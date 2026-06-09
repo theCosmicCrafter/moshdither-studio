@@ -1,0 +1,47 @@
+# Outputs
+outputs/
+
+# Binary assets (large)
+assets/bin/ffglitch-0.10.2-windows-x86_64/
+assets/bin/ffmpeg-master-latest-win64-gpl/
+assets/bin/*.zip
+
+# References (external repos with own .git)
+references/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+ENV/
+env/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+
+# Coverage / test artifacts
+coverage/
+.nyc_output/
+*.tsbuildinfo
+
+# Build artifacts (covered by package-level .gitignore but belt-and-suspenders)
+**/dist/
+**/dist-ssr/
+**/dist-electron/
+**/build/

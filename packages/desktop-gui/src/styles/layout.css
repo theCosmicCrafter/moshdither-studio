@@ -1,0 +1,79 @@
+/* App Shell Layout */
+.app-container {
+  display: grid;
+  grid-template-columns: 300px 1fr 300px;
+  grid-template-rows: 48px 1fr 60px;
+  grid-template-areas:
+    "header header header"
+    "sidebar workspace properties"
+    "sidebar timeline timeline";
+  height: 100vh;
+  width: 100vw;
+  background-color: var(--bg-base);
+}
+
+.app-header {
+  grid-area: header;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--spacing-md);
+  background: var(--bg-panel-solid);
+  border-bottom: 1px solid var(--border-color);
+  -webkit-app-region: drag; /* Electron dragging */
+}
+
+.app-header h1 {
+  font-size: 14px;
+  color: var(--text-primary);
+  margin-right: var(--spacing-lg);
+}
+
+.app-header nav {
+  display: flex;
+  gap: var(--spacing-md);
+  -webkit-app-region: no-drag;
+}
+
+.app-sidebar {
+  grid-area: sidebar;
+  background: var(--bg-panel-solid);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.app-workspace {
+  grid-area: workspace;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-image: 
+    linear-gradient(45deg, rgba(255,255,255,0.03) 25%, transparent 25%), 
+    linear-gradient(-45deg, rgba(255,255,255,0.03) 25%, transparent 25%), 
+    linear-gradient(45deg, transparent 75%, rgba(255,255,255,0.03) 75%), 
+    linear-gradient(-45deg, transparent 75%, rgba(255,255,255,0.03) 75%);
+  background-size: 20px 20px;
+  background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+  overflow: hidden;
+}
+
+.app-properties {
+  grid-area: properties;
+  background: var(--bg-panel-solid);
+  border-left: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: var(--spacing-md);
+}
+
+.app-timeline {
+  grid-area: timeline;
+  background: var(--bg-panel-solid);
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--spacing-md);
+}

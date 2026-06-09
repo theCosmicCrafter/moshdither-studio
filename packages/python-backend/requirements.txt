@@ -1,0 +1,7 @@
+# Python Backend Dependencies for MoshDither Studio
+
+# Image processing (used by dither_cli.py reference)
+Pillow>=12.2.0
+
+# Terminal UI (used by dither_cli.py reference)
+rich>=13.0.0

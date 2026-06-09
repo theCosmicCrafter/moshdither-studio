@@ -1,0 +1,94 @@
+# Electron Builder Configuration — MoshDither Studio
+# Code signing is configured via environment variables (see below).
+# Do NOT commit certificate passwords or private keys to version control.
+
+appId: com.moshdither.studio
+productName: MoshDither Studio
+
+directories:
+  output: dist
+  buildResources: build
+
+files:
+  - dist-electron/**
+  - dist/**
+  - package.json
+
+asar: true
+asarUnpack:
+  - "**/node_modules/sharp/**/*"
+  - "**/assets/bin/**/*"
+
+# ---------------------------------------------------------------------------
+# Code Signing
+# ---------------------------------------------------------------------------
+# Windows: Set these environment variables before building:
+#   WIN_CSC_LINK     -> URL or path to .pfx certificate file
+#   WIN_CSC_KEY_PASSWORD -> Password for the .pfx file
+#
+# macOS: Set these environment variables before building:
+#   CSC_LINK         -> URL or path to .p12 certificate file
+#   CSC_KEY_PASSWORD -> Password for the .p12 file
+#   APPLE_ID         -> Apple ID for notarization
+#   APPLE_ID_PASSWORD -> App-specific password for notarization
+#   TEAM_ID          -> Apple Developer Team ID
+#
+# For local development / unsigned builds, leave these unset.
+# Electron-builder will skip signing gracefully.
+# ---------------------------------------------------------------------------
+win:
+  target:
+    - nsis
+    - portable
+  publisherName: MoshDither Studio
+  verifyUpdateCodeSignature: true
+  signingHashAlgorithms:
+    - sha256
+  # Optional: sign DLLs inside the app
+  signDlls: false
+
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.video
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # Notarization (required for macOS 10.15+)
+  notarize:
+    teamId: ${env.TEAM_ID}
+
+linux:
+  target:
+    - AppImage
+    - deb
+  category: AudioVideoEditing
+  maintainer: MoshDither Studio
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: MoshDither Studio
+
+# ---------------------------------------------------------------------------
+# Publish / Auto-Update
+# ---------------------------------------------------------------------------
+publish:
+  provider: github
+  owner: moshdither
+  repo: moshdither-studio
+  # Auto-updater will look for releases here.
+  # Set GH_TOKEN env var when publishing from CI.
+
+# ---------------------------------------------------------------------------
+# After-Pack Hook: Flip Electron Security Fuses
+# ---------------------------------------------------------------------------
+# This runs AFTER the app is packaged but BEFORE code signing.
+# It hardens the binary by disabling debug/inspect vectors and enabling
+# ASAR integrity validation.
+# ---------------------------------------------------------------------------
+afterPack: scripts/flip-fuses-hook.js
