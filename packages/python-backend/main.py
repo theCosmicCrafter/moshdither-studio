@@ -5,6 +5,11 @@ import secrets
 import hashlib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+try:
+    import jwt
+except ImportError:
+    jwt = None  # type: ignore
+
 # ---------------------------------------------------------------------------
 # Security Constants
 # ---------------------------------------------------------------------------
@@ -49,11 +54,25 @@ class RPCRequestHandler(BaseHTTPRequestHandler):
             self._reject(403, "RPC token not configured")
             return
 
-        client_token = self.headers.get("X-RPC-Token")
-        # Use secrets.compare_digest to prevent timing attacks
-        if not client_token or not secrets.compare_digest(client_token, env_token):
-            self._reject(403, "Invalid RPC token")
-            return
+        # Prefer JWT session token (AUD-009 hardening). Fall back to raw token.
+        session_jwt = self.headers.get("X-RPC-Session")
+        if session_jwt and jwt is not None:
+            try:
+                decoded = jwt.decode(session_jwt, env_token, algorithms=["HS256"])
+                if decoded.get("sub") != "rpc-session":
+                    raise jwt.InvalidTokenError("Invalid subject")
+            except jwt.ExpiredSignatureError:
+                self._reject(403, "Session expired")
+                return
+            except jwt.InvalidTokenError:
+                self._reject(403, "Invalid session token")
+                return
+        else:
+            client_token = self.headers.get("X-RPC-Token")
+            # Use secrets.compare_digest to prevent timing attacks
+            if not client_token or not secrets.compare_digest(client_token, env_token):
+                self._reject(403, "Invalid RPC token")
+                return
 
         # --- 2. Content-Length validation ---
         content_length_hdr = self.headers.get("Content-Length")

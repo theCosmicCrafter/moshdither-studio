@@ -344,9 +344,27 @@ app.whenReady().then(() => {
 
   // Expose the Python RPC auth token to the renderer (via IPC) so it can
   // make authenticated requests to the local Python backend.
+  // SECURITY: Instead of returning the raw secret, we return a short-lived
+  // JWT signed with RPC_TOKEN as the HMAC secret. This limits exposure
+  // if a compromised renderer exfiltrates the credential.
+  function createRpcSessionToken(): string {
+    const header = Buffer.from(
+      JSON.stringify({ alg: "HS256", typ: "JWT" }),
+    ).toString("base64url");
+    const now = Math.floor(Date.now() / 1000);
+    const payload = Buffer.from(
+      JSON.stringify({ iat: now, exp: now + 300, sub: "rpc-session" }),
+    ).toString("base64url");
+    const signature = nodeCrypto
+      .createHmac("sha256", RPC_TOKEN)
+      .update(`${header}.${payload}`)
+      .digest("base64url");
+    return `${header}.${payload}.${signature}`;
+  }
+
   ipcMain.handle("get-rpc-token", (event) => {
     validateIpcSender(event);
-    return RPC_TOKEN;
+    return createRpcSessionToken();
   });
 
   ipcMain.handle("get-default-output-dir", (event) => {
@@ -364,6 +382,104 @@ app.whenReady().then(() => {
     }
     return null;
   });
+
+  // Cloud sync handlers
+  ipcMain.handle("dialog:selectSyncFolder", async (event) => {
+    validateIpcSender(event);
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      properties: ["openDirectory", "createDirectory"],
+    });
+    if (!canceled && filePaths.length > 0) {
+      return filePaths[0].replace(/\\/g, "/");
+    }
+    return null;
+  });
+
+  ipcMain.handle(
+    "sync:write-project",
+    async (event, folderPath: string, projectId: string, json: string) => {
+      validateIpcSender(event);
+      try {
+        const filePath = path.join(folderPath, `${projectId}.moshdither`);
+        fs.writeFileSync(filePath, json, "utf-8");
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  );
+
+  ipcMain.handle("sync:list-projects", async (event, folderPath: string) => {
+    validateIpcSender(event);
+    try {
+      const entries = fs.readdirSync(folderPath);
+      return entries
+        .filter((f) => f.endsWith(".moshdither"))
+        .map((f) => {
+          const filePath = path.join(folderPath, f);
+          const stats = fs.statSync(filePath);
+          const content = fs.readFileSync(filePath, "utf-8");
+          let name = f.replace(".moshdither", "");
+          try {
+            const bundle = JSON.parse(content);
+            name = bundle.project?.name || name;
+          } catch {}
+          return {
+            id: f.replace(".moshdither", ""),
+            name,
+            syncedAt: stats.mtime.toISOString(),
+          };
+        });
+    } catch {
+      return [];
+    }
+  });
+
+  // Git LFS helpers
+  ipcMain.handle("git:lfs-status", async (event) => {
+    validateIpcSender(event);
+    try {
+      const { execSync } = await import("node:child_process");
+      execSync("git lfs version", { stdio: "ignore" });
+      const tracked = execSync("git lfs track", {
+        encoding: "utf-8",
+        cwd: projectRoot,
+      }).split("\n");
+      return {
+        installed: true,
+        initialized: true,
+        trackedPatterns: tracked.filter(Boolean),
+      };
+    } catch {
+      return { installed: false, initialized: false, trackedPatterns: [] };
+    }
+  });
+
+  ipcMain.handle("git:init-lfs", async (event, projectPath: string) => {
+    validateIpcSender(event);
+    try {
+      const { execSync } = await import("node:child_process");
+      execSync("git init", { cwd: projectPath, stdio: "ignore" });
+      execSync("git lfs install", { cwd: projectPath, stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
+  ipcMain.handle(
+    "git:write-attributes",
+    async (event, projectPath: string, content: string) => {
+      validateIpcSender(event);
+      try {
+        const attributesPath = path.join(projectPath, ".gitattributes");
+        fs.writeFileSync(attributesPath, content, "utf-8");
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  );
 
   protocol.handle("media", async (request) => {
     try {

@@ -9,7 +9,7 @@ import {
   eventToKeyString,
   type ShortcutPreset,
 } from "../../utils/keyboardShortcuts";
-import { getCommands, type Command } from "../../utils/commands";
+import { getCommands } from "../../utils/commands";
 import { X, RotateCcw, Check, ChevronDown } from "lucide-react";
 
 interface KeyboardShortcutsEditorProps {

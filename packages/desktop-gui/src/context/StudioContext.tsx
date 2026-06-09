@@ -6,7 +6,8 @@ import {
   startAutoSave,
   stopAutoSave,
 } from '../utils/autoSave';
-import { getAllBindings, eventToKeyString, getCommands } from '../utils/keyboardShortcuts';
+import { getAllBindings, eventToKeyString } from '../utils/keyboardShortcuts';
+import { getCommands } from '../utils/commands';
 
 export interface ToastItem {
   id: string;

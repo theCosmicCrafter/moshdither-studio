@@ -152,6 +152,64 @@ def test_valid_token_accepted():
 
 
 # ---------------------------------------------------------------------------
+# JWT session token authentication (AUD-009 hardening)
+# ---------------------------------------------------------------------------
+
+def _make_jwt(secret: str, expired: bool = False) -> str:
+    """Helper to create a JWT session token for testing."""
+    import jwt as pyjwt
+    import time as pytime
+    now = int(pytime.time())
+    payload = {
+        "iat": now,
+        "exp": now - 10 if expired else now + 300,
+        "sub": "rpc-session",
+    }
+    return pyjwt.encode(payload, secret, algorithm="HS256")
+
+
+def test_valid_jwt_session_accepted():
+    os.environ["MOSHDITHER_RPC_TOKEN"] = "secret"
+    body = json.dumps({
+        "jsonrpc": "2.0",
+        "method": "neural_downscale",
+        "params": {"input_path": "/tmp/in.png", "scale": 0.5, "output_path": "/tmp/out.png"},
+        "id": 1,
+    }).encode()
+    session_jwt = _make_jwt("secret")
+    handler = make_handler(headers={"X-RPC-Session": session_jwt, "Content-Length": str(len(body))}, body=body)
+    handler.do_POST()
+    assert handler.status == 200
+    response = json.loads(handler.wfile.data)
+    assert response["jsonrpc"] == "2.0"
+    assert "result" in response
+    del os.environ["MOSHDITHER_RPC_TOKEN"]
+
+
+def test_expired_jwt_session_rejected():
+    os.environ["MOSHDITHER_RPC_TOKEN"] = "secret"
+    body = json.dumps({"jsonrpc": "2.0", "method": "neural_downscale", "id": 1}).encode()
+    session_jwt = _make_jwt("secret", expired=True)
+    handler = make_handler(headers={"X-RPC-Session": session_jwt, "Content-Length": str(len(body))}, body=body)
+    handler.do_POST()
+    assert handler.status == 403
+    response = json.loads(handler.wfile.data)
+    assert "Session expired" in response["error"]
+    del os.environ["MOSHDITHER_RPC_TOKEN"]
+
+
+def test_invalid_jwt_session_rejected():
+    os.environ["MOSHDITHER_RPC_TOKEN"] = "secret"
+    body = json.dumps({"jsonrpc": "2.0", "method": "neural_downscale", "id": 1}).encode()
+    handler = make_handler(headers={"X-RPC-Session": "not.a.jwt", "Content-Length": str(len(body))}, body=body)
+    handler.do_POST()
+    assert handler.status == 403
+    response = json.loads(handler.wfile.data)
+    assert "Invalid session token" in response["error"]
+    del os.environ["MOSHDITHER_RPC_TOKEN"]
+
+
+# ---------------------------------------------------------------------------
 # Input validation
 # ---------------------------------------------------------------------------
 
