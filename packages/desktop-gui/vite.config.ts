@@ -9,6 +9,23 @@ export default defineConfig({
     electron([
       {
         entry: "electron/main.ts",
+        onstart(options) {
+          options.reload();
+        },
+        vite: {
+          build: {
+            lib: {
+              entry: "electron/main.ts",
+              formats: ["cjs"],
+            },
+            rollupOptions: {
+              external: ["electron"],
+              output: {
+                entryFileNames: "[name].cjs",
+              },
+            },
+          },
+        },
       },
       {
         entry: "electron/preload.ts",
@@ -36,5 +53,18 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     include: ["src/**/*.unit.test.{ts,tsx}"],
+    coverage: {
+      provider: "v8",
+      include: ["src/**/*"],
+      exclude: [
+        "src/**/*.test.*",
+        "src/test/**",
+        "src/**/*.d.ts",
+        "src/**/*.stories.*",
+        "src/**/__tests__/**",
+      ],
+      reporter: ["text", "html", "json"],
+      reportsDirectory: "./coverage",
+    },
   },
 });
