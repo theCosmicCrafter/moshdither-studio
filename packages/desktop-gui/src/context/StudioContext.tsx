@@ -8,6 +8,15 @@ import {
 } from '../utils/autoSave';
 import { getAllBindings, eventToKeyString } from '../utils/keyboardShortcuts';
 import { getCommands } from '../utils/commands';
+import {
+  onCollabEvent,
+  sendOp,
+  createAddOp,
+  createRemoveOp,
+  createUpdateOp,
+  createReorderOp,
+  getCollabState,
+} from '../utils/collaboration';
 
 export interface ToastItem {
   id: string;
@@ -150,9 +159,60 @@ const defaultEffects: Effect[] = [
 const StudioContext = createContext<StudioContextType | undefined>(undefined);
 
 export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [activeEffectsState, setActiveEffectsState] = useState<Effect[]>(
+  const [activeEffectsState, setActiveEffectsStateRaw] = useState<Effect[]>(
     () => loadPersisted<Effect[]>('moshdither:activeEffects', defaultEffects),
   );
+
+  // Wrapped setter that broadcasts local changes to collaboration room
+  const setActiveEffectsState = useCallback((update: Effect[] | ((prev: Effect[]) => Effect[])) => {
+    if (applyingRemote.current) {
+      setActiveEffectsStateRaw(update);
+      return;
+    }
+
+    setActiveEffectsStateRaw((prev) => {
+      const next = typeof update === 'function' ? (update as (prev: Effect[]) => Effect[])(prev) : update;
+
+      // Broadcast diff if connected
+      if (getCollabState() === 'connected' && prev !== next) {
+        // Detect what changed
+        const prevIds = new Set(prev.map((fx) => fx.id));
+        const nextIds = new Set(next.map((fx) => fx.id));
+
+        // Added
+        for (const fx of next) {
+          if (!prevIds.has(fx.id)) {
+            sendOp(createAddOp(fx));
+          }
+        }
+
+        // Removed
+        for (const fx of prev) {
+          if (!nextIds.has(fx.id)) {
+            sendOp(createRemoveOp(fx.id));
+          }
+        }
+
+        // Reordered
+        const prevOrder = prev.map((fx) => fx.id).join(',');
+        const nextOrder = next.map((fx) => fx.id).join(',');
+        if (prevOrder !== nextOrder && prev.length === next.length) {
+          sendOp(createReorderOp(next.map((fx) => fx.id)));
+        }
+
+        // Updated params
+        for (const nextFx of next) {
+          const prevFx = prev.find((fx) => fx.id === nextFx.id);
+          if (prevFx && JSON.stringify(prevFx.params) !== JSON.stringify(nextFx.params)) {
+            sendOp(createUpdateOp(nextFx.id, nextFx.params));
+          }
+        }
+      }
+
+      return next;
+    });
+  }, []);
+
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
   const [mediaType, setMediaType] = useState<'image' | 'video' | null>(null);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
@@ -360,6 +420,37 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [undo, redo, setFontSizeScale]);
+
+  // Collaboration: apply remote ops
+  const applyingRemote = useRef(false);
+  useEffect(() => {
+    const unsub = onCollabEvent('op', (data) => {
+      const op = data as { type: string; payload: { effect?: Effect; effectId?: string; params?: unknown; effectIds?: string[] } };
+      applyingRemote.current = true;
+      try {
+        if (op.type === 'effect:add' && op.payload.effect) {
+          setActiveEffectsState((prev) => [...prev, op.payload.effect!]);
+        } else if (op.type === 'effect:remove' && op.payload.effectId) {
+          setActiveEffectsState((prev) => prev.filter((fx) => fx.id !== op.payload.effectId));
+        } else if (op.type === 'effect:update' && op.payload.effectId) {
+          setActiveEffectsState((prev) =>
+            prev.map((fx) =>
+              fx.id === op.payload.effectId ? { ...fx, params: { ...fx.params, ...(op.payload.params || {}) } } : fx
+            )
+          );
+        } else if (op.type === 'effect:reorder' && op.payload.effectIds) {
+          setActiveEffectsState((prev) => {
+            const order = op.payload.effectIds!;
+            const map = new Map(prev.map((fx) => [fx.id, fx]));
+            return order.map((id) => map.get(id)!).filter(Boolean);
+          });
+        }
+      } finally {
+        applyingRemote.current = false;
+      }
+    });
+    return unsub;
+  }, []);
 
   // Auto-save: serialize project state every 30 seconds
   useEffect(() => {

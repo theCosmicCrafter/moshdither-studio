@@ -20,6 +20,12 @@ import { MosherAdapter } from "../../mosh-engine/src/adapters/MosherAdapter";
 import { DitherAdapter } from "../../mosh-engine/src/adapters/DitherAdapter";
 import { installLogger, writeRendererLog, checkCrashMarker } from "./logger";
 import { initAutoUpdater } from "./updater";
+import {
+  startCollaborationServer,
+  stopCollaborationServer,
+  getCollaborationPort,
+  generateRoomId,
+} from "./collaborationServer";
 
 // Disable background timer throttling so render loops and video processing
 // continue smoothly even when the window loses focus.
@@ -480,6 +486,33 @@ app.whenReady().then(() => {
       }
     },
   );
+
+  // Collaboration server IPC
+  ipcMain.handle("collab:start-server", async (event) => {
+    validateIpcSender(event);
+    try {
+      const port = await startCollaborationServer(0);
+      return { success: true, port };
+    } catch {
+      return { success: false, port: 0 };
+    }
+  });
+
+  ipcMain.handle("collab:stop-server", async (event) => {
+    validateIpcSender(event);
+    stopCollaborationServer();
+    return { success: true };
+  });
+
+  ipcMain.handle("collab:get-port", async (event) => {
+    validateIpcSender(event);
+    return getCollaborationPort();
+  });
+
+  ipcMain.handle("collab:generate-room-id", async (event) => {
+    validateIpcSender(event);
+    return generateRoomId();
+  });
 
   protocol.handle("media", async (request) => {
     try {
@@ -1133,6 +1166,34 @@ app.whenReady().then(() => {
     } catch {
       // Ignore write failures during crash
     }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Real-time collaboration server
+  // ---------------------------------------------------------------------------
+  ipcMain.handle("collab:start-server", async () => {
+    try {
+      const port = await startCollaborationServer(0);
+      return { success: true, port };
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  });
+
+  ipcMain.handle("collab:stop-server", () => {
+    stopCollaborationServer();
+    return { success: true };
+  });
+
+  ipcMain.handle("collab:get-port", () => {
+    return { port: getCollaborationPort() };
+  });
+
+  ipcMain.handle("collab:generate-room-id", () => {
+    return generateRoomId();
   });
 
   // Subresource Integrity: verify preload.js hash before loading it

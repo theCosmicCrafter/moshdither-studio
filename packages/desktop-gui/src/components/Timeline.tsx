@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useStudio } from "../context/StudioContext";
 import { AudioWaveform } from "./organisms/AudioWaveform";
+import { onCollabEvent, type CollabPresence } from "../utils/collaboration";
 
 interface TimelineProps {
   duration: number;
@@ -20,6 +21,15 @@ export const Timeline: React.FC<TimelineProps> = ({ duration, currentTime, onTim
   const trackRef = React.useRef<HTMLDivElement>(null);
   const animRef = React.useRef<number>(0);
   const lastTimeRef = React.useRef<number>(0);
+  const [presences, setPresences] = React.useState<CollabPresence[]>([]);
+
+  // Subscribe to collaboration presence updates
+  React.useEffect(() => {
+    const unsub = onCollabEvent("presence", (data) => {
+      setPresences((data as CollabPresence[]) || []);
+    });
+    return () => unsub();
+  }, []);
 
   // Playback loop with in/out range
   React.useEffect(() => {
@@ -225,6 +235,29 @@ export const Timeline: React.FC<TimelineProps> = ({ duration, currentTime, onTim
             }}
           />
         )}
+        {/* Collaborator cursors */}
+        {duration > 0 &&
+          presences.map((p) =>
+            p.cursor && typeof p.cursor.x === "number" ? (
+              <div
+                key={p.clientId}
+                title={`${p.name}`}
+                style={{
+                  position: "absolute",
+                  left: `${Math.max(0, Math.min(100, p.cursor.x * 100))}%`,
+                  top: -6,
+                  width: 10,
+                  height: 10,
+                  borderRadius: "50%",
+                  background: p.color || "#ff453a",
+                  border: "2px solid #fff",
+                  boxShadow: "0 0 6px rgba(0,0,0,0.5)",
+                  transform: "translate(-50%, 0)",
+                  zIndex: 2,
+                }}
+              />
+            ) : null,
+          )}
       </div>
     </div>
   );

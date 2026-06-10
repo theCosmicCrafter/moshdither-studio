@@ -17,6 +17,7 @@ import { KeyboardShortcutsEditor } from './components/organisms/KeyboardShortcut
 import { StatusBar } from './components/layout/StatusBar';
 import { OnboardingModal } from './components/organisms/OnboardingModal';
 import { DebugOverlay } from './components/organisms/DebugOverlay';
+import { CollaborationPanel } from './components/organisms/CollaborationPanel';
 import { loadAutoSave, checkCrashRecovery, dismissCrashRecovery, type SerializedProject } from './utils/autoSave';
 import { registerCommand } from './utils/commands';
 
@@ -359,6 +360,7 @@ const AppContent: React.FC = () => {
       <StatusBar />
       <OnboardingModal />
       <DebugOverlay />
+      <CollaborationPanel />
       {showShortcutsEditor && (
         <KeyboardShortcutsEditor onClose={() => setShowShortcutsEditor(false)} />
       )}
