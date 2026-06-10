@@ -30,10 +30,10 @@ export interface SeparationResult {
  * For now, this returns a rejected promise with instructions.
  */
 export async function separateSources(
-  _audioFilePath: string,
+  audioFilePath: string,
 ): Promise<SeparationResult> {
   console.warn(
-    "[audioSourceSeparation] Full source separation requires a Python backend model (Demucs/Spleeter). " +
+    `[audioSourceSeparation] Full source separation requires a Python backend model (Demucs/Spleeter) for "${audioFilePath}". ` +
       "Configure the Python backend and implement the IPC handler to enable this feature.",
   );
 
