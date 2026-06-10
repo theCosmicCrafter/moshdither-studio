@@ -89,7 +89,7 @@ interface StudioState {
   watermarkSettings: WatermarkSettings;
 }
 
-interface StudioContextType extends StudioState {
+export interface StudioContextType extends StudioState {
   setActiveEffects: (effects: Effect[] | ((prev: Effect[]) => Effect[])) => void;
   setMediaUrl: (url: string | null) => void;
   setMediaType: (type: 'image' | 'video' | null) => void;
