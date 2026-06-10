@@ -30,6 +30,7 @@ import {
   buildWatermarkArgs,
   type WatermarkSettings,
 } from "../src/utils/watermark";
+import getSystemFonts from "get-system-fonts";
 
 // Disable background timer throttling so render loops and video processing
 // continue smoothly even when the window loses focus.
@@ -501,6 +502,22 @@ app.whenReady().then(() => {
       fs.mkdirSync(cacheDir, { recursive: true });
     }
     return cacheDir;
+  });
+
+  // System font discovery for watermark text rendering
+  ipcMain.handle("fonts:list", async (event) => {
+    validateIpcSender(event);
+    try {
+      const fonts = await getSystemFonts({
+        extensions: ["ttf", "otf", "ttc"],
+      });
+      // Return deduplicated, sorted list of font paths
+      const unique = Array.from(new Set(fonts)).sort();
+      return unique;
+    } catch (err) {
+      console.error("Font discovery error:", err);
+      return [];
+    }
   });
 
   protocol.handle("media", async (request) => {
@@ -1088,9 +1105,11 @@ app.whenReady().then(() => {
                 imagePath: null,
                 position: "bottom-right",
                 fontSize: 24,
+                fontPath: null,
                 color: "white",
                 opacity: 0.7,
                 scale: 20,
+                rotation: 0,
               },
             );
             await runFfmpeg(watermarkedArgs);

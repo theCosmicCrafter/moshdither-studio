@@ -11,6 +11,9 @@ import type { EffectMask, BlendMode } from '../../types/effectTypes';
 import { BLEND_MODES } from '../../types/effectTypes';
 import { recommendExportSettings, getMediaTypeFromExt } from '../../utils/smartExport';
 import type { WatermarkSettings } from '../../utils/watermark';
+import { generateBeatKeyframes } from '../../utils/beatKeyframeGenerator';
+import { detectBeats, decodeAudioFile } from '../../utils/beatDetection';
+import type { BeatKeyframeMode } from '../../utils/beatKeyframeGenerator';
 
 export const PropertiesPanel: React.FC = () => {
   const { 
@@ -41,6 +44,23 @@ export const PropertiesPanel: React.FC = () => {
   } = useStudio();
   const [modsOpen, setModsOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [systemFonts, setSystemFonts] = useState<string[]>([]);
+  const [beatGenOpen, setBeatGenOpen] = useState(false);
+  const [beatGenParam, setBeatGenParam] = useState('');
+  const [beatGenMode, setBeatGenMode] = useState<BeatKeyframeMode>('pulse');
+  const [beatGenMin, setBeatGenMin] = useState(0);
+  const [beatGenMax, setBeatGenMax] = useState(1);
+  const [beatGenLoading, setBeatGenLoading] = useState(false);
+
+  // Load system fonts for watermark text rendering
+  React.useEffect(() => {
+    if (!window.ipcRenderer) return;
+    window.ipcRenderer.invoke<string[]>('fonts:list').then((fonts) => {
+      setSystemFonts(fonts);
+    }).catch(() => {
+      setSystemFonts([]);
+    });
+  }, []);
 
   // Find the selected effect, or fall back to the first active/enabled one, or just the first in the list
   const activeFx = activeEffects.find(fx => fx.id === selectedEffectId) || activeEffects.find(fx => fx.enabled) || activeEffects[0];
@@ -913,6 +933,139 @@ export const PropertiesPanel: React.FC = () => {
               )}
             </div>
 
+            {/* 2.5 AUTO-KEYFRAME FROM BEATS SECTION */}
+            {mediaUrl && (
+              <div className="glass-panel" style={{ padding: '16px', background: 'rgba(255,255,255,0.02)', borderRadius: 'var(--radius-lg)', marginTop: '16px' }}>
+                <h4 style={{ fontSize: '12px', textTransform: 'uppercase', color: 'var(--text-secondary)', letterSpacing: '0.05em', marginBottom: '12px', fontWeight: 600 }}>
+                  Auto-Keyframe from Beats
+                </h4>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <Button
+                      variant="glass"
+                      size="sm"
+                      style={{ flex: 1 }}
+                      onClick={() => setBeatGenOpen(!beatGenOpen)}
+                    >
+                      {beatGenOpen ? 'Close' : 'Generate from Audio'}
+                    </Button>
+                  </div>
+
+                  {beatGenOpen && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', paddingTop: '8px' }}>
+                      <div className="control-group">
+                        <label className="control-label" style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Parameter to Animate</label>
+                        <select
+                          aria-label="Parameter to animate"
+                          value={beatGenParam}
+                          onChange={(e) => setBeatGenParam(e.target.value)}
+                          style={{ width: '100%', padding: '6px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px' }}
+                        >
+                          <option value="">-- Select parameter --</option>
+                          {activeFx && Object.keys(activeFx.params).map((k) => {
+                            const v = activeFx.params[k];
+                            if (typeof v === 'number') {
+                              return <option key={k} value={k}>{k}</option>;
+                            }
+                            return null;
+                          })}
+                        </select>
+                      </div>
+
+                      <div className="control-group">
+                        <label className="control-label" style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Mode</label>
+                        <select
+                          aria-label="Beat keyframe mode"
+                          value={beatGenMode}
+                          onChange={(e) => setBeatGenMode(e.target.value as BeatKeyframeMode)}
+                          style={{ width: '100%', padding: '6px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px' }}
+                        >
+                          <option value="pulse">Pulse (spike on beat, decay)</option>
+                          <option value="toggle">Toggle (alternate min/max)</option>
+                          <option value="ramp">Ramp (increase per beat)</option>
+                          <option value="decay">Decay (peak then fade)</option>
+                        </select>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '12px' }}>
+                        <div style={{ flex: 1 }}>
+                          <ControlGroup
+                            label="Min Value"
+                            value={beatGenMin}
+                            onChange={(v) => setBeatGenMin(Number(v))}
+                            min={-999}
+                            max={999}
+                            step={0.1}
+                            defaultValue={0}
+                          />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <ControlGroup
+                            label="Max Value"
+                            value={beatGenMax}
+                            onChange={(v) => setBeatGenMax(Number(v))}
+                            min={-999}
+                            max={999}
+                            step={0.1}
+                            defaultValue={1}
+                          />
+                        </div>
+                      </div>
+
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        disabled={!beatGenParam || beatGenLoading}
+                        onClick={async () => {
+                          if (!activeFx || !mediaUrl || !beatGenParam) return;
+                          setBeatGenLoading(true);
+                          try {
+                            // Fetch media file as blob via registered protocol
+                            const res = await fetch(mediaUrl);
+                            const blob = await res.blob();
+                            const audioBuffer = await decodeAudioFile(blob);
+                            const { beats } = detectBeats(audioBuffer, 1.3);
+
+                            if (beats.length === 0) {
+                              addToast('No beats detected in audio. Try a different track.', 'error');
+                              return;
+                            }
+
+                            const keyframes = generateBeatKeyframes({
+                              beats,
+                              paramKey: beatGenParam,
+                              mode: beatGenMode,
+                              minValue: beatGenMin,
+                              maxValue: beatGenMax,
+                            });
+
+                            setActiveEffects((prev) =>
+                              prev.map((fx) =>
+                                fx.id === activeFx.id
+                                  ? { ...fx, keyframes: { ...fx.keyframes, [beatGenParam]: keyframes } }
+                                  : fx,
+                              ),
+                            );
+
+                            addToast(`Generated ${keyframes.length} keyframes from ${beats.length} beats`, 'success');
+                            setBeatGenOpen(false);
+                          } catch (err) {
+                            const msg = err instanceof Error ? err.message : String(err);
+                            addToast(`Beat detection failed: ${msg}`, 'error');
+                          } finally {
+                            setBeatGenLoading(false);
+                          }
+                        }}
+                      >
+                        {beatGenLoading ? 'Analyzing...' : 'Generate Keyframes'}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* 3. AUDIO REACTIVITY SECTION (Collapsible Accordion) */}
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <div 
@@ -1218,6 +1371,24 @@ export const PropertiesPanel: React.FC = () => {
                               />
                               <span style={{ fontSize: '11px', color: 'var(--text-secondary)', width: 24, textAlign: 'right' }}>{watermarkSettings.fontSize}</span>
                             </div>
+                            {systemFonts.length > 0 && (
+                              <select
+                                aria-label="Watermark Font"
+                                value={watermarkSettings.fontPath || ''}
+                                onChange={(e) => setWatermarkSettings({ ...watermarkSettings, fontPath: e.target.value || null })}
+                                style={{ width: '100%', padding: '6px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px', fontSize: '12px' }}
+                              >
+                                <option value="">Default System Font</option>
+                                {systemFonts.map((fontPath) => {
+                                  const name = fontPath.replace(/\\/g, '/').split('/').pop()?.replace(/\.(ttf|otf|ttc)$/i, '') || fontPath;
+                                  return (
+                                    <option key={fontPath} value={fontPath}>
+                                      {name}
+                                    </option>
+                                  );
+                                })}
+                              </select>
+                            )}
                           </>
                         )}
 

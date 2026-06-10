@@ -12,10 +12,6 @@ const VALID_SEND_CHANNELS: string[] = [
   "git:lfs-status",
   "git:init-lfs",
   "git:write-attributes",
-  "collab:start-server",
-  "collab:stop-server",
-  "collab:get-port",
-  "collab:generate-room-id",
   "get-default-output-dir",
   "get-rpc-token",
   "render:pipeline",
@@ -35,6 +31,12 @@ const VALID_SEND_CHANNELS: string[] = [
   "safe-storage:delete",
   "update:check-now",
   "update:install-now",
+  "cache:get-frame",
+  "cache:set-frame",
+  "cache:clear",
+  "cache:stats",
+  "sam3:get-cache-dir",
+  "fonts:list",
 ];
 
 const VALID_RECEIVE_CHANNELS: string[] = [

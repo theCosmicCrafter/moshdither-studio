@@ -19,9 +19,11 @@ export interface WatermarkSettings {
     | "bottom-right"
     | "center";
   fontSize: number;
+  fontPath: string | null;
   color: string;
   opacity: number;
   scale: number; // percentage 1-100 for image watermarks
+  rotation: number; // degrees, 0-360
 }
 
 export const DEFAULT_WATERMARK: WatermarkSettings = {
@@ -31,9 +33,11 @@ export const DEFAULT_WATERMARK: WatermarkSettings = {
   imagePath: null,
   position: "bottom-right",
   fontSize: 24,
+  fontPath: null,
   color: "white",
   opacity: 0.7,
   scale: 20,
+  rotation: 0,
 };
 
 /**
@@ -104,8 +108,14 @@ export function buildDrawtextFilter(
     .toString(16)
     .padStart(2, "0");
 
-  // Cross-platform font file detection (Electron main process only)
-  return `drawtext=text='${escapeDrawtext(settings.text)}':x=${x}:y=${y}:fontsize=${settings.fontSize}:fontcolor=${color}@${alpha}`;
+  let filter = `drawtext=text='${escapeDrawtext(settings.text)}':x=${x}:y=${y}:fontsize=${settings.fontSize}:fontcolor=${color}@${alpha}`;
+
+  // Use selected font file if available
+  if (settings.fontPath) {
+    filter += `:fontfile=${settings.fontPath}`;
+  }
+
+  return filter;
 }
 
 /**
