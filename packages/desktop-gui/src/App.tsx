@@ -78,10 +78,11 @@ const AppContent: React.FC = () => {
       }
       // Trigger render pipeline
       addRenderJob({
+        name: `Export ${new Date().toLocaleTimeString()}`,
         inputUrl: mediaUrl,
-        outputDir: outputDirectory || '',
-        format: exportFormat || 'same',
-        fps: exportFps || 30,
+        outputDirectory: outputDirectory || '',
+        exportFormat: exportFormat || 'same',
+        exportFps: exportFps || 30,
         activeEffects,
         watermarkSettings,
       });

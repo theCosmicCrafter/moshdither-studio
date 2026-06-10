@@ -18,15 +18,12 @@ export const Toolbar: React.FC = () => {
   const [isMaximized, setIsMaximized] = useState(false);
   const isBrowser = !window.ipcRenderer;
   const isMac = navigator.platform.toLowerCase().includes('mac');
-  // Custom window controls only needed for frameless non-macOS windows
-  // Currently frameless is macOS-only, so these are hidden
-  const showWindowControls = false;
 
   // Track maximized state for frameless window controls
   useEffect(() => {
     if (isBrowser || !window.windowControls) return;
     const check = () => {
-      window.windowControls.isMaximized().then(setIsMaximized);
+      window.windowControls?.isMaximized().then(setIsMaximized);
     };
     const interval = setInterval(check, 500);
     return () => clearInterval(interval);
@@ -82,7 +79,7 @@ export const Toolbar: React.FC = () => {
       {/* App-specific Actions — right side */}
       <div
         className="toolbar__actions"
-        style={{ WebkitAppRegion: 'no-drag', appRegion: 'no-drag', marginLeft: 0 }}
+        style={{ WebkitAppRegion: 'no-drag', appRegion: 'no-drag', marginLeft: 0 } as React.CSSProperties}
       >
         <button className="btn-secondary" onClick={handleImport}>
           <UploadSimple size={14} />
@@ -184,7 +181,7 @@ export const Toolbar: React.FC = () => {
       {!isBrowser && !isMac && (
         <div
           className="window-controls"
-          style={{ WebkitAppRegion: 'no-drag', appRegion: 'no-drag' }}
+          style={{ WebkitAppRegion: 'no-drag', appRegion: 'no-drag' } as React.CSSProperties}
         >
           <button className="window-btn minimize" onClick={onMinimize} title="Minimize">
             <Minus size={14} />

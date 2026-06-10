@@ -4,21 +4,8 @@
  */
 
 import * as React from "react";
-import {
-  useAudioReactive,
-  type AudioFeatures,
-} from "../hooks/useAudioReactive";
-
-export interface AudioReactiveContextValue {
-  features: AudioFeatures;
-  featuresRef: React.RefObject<AudioFeatures>;
-  enabled: boolean;
-  setEnabled: (enabled: boolean) => void;
-}
-
-export const AudioReactiveContext = React.createContext<AudioReactiveContextValue | null>(
-  null,
-);
+import { useAudioReactive } from "../hooks/useAudioReactive";
+import { AudioReactiveContext } from "./audioReactiveContextDef";
 
 interface AudioReactiveProviderProps {
   children: React.ReactNode;
@@ -30,19 +17,13 @@ export const AudioReactiveProvider: React.FC<AudioReactiveProviderProps> = ({
   mediaUrl,
 }) => {
   const [enabled, setEnabled] = React.useState(false);
-  const [audioRev, setAudioRev] = React.useState(0);
-  const audioElementRef = React.useRef<HTMLAudioElement | null>(null);
+  const [audioElement, setAudioElement] =
+    React.useState<HTMLAudioElement | null>(null);
 
   // Create and manage audio element for analysis
   React.useEffect(() => {
     if (!mediaUrl) {
-      const prev = audioElementRef.current;
-      if (prev) {
-        prev.pause();
-        prev.src = "";
-        audioElementRef.current = null;
-        queueMicrotask(() => setAudioRev((r) => r + 1));
-      }
+      queueMicrotask(() => setAudioElement(null));
       return;
     }
 
@@ -53,28 +34,25 @@ export const AudioReactiveProvider: React.FC<AudioReactiveProviderProps> = ({
     audio.play().catch(() => {
       // Autoplay blocked — user must interact first
     });
-    audioElementRef.current = audio;
-    queueMicrotask(() => setAudioRev((r) => r + 1));
+    queueMicrotask(() => setAudioElement(audio));
 
     return () => {
       audio.pause();
       audio.src = "";
-      audioElementRef.current = null;
-      queueMicrotask(() => setAudioRev((r) => r + 1));
+      queueMicrotask(() =>
+        setAudioElement((current) => (current === audio ? null : current)),
+      );
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mediaUrl]);
 
   const { features, featuresRef } = useAudioReactive({
-    mediaElement: audioElementRef.current,
+    mediaElement: audioElement,
     enabled: enabled && !!mediaUrl,
   });
 
   const value = React.useMemo(
     () => ({ features, featuresRef, enabled, setEnabled }),
-    // audioRev ensures the memo updates when the audio element changes
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [features, featuresRef, enabled, audioRev],
+    [features, featuresRef, enabled],
   );
 
   return (
