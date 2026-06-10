@@ -45,3 +45,6 @@ coverage/
 **/dist-ssr/
 **/dist-electron/
 **/build/
+
+# Downloaded tools (auto-fetched at runtime)
+tools/

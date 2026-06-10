@@ -13,6 +13,8 @@
     "test:browser": "vitest run --config vitest.browser.config.ts",
     "test:coverage": "vitest run --coverage",
     "flip-fuses": "node scripts/flip-fuses.js",
+    "secret-scan": "powershell -ExecutionPolicy Bypass -File ../../scripts/secret-scan.ps1",
+    "secret-scan:history": "powershell -ExecutionPolicy Bypass -File ../../scripts/secret-scan.ps1 -History",
     "prepare": "husky || true"
   },
   "lint-staged": {

@@ -12,6 +12,14 @@ dist
 dist-ssr
 *.local
 
+# AI Model binaries (downloaded at build time, not versioned)
+assets/models/sam3/onnx/
+assets/models/**/*.onnx
+assets/models/**/*.onnx_data
+assets/models/**/*.safetensors
+assets/models/**/*.pth
+assets/models/**/*.pt
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
