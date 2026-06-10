@@ -20,8 +20,28 @@ export interface OSCMapping {
   address: string; // e.g. "/moshdither/effect1/intensity"
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let midiAccess: any = null;
+// Minimal Web MIDI API type declarations
+interface MIDIMessageEvent {
+  data: Uint8Array;
+}
+
+interface MIDIInput {
+  id: string;
+  name: string;
+  manufacturer: string;
+  onmidimessage: ((event: MIDIMessageEvent) => void) | null;
+}
+
+interface MIDIInputMap {
+  values(): IterableIterator<MIDIInput>;
+}
+
+interface MIDIAccess {
+  inputs: MIDIInputMap;
+  onstatechange: (() => void) | null;
+}
+
+let midiAccess: MIDIAccess | null = null;
 const midiMappings = new Map<string, MIDIMapping>(); // key: "ch-ctrl"
 const oscMappings = new Map<string, OSCMapping>();
 const paramListeners = new Set<
@@ -29,12 +49,16 @@ const paramListeners = new Set<
 >();
 
 export async function initMIDI(): Promise<boolean> {
-  if (!(navigator as any).requestMIDIAccess) {
+  const nav = navigator as unknown as {
+    requestMIDIAccess?: (opts?: { sysex?: boolean }) => Promise<MIDIAccess>;
+  };
+  if (!nav.requestMIDIAccess) {
     console.warn("Web MIDI API not supported in this browser");
     return false;
   }
   try {
-    midiAccess = await (navigator as any).requestMIDIAccess({ sysex: false });
+    midiAccess = await nav.requestMIDIAccess({ sysex: false });
+    if (!midiAccess) return false;
     for (const input of midiAccess.inputs.values()) {
       input.onmidimessage = handleMIDIMessage;
     }
@@ -52,8 +76,8 @@ export async function initMIDI(): Promise<boolean> {
   }
 }
 
-function handleMIDIMessage(event: any): void {
-  const data = event.data as Uint8Array | undefined;
+function handleMIDIMessage(event: MIDIMessageEvent): void {
+  const data = event.data;
   if (!data || data.length < 3) return;
 
   const status = data[0];
@@ -106,10 +130,10 @@ export function getMIDIDevices(): {
   manufacturer: string;
 }[] {
   if (!midiAccess) return [];
-  return Array.from(midiAccess.inputs.values()).map((input: any) => ({
-    id: input.id as string,
-    name: (input.name as string) ?? "Unknown",
-    manufacturer: (input.manufacturer as string) ?? "Unknown",
+  return Array.from(midiAccess.inputs.values()).map((input) => ({
+    id: input.id,
+    name: input.name ?? "Unknown",
+    manufacturer: input.manufacturer ?? "Unknown",
   }));
 }
 

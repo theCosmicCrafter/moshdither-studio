@@ -89,38 +89,25 @@ export const DebugOverlay: React.FC = () => {
 
   if (!visible) return null;
 
+  const fpsClass =
+    metrics.fps >= 55
+      ? "debug-overlay__metric-value--good"
+      : metrics.fps >= 30
+        ? "debug-overlay__metric-value--warn"
+        : "debug-overlay__metric-value--bad";
+
   return (
-    <div
-      style={{
-        position: "fixed",
-        top: "12px",
-        right: "12px",
-        zIndex: 99999,
-        background: "rgba(0,0,0,0.8)",
-        border: "1px solid var(--border-color)",
-        borderRadius: "var(--radius-md)",
-        padding: "12px",
-        display: "flex",
-        flexDirection: "column",
-        gap: "8px",
-        minWidth: "160px",
-        fontFamily: "monospace",
-        fontSize: "12px",
-        color: "#fff",
-      }}
-    >
-      <div style={{ display: "flex", justifyContent: "space-between" }}>
+    <div className="debug-overlay">
+      <div className="debug-overlay__metric">
         <span>FPS</span>
-        <span style={{ color: metrics.fps >= 55 ? "#4ade80" : metrics.fps >= 30 ? "#facc15" : "#f87171" }}>
-          {metrics.fps}
-        </span>
+        <span className={fpsClass}>{metrics.fps}</span>
       </div>
-      <div style={{ display: "flex", justifyContent: "space-between" }}>
+      <div className="debug-overlay__metric">
         <span>Frame</span>
         <span>{metrics.frameTime.toFixed(1)} ms</span>
       </div>
       {metrics.gpuMemory !== undefined && (
-        <div style={{ display: "flex", justifyContent: "space-between" }}>
+        <div className="debug-overlay__metric">
           <span>GPU</span>
           <span>{(metrics.gpuMemory / 1024 / 1024).toFixed(1)} MB</span>
         </div>
@@ -129,25 +116,16 @@ export const DebugOverlay: React.FC = () => {
         ref={canvasRef}
         width={120}
         height={30}
-        style={{ borderRadius: "4px", background: "rgba(255,255,255,0.05)" }}
+        className="debug-overlay__graph"
       />
       <button
         type="button"
         onClick={() => debugBus.emit("shader:reload")}
-        style={{
-          padding: "4px 8px",
-          background: "rgba(255,255,255,0.1)",
-          border: "1px solid rgba(255,255,255,0.2)",
-          borderRadius: "4px",
-          color: "#fff",
-          cursor: "pointer",
-          fontSize: "11px",
-          fontFamily: "monospace",
-        }}
+        className="debug-overlay__reload-btn"
       >
         Reload Shaders
       </button>
-      <div style={{ fontSize: "10px", color: "var(--text-secondary)", textAlign: "center" }}>
+      <div className="debug-overlay__hint">
         Ctrl+Shift+D to hide
       </div>
     </div>

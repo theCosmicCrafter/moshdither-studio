@@ -9,6 +9,21 @@ uniform float u_angleM;  // Angle for Magenta
 uniform float u_angleY;  // Angle for Yellow
 uniform float u_angleK;  // Angle for Key (Black)
 
+// Audio-reactive uniforms
+uniform float u_audioBass;
+uniform float u_audioMid;
+uniform float u_audioTreble;
+uniform float u_audioAverage;
+uniform float u_audioCentroid;
+uniform float u_audioFlatness;
+uniform float u_audioRms;
+uniform float u_audioZcr;
+uniform float u_audioOnsetKick;
+uniform float u_audioOnsetSnare;
+uniform float u_audioOnsetHihat;
+uniform float u_audioLeft;
+uniform float u_audioRight;
+
 in vec2 v_texCoord;
 out vec4 fragColor;
 
@@ -42,11 +57,14 @@ void main() {
     float y = (1.0 - texColor.b - k) / (1.0 - k + 0.0001);
     
     vec2 screenCoord = v_texCoord * u_resolution;
-    
-    float dtC = halftone(screenCoord, u_angleC, c, u_dotSize);
-    float dtM = halftone(screenCoord, u_angleM, m, u_dotSize);
-    float dtY = halftone(screenCoord, u_angleY, y, u_dotSize);
-    float dtK = halftone(screenCoord, u_angleK, k, u_dotSize);
+
+    // Audio-reactive: treble jitters dot size
+    float audioDotSize = u_dotSize * (1.0 + u_audioTreble * 0.5);
+
+    float dtC = halftone(screenCoord, u_angleC, c, audioDotSize);
+    float dtM = halftone(screenCoord, u_angleM, m, audioDotSize);
+    float dtY = halftone(screenCoord, u_angleY, y, audioDotSize);
+    float dtK = halftone(screenCoord, u_angleK, k, audioDotSize);
     
     // Reconstruct RGB from CMYK dots
     float r = (1.0 - dtC * c) * (1.0 - dtK * k);

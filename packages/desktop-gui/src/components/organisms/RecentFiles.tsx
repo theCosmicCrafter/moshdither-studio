@@ -13,20 +13,20 @@ export const RecentFiles: React.FC = () => {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "8px" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-secondary)", fontWeight: 600, letterSpacing: "0.05em" }}>
+    <div className="recent-files">
+      <div className="recent-files__header">
+        <span className="recent-files__title">
           Recent Files
         </span>
         <button
           onClick={() => setOpen(!open)}
-          style={{ fontSize: "10px", color: "var(--accent-primary)", background: "none", border: "none", cursor: "pointer" }}
+          className="recent-files__toggle"
         >
           {open ? "Hide" : "Show"}
         </button>
       </div>
       {open && (
-        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+        <div className="recent-files__list">
           {recentFiles.slice(0, 10).map((path) => (
             <button
               key={path}
@@ -35,34 +35,14 @@ export const RecentFiles: React.FC = () => {
                 addRecentFile(path);
               }}
               title={path}
-              style={{
-                background: "transparent",
-                border: "none",
-                color: "var(--text-primary)",
-                padding: "6px 8px",
-                textAlign: "left",
-                cursor: "pointer",
-                borderRadius: "var(--radius-sm)",
-                fontSize: "12px",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
+              className="recent-files__item"
             >
               {basename(path)}
             </button>
           ))}
           <button
             onClick={clearRecentFiles}
-            style={{
-              background: "none",
-              border: "none",
-              color: "var(--text-secondary)",
-              fontSize: "10px",
-              cursor: "pointer",
-              textAlign: "left",
-              padding: "4px 8px",
-            }}
+            className="recent-files__clear"
           >
             Clear History
           </button>

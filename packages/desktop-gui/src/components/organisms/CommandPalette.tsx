@@ -18,7 +18,7 @@ export const CommandPalette: React.FC = () => {
   }, [query]);
 
   React.useEffect(() => {
-    setSelectedIndex(0);
+    queueMicrotask(() => setSelectedIndex(0));
   }, [query]);
 
   React.useEffect(() => {

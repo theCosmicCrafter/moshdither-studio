@@ -1,220 +1,154 @@
 /**
- * SAM 3 Tracker integration for MoshDither Studio.
+ * SAM 3 / AI Masking integration for MoshDither Studio.
  *
- * Lazy-loads the ONNX model from Hugging Face, caches it in app data,
- * and provides a click-to-segment function.
+ * Model loading and inference run in the MAIN PROCESS via IPC,
+ * because Transformers.js filesystem cache requires Node.js fs access
+ * which is unavailable in Electron's sandboxed renderer.
  *
- * Model: onnx-community/sam3-tracker-ONNX (point/box prompts, no text encoder)
+ * The renderer sends only the image file path + click coordinates.
+ * Main loads the image from disk, runs inference, returns mask bytes.
  */
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback } from "react";
 
 export type SAM3Status = "idle" | "loading" | "ready" | "error" | "segmenting";
 
 interface SAM3State {
   status: SAM3Status;
-  progress: number; // 0-100 download progress
+  progress: number;
+  loadingStep: string;
   error: string | null;
 }
-
-let globalModel: unknown | null = null;
-let globalProcessor: unknown | null = null;
-let loadPromise: Promise<void> | null = null;
 
 export function useSAM3() {
   const [state, setState] = useState<SAM3State>({
     status: "idle",
     progress: 0,
+    loadingStep: "",
     error: null,
   });
 
-  const abortRef = useRef(false);
-
-  const loadModel = useCallback(async (): Promise<void> => {
-    if (globalModel && globalProcessor) {
-      setState((s) => ({ ...s, status: "ready", progress: 100 }));
-      return;
-    }
-    if (loadPromise) {
-      await loadPromise;
-      return;
+  const loadModel = useCallback(async (): Promise<boolean> => {
+    if (!window.ipcRenderer) {
+      setState((s) => ({
+        ...s,
+        status: "error",
+        error: "IPC not available. Run inside Electron.",
+      }));
+      return false;
     }
 
-    setState({ status: "loading", progress: 0, error: null });
-    abortRef.current = false;
+    setState({
+      status: "loading",
+      progress: 10,
+      loadingStep: "Downloading model files...",
+      error: null,
+    });
 
-    loadPromise = (async () => {
-      try {
-        // Dynamic import to avoid bundling the large transformers library
-        // unless the user actually uses SAM 3
-        const { Sam3TrackerModel, AutoProcessor } =
-          await import("@huggingface/transformers");
+    try {
+      const result = (await window.ipcRenderer.invoke("sam3:load-model")) as {
+        ok: boolean;
+        error?: string;
+      };
 
-        if (abortRef.current) throw new Error("Aborted");
-
-        setState((s) => ({ ...s, progress: 20 }));
-
-        const MODEL_ID = "onnx-community/sam3-tracker-ONNX";
-        const cacheDir = await getCacheDir();
-
-        if (abortRef.current) throw new Error("Aborted");
-
-        const processor = await AutoProcessor.from_pretrained(MODEL_ID, {
-          cache_dir: cacheDir,
-          dtype: "fp16",
+      if (result.ok) {
+        setState({
+          status: "ready",
+          progress: 100,
+          loadingStep: "",
+          error: null,
         });
-
-        if (abortRef.current) throw new Error("Aborted");
-
-        setState((s) => ({ ...s, progress: 60 }));
-
-        const model = await Sam3TrackerModel.from_pretrained(MODEL_ID, {
-          cache_dir: cacheDir,
-          dtype: "fp16",
+        return true;
+      } else {
+        setState({
+          status: "error",
+          progress: 0,
+          loadingStep: "",
+          error: result.error || "Unknown model load error",
         });
-
-        if (abortRef.current) throw new Error("Aborted");
-
-        globalModel = model;
-        globalProcessor = processor;
-        setState({ status: "ready", progress: 100, error: null });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        setState({ status: "error", progress: 0, error: msg });
-        loadPromise = null;
-        throw err;
+        return false;
       }
-    })();
-
-    await loadPromise;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setState({
+        status: "error",
+        progress: 0,
+        loadingStep: "",
+        error: msg,
+      });
+      return false;
+    }
   }, []);
 
   const unloadModel = useCallback(() => {
-    abortRef.current = true;
-    globalModel = null;
-    globalProcessor = null;
-    loadPromise = null;
-    setState({ status: "idle", progress: 0, error: null });
+    setState({ status: "idle", progress: 0, loadingStep: "", error: null });
   }, []);
 
   /**
    * Segment an object at the given pixel coordinates.
    *
-   * @param image - The source image or video frame (HTMLImageElement or HTMLVideoElement)
+   * @param imagePath - Path to the image file (e.g. media://C:/.../img.jpg)
    * @param point - Click coordinate in image pixel space {x, y}
    * @returns Promise<Uint8Array> - Binary mask as 1-byte-per-pixel, or null on error
    */
   const segmentAtPoint = useCallback(
     async (
-      image: HTMLImageElement | HTMLVideoElement,
+      imagePath: string,
       point: { x: number; y: number },
     ): Promise<Uint8Array | null> => {
-      if (!globalModel || !globalProcessor) {
-        await loadModel();
+      if (!window.ipcRenderer) {
+        console.warn("IPC not available. Run inside Electron.");
+        return null;
       }
-      if (!globalModel || !globalProcessor) return null;
 
-      setState((s) => ({ ...s, status: "segmenting" }));
+      setState((s) => ({
+        ...s,
+        status: "segmenting",
+        loadingStep: "Segmenting object...",
+      }));
 
       try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const processor = globalProcessor as any;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const model = globalModel as any;
+        const result = (await window.ipcRenderer.invoke("sam3:segment", {
+          imagePath,
+          point,
+        })) as {
+          ok: boolean;
+          maskBase64?: string;
+          width?: number;
+          height?: number;
+          error?: string;
+        };
 
-        // Convert image/video to a canvas frame for the processor
-        const rawImage = await elementToRawImage(image);
-
-        const input_points = [[[[point.x, point.y]]]];
-        const input_labels = [[[1]]]; // 1 = foreground
-
-        const inputs = await processor(rawImage, {
-          input_points,
-          input_labels,
-        });
-
-        const outputs = await model(inputs);
-
-        const masks = await processor.post_process_masks(
-          outputs.pred_masks,
-          inputs.original_sizes,
-          inputs.reshaped_input_sizes,
-        );
-
-        // masks is a boolean Tensor [1, 3, H, W] (3 hypothesis masks)
-        // Take the best one (index 0 typically has highest score)
-        const maskTensor = masks[0][0]; // [H, W] boolean
-
-        // Convert tensor to Uint8Array
-        const [h, w] = maskTensor.dims;
-        const maskData = new Uint8Array(h * w);
-        const data = maskTensor.data as Uint8Array; // bool tensor data
-
-        for (let i = 0; i < h * w; i++) {
-          maskData[i] = data[i] ? 255 : 0;
+        if (!result.ok || !result.maskBase64) {
+          throw new Error(result.error || "Segmentation failed");
         }
 
-        setState((s) => ({ ...s, status: "ready" }));
-        return maskData;
+        // Decode raw mask bytes from base64
+        const rawBytes = Uint8Array.from(atob(result.maskBase64), (c) =>
+          c.charCodeAt(0),
+        );
+
+        setState((s) => ({ ...s, status: "ready", loadingStep: "" }));
+        return rawBytes;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        setState((s) => ({ ...s, status: "error", error: msg }));
+        setState((s) => ({
+          ...s,
+          status: "error",
+          loadingStep: "",
+          error: msg,
+        }));
         return null;
       }
     },
-    [loadModel],
+    [],
   );
 
   return {
     ...state,
+    progress: state.progress,
     loadModel,
     unloadModel,
     segmentAtPoint,
   };
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-async function getCacheDir(): Promise<string | undefined> {
-  // In Electron, ask main process for app data path
-  if (window.ipcRenderer) {
-    try {
-      return await window.ipcRenderer.invoke<string>("sam3:get-cache-dir");
-    } catch {
-      return undefined;
-    }
-  }
-  return undefined;
-}
-
-/**
- * Convert an HTMLImageElement or HTMLVideoElement to a RawImage
- * compatible with the Transformers.js processor.
- */
-async function elementToRawImage(
-  element: HTMLImageElement | HTMLVideoElement,
-): Promise<unknown> {
-  // Create a canvas to extract the frame
-  const canvas = document.createElement("canvas");
-  const width =
-    element instanceof HTMLImageElement
-      ? element.naturalWidth
-      : element.videoWidth;
-  const height =
-    element instanceof HTMLImageElement
-      ? element.naturalHeight
-      : element.videoHeight;
-  canvas.width = width || element.width;
-  canvas.height = height || element.height;
-
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Cannot create 2D context");
-
-  ctx.drawImage(element, 0, 0, canvas.width, canvas.height);
-
-  // Convert to RawImage format expected by Transformers.js
-  const { RawImage } = await import("@huggingface/transformers");
-  return RawImage.fromURL(canvas.toDataURL("image/png"));
 }

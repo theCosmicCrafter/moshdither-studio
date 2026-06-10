@@ -18,6 +18,7 @@ asar: true
 asarUnpack:
   - "**/node_modules/sharp/**/*"
   - "**/assets/bin/**/*"
+  - "**/assets/models/**/*"
 
 # ---------------------------------------------------------------------------
 # Code Signing

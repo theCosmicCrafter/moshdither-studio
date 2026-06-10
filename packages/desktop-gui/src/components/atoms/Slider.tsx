@@ -33,6 +33,7 @@ export const Slider: React.FC<SliderProps> = ({
         step={step}
         value={value}
         onChange={handleChange}
+        className="custom-range-slider"
         style={{
           ...style,
           background: `linear-gradient(to right, var(--accent-primary) 0%, var(--accent-primary) ${fillPercent}%, var(--bg-surface) ${fillPercent}%, var(--bg-surface) 100%)`,

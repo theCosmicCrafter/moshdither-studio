@@ -37,12 +37,17 @@ export const DebouncedControlGroup: React.FC<DebouncedControlGroupProps> = ({
 }) => {
   const [localValue, setLocalValue] = React.useState(value);
   const isInternalChange = React.useRef(false);
+  const prevValueRef = React.useRef(value);
 
-  // Keep local slider state in sync with external prop changes.
-  if (!isInternalChange.current && value !== localValue) {
-    setLocalValue(value);
-  }
-  isInternalChange.current = false;
+  // Keep local slider state in sync with external prop changes via useEffect
+  // instead of render-phase setState to prevent dropped inputs.
+  React.useEffect(() => {
+    if (!isInternalChange.current && value !== prevValueRef.current) {
+      setLocalValue(value);
+    }
+    prevValueRef.current = value;
+    isInternalChange.current = false;
+  }, [value]);
 
   const debouncedValue = useDebounce(localValue, delay);
 

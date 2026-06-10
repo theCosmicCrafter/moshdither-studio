@@ -2,6 +2,7 @@ import * as React from 'react';
 
 interface SplitViewProps {
   enabled: boolean;
+  hideSplitLine?: boolean;
   children: React.ReactNode;
   originalSrc: string | null;
 }
@@ -11,8 +12,34 @@ interface SplitViewProps {
  * When enabled, shows the original source on the left half
  * and the processed preview (children) on the right half.
  */
-export const SplitView: React.FC<SplitViewProps> = ({ enabled, children, originalSrc }) => {
-  if (!enabled || !originalSrc) return <>{children}</>;
+export const SplitView: React.FC<SplitViewProps> = ({ enabled, hideSplitLine = false, children, originalSrc }) => {
+  const [originalUrl, setOriginalUrl] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!originalSrc) return;
+
+    let objectUrl: string | null = null;
+
+    if (originalSrc.startsWith('media://') || originalSrc.startsWith('blob:')) {
+      fetch(originalSrc)
+        .then(r => r.blob())
+        .then(blob => {
+          objectUrl = URL.createObjectURL(blob);
+          setOriginalUrl(objectUrl);
+        })
+        .catch(() => setOriginalUrl(originalSrc));
+    } else {
+      setOriginalUrl(originalSrc);
+    }
+
+    return () => {
+      if (objectUrl?.startsWith('blob:')) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [originalSrc]);
+
+  if (!enabled || !originalUrl) return <>{children}</>;
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
@@ -26,12 +53,12 @@ export const SplitView: React.FC<SplitViewProps> = ({ enabled, children, origina
           height: '100%',
           overflow: 'hidden',
           zIndex: 2,
-          borderRight: '2px solid var(--accent-primary)',
+          borderRight: hideSplitLine ? 'none' : '2px solid var(--accent-primary)',
         }}
       >
-        {originalSrc.match(/\.(mp4|webm|mov)$/i) ? (
+        {originalUrl.match(/.(mp4|webm|mov|avi|mkv)$/i) ? (
           <video
-            src={originalSrc}
+            src={originalUrl}
             style={{ width: '200%', height: '100%', objectFit: 'contain' }}
             muted
             loop
@@ -39,7 +66,7 @@ export const SplitView: React.FC<SplitViewProps> = ({ enabled, children, origina
           />
         ) : (
           <img
-            src={originalSrc}
+            src={originalUrl}
             alt="Original"
             style={{ width: '200%', height: '100%', objectFit: 'contain' }}
           />

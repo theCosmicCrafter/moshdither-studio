@@ -17,8 +17,14 @@ let _intervalId: ReturnType<typeof setInterval> | null = null;
 let _warningThreshold = 0.85;
 let _criticalThreshold = 0.95;
 
+interface ChromeMemory {
+  usedJSHeapSize: number;
+  totalJSHeapSize: number;
+  jsHeapSizeLimit: number;
+}
+
 function getMemoryInfo(): MemorySnapshot | null {
-  const perf = (performance as any).memory;
+  const perf = (performance as unknown as { memory?: ChromeMemory }).memory;
   if (!perf) return null;
 
   const used = perf.usedJSHeapSize;
@@ -33,15 +39,13 @@ function getMemoryInfo(): MemorySnapshot | null {
   };
 }
 
-export function startMemoryMonitoring(
-  options?: {
-    intervalMs?: number;
-    warningThreshold?: number;
-    criticalThreshold?: number;
-    onWarning?: (mem: MemorySnapshot) => void;
-    onCritical?: (mem: MemorySnapshot) => void;
-  },
-): () => void {
+export function startMemoryMonitoring(options?: {
+  intervalMs?: number;
+  warningThreshold?: number;
+  criticalThreshold?: number;
+  onWarning?: (mem: MemorySnapshot) => void;
+  onCritical?: (mem: MemorySnapshot) => void;
+}): () => void {
   const {
     intervalMs = 5000,
     warningThreshold = 0.85,
@@ -92,7 +96,9 @@ export function stopMemoryMonitoring(): void {
   }
 }
 
-export function subscribeMemory(listener: (mem: MemorySnapshot) => void): () => void {
+export function subscribeMemory(
+  listener: (mem: MemorySnapshot) => void,
+): () => void {
   _listener = listener;
   return () => {
     if (_listener === listener) _listener = null;

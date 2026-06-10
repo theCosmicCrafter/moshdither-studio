@@ -1,6 +1,3 @@
-/* eslint-disable @typescript-eslint/ban-ts-comment */
-// @ts-nocheck
-// Stub file — known type issues tracked in AUD-005 (Agent 2 cleanup task)
 /**
  * Cloud Sync for MoshDither Studio.
  *
@@ -192,9 +189,11 @@ export async function listSyncedProjects(): Promise<
  * Share project — generates a read-only export link (stub for real backend).
  */
 export async function shareProject(
-  _projectId: string,
-  _options: { readOnly: boolean; expiresInDays?: number },
+  projectId: string,
+  options: { readOnly: boolean; expiresInDays?: number },
 ): Promise<string | null> {
+  void projectId;
+  void options;
   console.warn(
     "[CloudSync] shareProject requires cloud backend. Use local export for now.",
   );

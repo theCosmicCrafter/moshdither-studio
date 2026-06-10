@@ -2,8 +2,8 @@
 
 .glass-panel {
   background: var(--bg-panel);
-  backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
@@ -33,7 +33,10 @@
   align-items: center;
   justify-content: space-between;
   cursor: grab;
-  transition: transform 0.2s ease, border-color 0.2s ease;
+  transition:
+    transform 0.2s ease,
+    border-color 0.2s ease;
+  -webkit-user-select: none;
   user-select: none;
 }
 
@@ -68,6 +71,7 @@
 
 input[type="range"] {
   -webkit-appearance: none;
+  appearance: none;
   width: 100%;
   background: transparent;
   padding: 0;
@@ -82,7 +86,7 @@ input[type="range"]::-webkit-slider-thumb {
   background: var(--accent-primary);
   cursor: pointer;
   margin-top: -6px; /* You need to specify a margin in Chrome, but in Firefox and IE it is automatic */
-  box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
 }
 
 input[type="range"]::-webkit-slider-runnable-track {
@@ -91,4 +95,170 @@ input[type="range"]::-webkit-slider-runnable-track {
   cursor: pointer;
   background: var(--bg-surface-hover);
   border-radius: 2px;
+}
+
+/* Debug Overlay */
+.debug-overlay {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 99999;
+  background: rgba(0, 0, 0, 0.8);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 160px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: #fff;
+}
+
+.debug-overlay__metric {
+  display: flex;
+  justify-content: space-between;
+}
+
+.debug-overlay__metric-value--good {
+  color: #4ade80;
+}
+
+.debug-overlay__metric-value--warn {
+  color: #facc15;
+}
+
+.debug-overlay__metric-value--bad {
+  color: #f87171;
+}
+
+.debug-overlay__graph {
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.debug-overlay__reload-btn {
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.debug-overlay__reload-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.debug-overlay__hint {
+  font-size: 10px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+/* Export Presets */
+.export-presets {
+  position: relative;
+}
+
+.export-presets__dropdown {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: rgba(28, 28, 30, 0.95);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 100;
+  box-shadow: var(--shadow-lg);
+}
+
+.export-presets__item {
+  background: transparent;
+  border: none;
+  color: #fff;
+  padding: 8px 10px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+
+.export-presets__item:hover {
+  background: var(--bg-hover);
+}
+
+/* Recent Files */
+.recent-files {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.recent-files__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.recent-files__title {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.recent-files__toggle {
+  font-size: 10px;
+  color: var(--accent-primary);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.recent-files__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.recent-files__item {
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  padding: 6px 8px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-files__item:hover {
+  background: var(--bg-hover);
+}
+
+.recent-files__clear {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 10px;
+  cursor: pointer;
+  text-align: left;
+  padding: 4px 8px;
+}
+
+.recent-files__clear:hover {
+  color: var(--text-primary);
 }

@@ -34,10 +34,12 @@ export const EffectStack: React.FC = () => {
     }
   };
 
+  const idCounterRef = React.useRef(0);
+
   const duplicateEffect = (index: number) => {
     const fx = activeEffects[index];
     if (!fx) return;
-    const newId = `fx-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const newId = `fx-${++idCounterRef.current}`;
     const copy: typeof fx = {
       ...fx,
       id: newId,

@@ -67,6 +67,7 @@ export const Toast: React.FC<ToastProps> = ({ toast, onClose }) => {
         {toast.message}
       </div>
       <button
+        aria-label="Dismiss notification"
         onClick={onClose}
         style={{
           color: 'var(--text-tertiary)',

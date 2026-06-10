@@ -10,7 +10,7 @@ export default defineConfig({
       {
         entry: "electron/main.ts",
         onstart(options) {
-          options.reload();
+          options.startup();
         },
         vite: {
           build: {
@@ -19,7 +19,7 @@ export default defineConfig({
               formats: ["cjs"],
             },
             rollupOptions: {
-              external: ["electron"],
+              external: ["electron", "@huggingface/transformers"],
               output: {
                 entryFileNames: "[name].cjs",
               },

@@ -403,6 +403,54 @@ input[type="range"]::-webkit-slider-thumb:active {
   animation: pulse-glow 2s ease-in-out infinite;
 }
 
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(0.85);
+  }
+}
+
+/* === WINDOW CONTROLS (frameless) === */
+.window-controls {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin-left: 12px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border-color);
+}
+
+.window-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 4px;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.window-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+
+.window-btn.close:hover {
+  background: #e81123;
+  color: #fff;
+}
+
 /* === REDUCED MOTION === */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -410,5 +458,63 @@ input[type="range"]::-webkit-slider-thumb:active {
   *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* Custom range slider thumb styling */
+input[type="range"].custom-range-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  border: 2px solid #fff;
+  cursor: pointer;
+  box-shadow: 0 0 6px var(--accent-glow);
+  transition:
+    transform 0.1s ease,
+    box-shadow 0.2s ease;
+}
+
+input[type="range"].custom-range-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+
+input[type="range"].custom-range-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  border: 2px solid #fff;
+  cursor: pointer;
+  box-shadow: 0 0 6px var(--accent-glow);
+}
+
+/* Drag-and-drop overlay */
+.drag-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  background: rgba(15, 15, 17, 0.85);
+  border: 2px dashed var(--accent-primary);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-primary);
+  pointer-events: none;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
   }
 }

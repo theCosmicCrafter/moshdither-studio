@@ -14,6 +14,7 @@ import type { WatermarkSettings } from '../../utils/watermark';
 import { generateBeatKeyframes } from '../../utils/beatKeyframeGenerator';
 import { detectBeats, decodeAudioFile } from '../../utils/beatDetection';
 import type { BeatKeyframeMode } from '../../utils/beatKeyframeGenerator';
+import { useSAM3 } from '../../hooks/useSAM3';
 
 export const PropertiesPanel: React.FC = () => {
   const { 
@@ -42,6 +43,7 @@ export const PropertiesPanel: React.FC = () => {
     watermarkSettings,
     setWatermarkSettings,
   } = useStudio();
+  const { status: samStatus, progress: samProgress, loadingStep: samLoadingStep, error: samError } = useSAM3();
   const [modsOpen, setModsOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [systemFonts, setSystemFonts] = useState<string[]>([]);
@@ -782,7 +784,7 @@ export const PropertiesPanel: React.FC = () => {
                   <option value="brush">Brush (Draw Mask on Canvas)</option>
                   <option value="radial">Radial Gradient (Circular area)</option>
                   <option value="linear">Linear Gradient (Split screen)</option>
-                  <option value="sam">SAM AI Mask (Click to Segment)</option>
+                  <option value="sam">AI Masking (Click to Segment)</option>
                 </select>
               </div>
 
@@ -887,6 +889,65 @@ export const PropertiesPanel: React.FC = () => {
 
               {activeFx.mask?.type === 'sam' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '8px 0' }}>
+                  {/* SAM Model Status Badge */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      padding: '6px 10px',
+                      borderRadius: '6px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      background:
+                        samStatus === 'ready'
+                          ? 'rgba(0,255,170,0.15)'
+                          : samStatus === 'loading'
+                            ? 'rgba(0,170,255,0.15)'
+                            : samStatus === 'error'
+                              ? 'rgba(255,80,80,0.15)'
+                              : 'rgba(255,255,255,0.05)',
+                      color:
+                        samStatus === 'ready'
+                          ? 'var(--accent-primary)'
+                          : samStatus === 'loading'
+                            ? '#00aaff'
+                            : samStatus === 'error'
+                              ? '#ff5050'
+                              : 'var(--text-tertiary)',
+                      border: `1px solid ${samStatus === 'ready' ? 'rgba(0,255,170,0.3)' : samStatus === 'loading' ? 'rgba(0,170,255,0.3)' : samStatus === 'error' ? 'rgba(255,80,80,0.3)' : 'rgba(255,255,255,0.1)'}`,
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: '50%',
+                        background:
+                          samStatus === 'ready'
+                            ? 'var(--accent-primary)'
+                            : samStatus === 'loading'
+                              ? '#00aaff'
+                              : samStatus === 'error'
+                                ? '#ff5050'
+                                : '#888',
+                        animation: samStatus === 'loading' ? 'pulse 1.5s ease-in-out infinite' : 'none',
+                      }}
+                    />
+                    <span>
+                      {samStatus === 'ready'
+                        ? 'Model Ready'
+                        : samStatus === 'loading'
+                          ? `Loading Model ${Math.round(samProgress)}%`
+                          : samStatus === 'error'
+                            ? `Error: ${samError}`
+                            : 'Model Not Loaded'}
+                    </span>
+                  </div>
+                  {/* Loading step description */}
+                  {samStatus === 'loading' && samLoadingStep && (
+                    <span style={{ fontSize: '10px', color: '#00aaff', opacity: 0.9 }}>{samLoadingStep}</span>
+                  )}
                   <span style={{ fontSize: '11px', color: 'var(--text-tertiary)' }}>
                     Click on the canvas to segment the clicked object. The effect will apply only inside the segmented region.
                   </span>
@@ -904,7 +965,7 @@ export const PropertiesPanel: React.FC = () => {
                           ));
                         }}
                       >
-                        Clear SAM Mask
+                        Clear AI Mask
                       </Button>
                     </div>
                   )}

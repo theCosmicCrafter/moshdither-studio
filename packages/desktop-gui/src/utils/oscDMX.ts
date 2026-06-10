@@ -6,8 +6,6 @@
  * and a DMX serial output stub for lighting control.
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
 export interface OSCMessage {
   address: string;
   args: (number | string | boolean | Uint8Array)[];
@@ -135,7 +133,9 @@ export async function startOSCListener(port = 9000): Promise<number | null> {
               oscListeners.forEach((cb) => {
                 try {
                   cb(msg);
-                } catch {}
+                } catch {
+                  /* ignore listener errors */
+                }
               });
             }
           });

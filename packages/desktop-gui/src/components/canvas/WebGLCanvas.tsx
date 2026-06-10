@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { useStudio } from '../../context/StudioContext';
+import { useAudioReactiveContext } from '../../hooks/useAudioReactiveContext';
 import { WEBGL_EFFECT_TYPES, BLEND_MODE_MAP } from '../../types/effectTypes';
 import type { Effect } from '../../types/effectTypes';
 import {
@@ -38,7 +39,7 @@ precision highp float;
 uniform sampler2D u_original;
 uniform sampler2D u_glitched;
 uniform sampler2D u_mask;
-uniform int u_maskType; // 0=none, 1=brush, 2=radial, 3=linear
+uniform int u_maskType; // 0=none, 1=brush, 2=radial, 3=linear, 4=sam
 uniform vec2 u_radialCenter;
 uniform float u_radialRadius;
 uniform float u_linearAngle;
@@ -52,7 +53,7 @@ void main() {
     vec4 orig = texture(u_original, v_texCoord);
     vec4 glitched = texture(u_glitched, v_texCoord);
     float maskVal = 1.0;
-    
+
     if (u_maskType == 1) { // brush
         maskVal = texture(u_mask, v_texCoord).r;
     } else if (u_maskType == 2) { // radial
@@ -65,12 +66,14 @@ void main() {
         vec2 dir = vec2(cos(angleRad), sin(angleRad));
         float dist = dot(uv - vec2(0.5), dir) + u_linearOffset;
         maskVal = smoothstep(-0.05, 0.05, dist);
+    } else if (u_maskType == 4) { // sam ai mask
+        maskVal = texture(u_mask, v_texCoord).r;
     }
-    
+
     if (u_invert == 1) {
         maskVal = 1.0 - maskVal;
     }
-    
+
     fragColor = mix(orig, glitched, maskVal);
 }
 `;
@@ -80,7 +83,8 @@ void main() {
 export const WebGLCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
-  const { activeEffects, mediaUrl, proxyUrl, qualityMode, maskCanvas } = useStudio();
+  const { activeEffects, mediaUrl, proxyUrl, qualityMode, maskCanvas, aspectRatio } = useStudio();
+  const { featuresRef: audioFeaturesRef } = useAudioReactiveContext();
   const previewUrl = proxyUrl || mediaUrl;
 
   // Use a ref for the loaded media element to avoid setState-in-effect anti-pattern.
@@ -90,6 +94,12 @@ export const WebGLCanvas: React.FC = () => {
 
   // Track previous video element for cleanup
   const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  // SAM mask texture cache: effectId -> WebGLTexture
+  const samMaskTexturesRef = useRef<Map<string, WebGLTexture>>(new Map());
+  const samMaskDataRef = useRef<Map<string, string>>(new Map());
+  // Pre-decoded SAM mask images: effectId -> HTMLImageElement
+  const samMaskImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
 
   // Load image or video when previewUrl changes (uses proxy if available)
   useEffect(() => {
@@ -164,6 +174,27 @@ export const WebGLCanvas: React.FC = () => {
       };
     }
   }, [previewUrl]);
+
+  // Pre-decode SAM mask base64 PNGs so the render loop stays synchronous
+  useEffect(() => {
+    const samEffects = activeEffects.filter(
+      (fx) => fx.mask?.type === 'sam' && fx.mask.samMaskData,
+    );
+    const images = samMaskImagesRef.current;
+
+    samEffects.forEach((fx) => {
+      const dataUrl = fx.mask!.samMaskData!;
+      if (!images.has(fx.id) || (images.get(fx.id) as HTMLImageElement).src !== dataUrl) {
+        const img = new Image();
+        img.src = dataUrl;
+        img.onload = () => {
+          images.set(fx.id, img);
+          // Trigger a re-render so the decoded image is picked up
+          setMediaReadyRev((r) => r + 1);
+        };
+      }
+    });
+  }, [activeEffects]);
 
   // Render loop with requestAnimationFrame
   useEffect(() => {
@@ -384,6 +415,25 @@ export const WebGLCanvas: React.FC = () => {
       setUniform2f(glCtx, uniformCache, prog, name, x, y);
     }
 
+    function _setAudioUniforms(prog: WebGLProgram) {
+      const audio = audioFeaturesRef.current;
+      if (!audio) return;
+      _setUniform1f(prog, 'u_audioBass', audio.bass);
+      _setUniform1f(prog, 'u_audioMid', audio.mid);
+      _setUniform1f(prog, 'u_audioTreble', audio.treble);
+      _setUniform1f(prog, 'u_audioAverage', audio.average);
+      _setUniform1f(prog, 'u_audioCentroid', audio.spectralCentroid);
+      _setUniform1f(prog, 'u_audioFlatness', audio.spectralFlatness);
+      _setUniform1f(prog, 'u_audioRolloff', audio.spectralRolloff);
+      _setUniform1f(prog, 'u_audioRms', audio.rms);
+      _setUniform1f(prog, 'u_audioZcr', audio.zcr);
+      _setUniform1f(prog, 'u_audioOnsetKick', audio.onsetKick);
+      _setUniform1f(prog, 'u_audioOnsetSnare', audio.onsetSnare);
+      _setUniform1f(prog, 'u_audioOnsetHihat', audio.onsetHihat);
+      _setUniform1f(prog, 'u_audioLeft', audio.left);
+      _setUniform1f(prog, 'u_audioRight', audio.right);
+    }
+
     let animationFrameId = 0;
     const startTime = Date.now();
 
@@ -509,6 +559,16 @@ export const WebGLCanvas: React.FC = () => {
             }
           }
 
+          _setAudioUniforms(program);
+
+          // Aspect ratio letterboxing
+          const mediaW = textureSourceRef.current ? ('videoWidth' in textureSourceRef.current ? textureSourceRef.current.videoWidth : textureSourceRef.current.width) : 1;
+          const mediaH = textureSourceRef.current ? ('videoHeight' in textureSourceRef.current ? textureSourceRef.current.videoHeight : textureSourceRef.current.height) : 1;
+          const mediaAspect = mediaW / mediaH;
+          const canvasAspect = canvas.width / canvas.height;
+          _setUniform1f(program, 'u_mediaAspect', mediaAspect);
+          _setUniform1f(program, 'u_canvasAspect', canvasAspect);
+
           gl.drawArrays(gl.TRIANGLES, 0, 6);
 
           // Step 2: Composite effect output onto the previous state
@@ -530,11 +590,44 @@ export const WebGLCanvas: React.FC = () => {
             gl.bindTexture(gl.TEXTURE_2D, tempTex);
             gl.uniform1i(gl.getUniformLocation(blendMaskProgram, 'u_glitched'), 1);
 
+            // Determine which mask texture to bind
+            let boundMaskTexture = maskTexture;
+            const isSAM = fx.mask!.type === 'sam';
+            if (isSAM && fx.mask!.samMaskData) {
+              const samTextures = samMaskTexturesRef.current;
+              const samDataMap = samMaskDataRef.current;
+              const samImages = samMaskImagesRef.current;
+              const prevData = samDataMap.get(fx.id);
+              let samTex = samTextures.get(fx.id);
+              const img = samImages.get(fx.id);
+              if (img && (!samTex || prevData !== fx.mask!.samMaskData)) {
+                if (!samTex) {
+                  samTex = gl.createTexture();
+                  if (samTex) {
+                    samTextures.set(fx.id, samTex);
+                    resources.textures.push(samTex);
+                  }
+                }
+                if (samTex) {
+                  gl.bindTexture(gl.TEXTURE_2D, samTex);
+                  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+                  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+                  samDataMap.set(fx.id, fx.mask!.samMaskData);
+                  boundMaskTexture = samTex;
+                }
+              } else if (samTex) {
+                boundMaskTexture = samTex;
+              }
+            }
+
             gl.activeTexture(gl.TEXTURE2);
-            gl.bindTexture(gl.TEXTURE_2D, maskTexture);
+            gl.bindTexture(gl.TEXTURE_2D, boundMaskTexture);
             gl.uniform1i(gl.getUniformLocation(blendMaskProgram, 'u_mask'), 2);
 
-            const maskTypeMap = { none: 0, brush: 1, radial: 2, linear: 3 };
+            const maskTypeMap = { none: 0, brush: 1, radial: 2, linear: 3, sam: 4 };
             const mType = maskTypeMap[fx.mask!.type] || 0;
             _setUniform1i(blendMaskProgram, 'u_maskType', mType);
             const radialCenter = fx.mask!.radialCenter || { x: 0.5, y: 0.5 };
@@ -614,7 +707,7 @@ export const WebGLCanvas: React.FC = () => {
       resources.buffers.forEach((b) => gl.deleteBuffer(b));
       resources.framebuffers.forEach((f) => gl.deleteFramebuffer(f));
     };
-  }, [activeEffects, mediaReadyRev, qualityMode, maskCanvas]);
+  }, [activeEffects, mediaReadyRev, qualityMode, maskCanvas, audioFeaturesRef]);
 
   return (
     <div ref={wrapperRef} style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -625,10 +718,12 @@ export const WebGLCanvas: React.FC = () => {
         style={{
           maxWidth: '100%',
           maxHeight: '100%',
+          width: 'auto',
+          height: 'auto',
           boxShadow: 'var(--shadow-lg)',
           background: '#000',
           borderRadius: '4px',
-          display: 'block'
+          display: 'block',
         }}
       />
     </div>

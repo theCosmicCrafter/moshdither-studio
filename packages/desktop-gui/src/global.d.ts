@@ -15,9 +15,17 @@ export interface IpcRendererApi {
   invoke<T = unknown>(channel: string, ...args: unknown[]): Promise<T>;
 }
 
+export interface WindowControlsApi {
+  minimize(): Promise<void>;
+  maximize(): Promise<void>;
+  close(): Promise<void>;
+  isMaximized(): Promise<boolean>;
+}
+
 declare global {
   interface Window {
     ipcRenderer: IpcRendererApi;
+    windowControls?: WindowControlsApi;
   }
 }
 

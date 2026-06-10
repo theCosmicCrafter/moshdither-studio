@@ -8,6 +8,7 @@ import {
   safeStorage,
   Menu,
   TouchBar,
+  shell,
 } from "electron";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -177,10 +178,18 @@ let win: BrowserWindow | null;
 const VITE_DEV_SERVER_URL = process.env["VITE_DEV_SERVER_URL"];
 
 function createWindow() {
+  const isMac = process.platform === "darwin";
   win = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    width: 1400,
+    height: 900,
+    minWidth: 960,
+    minHeight: 600,
     icon: path.join(process.env.VITE_PUBLIC || "", "electron-vite.svg"),
+    // macOS: frameless with hidden title bar for traffic-light buttons
+    // Windows/Linux: keep native frame so the menu bar renders correctly
+    frame: !isMac,
+    titleBarStyle: isMac ? "hidden" : undefined,
+    trafficLightPosition: isMac ? { x: 16, y: 14 } : undefined,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -231,6 +240,26 @@ function createWindow() {
     win.loadFile(path.join(distPath, "index.html"));
   }
 }
+
+// ---------------------------------------------------------------------------
+// Window control IPC handlers (for frameless custom title bar)
+// ---------------------------------------------------------------------------
+ipcMain.handle("window:minimize", () => {
+  win?.minimize();
+});
+ipcMain.handle("window:maximize", () => {
+  if (win?.isMaximized()) {
+    win.unmaximize();
+  } else {
+    win?.maximize();
+  }
+});
+ipcMain.handle("window:close", () => {
+  win?.close();
+});
+ipcMain.handle("window:isMaximized", () => {
+  return win?.isMaximized() ?? false;
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
@@ -494,14 +523,138 @@ app.whenReady().then(() => {
     },
   );
 
-  // SAM 3 model cache directory
-  ipcMain.handle("sam3:get-cache-dir", async (event) => {
-    validateIpcSender(event);
-    const cacheDir = path.join(app.getPath("userData"), "sam3-cache");
-    if (!fs.existsSync(cacheDir)) {
-      fs.mkdirSync(cacheDir, { recursive: true });
+  // ---------------------------------------------------------------------------
+  // SAM 3 / AI Masking Model — runs in main process (Node.js has fs access)
+  // ---------------------------------------------------------------------------
+  let samModel: unknown | null = null;
+  let samProcessor: unknown | null = null;
+  let samLoadPromise: Promise<void> | null = null;
+
+  const SAM_CACHE_DIR = path.join(app.getPath("userData"), "sam3-cache");
+  if (!fs.existsSync(SAM_CACHE_DIR)) {
+    fs.mkdirSync(SAM_CACHE_DIR, { recursive: true });
+  }
+
+  async function loadSAM3Model(): Promise<void> {
+    if (samModel && samProcessor) return;
+    if (samLoadPromise) {
+      await samLoadPromise;
+      return;
     }
-    return cacheDir;
+
+    samLoadPromise = (async () => {
+      try {
+        // Dynamic import to avoid loading Transformers.js until needed
+        const transformers = await import("@huggingface/transformers");
+        const { Sam3TrackerModel, AutoProcessor, env } = transformers;
+
+        // Use filesystem cache only (main process has Node.js fs)
+        env.useBrowserCache = false;
+        env.useFSCache = true;
+        env.cacheDir = SAM_CACHE_DIR;
+
+        const MODEL_ID = "onnx-community/sam3-tracker-ONNX";
+
+        console.log("[Main] Loading SAM 3 processor...");
+        samProcessor = await AutoProcessor.from_pretrained(MODEL_ID, {
+          cache_dir: SAM_CACHE_DIR,
+          dtype: "fp16",
+        });
+        console.log("[Main] SAM 3 processor loaded");
+
+        console.log("[Main] Loading SAM 3 model...");
+        samModel = await Sam3TrackerModel.from_pretrained(MODEL_ID, {
+          cache_dir: SAM_CACHE_DIR,
+          dtype: "fp16",
+        });
+        console.log("[Main] SAM 3 model loaded");
+      } catch (err) {
+        samLoadPromise = null;
+        console.error("[Main] SAM 3 load failed:", err);
+        throw err;
+      }
+    })();
+
+    await samLoadPromise;
+  }
+
+  ipcMain.handle("sam3:load-model", async (event) => {
+    validateIpcSender(event);
+    try {
+      await loadSAM3Model();
+      return { ok: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: msg };
+    }
+  });
+
+  ipcMain.handle("sam3:segment", async (event, payload) => {
+    validateIpcSender(event);
+    const { imagePath, point } = payload as {
+      imagePath: string;
+      point: { x: number; y: number };
+    };
+
+    try {
+      await loadSAM3Model();
+      if (!samModel || !samProcessor) {
+        throw new Error("Model not loaded");
+      }
+
+      // Resolve media:// URL to real file path
+      const filePath = imagePath.replace(/^media:\/\//, "");
+      if (!fs.existsSync(filePath)) {
+        throw new Error(`Image file not found: ${filePath}`);
+      }
+
+      // Load image directly from disk using Transformers.js RawImage
+      const { RawImage } = await import("@huggingface/transformers");
+      const rawImage = await RawImage.read(filePath);
+
+      // Run inference
+      const processor = samProcessor as any;
+      const model = samModel as any;
+
+      const input_points = [[[[point.x, point.y]]]];
+      const input_labels = [[[1]]]; // 1 = foreground
+
+      const inputs = await processor(rawImage, {
+        input_points,
+        input_labels,
+      });
+
+      const outputs = await model(inputs);
+
+      const masks = await processor.post_process_masks(
+        outputs.pred_masks,
+        inputs.original_sizes,
+        inputs.reshaped_input_sizes,
+      );
+
+      // masks is [1, 3, H, W] boolean — take best (index 0)
+      const maskTensor = masks[0][0]; // [H, W]
+      const [h, w] = maskTensor.dims;
+      const data = maskTensor.data as Uint8Array;
+
+      // Return raw mask bytes (0 or 255) as base64
+      const maskBytes = new Uint8Array(h * w);
+      for (let i = 0; i < h * w; i++) {
+        maskBytes[i] = data[i] ? 255 : 0;
+      }
+      const maskBase64 = Buffer.from(maskBytes).toString("base64");
+
+      return {
+        ok: true,
+        maskBase64,
+        width: w,
+        height: h,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[Main] SAM 3 segmentation failed:", msg);
+      return { ok: false, error: msg };
+    }
   });
 
   // System font discovery for watermark text rendering
@@ -1233,43 +1386,141 @@ app.whenReady().then(() => {
   // Platform-specific stubs
   // ---------------------------------------------------------------------------
 
-  // Native menu bar (macOS)
-  if (process.platform === "darwin") {
-    const template: Electron.MenuItemConstructorOptions[] = [
-      {
-        label: app.name,
-        submenu: [{ role: "about" }, { type: "separator" }, { role: "quit" }],
-      },
-      {
-        label: "File",
-        submenu: [
+  // ---------------------------------------------------------------------------
+  // Native application menu (all platforms)
+  // ---------------------------------------------------------------------------
+  const isMac = process.platform === "darwin";
+  const template: Electron.MenuItemConstructorOptions[] = [
+    // macOS App menu
+    ...(isMac
+      ? [
           {
-            label: "Import Media",
-            accelerator: "CmdOrCtrl+O",
-            click: () => win?.webContents.send("menu:import"),
+            label: app.name,
+            submenu: [
+              { role: "about" },
+              { type: "separator" },
+              { role: "services" },
+              { type: "separator" },
+              { role: "hide" },
+              { role: "hideOthers" },
+              { role: "unhide" },
+              { type: "separator" },
+              { role: "quit" },
+            ],
           },
+        ]
+      : []),
+    {
+      label: "File",
+      submenu: [
+        {
+          label: "Open Media...",
+          accelerator: "CmdOrCtrl+O",
+          click: () => win?.webContents.send("menu:import"),
+        },
+        {
+          label: "Open Recent",
+          submenu: [{ label: "Clear Recent", enabled: false }],
+        },
+        { type: "separator" },
+        {
+          label: "Export...",
+          accelerator: "CmdOrCtrl+Shift+E",
+          click: () => win?.webContents.send("menu:export"),
+        },
+        { type: "separator" },
+        {
+          label: "Download AI Masking Model",
+          accelerator: "CmdOrCtrl+Shift+M",
+          click: () => win?.webContents.send("menu:preload-model"),
+        },
+        { type: "separator" },
+        ...(isMac
+          ? []
+          : ([{ role: "quit" }] as Electron.MenuItemConstructorOptions[])),
+      ],
+    },
+    {
+      label: "Edit",
+      submenu: [
+        { role: "undo" },
+        { role: "redo" },
+        { type: "separator" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        ...(isMac
+          ? [
+              { role: "pasteAndMatchStyle" },
+              { role: "delete" },
+              { role: "selectAll" },
+              { type: "separator" },
+              {
+                label: "Speech",
+                submenu: [{ role: "startSpeaking" }, { role: "stopSpeaking" }],
+              },
+            ]
+          : [{ role: "delete" }, { type: "separator" }, { role: "selectAll" }]),
+      ],
+    },
+    {
+      label: "View",
+      submenu: [
+        { role: "reload" },
+        { role: "forceReload" },
+        { role: "toggleDevTools" },
+        { type: "separator" },
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
+    },
+    // Window menu
+    ...(isMac
+      ? [
           {
-            label: "Export",
-            accelerator: "CmdOrCtrl+Shift+E",
-            click: () => win?.webContents.send("menu:export"),
+            label: "Window",
+            submenu: [
+              { role: "minimize" },
+              { role: "zoom" },
+              { type: "separator" },
+              { role: "front" },
+              { type: "separator" },
+              { role: "window" },
+            ],
           },
-        ],
-      },
-      {
-        label: "View",
-        submenu: [
-          { role: "reload" },
-          { role: "forceReload" },
-          { role: "toggleDevTools" },
-          { type: "separator" },
-          { role: "resetZoom" },
-          { role: "zoomIn" },
-          { role: "zoomOut" },
-        ],
-      },
-    ];
-    Menu.setApplicationMenu(Menu.buildFromTemplate(template));
-  }
+        ]
+      : [
+          {
+            label: "Window",
+            submenu: [{ role: "minimize" }, { role: "close" }],
+          },
+        ]),
+    {
+      label: "Help",
+      submenu: [
+        {
+          label: "Keyboard Shortcuts",
+          accelerator: "CmdOrCtrl+K",
+          click: () => win?.webContents.send("menu:shortcuts"),
+        },
+        {
+          label: "Documentation",
+          click: () =>
+            shell.openExternal("https://github.com/richk/MoshDither-Studio"),
+        },
+        { type: "separator" },
+        {
+          label: "Toggle Developer Tools",
+          accelerator: "F12",
+          click: () => win?.webContents.toggleDevTools(),
+        },
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 
   // Touch Bar (macOS)
   if (process.platform === "darwin" && win) {

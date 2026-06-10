@@ -20,8 +20,7 @@ describe("OSC Parser", () => {
     // Type tag
     bytes[offset++] = ",".charCodeAt(0);
     bytes[offset++] = "i".charCodeAt(0);
-    bytes[offset++] = "f".charCodeAt(0);
-    offset = 12; // pad to 12
+    bytes[offset] = "f".charCodeAt(0);
 
     // Data
     const data = new DataView(buffer);
@@ -49,7 +48,7 @@ describe("OSC Parser", () => {
     offset = 8;
 
     bytes[offset++] = ",".charCodeAt(0);
-    bytes[offset++] = "s".charCodeAt(0);
+    bytes[offset] = "s".charCodeAt(0);
     offset = 12;
 
     const str = "world";

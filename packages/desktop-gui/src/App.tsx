@@ -15,6 +15,7 @@ import { installRendererCrashReporter } from './utils/rendererCrashReporter';
 import { CrashRecoveryDialog } from './components/organisms/CrashRecoveryDialog';
 import { CommandPalette } from './components/organisms/CommandPalette';
 import { KeyboardShortcutsEditor } from './components/organisms/KeyboardShortcutsEditor';
+// AI model preload is now handled via IPC to main process (see menu:preload-model listener)
 import { StatusBar } from './components/layout/StatusBar';
 import { OnboardingModal } from './components/organisms/OnboardingModal';
 import { DebugOverlay } from './components/organisms/DebugOverlay';
@@ -55,6 +56,77 @@ const AppContent: React.FC = () => {
         });
       }
     });
+  }, [isBrowser]);
+
+  // Listen for native menu events from main process
+  React.useEffect(() => {
+    if (isBrowser || !window.ipcRenderer) return;
+
+    const handleImport = () => {
+      // Trigger the same logic as the Import button
+      window.ipcRenderer.invoke('dialog:openMedia').then((filePath: unknown) => {
+        if (filePath) {
+          setMediaUrl(filePath as string);
+        }
+      });
+    };
+
+    const handleExport = () => {
+      if (!mediaUrl) {
+        addToast('No media loaded to export.', 'error');
+        return;
+      }
+      // Trigger render pipeline
+      addRenderJob({
+        inputUrl: mediaUrl,
+        outputDir: outputDirectory || '',
+        format: exportFormat || 'same',
+        fps: exportFps || 30,
+        activeEffects,
+        watermarkSettings,
+      });
+    };
+
+    const removeImport = window.ipcRenderer.on('menu:import', handleImport);
+    const removeExport = window.ipcRenderer.on('menu:export', handleExport);
+    const removeShortcuts = window.ipcRenderer.on('menu:shortcuts', () => setShowShortcutsEditor(true));
+    const removePreload = window.ipcRenderer.on('menu:preload-model', () => {
+      addToast('Starting AI Masking model download...', 'info');
+      window.ipcRenderer.invoke('sam3:load-model').then((result: unknown) => {
+        const r = result as { ok: boolean; error?: string };
+        if (r.ok) {
+          addToast('AI Masking model ready!', 'success');
+        } else {
+          addToast('AI Masking model failed to load. Check console for details.', 'error');
+        }
+      }).catch((err) => {
+        console.error('[App] Model preload failed:', err);
+        addToast(`AI Masking model error: ${err instanceof Error ? err.message : String(err)}`, 'error');
+      });
+    });
+
+    return () => {
+      removeImport();
+      removeExport();
+      removeShortcuts();
+      removePreload();
+    };
+  }, [isBrowser]);
+
+  // Auto-preload AI Masking model in background after app startup
+  React.useEffect(() => {
+    if (isBrowser) return;
+    // Delay to not block startup — preload after 3 seconds
+    const timer = setTimeout(() => {
+      console.log('[App] Auto-preloading AI Masking model in background...');
+      window.ipcRenderer.invoke('sam3:load-model').then((result: unknown) => {
+        const r = result as { ok: boolean; error?: string };
+        console.log('[App] Auto-preload result:', r.ok ? 'ready' : 'failed');
+      }).catch((err) => {
+        console.warn('[App] Auto-preload error (will retry on first use):', err);
+      });
+    }, 3000);
+    return () => clearTimeout(timer);
   }, [isBrowser]);
 
   // Listen for main-process WebGL export requests

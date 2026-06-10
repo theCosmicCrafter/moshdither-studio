@@ -24,24 +24,34 @@ function formatBytes(bytes: number): string {
 export const StatusBar: React.FC = () => {
   const { currentTime, duration, renderProgress, isRendering, addToast } = useStudio();
   const { gpuInfo } = useGPUInfo();
-  const [cacheStats, setCacheStats] = useState(() => getCacheStats());
+  const [cacheStats, setCacheStats] = useState({ entries: 0, sizeMB: 0 });
 
-  const refreshCacheStats = useCallback(() => setCacheStats(getCacheStats()), []);
+  const refreshCacheStats = useCallback(() => {
+    getCacheStats().then((stats) => setCacheStats(stats));
+  }, []);
 
   useEffect(() => {
-    const id = setInterval(refreshCacheStats, 10000);
-    return () => clearInterval(id);
-  }, [refreshCacheStats]);
+    let mounted = true;
+    getCacheStats().then((stats) => {
+      if (mounted) setCacheStats(stats);
+    });
+    const id = setInterval(() => {
+      getCacheStats().then((stats) => {
+        if (mounted) setCacheStats(stats);
+      });
+    }, 10000);
+    return () => { mounted = false; clearInterval(id); };
+  }, []);
 
-  const handleClearCache = useCallback(() => {
-    clearFrameCache();
+  const handleClearCache = useCallback(async () => {
+    await clearFrameCache();
     refreshCacheStats();
     addToast("Frame cache cleared", "info");
   }, [refreshCacheStats, addToast]);
 
   const { memory, warning: memWarning, critical: memCritical } = useMemoryMonitor({
-    onCritical: () => {
-      clearFrameCache();
+    onCritical: async () => {
+      await clearFrameCache();
       refreshCacheStats();
       addToast("Critical memory — frame cache purged", "error");
     },

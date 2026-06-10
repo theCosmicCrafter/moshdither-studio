@@ -7,7 +7,6 @@ import { RenderQueue } from '../organisms/RenderQueue';
 import { BatchProcessor } from '../organisms/BatchProcessor';
 import { ExportPresets } from '../organisms/ExportPresets';
 import { RecentFiles } from '../organisms/RecentFiles';
-import { MIDIManager } from '../molecules/MIDIManager';
 import { Button } from '../atoms/Button';
 import { Icon } from '../atoms/Icon';
 import type { EffectType, Effect } from '../../types/effectTypes';
@@ -171,7 +170,6 @@ export const Sidebar: React.FC = () => {
         <RenderQueue />
         <BatchProcessor />
         <RecentFiles />
-        <MIDIManager />
       </div>
     </div>
   );

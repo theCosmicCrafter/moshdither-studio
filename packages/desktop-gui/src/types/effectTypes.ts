@@ -110,13 +110,17 @@ export type EffectParams =
 // ---------------------------------------------------------------------------
 
 export interface EffectMask {
-  type: "none" | "brush" | "radial" | "linear";
+  type: "none" | "brush" | "radial" | "linear" | "sam";
   brushData?: string; // Base64 PNG mask drawn by user
   radialCenter?: { x: number; y: number }; // [0..1] coordinates
   radialRadius?: number; // [0..1] radius
   linearAngle?: number; // degrees [0..360]
   linearOffset?: number; // [-1..1] offset
   invert?: boolean;
+  /** SAM3 mask: base64 PNG of the AI-generated segmentation mask */
+  samMaskData?: string;
+  /** SAM3: last click coordinate used to generate mask (for re-run) */
+  samClickPoint?: { x: number; y: number };
 }
 
 export type BlendMode =

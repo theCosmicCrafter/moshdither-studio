@@ -5,7 +5,12 @@
  * sequentially or in parallel while the user continues working.
  */
 
-export type RenderJobStatus = "queued" | "rendering" | "completed" | "failed" | "cancelled";
+export type RenderJobStatus =
+  | "queued"
+  | "rendering"
+  | "completed"
+  | "failed"
+  | "cancelled";
 
 export interface RenderJob {
   id: string;
@@ -27,7 +32,7 @@ type JobListener = (jobs: RenderJob[]) => void;
 const jobs: RenderJob[] = [];
 const listeners: Set<JobListener> = new Set();
 let isProcessing = false;
-let maxConcurrent = 1; // Sequential by default; can be increased
+const maxConcurrent = 1; // Sequential by default; can be increased
 
 function notify() {
   const snapshot = [...jobs];
@@ -46,7 +51,9 @@ export function subscribeToQueue(listener: JobListener): () => void {
   return () => listeners.delete(listener);
 }
 
-export function addJob(job: Omit<RenderJob, "id" | "status" | "progress" | "createdAt">): RenderJob {
+export function addJob(
+  job: Omit<RenderJob, "id" | "status" | "progress" | "createdAt">,
+): RenderJob {
   const fullJob: RenderJob = {
     ...job,
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -82,7 +89,11 @@ export function removeJob(jobId: string): void {
 
 export function clearCompleted(): void {
   for (let i = jobs.length - 1; i >= 0; i--) {
-    if (jobs[i].status === "completed" || jobs[i].status === "failed" || jobs[i].status === "cancelled") {
+    if (
+      jobs[i].status === "completed" ||
+      jobs[i].status === "failed" ||
+      jobs[i].status === "cancelled"
+    ) {
       jobs.splice(i, 1);
     }
   }

@@ -37,6 +37,12 @@ const VALID_SEND_CHANNELS: string[] = [
   "cache:stats",
   "sam3:get-cache-dir",
   "fonts:list",
+  "sam3:load-model",
+  "sam3:segment",
+  "window:minimize",
+  "window:maximize",
+  "window:close",
+  "window:isMaximized",
 ];
 
 const VALID_RECEIVE_CHANNELS: string[] = [
@@ -49,6 +55,10 @@ const VALID_RECEIVE_CHANNELS: string[] = [
   "update:progress",
   "update:downloaded",
   "update:error",
+  "menu:import",
+  "menu:export",
+  "menu:shortcuts",
+  "menu:preload-model",
 ];
 
 function validateChannel(channel: string, valid: string[]): void {
@@ -87,4 +97,12 @@ contextBridge.exposeInMainWorld("ipcRenderer", {
     validateChannel(channel, VALID_SEND_CHANNELS);
     return ipcRenderer.invoke(channel, ...args) as Promise<T>;
   },
+});
+
+// Expose window control API for frameless custom title bar
+contextBridge.exposeInMainWorld("windowControls", {
+  minimize: () => ipcRenderer.invoke("window:minimize"),
+  maximize: () => ipcRenderer.invoke("window:maximize"),
+  close: () => ipcRenderer.invoke("window:close"),
+  isMaximized: () => ipcRenderer.invoke("window:isMaximized"),
 });

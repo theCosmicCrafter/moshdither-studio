@@ -8,6 +8,21 @@ uniform float u_time;
 uniform float u_noiseScale;    // Size of the noise grains (e.g. 1.0 to 8.0)
 uniform float u_colorLevels;   // Optional quantization levels to dither with noise
 
+// Audio-reactive uniforms
+uniform float u_audioBass;
+uniform float u_audioMid;
+uniform float u_audioTreble;
+uniform float u_audioAverage;
+uniform float u_audioCentroid;
+uniform float u_audioFlatness;
+uniform float u_audioRms;
+uniform float u_audioZcr;
+uniform float u_audioOnsetKick;
+uniform float u_audioOnsetSnare;
+uniform float u_audioOnsetHihat;
+uniform float u_audioLeft;
+uniform float u_audioRight;
+
 in vec2 v_texCoord;
 out vec4 fragColor;
 
@@ -29,12 +44,15 @@ void main() {
 
     // Use a time-based seed that updates periodically (at 24 FPS)
     float timeSeed = floor(u_time * 24.0) + 1.0;
-    
+
+    // Audio-reactive: bass drives noise intensity
+    float audioIntensity = u_intensity * (1.0 + u_audioBass * 2.0);
+
     // Generate noise value in range [-0.5, 0.5]
     float noiseVal = goldNoise(blockPos, timeSeed) - 0.5;
 
     // Blend the noise into the color
-    vec3 noisyColor = color + noiseVal * u_intensity;
+    vec3 noisyColor = color + noiseVal * audioIntensity;
 
     // If quantization is set, snap colors for a dithered look
     if (u_colorLevels > 0.0) {

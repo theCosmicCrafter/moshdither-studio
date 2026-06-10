@@ -1,18 +1,34 @@
 /**
  * Audio-reactive effect parameter driver.
  *
- * Maps audio frequency bands (bass/mid/treble/average) to effect parameters,
- * updating them in real-time via StudioContext.
+ * Maps audio features (bass/mid/treble/average/centroid/flatness/onset/etc)
+ * to effect parameters, updating them in real-time via StudioContext.
+ * Note: For WebGL effects, shader uniform wiring via AudioReactiveContext
+ * is preferred for performance (no React re-renders per frame).
  */
 
 import { useEffect, useRef } from "react";
 import type { Effect } from "../types/effectTypes";
-import type { AudioBands } from "./useAudioReactive";
+import type { AudioFeatures } from "./useAudioReactive";
 
 export interface AudioReactiveMapping {
   effectId: string;
   paramName: string;
-  band: "bass" | "mid" | "treble" | "average";
+  band:
+    | "bass"
+    | "mid"
+    | "treble"
+    | "average"
+    | "spectralCentroid"
+    | "spectralFlatness"
+    | "spectralRolloff"
+    | "rms"
+    | "zcr"
+    | "left"
+    | "right"
+    | "onsetKick"
+    | "onsetSnare"
+    | "onsetHihat";
   minValue: number;
   maxValue: number;
   smoothing: number; // 0-1, higher = more smoothing
@@ -36,7 +52,7 @@ function clamp(v: number, min: number, max: number): number {
  * @param enabled - Whether audio reactivity is active
  */
 export function useAudioReactiveEffects(
-  bands: AudioBands,
+  bands: AudioFeatures,
   _activeEffects: Effect[],
   mappings: AudioReactiveMapping[],
   setActiveEffects: (

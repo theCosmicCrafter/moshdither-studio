@@ -1,21 +1,9 @@
-import { useEffect, useState } from "react";
-import { detectGPU, checkGPUSupport, type GPUInfo } from "../utils/webgl/gpuDetector";
+import { useMemo } from "react";
+import { detectGPU, checkGPUSupport } from "../utils/webgl/gpuDetector";
 
 export function useGPUInfo() {
-  const [gpuInfo, setGpuInfo] = useState<GPUInfo | null>(null);
-  const [support, setSupport] = useState<{
-    supported: boolean;
-    warnings: string[];
-    recommendedQuality: "full" | "reduced" | "software";
-  } | null>(null);
-  const [loading, setLoading] = useState(true);
+  const gpuInfo = useMemo(() => detectGPU(), []);
+  const support = useMemo(() => checkGPUSupport(), []);
 
-  useEffect(() => {
-    const info = detectGPU();
-    setGpuInfo(info);
-    setSupport(checkGPUSupport());
-    setLoading(false);
-  }, []);
-
-  return { gpuInfo, support, loading };
+  return { gpuInfo, support, loading: false };
 }

@@ -6,6 +6,8 @@ import { Icon } from '../atoms/Icon';
 import { SplitView } from './SplitView';
 import { AudioWaveform } from './AudioWaveform';
 import { collectStrokePoints, renderStroke, BRUSH_PRESETS } from '../../lib/BrushEngine';
+import { useSAM3 } from '../../hooks/useSAM3';
+import { Loader2 } from 'lucide-react';
 
 export const Viewport: React.FC = () => {
   const {
@@ -27,6 +29,8 @@ export const Viewport: React.FC = () => {
     maskBrushEraser,
     setMaskBrushEraser,
     setMaskCanvas,
+    setMediaUrl,
+    setMediaType,
     activeEffects,
     setActiveEffects,
     selectedEffectId,
@@ -49,6 +53,10 @@ export const Viewport: React.FC = () => {
     display: 'none',
   });
   const [splitView, setSplitView] = React.useState(false);
+  const [isDraggingFile, setIsDraggingFile] = React.useState(false);
+  const [hideSplitLine, setHideSplitLine] = React.useState(false);
+  const samOverlayRef = React.useRef<HTMLDivElement>(null);
+  const { segmentAtPoint, status: samStatus, progress: samProgress, loadingStep: samLoadingStep, error: samError, loadModel: loadSAMModel } = useSAM3();
 
   const brushDataRef = React.useRef<string | undefined>(undefined);
   React.useEffect(() => {
@@ -160,6 +168,39 @@ export const Viewport: React.FC = () => {
     };
   }, [isPaintingMask, syncPaintCanvasSize]);
 
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingFile(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingFile(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingFile(false);
+
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+      const file = files[0];
+      const url = URL.createObjectURL(file);
+      setMediaUrl(url);
+      setMediaType(file.type.startsWith('video') ? 'video' : 'image');
+      return;
+    }
+
+    const uriList = e.dataTransfer.getData('text/uri-list');
+    if (uriList) {
+      setMediaUrl(uriList);
+      setMediaType(uriList.match(/\.(mp4|webm|mov|avi|mkv)$/i) ? 'video' : 'image');
+    }
+  };
+
   const getCanvasMousePos = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = paintCanvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
@@ -227,6 +268,82 @@ export const Viewport: React.FC = () => {
     }
   };
 
+  // AI Masking click-to-segment handler
+  const isSAMMode = activeFx?.mask?.type === 'sam';
+  const handleSAMClick = React.useCallback(
+    async (e: React.MouseEvent<HTMLDivElement>) => {
+      if (!isSAMMode || !activeFx || !mediaUrl) return;
+
+      const overlay = samOverlayRef.current;
+      const container = containerRef.current;
+      if (!overlay || !container) return;
+
+      try {
+        // Get click position in overlay CSS coordinates
+        const rect = overlay.getBoundingClientRect();
+        const clickX = e.clientX - rect.left;
+        const clickY = e.clientY - rect.top;
+
+        // Find the source image/video element
+        const glCanvas = container.querySelector('.webgl-canvas') as HTMLCanvasElement;
+        if (!glCanvas) return;
+
+        // Convert overlay click to image pixel coordinates
+        const scaleX = glCanvas.width / rect.width;
+        const scaleY = glCanvas.height / rect.height;
+        const imgX = Math.round(clickX * scaleX);
+        const imgY = Math.round(clickY * scaleY);
+
+        // Send file path + click coordinates to main process for segmentation
+        // Main process loads the image from disk directly (no canvas tainting issues)
+        const maskData = await segmentAtPoint(mediaUrl, { x: imgX, y: imgY });
+        if (!maskData) {
+          console.warn('[AI Masking] segmentation returned no mask');
+          return;
+        }
+
+        // Convert raw mask bytes to base64 PNG for storage
+        const maskCanvas = document.createElement('canvas');
+        maskCanvas.width = glCanvas?.width || rect.width;
+        maskCanvas.height = glCanvas?.height || rect.height;
+        const ctx = maskCanvas.getContext('2d');
+        if (!ctx) return;
+
+        // Convert 1-channel mask to RGBA for ImageData
+        const rgba = new Uint8ClampedArray(maskCanvas.width * maskCanvas.height * 4);
+        for (let i = 0; i < maskData.length; i++) {
+          const val = maskData[i] ? 255 : 0;
+          rgba[i * 4] = val;
+          rgba[i * 4 + 1] = val;
+          rgba[i * 4 + 2] = val;
+          rgba[i * 4 + 3] = 255;
+        }
+        const imageData = new ImageData(rgba, maskCanvas.width, maskCanvas.height);
+        ctx.putImageData(imageData, 0, 0);
+        const samMaskData = maskCanvas.toDataURL('image/png');
+
+        setActiveEffects((prev) =>
+          prev.map((fx) =>
+            fx.id === activeFx.id
+              ? {
+                  ...fx,
+                  mask: {
+                    ...(fx.mask || {}),
+                    type: 'sam',
+                    samMaskData,
+                    samClickPoint: { x: clickX / rect.width, y: clickY / rect.height },
+                  },
+                }
+              : fx,
+          ),
+        );
+      } catch (err) {
+        console.error('[AI Masking] Click-to-segment failed:', err);
+      }
+    },
+    [isSAMMode, activeFx, mediaUrl, segmentAtPoint, setActiveEffects],
+  );
+
   // Brush size shortcuts: [ decrease, ] increase
   React.useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -245,6 +362,9 @@ export const Viewport: React.FC = () => {
 
   return (
     <div
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
       className="glass-panel"
       style={{
         display: 'flex',
@@ -268,7 +388,7 @@ export const Viewport: React.FC = () => {
           justifyContent: 'center',
           background: '#040405',
           position: 'relative',
-          overflow: 'auto',
+          overflow: 'hidden',
         }}
       >
         {mediaUrl ? (
@@ -277,11 +397,11 @@ export const Viewport: React.FC = () => {
               transition: 'transform 0.15s cubic-bezier(0.16, 1, 0.3, 1)',
               transform: `scale(${zoomLevel})`,
               transformOrigin: 'center center',
-              aspectRatio: getAspectRatioStyle(),
+              aspectRatio: aspectRatio !== 'free' ? getAspectRatioStyle() : 'auto',
               width: '100%',
-              height: '100%',
-              maxWidth: aspectRatio !== 'free' ? '800px' : '100%',
-              maxHeight: aspectRatio !== 'free' ? '600px' : '100%',
+              height: aspectRatio !== 'free' ? 'auto' : '100%',
+              maxWidth: '100%',
+              maxHeight: '100%',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -299,7 +419,7 @@ export const Viewport: React.FC = () => {
                 position: 'relative',
               }}
             >
-              <SplitView enabled={splitView} originalSrc={mediaUrl}>
+              <SplitView enabled={splitView} hideSplitLine={hideSplitLine} originalSrc={mediaUrl}>
                 <WebGLCanvas />
               </SplitView>
               {isPaintingMask && (
@@ -310,6 +430,99 @@ export const Viewport: React.FC = () => {
                   onPointerMove={handlePointerMove}
                   onPointerUp={handlePointerUp}
                 />
+              )}
+              {isSAMMode && (
+                <div
+                  ref={samOverlayRef}
+                  onClick={handleSAMClick}
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    zIndex: 10,
+                    cursor: samStatus === 'segmenting' || samStatus === 'loading' ? 'wait' : 'crosshair',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  {(samStatus === 'loading' || samStatus === 'segmenting') && (
+                    <div
+                      style={{
+                        background: 'rgba(0,0,0,0.85)',
+                        padding: '20px 28px',
+                        borderRadius: 12,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        gap: 14,
+                        color: '#fff',
+                        pointerEvents: 'none',
+                        minWidth: 280,
+                      }}
+                    >
+                      <Loader2 size={28} style={{ animation: 'spin 1s linear infinite', color: 'var(--accent-primary)' }} />
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontSize: 14, fontWeight: 600 }}>
+                          {samStatus === 'loading' ? 'Loading AI Masking Model' : 'Generating Mask'}
+                        </span>
+                        <span style={{ fontSize: 11, opacity: 0.7 }}>
+                          {samStatus === 'loading' ? samLoadingStep || 'Preparing...' : 'Processing segmentation...'}
+                        </span>
+                      </div>
+                      {/* Progress bar */}
+                      <div style={{ width: '100%', height: 4, background: 'rgba(255,255,255,0.15)', borderRadius: 2, overflow: 'hidden' }}>
+                        <div
+                          style={{
+                            width: `${samProgress}%`,
+                            height: '100%',
+                            background: 'var(--accent-primary)',
+                            borderRadius: 2,
+                            transition: 'width 0.3s ease',
+                          }}
+                        />
+                      </div>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent-primary)' }}>{Math.round(samProgress)}%</span>
+                    </div>
+                  )}
+                  {samStatus === 'error' && samError && (
+                    <div
+                      style={{
+                        background: 'rgba(60,0,0,0.85)',
+                        padding: '12px 20px',
+                        borderRadius: 8,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        gap: 8,
+                        color: '#fff',
+                        fontSize: 13,
+                        maxWidth: '80%',
+                      }}
+                    >
+                      <span style={{ color: '#ff6b6b', fontWeight: 600 }}>AI Masking Error</span>
+                      <span style={{ fontSize: 12, opacity: 0.8, textAlign: 'center' }}>{samError}</span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          loadSAMModel();
+                        }}
+                        style={{
+                          marginTop: 4,
+                          padding: '4px 12px',
+                          background: 'var(--accent-primary)',
+                          border: 'none',
+                          borderRadius: 4,
+                          color: '#000',
+                          fontSize: 12,
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  )}
+                </div>
               )}
               <AudioWaveform
                 mediaUrl={mediaUrl}
@@ -336,6 +549,12 @@ export const Viewport: React.FC = () => {
         )}
 
         {/* Floating HUD Viewport Controls */}
+        {isDraggingFile && (
+          <div className="drag-drop-overlay">
+            <span style={{ fontSize: '18px', fontWeight: 600 }}>Drop media here</span>
+            <span style={{ fontSize: '13px', opacity: 0.7 }}>Images and videos supported</span>
+          </div>
+        )}
         {mediaUrl && (
           <div
             style={{
@@ -450,6 +669,12 @@ export const Viewport: React.FC = () => {
               <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>A/B</span>
               <Switch checked={splitView} onChange={setSplitView} />
             </div>
+            {splitView && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Hide Line</span>
+                <Switch checked={hideSplitLine} onChange={setHideSplitLine} />
+              </div>
+            )}
 
             {/* Brush Controls when painting mask */}
             {isPaintingMask && (

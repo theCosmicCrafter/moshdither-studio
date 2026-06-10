@@ -11,6 +11,21 @@ uniform float uMatrixSize;
 uniform float uScale;
 uniform bool uUseGamma; // Gamma correction toggle
 
+// Audio-reactive uniforms
+uniform float u_audioBass;
+uniform float u_audioMid;
+uniform float u_audioTreble;
+uniform float u_audioAverage;
+uniform float u_audioCentroid;
+uniform float u_audioFlatness;
+uniform float u_audioRms;
+uniform float u_audioZcr;
+uniform float u_audioOnsetKick;
+uniform float u_audioOnsetSnare;
+uniform float u_audioOnsetHihat;
+uniform float u_audioLeft;
+uniform float u_audioRight;
+
 // Bayer matrices
 const int bayer2[4] = int[](0, 2, 3, 1);
 const int bayer4[16] = int[](
@@ -74,7 +89,9 @@ void main() {
     int x = int(blockPos.x / uScale);
     int y = int(blockPos.y / uScale);
     
-    float threshold = getBayerValue(x, y, int(uMatrixSize)) - 0.5;
+    // Audio-reactive: spectral centroid shifts the dither threshold
+    float audioShift = (u_audioCentroid - 0.5) * 0.3;
+    float threshold = getBayerValue(x, y, int(uMatrixSize)) - 0.5 + audioShift;
     
     if (uColorLevels < 0.0) {
         float luma = perceivedLuminance(color);
