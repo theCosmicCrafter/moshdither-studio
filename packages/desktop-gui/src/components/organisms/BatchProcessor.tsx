@@ -3,7 +3,7 @@ import { useStudio } from '../../context/StudioContext';
 import { Button } from '../atoms/Button';
 
 export const BatchProcessor: React.FC = () => {
-  const { activeEffects, outputDirectory, exportFormat, exportFps, addToast, addRenderJob } = useStudio();
+  const { activeEffects, outputDirectory, exportFormat, exportFps, addToast, addRenderJob, watermarkSettings } = useStudio();
   const [files, setFiles] = React.useState<string[]>([]);
   const [isRunning, setIsRunning] = React.useState(false);
 
@@ -26,6 +26,7 @@ export const BatchProcessor: React.FC = () => {
         outputDirectory,
         exportFormat,
         exportFps,
+        watermarkSettings,
       });
     }
     setIsRunning(false);

@@ -21,11 +21,15 @@ import { DitherAdapter } from "../../mosh-engine/src/adapters/DitherAdapter";
 import { installLogger, writeRendererLog, checkCrashMarker } from "./logger";
 import { initAutoUpdater } from "./updater";
 import {
-  startCollaborationServer,
-  stopCollaborationServer,
-  getCollaborationPort,
-  generateRoomId,
-} from "./collaborationServer";
+  getCachedFrame,
+  setCachedFrame,
+  clearFrameCache,
+  getCacheStats,
+} from "./frameCacheMain";
+import {
+  buildWatermarkArgs,
+  type WatermarkSettings,
+} from "../src/utils/watermark";
 
 // Disable background timer throttling so render loops and video processing
 // continue smoothly even when the window loses focus.
@@ -429,7 +433,9 @@ app.whenReady().then(() => {
           try {
             const bundle = JSON.parse(content);
             name = bundle.project?.name || name;
-          } catch {}
+          } catch {
+            /* ignore parse errors for malformed bundles */
+          }
           return {
             id: f.replace(".moshdither", ""),
             name,
@@ -487,31 +493,14 @@ app.whenReady().then(() => {
     },
   );
 
-  // Collaboration server IPC
-  ipcMain.handle("collab:start-server", async (event) => {
+  // SAM 3 model cache directory
+  ipcMain.handle("sam3:get-cache-dir", async (event) => {
     validateIpcSender(event);
-    try {
-      const port = await startCollaborationServer(0);
-      return { success: true, port };
-    } catch {
-      return { success: false, port: 0 };
+    const cacheDir = path.join(app.getPath("userData"), "sam3-cache");
+    if (!fs.existsSync(cacheDir)) {
+      fs.mkdirSync(cacheDir, { recursive: true });
     }
-  });
-
-  ipcMain.handle("collab:stop-server", async (event) => {
-    validateIpcSender(event);
-    stopCollaborationServer();
-    return { success: true };
-  });
-
-  ipcMain.handle("collab:get-port", async (event) => {
-    validateIpcSender(event);
-    return getCollaborationPort();
-  });
-
-  ipcMain.handle("collab:generate-room-id", async (event) => {
-    validateIpcSender(event);
-    return generateRoomId();
+    return cacheDir;
   });
 
   protocol.handle("media", async (request) => {
@@ -732,9 +721,8 @@ app.whenReady().then(() => {
         proxyPath,
       ];
       const proc = spawn(ffmpegPath, args);
-      let stderr = "";
-      proc.stderr.on("data", (data: Buffer) => {
-        stderr += data.toString();
+      proc.stderr.on("data", () => {
+        /* stderr logging for ffmpeg proxy generation */
       });
       proc.on("close", (code) => {
         if (code === 0) {
@@ -760,6 +748,32 @@ app.whenReady().then(() => {
     }
   });
 
+  // Frame cache IPC handlers (moved from renderer to main process)
+  ipcMain.handle("cache:get-frame", async (event, key: string) => {
+    validateIpcSender(event);
+    return getCachedFrame(key);
+  });
+
+  ipcMain.handle(
+    "cache:set-frame",
+    async (event, key: string, data: Uint8Array) => {
+      validateIpcSender(event);
+      setCachedFrame(key, Buffer.from(data));
+      return true;
+    },
+  );
+
+  ipcMain.handle("cache:clear", async (event) => {
+    validateIpcSender(event);
+    clearFrameCache();
+    return true;
+  });
+
+  ipcMain.handle("cache:stats", async (event) => {
+    validateIpcSender(event);
+    return getCacheStats();
+  });
+
   ipcMain.handle("metadata:read", async (event, mediaUrl: string) => {
     validateIpcSender(event);
     const filePath = getPathFromMediaUrl(mediaUrl);
@@ -781,6 +795,7 @@ app.whenReady().then(() => {
       exportFormat?: string,
       exportFps?: number,
       useProxy?: boolean,
+      watermarkSettings?: WatermarkSettings,
     ) => {
       validateIpcSender(event);
       try {
@@ -1064,7 +1079,21 @@ app.whenReady().then(() => {
           }
 
           if (args.length > 0) {
-            await runFfmpeg(args);
+            const { args: watermarkedArgs } = buildWatermarkArgs(
+              args,
+              watermarkSettings || {
+                enabled: false,
+                type: "text",
+                text: "",
+                imagePath: null,
+                position: "bottom-right",
+                fontSize: 24,
+                color: "white",
+                opacity: 0.7,
+                scale: 20,
+              },
+            );
+            await runFfmpeg(watermarkedArgs);
             currentPath = conversionTempPath;
             reportProgress(`Converted to ${targetExtLower}`);
           }
@@ -1166,34 +1195,6 @@ app.whenReady().then(() => {
     } catch {
       // Ignore write failures during crash
     }
-  });
-
-  // ---------------------------------------------------------------------------
-  // Real-time collaboration server
-  // ---------------------------------------------------------------------------
-  ipcMain.handle("collab:start-server", async () => {
-    try {
-      const port = await startCollaborationServer(0);
-      return { success: true, port };
-    } catch (err) {
-      return {
-        success: false,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
-  });
-
-  ipcMain.handle("collab:stop-server", () => {
-    stopCollaborationServer();
-    return { success: true };
-  });
-
-  ipcMain.handle("collab:get-port", () => {
-    return { port: getCollaborationPort() };
-  });
-
-  ipcMain.handle("collab:generate-room-id", () => {
-    return generateRoomId();
   });
 
   // Subresource Integrity: verify preload.js hash before loading it

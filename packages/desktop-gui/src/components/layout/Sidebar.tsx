@@ -14,7 +14,7 @@ import type { EffectType, Effect } from '../../types/effectTypes';
 import { EFFECT_REGISTRY, ALL_EFFECT_TYPES } from '../../types/effectTypes';
 
 export const Sidebar: React.FC = () => {
-  const { activeEffects, setActiveEffects, mediaUrl, isRendering, addToast, outputDirectory, exportFormat, exportFps, addRenderJob } = useStudio();
+  const { activeEffects, setActiveEffects, mediaUrl, isRendering, addToast, outputDirectory, exportFormat, exportFps, addRenderJob, watermarkSettings } = useStudio();
   const [showAddMenu, setShowAddMenu] = useState(false);
   const idCounter = useRef(0);
 
@@ -31,6 +31,7 @@ export const Sidebar: React.FC = () => {
       outputDirectory,
       exportFormat,
       exportFps,
+      watermarkSettings,
     });
   };
 

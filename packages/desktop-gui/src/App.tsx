@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { StudioProvider, useStudio } from './context/StudioContext';
+import { AudioReactiveProvider } from './context/AudioReactiveContext';
 import { Toolbar } from './components/layout/Toolbar';
 import { Sidebar } from './components/layout/Sidebar';
 import { Viewport } from './components/organisms/Viewport';
@@ -17,7 +18,6 @@ import { KeyboardShortcutsEditor } from './components/organisms/KeyboardShortcut
 import { StatusBar } from './components/layout/StatusBar';
 import { OnboardingModal } from './components/organisms/OnboardingModal';
 import { DebugOverlay } from './components/organisms/DebugOverlay';
-import { CollaborationPanel } from './components/organisms/CollaborationPanel';
 import { loadAutoSave, checkCrashRecovery, dismissCrashRecovery, type SerializedProject } from './utils/autoSave';
 import { registerCommand } from './utils/commands';
 
@@ -26,7 +26,7 @@ const AppContent: React.FC = () => {
     currentTime, duration, setCurrentTime, toasts, removeToast,
     setMediaUrl, mediaUrl, setRenderProgress,
     undo, redo, addToast,
-    activeEffects, outputDirectory, exportFormat, exportFps,
+    activeEffects, outputDirectory, exportFormat, exportFps, watermarkSettings,
     setIsRendering, addRenderJob, updateRenderJob,
     setFontSizeScale,
     setHighContrastMode,
@@ -141,13 +141,15 @@ const AppContent: React.FC = () => {
 
   // Ref to latest studio values so command actions never capture stale closures
   const studioRef = React.useRef({
-    mediaUrl, activeEffects, outputDirectory, exportFormat, exportFps,
+    mediaUrl, activeEffects, outputDirectory, exportFormat, exportFps, watermarkSettings,
     setMediaUrl, addToast, setIsRendering, addRenderJob, updateRenderJob,
   });
-  studioRef.current = {
-    mediaUrl, activeEffects, outputDirectory, exportFormat, exportFps,
-    setMediaUrl, addToast, setIsRendering, addRenderJob, updateRenderJob,
-  };
+  React.useLayoutEffect(() => {
+    studioRef.current = {
+      mediaUrl, activeEffects, outputDirectory, exportFormat, exportFps, watermarkSettings,
+      setMediaUrl, addToast, setIsRendering, addRenderJob, updateRenderJob,
+    };
+  });
 
   // Register commands for the Command Palette
   React.useEffect(() => {
@@ -190,6 +192,7 @@ const AppContent: React.FC = () => {
           outputDirectory: s.outputDirectory,
           exportFormat: s.exportFormat,
           exportFps: s.exportFps,
+          watermarkSettings: s.watermarkSettings,
         });
       },
     });
@@ -360,7 +363,6 @@ const AppContent: React.FC = () => {
       <StatusBar />
       <OnboardingModal />
       <DebugOverlay />
-      <CollaborationPanel />
       {showShortcutsEditor && (
         <KeyboardShortcutsEditor onClose={() => setShowShortcutsEditor(false)} />
       )}
@@ -378,11 +380,20 @@ const AppContent: React.FC = () => {
   );
 };
 
+function AppContentWrapped() {
+  const { mediaUrl } = useStudio();
+  return (
+    <AudioReactiveProvider mediaUrl={mediaUrl}>
+      <AppContent />
+    </AudioReactiveProvider>
+  );
+}
+
 function App() {
   return (
     <ErrorBoundary>
       <StudioProvider>
-        <AppContent />
+        <AppContentWrapped />
       </StudioProvider>
     </ErrorBoundary>
   );

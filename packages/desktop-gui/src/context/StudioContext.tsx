@@ -8,15 +8,8 @@ import {
 } from '../utils/autoSave';
 import { getAllBindings, eventToKeyString } from '../utils/keyboardShortcuts';
 import { getCommands } from '../utils/commands';
-import {
-  onCollabEvent,
-  sendOp,
-  createAddOp,
-  createRemoveOp,
-  createUpdateOp,
-  createReorderOp,
-  getCollabState,
-} from '../utils/collaboration';
+import type { WatermarkSettings } from '../utils/watermark';
+import { DEFAULT_WATERMARK } from '../utils/watermark';
 
 export interface ToastItem {
   id: string;
@@ -57,6 +50,7 @@ export interface RenderJob {
   outputDirectory?: string | null;
   exportFormat?: 'same' | 'png' | 'jpg' | 'gif' | 'mp4';
   exportFps?: number;
+  watermarkSettings?: WatermarkSettings;
 }
 
 interface StudioState {
@@ -92,6 +86,7 @@ interface StudioState {
   proxyUrl: string | null;
   inTime: number;
   outTime: number;
+  watermarkSettings: WatermarkSettings;
 }
 
 interface StudioContextType extends StudioState {
@@ -133,6 +128,8 @@ interface StudioContextType extends StudioState {
   setProxyUrl: (url: string | null) => void;
   setInTime: (time: number) => void;
   setOutTime: (time: number) => void;
+  watermarkSettings: WatermarkSettings;
+  setWatermarkSettings: (settings: WatermarkSettings) => void;
 }
 
 function makeDefaultEffect(id: string, type: Effect['type'], enabled: boolean): Effect {
@@ -163,54 +160,8 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     () => loadPersisted<Effect[]>('moshdither:activeEffects', defaultEffects),
   );
 
-  // Wrapped setter that broadcasts local changes to collaboration room
   const setActiveEffectsState = useCallback((update: Effect[] | ((prev: Effect[]) => Effect[])) => {
-    if (applyingRemote.current) {
-      setActiveEffectsStateRaw(update);
-      return;
-    }
-
-    setActiveEffectsStateRaw((prev) => {
-      const next = typeof update === 'function' ? (update as (prev: Effect[]) => Effect[])(prev) : update;
-
-      // Broadcast diff if connected
-      if (getCollabState() === 'connected' && prev !== next) {
-        // Detect what changed
-        const prevIds = new Set(prev.map((fx) => fx.id));
-        const nextIds = new Set(next.map((fx) => fx.id));
-
-        // Added
-        for (const fx of next) {
-          if (!prevIds.has(fx.id)) {
-            sendOp(createAddOp(fx));
-          }
-        }
-
-        // Removed
-        for (const fx of prev) {
-          if (!nextIds.has(fx.id)) {
-            sendOp(createRemoveOp(fx.id));
-          }
-        }
-
-        // Reordered
-        const prevOrder = prev.map((fx) => fx.id).join(',');
-        const nextOrder = next.map((fx) => fx.id).join(',');
-        if (prevOrder !== nextOrder && prev.length === next.length) {
-          sendOp(createReorderOp(next.map((fx) => fx.id)));
-        }
-
-        // Updated params
-        for (const nextFx of next) {
-          const prevFx = prev.find((fx) => fx.id === nextFx.id);
-          if (prevFx && JSON.stringify(prevFx.params) !== JSON.stringify(nextFx.params)) {
-            sendOp(createUpdateOp(nextFx.id, nextFx.params));
-          }
-        }
-      }
-
-      return next;
-    });
+    setActiveEffectsStateRaw(update);
   }, []);
 
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
@@ -289,6 +240,9 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [proxyUrl, setProxyUrl] = useState<string | null>(null);
   const [inTime, setInTime] = useState<number>(0);
   const [outTime, setOutTime] = useState<number>(0);
+  const [watermarkSettings, setWatermarkSettingsState] = useState<WatermarkSettings>(
+    () => loadPersisted<WatermarkSettings>('moshdither:watermark', DEFAULT_WATERMARK),
+  );
   const hasFetchedDefaultDir = useRef(false);
 
   const addRecentFile = useCallback((path: string) => {
@@ -321,6 +275,20 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setRenderQueue((prev) => prev.filter((j) => j.status !== 'completed' && j.status !== 'failed'));
   }, []);
 
+  const removeToast = useCallback((id: string) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  }, []);
+
+  const addToast = useCallback((message: string, type: ToastItem['type'] = 'info') => {
+    const id = `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    setToasts(prev => [...prev, { id, message, type }]);
+
+    // Auto dismiss after 4 seconds
+    setTimeout(() => {
+      removeToast(id);
+    }, 4000);
+  }, [removeToast]);
+
   const setOutputDirectory = useCallback((dir: string | null) => {
     setOutputDirectoryState(dir);
     if (dir) {
@@ -328,6 +296,11 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     } else {
       localStorage.removeItem('outputDirectory');
     }
+  }, []);
+
+  const setWatermarkSettings = useCallback((settings: WatermarkSettings) => {
+    setWatermarkSettingsState(settings);
+    savePersisted('moshdither:watermark', settings);
   }, []);
 
   const setExportFormat = useCallback((format: 'same' | 'png' | 'jpg' | 'gif' | 'mp4') => {
@@ -421,37 +394,6 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [undo, redo, setFontSizeScale]);
 
-  // Collaboration: apply remote ops
-  const applyingRemote = useRef(false);
-  useEffect(() => {
-    const unsub = onCollabEvent('op', (data) => {
-      const op = data as { type: string; payload: { effect?: Effect; effectId?: string; params?: unknown; effectIds?: string[] } };
-      applyingRemote.current = true;
-      try {
-        if (op.type === 'effect:add' && op.payload.effect) {
-          setActiveEffectsState((prev) => [...prev, op.payload.effect!]);
-        } else if (op.type === 'effect:remove' && op.payload.effectId) {
-          setActiveEffectsState((prev) => prev.filter((fx) => fx.id !== op.payload.effectId));
-        } else if (op.type === 'effect:update' && op.payload.effectId) {
-          setActiveEffectsState((prev) =>
-            prev.map((fx) =>
-              fx.id === op.payload.effectId ? { ...fx, params: { ...fx.params, ...(op.payload.params || {}) } } : fx
-            )
-          );
-        } else if (op.type === 'effect:reorder' && op.payload.effectIds) {
-          setActiveEffectsState((prev) => {
-            const order = op.payload.effectIds!;
-            const map = new Map(prev.map((fx) => [fx.id, fx]));
-            return order.map((id) => map.get(id)!).filter(Boolean);
-          });
-        }
-      } finally {
-        applyingRemote.current = false;
-      }
-    });
-    return unsub;
-  }, []);
-
   // Auto-save: serialize project state every 30 seconds
   useEffect(() => {
     if (!window.ipcRenderer) return;
@@ -530,18 +472,35 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     if (active.length > 0 || queued.length === 0) return;
 
     const nextJob = queued[0];
-    setIsRendering(true);
-    updateRenderJob(nextJob.id, { status: 'rendering', startedAt: Date.now() });
+
+    // Prefer job snapshot fields; fail if required snapshot is missing
+    const effects = nextJob.activeEffects;
+    const outDir = nextJob.outputDirectory;
+    const fmt = nextJob.exportFormat;
+    const fps = nextJob.exportFps;
+    if (!effects || !outDir || !fmt || !fps) {
+      queueMicrotask(() => {
+        updateRenderJob(nextJob.id, { status: 'failed', error: 'Job missing required snapshot fields' });
+      });
+      return;
+    }
+
+    queueMicrotask(() => {
+      setIsRendering(true);
+      updateRenderJob(nextJob.id, { status: 'rendering', startedAt: Date.now() });
+    });
 
     (async () => {
       try {
         const resultUrl = await window.ipcRenderer.invoke<string | null>(
           'render:pipeline',
           nextJob.inputUrl,
-          nextJob.activeEffects ?? activeEffectsState,
-          nextJob.outputDirectory ?? outputDirectory,
-          nextJob.exportFormat ?? exportFormat,
-          nextJob.exportFps ?? exportFps,
+          effects,
+          outDir,
+          fmt,
+          fps,
+          false,
+          nextJob.watermarkSettings,
         );
         if (resultUrl) {
           updateRenderJob(nextJob.id, {
@@ -564,21 +523,7 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         setIsRendering(false);
       }
     })();
-  }, [renderQueue, activeEffectsState, outputDirectory, exportFormat, exportFps]);
-
-  const removeToast = useCallback((id: string) => {
-    setToasts(prev => prev.filter(t => t.id !== id));
-  }, []);
-
-  const addToast = useCallback((message: string, type: ToastItem['type'] = 'info') => {
-    const id = `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-    setToasts(prev => [...prev, { id, message, type }]);
-
-    // Auto dismiss after 4 seconds
-    setTimeout(() => {
-      removeToast(id);
-    }, 4000);
-  }, [removeToast]);
+  }, [renderQueue]);
 
   return (
     <StudioContext.Provider
@@ -651,6 +596,8 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         setInTime,
         outTime,
         setOutTime,
+        watermarkSettings,
+        setWatermarkSettings,
       }}
     >
       {children}

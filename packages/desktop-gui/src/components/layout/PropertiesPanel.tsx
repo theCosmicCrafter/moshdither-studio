@@ -10,6 +10,7 @@ import { KeyframeRail } from '../molecules/KeyframeRail';
 import type { EffectMask, BlendMode } from '../../types/effectTypes';
 import { BLEND_MODES } from '../../types/effectTypes';
 import { recommendExportSettings, getMediaTypeFromExt } from '../../utils/smartExport';
+import type { WatermarkSettings } from '../../utils/watermark';
 
 export const PropertiesPanel: React.FC = () => {
   const { 
@@ -35,6 +36,8 @@ export const PropertiesPanel: React.FC = () => {
     addRenderJob,
     addToast,
     isRendering,
+    watermarkSettings,
+    setWatermarkSettings,
   } = useStudio();
   const [modsOpen, setModsOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -135,6 +138,7 @@ export const PropertiesPanel: React.FC = () => {
           <div className="control-group" style={{ marginBottom: '16px' }}>
             <label className="control-label" style={{ display: 'block', fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '6px' }}>Editing Layer</label>
             <select
+              aria-label="Editing Layer"
               value={activeFx.id}
               onChange={(e) => setSelectedEffectId(e.target.value)}
               style={{ width: '100%', padding: '6px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px' }}
@@ -154,6 +158,7 @@ export const PropertiesPanel: React.FC = () => {
               <Tooltip content="How this layer composites with layers below it" />
             </div>
             <select
+              aria-label="Blend Mode"
               value={activeFx.blendMode || 'normal'}
               onChange={(e) => {
                 const bm = e.target.value as BlendMode;
@@ -198,6 +203,7 @@ export const PropertiesPanel: React.FC = () => {
                       <Tooltip content="Select the pixel arrangement pattern algorithm" />
                     </div>
                     <select
+                      aria-label="Dither Algorithm"
                       value={activeFx.params.ditherMode || 'atkinson'}
                       onChange={(e) => updateParam('ditherMode', e.target.value)}
                       style={{ width: '100%', padding: '6px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px' }}
@@ -224,6 +230,7 @@ export const PropertiesPanel: React.FC = () => {
                       <Tooltip content="Choose how color levels are quantized" />
                     </div>
                     <select
+                      aria-label="Color Palette"
                       value={activeFx.params.paletteSource || 'kmeans'}
                       onChange={(e) => updateParam('paletteSource', e.target.value)}
                       style={{ width: '100%', padding: '6px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px' }}
@@ -254,6 +261,7 @@ export const PropertiesPanel: React.FC = () => {
                     <div className="control-group" style={{ marginBottom: '12px' }}>
                       <label className="control-label">Bayer Matrix Size</label>
                       <select
+                        aria-label="Bayer Matrix Size"
                         value={activeFx.params.matrixSize || '4x4'}
                         onChange={(e) => updateParam('matrixSize', e.target.value)}
                         style={{ width: '100%', padding: '6px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px' }}
@@ -272,6 +280,7 @@ export const PropertiesPanel: React.FC = () => {
                       <div className="control-group" style={{ marginBottom: '12px' }}>
                         <label className="control-label">Error Diffusion Kernel</label>
                         <select
+                          aria-label="Error Diffusion Kernel"
                           value={activeFx.params.errorDiffusionVariant || 'atkinson'}
                           onChange={(e) => updateParam('errorDiffusionVariant', e.target.value)}
                           style={{ width: '100%', padding: '6px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px' }}
@@ -323,6 +332,7 @@ export const PropertiesPanel: React.FC = () => {
                       <div className="control-group" style={{ marginBottom: '12px' }}>
                         <label className="control-label">Wavelet Type</label>
                         <select
+                          aria-label="Wavelet Type"
                           value={activeFx.params.wavelet || 'haar'}
                           onChange={(e) => updateParam('wavelet', e.target.value)}
                           style={{ width: '100%', padding: '6px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px' }}
@@ -358,6 +368,7 @@ export const PropertiesPanel: React.FC = () => {
                       <div className="control-group" style={{ marginBottom: '12px' }}>
                         <label className="control-label">Dot Shape</label>
                         <select
+                          aria-label="Dot Shape"
                           value={activeFx.params.shape || 'circle'}
                           onChange={(e) => updateParam('shape', e.target.value)}
                           style={{ width: '100%', padding: '6px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px' }}
@@ -436,6 +447,7 @@ export const PropertiesPanel: React.FC = () => {
                   <div className="control-group" style={{ marginBottom: '12px' }}>
                     <label className="control-label">Datamoshing Mode</label>
                     <select
+                      aria-label="Datamoshing Mode"
                       value={activeFx.params.mode || 'classic'}
                       onChange={(e) => updateParam('mode', e.target.value)}
                       style={{ width: '100%', padding: '6px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px', marginTop: '6px' }}
@@ -589,6 +601,7 @@ export const PropertiesPanel: React.FC = () => {
                     <div className="control-group" style={{ marginBottom: '12px' }}>
                       <label className="control-label">Stretch Direction</label>
                       <select
+                        aria-label="Stretch Direction"
                         value={activeFx.params.direction || 'horizontal'}
                         onChange={(e) => updateParam('direction', e.target.value)}
                         style={{ width: '100%', padding: '6px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px', marginTop: '6px' }}
@@ -728,6 +741,7 @@ export const PropertiesPanel: React.FC = () => {
               <div className="control-group" style={{ marginBottom: '12px' }}>
                 <label className="control-label" style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Mask Type</label>
                 <select
+                  aria-label="Mask Type"
                   value={activeFx.mask?.type || 'none'}
                   onChange={(e) => {
                     const newType = e.target.value as EffectMask['type'];
@@ -748,6 +762,7 @@ export const PropertiesPanel: React.FC = () => {
                   <option value="brush">Brush (Draw Mask on Canvas)</option>
                   <option value="radial">Radial Gradient (Circular area)</option>
                   <option value="linear">Linear Gradient (Split screen)</option>
+                  <option value="sam">SAM AI Mask (Click to Segment)</option>
                 </select>
               </div>
 
@@ -850,6 +865,37 @@ export const PropertiesPanel: React.FC = () => {
                 </>
               )}
 
+              {activeFx.mask?.type === 'sam' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '8px 0' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-tertiary)' }}>
+                    Click on the canvas to segment the clicked object. The effect will apply only inside the segmented region.
+                  </span>
+                  {activeFx.mask?.samMaskData && (
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <Button
+                        variant="glass"
+                        size="sm"
+                        style={{ flex: 1 }}
+                        onClick={() => {
+                          setActiveEffects(activeEffects.map(fx =>
+                            fx.id === activeFx.id
+                              ? { ...fx, mask: { ...(fx.mask || {}), type: 'sam', samMaskData: undefined, samClickPoint: undefined } }
+                              : fx
+                          ));
+                        }}
+                      >
+                        Clear SAM Mask
+                      </Button>
+                    </div>
+                  )}
+                  {activeFx.mask?.samClickPoint && !activeFx.mask?.samMaskData && (
+                    <span style={{ fontSize: '11px', color: 'var(--accent-primary)' }}>
+                      Click on the preview to segment...
+                    </span>
+                  )}
+                </div>
+              )}
+
               {activeFx.mask && activeFx.mask.type !== 'none' && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
                   <Switch 
@@ -907,7 +953,7 @@ export const PropertiesPanel: React.FC = () => {
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px' }}>
                         <div className="control-group" style={{ marginBottom: '8px' }}>
                           <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Waveform</label>
-                          <select style={{ width: '100%', padding: '4px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px' }}>
+                          <select aria-label="Waveform" style={{ width: '100%', padding: '4px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px' }}>
                             <option>Sine</option>
                             <option>Triangle</option>
                             <option>Sawtooth</option>
@@ -932,7 +978,7 @@ export const PropertiesPanel: React.FC = () => {
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px' }}>
                         <div className="control-group" style={{ marginBottom: '8px' }}>
                           <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Frequency Band</label>
-                          <select style={{ width: '100%', padding: '4px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px' }}>
+                          <select aria-label="Frequency Band" style={{ width: '100%', padding: '4px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px' }}>
                             <option>Bass (Low Frequency)</option>
                             <option>Mids (Speech range)</option>
                             <option>Highs (Crisp treble)</option>
@@ -981,6 +1027,7 @@ export const PropertiesPanel: React.FC = () => {
                   <div className="control-group">
                     <label className="control-label" style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-secondary)' }}>GOP Keyframes Interval</label>
                     <select
+                      aria-label="GOP Keyframes Interval"
                       value={activeFx.params.gop || 1000}
                       onChange={(e) => updateParam('gop', Number(e.target.value))}
                       style={{ width: '100%', padding: '6px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px', marginTop: '6px' }}
@@ -1084,6 +1131,164 @@ export const PropertiesPanel: React.FC = () => {
                     </div>
                   )}
 
+                  {/* Watermark Section */}
+                  <div className="control-group" style={{ marginBottom: '12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <label className="control-label" style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-secondary)' }}>Watermark</label>
+                      <Switch
+                        checked={watermarkSettings.enabled}
+                        onChange={(val) => setWatermarkSettings({ ...watermarkSettings, enabled: val })}
+                      />
+                    </div>
+                    {watermarkSettings.enabled && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button
+                            type="button"
+                            onClick={() => setWatermarkSettings({ ...watermarkSettings, type: 'text' })}
+                            style={{
+                              flex: 1,
+                              padding: '6px',
+                              fontSize: '11px',
+                              background: watermarkSettings.type === 'text' ? 'var(--accent-primary)' : '#1c1c1e',
+                              color: '#fff',
+                              border: '1px solid var(--border-color)',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Text
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setWatermarkSettings({ ...watermarkSettings, type: 'image' })}
+                            style={{
+                              flex: 1,
+                              padding: '6px',
+                              fontSize: '11px',
+                              background: watermarkSettings.type === 'image' ? 'var(--accent-primary)' : '#1c1c1e',
+                              color: '#fff',
+                              border: '1px solid var(--border-color)',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Image
+                          </button>
+                        </div>
+
+                        {watermarkSettings.type === 'text' && (
+                          <>
+                            <input
+                              type="text"
+                              value={watermarkSettings.text}
+                              onChange={(e) => setWatermarkSettings({ ...watermarkSettings, text: e.target.value })}
+                              placeholder="Watermark text..."
+                              style={{ width: '100%', padding: '6px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px', fontSize: '12px' }}
+                            />
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                              <select
+                                aria-label="Watermark Position"
+                                value={watermarkSettings.position}
+                                onChange={(e) => setWatermarkSettings({ ...watermarkSettings, position: e.target.value as WatermarkSettings['position'] })}
+                                style={{ flex: 1, padding: '6px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px', fontSize: '12px' }}
+                              >
+                                <option value="top-left">Top Left</option>
+                                <option value="top-right">Top Right</option>
+                                <option value="bottom-left">Bottom Left</option>
+                                <option value="bottom-right">Bottom Right</option>
+                                <option value="center">Center</option>
+                              </select>
+                              <input
+                                type="color"
+                                value={watermarkSettings.color === 'white' ? '#ffffff' : watermarkSettings.color === 'black' ? '#000000' : watermarkSettings.color}
+                                onChange={(e) => setWatermarkSettings({ ...watermarkSettings, color: e.target.value })}
+                                style={{ width: 40, height: 32, padding: 2, background: 'transparent', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer' }}
+                              />
+                            </div>
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                              <span style={{ fontSize: '11px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>Size</span>
+                              <input
+                                type="range"
+                                min={8}
+                                max={72}
+                                value={watermarkSettings.fontSize}
+                                onChange={(e) => setWatermarkSettings({ ...watermarkSettings, fontSize: Number(e.target.value) })}
+                                style={{ flex: 1 }}
+                              />
+                              <span style={{ fontSize: '11px', color: 'var(--text-secondary)', width: 24, textAlign: 'right' }}>{watermarkSettings.fontSize}</span>
+                            </div>
+                          </>
+                        )}
+
+                        {watermarkSettings.type === 'image' && (
+                          <>
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                              <input
+                                type="text"
+                                value={watermarkSettings.imagePath || ''}
+                                disabled
+                                placeholder="No image selected"
+                                style={{ flex: 1, padding: '6px', background: '#1c1c1e', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', borderRadius: '4px', fontSize: '12px' }}
+                              />
+                              <Button
+                                variant="glass"
+                                size="sm"
+                                style={{ padding: '6px 12px', fontSize: '11px' }}
+                                onClick={async () => {
+                                  if (!window.ipcRenderer) return;
+                                  const result = await window.ipcRenderer.invoke<string | null>('dialog:openMedia');
+                                  if (result) {
+                                    setWatermarkSettings({ ...watermarkSettings, imagePath: result });
+                                  }
+                                }}
+                              >
+                                Browse
+                              </Button>
+                            </div>
+                            <select
+                              aria-label="Watermark Position"
+                              value={watermarkSettings.position}
+                              onChange={(e) => setWatermarkSettings({ ...watermarkSettings, position: e.target.value as WatermarkSettings['position'] })}
+                              style={{ width: '100%', padding: '6px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px', fontSize: '12px' }}
+                            >
+                              <option value="top-left">Top Left</option>
+                              <option value="top-right">Top Right</option>
+                              <option value="bottom-left">Bottom Left</option>
+                              <option value="bottom-right">Bottom Right</option>
+                              <option value="center">Center</option>
+                            </select>
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                              <span style={{ fontSize: '11px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>Scale</span>
+                              <input
+                                type="range"
+                                min={5}
+                                max={50}
+                                value={watermarkSettings.scale}
+                                onChange={(e) => setWatermarkSettings({ ...watermarkSettings, scale: Number(e.target.value) })}
+                                style={{ flex: 1 }}
+                              />
+                              <span style={{ fontSize: '11px', color: 'var(--text-secondary)', width: 32, textAlign: 'right' }}>{watermarkSettings.scale}%</span>
+                            </div>
+                          </>
+                        )}
+
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                          <span style={{ fontSize: '11px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>Opacity</span>
+                          <input
+                            type="range"
+                            min={0}
+                            max={100}
+                            value={Math.round(watermarkSettings.opacity * 100)}
+                            onChange={(e) => setWatermarkSettings({ ...watermarkSettings, opacity: Number(e.target.value) / 100 })}
+                            style={{ flex: 1 }}
+                          />
+                          <span style={{ fontSize: '11px', color: 'var(--text-secondary)', width: 32, textAlign: 'right' }}>{Math.round(watermarkSettings.opacity * 100)}%</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
                   {/* Custom Output Directory Section */}
                   <div className="control-group" style={{ marginBottom: '12px' }}>
                     <label className="control-label" style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-secondary)' }}>Output Directory</label>
@@ -1127,6 +1332,7 @@ export const PropertiesPanel: React.FC = () => {
                           outputDirectory,
                           exportFormat,
                           exportFps,
+                          watermarkSettings,
                         });
                         addToast('Render job queued!', 'success');
                       }}
