@@ -83,7 +83,7 @@ void main() {
 export const WebGLCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
-  const { activeEffects, mediaUrl, proxyUrl, qualityMode, maskCanvas, aspectRatio } = useStudio();
+  const { activeEffects, mediaUrl, proxyUrl, qualityMode, maskCanvas } = useStudio();
   const { featuresRef: audioFeaturesRef } = useAudioReactiveContext();
   const previewUrl = proxyUrl || mediaUrl;
 
@@ -701,13 +701,16 @@ export const WebGLCanvas: React.FC = () => {
       canvas.removeEventListener('webglcontextlost', handleContextLost);
       canvas.removeEventListener('webglcontextrestored', handleContextRestored);
       resizeObserver.disconnect();
-      // Delete all tracked WebGL resources (cached programs are cleared globally)
-      clearProgramCache();
+      // Delete per-run WebGL resources. Compiled programs stay in the global
+      // cache so re-runs (param tweaks, resizes) reuse them without recompiling.
       resources.textures.forEach((t) => gl.deleteTexture(t));
       resources.buffers.forEach((b) => gl.deleteBuffer(b));
       resources.framebuffers.forEach((f) => gl.deleteFramebuffer(f));
     };
   }, [activeEffects, mediaReadyRev, qualityMode, maskCanvas, audioFeaturesRef]);
+
+  // Clear the shader program cache only when the canvas unmounts
+  useEffect(() => clearProgramCache, []);
 
   return (
     <div ref={wrapperRef} style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>

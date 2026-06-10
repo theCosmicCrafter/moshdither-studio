@@ -1,5 +1,5 @@
 import * as React from "react";
-import { AudioReactiveContext } from "../context/AudioReactiveContext";
+import { AudioReactiveContext } from "../context/audioReactiveContextDef";
 
 export function useAudioReactiveContext() {
   const ctx = React.useContext(AudioReactiveContext);

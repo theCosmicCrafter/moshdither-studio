@@ -13,31 +13,37 @@ interface SplitViewProps {
  * and the processed preview (children) on the right half.
  */
 export const SplitView: React.FC<SplitViewProps> = ({ enabled, hideSplitLine = false, children, originalSrc }) => {
-  const [originalUrl, setOriginalUrl] = React.useState<string | null>(null);
+  // Sources behind custom protocols need to be fetched into a blob URL.
+  const needsBlob = !!originalSrc && (originalSrc.startsWith('media://') || originalSrc.startsWith('blob:'));
+  const [blob, setBlob] = React.useState<{ src: string; url: string } | null>(null);
 
   React.useEffect(() => {
-    if (!originalSrc) return;
+    if (!originalSrc || !(originalSrc.startsWith('media://') || originalSrc.startsWith('blob:'))) return;
 
     let objectUrl: string | null = null;
+    let cancelled = false;
 
-    if (originalSrc.startsWith('media://') || originalSrc.startsWith('blob:')) {
-      fetch(originalSrc)
-        .then(r => r.blob())
-        .then(blob => {
-          objectUrl = URL.createObjectURL(blob);
-          setOriginalUrl(objectUrl);
-        })
-        .catch(() => setOriginalUrl(originalSrc));
-    } else {
-      setOriginalUrl(originalSrc);
-    }
+    fetch(originalSrc)
+      .then(r => r.blob())
+      .then(b => {
+        objectUrl = URL.createObjectURL(b);
+        if (!cancelled) setBlob({ src: originalSrc, url: objectUrl });
+      })
+      .catch(() => {
+        if (!cancelled) setBlob({ src: originalSrc, url: originalSrc });
+      });
 
     return () => {
-      if (objectUrl?.startsWith('blob:')) {
+      cancelled = true;
+      if (objectUrl) {
         URL.revokeObjectURL(objectUrl);
       }
     };
   }, [originalSrc]);
+
+  const originalUrl = needsBlob
+    ? (blob && blob.src === originalSrc ? blob.url : null)
+    : originalSrc;
 
   if (!enabled || !originalUrl) return <>{children}</>;
 

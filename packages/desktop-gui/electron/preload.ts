@@ -59,6 +59,7 @@ const VALID_RECEIVE_CHANNELS: string[] = [
   "menu:export",
   "menu:shortcuts",
   "menu:preload-model",
+  "sam3:progress",
 ];
 
 function validateChannel(channel: string, valid: string[]): void {

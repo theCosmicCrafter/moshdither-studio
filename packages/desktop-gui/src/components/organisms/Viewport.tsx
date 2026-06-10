@@ -225,8 +225,6 @@ export const Viewport: React.FC = () => {
     if (ctx && strokePoints.current.length > 0) {
       const preset = BRUSH_PRESETS[brushPreset] || BRUSH_PRESETS.softRound;
       renderStroke(ctx, strokePoints.current, { ...preset, size: maskBrushSize }, maskBrushEraser);
-      setMaskCanvas(null);
-      setMaskCanvas(canvas);
     }
   };
 
@@ -245,8 +243,6 @@ export const Viewport: React.FC = () => {
     if (ctx && newPoints.length > 0) {
       const preset = BRUSH_PRESETS[brushPreset] || BRUSH_PRESETS.softRound;
       renderStroke(ctx, newPoints, { ...preset, size: maskBrushSize }, maskBrushEraser);
-      setMaskCanvas(null);
-      setMaskCanvas(canvas);
     }
   };
 
@@ -279,46 +275,46 @@ export const Viewport: React.FC = () => {
       if (!overlay || !container) return;
 
       try {
-        // Get click position in overlay CSS coordinates
-        const rect = overlay.getBoundingClientRect();
-        const clickX = e.clientX - rect.left;
-        const clickY = e.clientY - rect.top;
-
-        // Find the source image/video element
+        // Measure against the rendered canvas (not the overlay) so
+        // letterboxing inside the container doesn't skew coordinates
         const glCanvas = container.querySelector('.webgl-canvas') as HTMLCanvasElement;
         if (!glCanvas) return;
+        const rect = glCanvas.getBoundingClientRect();
+        const clickX = e.clientX - rect.left;
+        const clickY = e.clientY - rect.top;
+        if (clickX < 0 || clickY < 0 || clickX > rect.width || clickY > rect.height) return;
 
-        // Convert overlay click to image pixel coordinates
-        const scaleX = glCanvas.width / rect.width;
-        const scaleY = glCanvas.height / rect.height;
-        const imgX = Math.round(clickX * scaleX);
-        const imgY = Math.round(clickY * scaleY);
-
-        // Send file path + click coordinates to main process for segmentation
-        // Main process loads the image from disk directly (no canvas tainting issues)
-        const maskData = await segmentAtPoint(mediaUrl, { x: imgX, y: imgY });
-        if (!maskData) {
+        // Send file path + normalized click coordinates (0..1) to the main
+        // process — it scales them to the source image's native pixel size.
+        // Main loads the image from disk directly (no canvas tainting issues).
+        const mask = await segmentAtPoint(mediaUrl, {
+          x: clickX / rect.width,
+          y: clickY / rect.height,
+        });
+        if (!mask) {
           console.warn('[AI Masking] segmentation returned no mask');
           return;
         }
 
-        // Convert raw mask bytes to base64 PNG for storage
+        // Build the mask canvas at the mask's own resolution (source image
+        // size) — the GPU samples it with normalized UVs, so it stretches
+        // to fit the viewport automatically.
         const maskCanvas = document.createElement('canvas');
-        maskCanvas.width = glCanvas?.width || rect.width;
-        maskCanvas.height = glCanvas?.height || rect.height;
+        maskCanvas.width = mask.width;
+        maskCanvas.height = mask.height;
         const ctx = maskCanvas.getContext('2d');
         if (!ctx) return;
 
         // Convert 1-channel mask to RGBA for ImageData
-        const rgba = new Uint8ClampedArray(maskCanvas.width * maskCanvas.height * 4);
-        for (let i = 0; i < maskData.length; i++) {
-          const val = maskData[i] ? 255 : 0;
+        const rgba = new Uint8ClampedArray(mask.width * mask.height * 4);
+        for (let i = 0; i < mask.data.length; i++) {
+          const val = mask.data[i] ? 255 : 0;
           rgba[i * 4] = val;
           rgba[i * 4 + 1] = val;
           rgba[i * 4 + 2] = val;
           rgba[i * 4 + 3] = 255;
         }
-        const imageData = new ImageData(rgba, maskCanvas.width, maskCanvas.height);
+        const imageData = new ImageData(rgba, mask.width, mask.height);
         ctx.putImageData(imageData, 0, 0);
         const samMaskData = maskCanvas.toDataURL('image/png');
 

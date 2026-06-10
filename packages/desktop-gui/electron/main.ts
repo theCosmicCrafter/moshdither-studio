@@ -526,6 +526,32 @@ app.whenReady().then(() => {
   // ---------------------------------------------------------------------------
   // SAM 3 / AI Masking Model — runs in main process (Node.js has fs access)
   // ---------------------------------------------------------------------------
+  // Minimal structural types for the dynamically imported transformers.js
+  // objects (the library's own types are too loose to use directly here).
+  interface SamTensor {
+    dims: number[];
+    data: Float32Array | Uint8Array;
+    [index: number]: SamTensor;
+  }
+  interface SamProcessorLike {
+    (
+      image: unknown,
+      options: { input_points: number[][][][]; input_labels: number[][][] },
+    ): Promise<{
+      original_sizes: unknown;
+      reshaped_input_sizes: unknown;
+    }>;
+    post_process_masks(
+      predMasks: unknown,
+      originalSizes: unknown,
+      reshapedSizes: unknown,
+    ): Promise<SamTensor[]>;
+  }
+  type SamModelLike = (inputs: unknown) => Promise<{
+    pred_masks: unknown;
+    iou_scores: SamTensor;
+  }>;
+
   let samModel: unknown | null = null;
   let samProcessor: unknown | null = null;
   let samLoadPromise: Promise<void> | null = null;
@@ -535,7 +561,7 @@ app.whenReady().then(() => {
     fs.mkdirSync(SAM_CACHE_DIR, { recursive: true });
   }
 
-  async function loadSAM3Model(): Promise<void> {
+  async function loadSAM3Model(sender?: Electron.WebContents): Promise<void> {
     if (samModel && samProcessor) return;
     if (samLoadPromise) {
       await samLoadPromise;
@@ -555,10 +581,25 @@ app.whenReady().then(() => {
 
         const MODEL_ID = "onnx-community/sam3-tracker-ONNX";
 
+        // Forward real download/load progress to the renderer
+        const progress_callback = (info: {
+          status: string;
+          file?: string;
+          progress?: number;
+        }) => {
+          if (sender && !sender.isDestroyed()) {
+            sender.send("sam3:progress", {
+              status: info.status,
+              file: info.file,
+              progress: info.progress,
+            });
+          }
+        };
+
         console.log("[Main] Loading SAM 3 processor...");
         samProcessor = await AutoProcessor.from_pretrained(MODEL_ID, {
           cache_dir: SAM_CACHE_DIR,
-          dtype: "fp16",
+          progress_callback,
         });
         console.log("[Main] SAM 3 processor loaded");
 
@@ -566,6 +607,7 @@ app.whenReady().then(() => {
         samModel = await Sam3TrackerModel.from_pretrained(MODEL_ID, {
           cache_dir: SAM_CACHE_DIR,
           dtype: "fp16",
+          progress_callback,
         });
         console.log("[Main] SAM 3 model loaded");
       } catch (err) {
@@ -581,7 +623,7 @@ app.whenReady().then(() => {
   ipcMain.handle("sam3:load-model", async (event) => {
     validateIpcSender(event);
     try {
-      await loadSAM3Model();
+      await loadSAM3Model(event.sender);
       return { ok: true };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -597,15 +639,17 @@ app.whenReady().then(() => {
     };
 
     try {
-      await loadSAM3Model();
+      await loadSAM3Model(event.sender);
       if (!samModel || !samProcessor) {
         throw new Error("Model not loaded");
       }
 
-      // Resolve media:// URL to real file path
-      const filePath = imagePath.replace(/^media:\/\//, "");
-      if (!fs.existsSync(filePath)) {
-        throw new Error(`Image file not found: ${filePath}`);
+      // Resolve media:// URL to a validated real file path
+      const filePath = imagePath.startsWith("media://")
+        ? getPathFromMediaUrl(imagePath)
+        : imagePath;
+      if (!filePath || !fs.existsSync(filePath)) {
+        throw new Error(`Image file not found: ${imagePath}`);
       }
 
       // Load image directly from disk using Transformers.js RawImage
@@ -613,10 +657,13 @@ app.whenReady().then(() => {
       const rawImage = await RawImage.read(filePath);
 
       // Run inference
-      const processor = samProcessor as any;
-      const model = samModel as any;
+      const processor = samProcessor as SamProcessorLike;
+      const model = samModel as SamModelLike;
 
-      const input_points = [[[[point.x, point.y]]]];
+      // Click point arrives normalized (0..1); scale to native image pixels
+      const px = Math.round(point.x * rawImage.width);
+      const py = Math.round(point.y * rawImage.height);
+      const input_points = [[[[px, py]]]];
       const input_labels = [[[1]]]; // 1 = foreground
 
       const inputs = await processor(rawImage, {
@@ -632,8 +679,15 @@ app.whenReady().then(() => {
         inputs.reshaped_input_sizes,
       );
 
-      // masks is [1, 3, H, W] boolean — take best (index 0)
-      const maskTensor = masks[0][0]; // [H, W]
+      // masks[0][0] has dims [3, H, W] — three candidate masks.
+      // Pick the one with the highest IoU score.
+      const candidates = masks[0][0]; // [3, H, W]
+      const scores = outputs.iou_scores.data as Float32Array; // [3]
+      let bestIdx = 0;
+      for (let i = 1; i < scores.length; i++) {
+        if (scores[i] > scores[bestIdx]) bestIdx = i;
+      }
+      const maskTensor = candidates[bestIdx]; // [H, W]
       const [h, w] = maskTensor.dims;
       const data = maskTensor.data as Uint8Array;
 
@@ -1408,7 +1462,7 @@ app.whenReady().then(() => {
               { role: "quit" },
             ],
           },
-        ]
+        ] as Electron.MenuItemConstructorOptions[]
       : []),
     {
       label: "File",
@@ -1460,7 +1514,11 @@ app.whenReady().then(() => {
                 submenu: [{ role: "startSpeaking" }, { role: "stopSpeaking" }],
               },
             ]
-          : [{ role: "delete" }, { type: "separator" }, { role: "selectAll" }]),
+          : [
+              { role: "delete" },
+              { type: "separator" },
+              { role: "selectAll" },
+            ]) as Electron.MenuItemConstructorOptions[],
       ],
     },
     {
@@ -1497,7 +1555,7 @@ app.whenReady().then(() => {
             label: "Window",
             submenu: [{ role: "minimize" }, { role: "close" }],
           },
-        ]),
+        ]) as Electron.MenuItemConstructorOptions[],
     {
       label: "Help",
       submenu: [
