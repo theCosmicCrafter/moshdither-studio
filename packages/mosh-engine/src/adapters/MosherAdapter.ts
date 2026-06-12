@@ -85,10 +85,15 @@ export class MosherAdapter {
 
       await fs.writeFile(configPath, JSON.stringify(config, null, 2));
 
-      console.log(`Starting mosh_cli.py with config: ${configPath}`);
+      // Support both standalone PyInstaller executable and python script
+      const isStandalone = !this.moshCliPath.endsWith(".py");
+      const cmd = isStandalone ? this.moshCliPath : this.pythonPath;
+      const args = isStandalone ? [configPath] : [this.moshCliPath, configPath];
+
+      console.log(`Starting mosh backend: ${cmd} ${args.join(" ")}`);
 
       await new Promise<void>((resolve, reject) => {
-        const proc = spawn(this.pythonPath, [this.moshCliPath, configPath]);
+        const proc = spawn(cmd, args);
 
         proc.stdout.on("data", (data) =>
           console.log(`[mosh] ${data.toString().trim()}`),

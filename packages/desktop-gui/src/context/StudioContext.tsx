@@ -35,6 +35,23 @@ function savePersisted(key: string, value: unknown): void {
   }
 }
 
+export interface MaskLayer {
+  id: string;
+  name: string;
+  visible: boolean;
+  maskData: string | null; // base64 PNG or canvas data URL
+  width: number;
+  height: number;
+  postProcessed: boolean;
+}
+
+export interface PostProcessParams {
+  grow: number;
+  blur: number;
+  fillHoles: number;
+  smooth: number;
+}
+
 export interface RenderJob {
   id: string;
   name: string;
@@ -87,6 +104,11 @@ interface StudioState {
   inTime: number;
   outTime: number;
   watermarkSettings: WatermarkSettings;
+  maskLayers: MaskLayer[];
+  postProcessParams: PostProcessParams;
+  selectedSAMModel: string;
+  modelDownloadProgress: Record<string, number>;
+  backgroundRemovalEnabled: boolean;
 }
 
 export interface StudioContextType extends StudioState {
@@ -130,6 +152,11 @@ export interface StudioContextType extends StudioState {
   setOutTime: (time: number) => void;
   watermarkSettings: WatermarkSettings;
   setWatermarkSettings: (settings: WatermarkSettings) => void;
+  setMaskLayers: (layers: MaskLayer[] | ((prev: MaskLayer[]) => MaskLayer[])) => void;
+  setPostProcessParams: (params: PostProcessParams | ((prev: PostProcessParams) => PostProcessParams)) => void;
+  setSelectedSAMModel: (model: string) => void;
+  setModelDownloadProgress: (progress: Record<string, number>) => void;
+  setBackgroundRemovalEnabled: (enabled: boolean) => void;
 }
 
 function makeDefaultEffect(id: string, type: Effect['type'], enabled: boolean): Effect {
@@ -242,6 +269,19 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [outTime, setOutTime] = useState<number>(0);
   const [watermarkSettings, setWatermarkSettingsState] = useState<WatermarkSettings>(
     () => loadPersisted<WatermarkSettings>('moshdither:watermark', DEFAULT_WATERMARK),
+  );
+  const [maskLayers, setMaskLayers] = useState<MaskLayer[]>(
+    () => loadPersisted<MaskLayer[]>('moshdither:maskLayers', []),
+  );
+  const [postProcessParams, setPostProcessParams] = useState<PostProcessParams>(
+    () => loadPersisted<PostProcessParams>('moshdither:postProcessParams', { grow: 0, blur: 0, fillHoles: 0, smooth: 0 }),
+  );
+  const [selectedSAMModel, setSelectedSAMModel] = useState<string>(
+    () => loadPersisted<string>('moshdither:selectedSAMModel', 'sam-vit-base'),
+  );
+  const [modelDownloadProgress, setModelDownloadProgress] = useState<Record<string, number>>({});
+  const [backgroundRemovalEnabled, setBackgroundRemovalEnabled] = useState<boolean>(
+    () => loadPersisted<boolean>('moshdither:bgRemovalEnabled', false),
   );
   const hasFetchedDefaultDir = useRef(false);
 
@@ -598,6 +638,16 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         setOutTime,
         watermarkSettings,
         setWatermarkSettings,
+        maskLayers,
+        setMaskLayers,
+        postProcessParams,
+        setPostProcessParams,
+        selectedSAMModel,
+        setSelectedSAMModel,
+        modelDownloadProgress,
+        setModelDownloadProgress,
+        backgroundRemovalEnabled,
+        setBackgroundRemovalEnabled,
       }}
     >
       {children}

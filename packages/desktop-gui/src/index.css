@@ -56,6 +56,23 @@
   --shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.3);
   --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
   --glow-primary: 0 0 20px 4px var(--accent-primary-glow);
+
+  /* Transitions */
+  --transition-fast: 100ms ease-out;
+  --transition-base: 150ms ease-out;
+  --transition-slow: 300ms ease-out;
+
+  /* Panel Sizing */
+  --panel-min-width: 240px;
+  --panel-max-width: 520px;
+  --toolbar-height: 48px;
+
+  /* Z-Index Scale */
+  --z-hud: 500;
+  --z-tooltip: 7000;
+  --z-dropdown: 8000;
+  --z-modal: 9000;
+  --z-toast: 10000;
 }
 
 * {

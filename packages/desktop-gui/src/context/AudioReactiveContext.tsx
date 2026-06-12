@@ -5,7 +5,10 @@
 
 import * as React from "react";
 import { useAudioReactive } from "../hooks/useAudioReactive";
-import { AudioReactiveContext } from "./audioReactiveContextDef";
+import {
+  AudioReactiveRefContext,
+  AudioReactiveFeaturesContext,
+} from "./audioReactiveContextDef";
 
 interface AudioReactiveProviderProps {
   children: React.ReactNode;
@@ -50,14 +53,21 @@ export const AudioReactiveProvider: React.FC<AudioReactiveProviderProps> = ({
     enabled: enabled && !!mediaUrl,
   });
 
-  const value = React.useMemo(
-    () => ({ features, featuresRef, enabled, setEnabled }),
-    [features, featuresRef, enabled],
+  const refValue = React.useMemo(
+    () => ({ featuresRef, enabled, setEnabled }),
+    [featuresRef, enabled],
+  );
+
+  const featuresValue = React.useMemo(
+    () => ({ features }),
+    [features],
   );
 
   return (
-    <AudioReactiveContext.Provider value={value}>
-      {children}
-    </AudioReactiveContext.Provider>
+    <AudioReactiveRefContext.Provider value={refValue}>
+      <AudioReactiveFeaturesContext.Provider value={featuresValue}>
+        {children}
+      </AudioReactiveFeaturesContext.Provider>
+    </AudioReactiveRefContext.Provider>
   );
 };

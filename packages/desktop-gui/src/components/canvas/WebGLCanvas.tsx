@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+﻿import React, { useRef, useEffect, useState } from 'react';
 import { useStudio } from '../../context/StudioContext';
 import { useAudioReactiveContext } from '../../hooks/useAudioReactiveContext';
 import { WEBGL_EFFECT_TYPES, BLEND_MODE_MAP } from '../../types/effectTypes';
@@ -83,7 +83,7 @@ void main() {
 export const WebGLCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
-  const { activeEffects, mediaUrl, proxyUrl, qualityMode, maskCanvas } = useStudio();
+  const { activeEffects, mediaUrl, proxyUrl, qualityMode, maskCanvas, maskLayers, postProcessParams, backgroundRemovalEnabled } = useStudio();
   const { featuresRef: audioFeaturesRef } = useAudioReactiveContext();
   const previewUrl = proxyUrl || mediaUrl;
 
@@ -100,6 +100,19 @@ export const WebGLCanvas: React.FC = () => {
   const samMaskDataRef = useRef<Map<string, string>>(new Map());
   // Pre-decoded SAM mask images: effectId -> HTMLImageElement
   const samMaskImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
+
+  // Refs for values that change frequently — using them in the render loop
+  // avoids tearing down and rebuilding the entire WebGL pipeline on every tweak.
+  const activeEffectsRef = useRef(activeEffects);
+  const maskCanvasRef = useRef(maskCanvas);
+  const maskLayersRef = useRef(maskLayers);
+  const postProcessParamsRef = useRef(postProcessParams);
+  const bgRemovalEnabledRef = useRef(backgroundRemovalEnabled);
+  useEffect(() => { activeEffectsRef.current = activeEffects; }, [activeEffects]);
+  useEffect(() => { maskCanvasRef.current = maskCanvas; }, [maskCanvas]);
+  useEffect(() => { maskLayersRef.current = maskLayers; }, [maskLayers]);
+  useEffect(() => { postProcessParamsRef.current = postProcessParams; }, [postProcessParams]);
+  useEffect(() => { bgRemovalEnabledRef.current = backgroundRemovalEnabled; }, [backgroundRemovalEnabled]);
 
   // Load image or video when previewUrl changes (uses proxy if available)
   useEffect(() => {
@@ -181,16 +194,32 @@ export const WebGLCanvas: React.FC = () => {
       (fx) => fx.mask?.type === 'sam' && fx.mask.samMaskData,
     );
     const images = samMaskImagesRef.current;
+    const textures = samMaskTexturesRef.current;
+    const dataMap = samMaskDataRef.current;
+    const validIds = new Set(samEffects.map((fx) => fx.id));
+
+    // Cleanup stale SAM resources for removed/cleared effects
+    for (const id of Array.from(textures.keys())) {
+      if (!validIds.has(id)) {
+        textures.delete(id);
+        dataMap.delete(id);
+        images.delete(id);
+      }
+    }
 
     samEffects.forEach((fx) => {
       const dataUrl = fx.mask!.samMaskData!;
       if (!images.has(fx.id) || (images.get(fx.id) as HTMLImageElement).src !== dataUrl) {
         const img = new Image();
+        img.crossOrigin = 'anonymous';
         img.src = dataUrl;
         img.onload = () => {
           images.set(fx.id, img);
           // Trigger a re-render so the decoded image is picked up
           setMediaReadyRev((r) => r + 1);
+        };
+        img.onerror = () => {
+          console.error('[WebGLCanvas] Failed to decode SAM mask image for effect', fx.id);
         };
       }
     });
@@ -221,10 +250,6 @@ export const WebGLCanvas: React.FC = () => {
       framebuffers: [],
     };
 
-    const trackProgram = (p: WebGLProgram) => {
-      resources.programs.push(p);
-      return p;
-    };
     const trackTexture = (t: WebGLTexture | null) => {
       if (t) resources.textures.push(t);
       return t;
@@ -259,57 +284,17 @@ export const WebGLCanvas: React.FC = () => {
     });
     resizeObserver.observe(wrapper);
 
-    // Filter enabled WebGL effects
-    const activeFxs = activeEffects.filter(
-      (fx) => fx.enabled && WEBGL_EFFECT_TYPES.has(fx.type),
-    );
-
-    // Compile programs for each active effect, plus passthrough
+    // Compile shared programs once — they live in the global cache
     let passthroughProgram: WebGLProgram;
-    try {
-      passthroughProgram = trackProgram(getOrCreateProgram(gl, defaultVert, passthroughFrag));
-    } catch (e) {
-      console.error('Failed to compile passthrough shader:', e);
-      return;
-    }
-
     let blendMaskProgram: WebGLProgram;
-    try {
-      blendMaskProgram = trackProgram(getOrCreateProgram(gl, defaultVert, blendMaskFrag));
-    } catch (e) {
-      console.error('Failed to compile blend mask shader:', e);
-      return;
-    }
-
     let blendModesProgram: WebGLProgram;
     try {
-      blendModesProgram = trackProgram(getOrCreateProgram(gl, defaultVert, blendModesFrag));
+      passthroughProgram = getOrCreateProgram(gl, defaultVert, passthroughFrag);
+      blendMaskProgram = getOrCreateProgram(gl, defaultVert, blendMaskFrag);
+      blendModesProgram = getOrCreateProgram(gl, defaultVert, blendModesFrag);
     } catch (e) {
-      console.error('Failed to compile blend modes shader:', e);
+      console.error('Failed to compile core shaders:', e);
       return;
-    }
-
-    const programs: { [id: string]: WebGLProgram } = {};
-    for (const fx of activeFxs) {
-      let fsSource = passthroughFrag;
-      if (fx.type === 'halftone') fsSource = halftoneFrag;
-      else if (fx.type === 'analog-glitch') fsSource = analogGlitchFrag;
-      else if (fx.type === 'dither') {
-        if (fx.params.ditherMode === 'halftone' || fx.params.ditherMode === 'polka_dot') {
-          fsSource = halftoneFrag;
-        } else {
-          fsSource = bayerDitherFrag;
-        }
-      }
-      else if (fx.type === 'epsilon-glow') fsSource = epsilonGlowFrag;
-      else if (fx.type === 'crt-phosphor') fsSource = crtPhosphorFrag;
-      else if (fx.type === 'temporal-noise') fsSource = temporalNoiseFrag;
-
-      try {
-        programs[fx.id] = trackProgram(getOrCreateProgram(gl, defaultVert, fsSource));
-      } catch (e) {
-        console.error(`Failed to compile program for ${fx.name}:`, e);
-      }
     }
 
     // Set up geometry
@@ -384,20 +369,18 @@ export const WebGLCanvas: React.FC = () => {
       console.warn("Failed to create temp framebuffer:", e);
     }
 
-    // Allocate two offscreen framebuffers and textures for intermediate passes (ping-pong)
+    // Allocate two offscreen framebuffers and textures for intermediate passes (ping-pong).
+    // We always create them even if only one effect is active — they are reused when
+    // effects change without requiring a pipeline rebuild.
     const fbos: WebGLFramebuffer[] = [];
     const fbTextures: WebGLTexture[] = [];
-    const numPasses = activeFxs.length;
-
-    if (numPasses > 1) {
-      for (let i = 0; i < 2; i++) {
-        try {
-          const pair = createFramebufferTexturePair(gl, canvas.width, canvas.height);
-          fbos.push(trackFramebuffer(pair.framebuffer)!);
-          fbTextures.push(trackTexture(pair.texture)!);
-        } catch (e) {
-          console.warn("Failed to create ping-pong framebuffer:", e);
-        }
+    for (let i = 0; i < 2; i++) {
+      try {
+        const pair = createFramebufferTexturePair(gl, canvas.width, canvas.height);
+        fbos.push(trackFramebuffer(pair.framebuffer)!);
+        fbTextures.push(trackTexture(pair.texture)!);
+      } catch (e) {
+        console.warn("Failed to create ping-pong framebuffer:", e);
       }
     }
 
@@ -447,10 +430,18 @@ export const WebGLCanvas: React.FC = () => {
       }
 
       // Upload mask canvas to mask texture if painting/present
-      if (maskCanvas) {
+      const currentMaskCanvas = maskCanvasRef.current;
+      if (currentMaskCanvas) {
         gl.bindTexture(gl.TEXTURE_2D, maskTexture);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, maskCanvas);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, currentMaskCanvas);
       }
+
+      // Read current effects from ref so we don't rebuild the pipeline on every tweak
+      const currentEffects = activeEffectsRef.current;
+      const activeFxs = currentEffects.filter(
+        (fx) => fx.enabled && WEBGL_EFFECT_TYPES.has(fx.type),
+      );
+      const numPasses = activeFxs.length;
 
       let currentInputTexture = texture;
 
@@ -477,11 +468,34 @@ export const WebGLCanvas: React.FC = () => {
 
         gl.drawArrays(gl.TRIANGLES, 0, 6);
       } else {
-        // Multi-pass post processing
+        // Multi-pass post processing — programs are compiled lazily and cached globally
         for (let i = 0; i < numPasses; i++) {
           const fx = activeFxs[i];
           const isLastPass = (i === numPasses - 1);
           const hasMask = fx.mask && fx.mask.type !== 'none';
+
+          // Lazily compile (or retrieve cached) fragment shader for this effect type
+          let fsSource = passthroughFrag;
+          if (fx.type === 'halftone') fsSource = halftoneFrag;
+          else if (fx.type === 'analog-glitch') fsSource = analogGlitchFrag;
+          else if (fx.type === 'dither') {
+            if (fx.params.ditherMode === 'halftone' || fx.params.ditherMode === 'polka_dot') {
+              fsSource = halftoneFrag;
+            } else {
+              fsSource = bayerDitherFrag;
+            }
+          }
+          else if (fx.type === 'epsilon-glow') fsSource = epsilonGlowFrag;
+          else if (fx.type === 'crt-phosphor') fsSource = crtPhosphorFrag;
+          else if (fx.type === 'temporal-noise') fsSource = temporalNoiseFrag;
+
+          let program: WebGLProgram;
+          try {
+            program = getOrCreateProgram(gl, defaultVert, fsSource);
+          } catch (e) {
+            console.error(`Failed to compile program for ${fx.name}:`, e);
+            program = passthroughProgram;
+          }
 
           // Step 1: Always render the effect to tempFbo first
           gl.bindFramebuffer(gl.FRAMEBUFFER, tempFbo);
@@ -489,7 +503,6 @@ export const WebGLCanvas: React.FC = () => {
           gl.clearColor(0.0, 0.0, 0.0, 1.0);
           gl.clear(gl.COLOR_BUFFER_BIT);
 
-          const program = programs[fx.id] || passthroughProgram;
           gl.useProgram(program);
 
           gl.activeTexture(gl.TEXTURE0);
@@ -591,6 +604,8 @@ export const WebGLCanvas: React.FC = () => {
             gl.uniform1i(gl.getUniformLocation(blendMaskProgram, 'u_glitched'), 1);
 
             // Determine which mask texture to bind
+            // TODO: Multi-layer mask compositing � combine maskLayers from StudioContext
+            // TODO: Background removal mask source when bgRemovalEnabledRef.current is true
             let boundMaskTexture = maskTexture;
             const isSAM = fx.mask!.type === 'sam';
             if (isSAM && fx.mask!.samMaskData) {
@@ -687,7 +702,7 @@ export const WebGLCanvas: React.FC = () => {
       const isVideo = textureSource && 'videoWidth' in textureSource;
       const animatedWebglTypes = new Set<Effect['type']>(['analog-glitch', 'crt-phosphor', 'temporal-noise']);
       const hasAnimatedEffect = activeFxs.some((fx) => animatedWebglTypes.has(fx.type));
-      const isPainting = activeEffects.some(fx => fx.enabled && fx.mask && fx.mask.type !== 'none');
+      const isPainting = activeEffectsRef.current.some(fx => fx.enabled && fx.mask && fx.mask.type !== 'none');
 
       if (isVideo || hasAnimatedEffect || isPainting) {
         animationFrameId = requestAnimationFrame(render);
@@ -707,7 +722,8 @@ export const WebGLCanvas: React.FC = () => {
       resources.buffers.forEach((b) => gl.deleteBuffer(b));
       resources.framebuffers.forEach((f) => gl.deleteFramebuffer(f));
     };
-  }, [activeEffects, mediaReadyRev, qualityMode, maskCanvas, audioFeaturesRef]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mediaReadyRev, qualityMode]);
 
   // Clear the shader program cache only when the canvas unmounts
   useEffect(() => clearProgramCache, []);

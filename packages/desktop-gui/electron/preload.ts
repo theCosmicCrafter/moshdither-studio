@@ -39,10 +39,23 @@ const VALID_SEND_CHANNELS: string[] = [
   "fonts:list",
   "sam3:load-model",
   "sam3:segment",
+  "sam3:predict-batch",
+  "sam3:hover-preview",
+  "sam3:remove-background",
+  "sam3:list-models",
+  "sam3:download-model",
+  "sam3:model-status",
+  "sam3:unload-model",
+  "mask:post-process",
+  "mask:flood-fill",
   "window:minimize",
   "window:maximize",
   "window:close",
   "window:isMaximized",
+  // Environment manager
+  "env:status",
+  "env:install-local",
+  "env:set-mode",
 ];
 
 const VALID_RECEIVE_CHANNELS: string[] = [
@@ -60,6 +73,9 @@ const VALID_RECEIVE_CHANNELS: string[] = [
   "menu:shortcuts",
   "menu:preload-model",
   "sam3:progress",
+  "sam3:download-progress",
+  "sam3:hover-result",
+  "env:install-progress",
 ];
 
 function validateChannel(channel: string, valid: string[]): void {

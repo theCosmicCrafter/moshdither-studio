@@ -52,16 +52,37 @@ export const Viewport: React.FC = () => {
     position: 'absolute',
     display: 'none',
   });
+  const [samOverlayStyle, setSamOverlayStyle] = React.useState<React.CSSProperties>({
+    position: 'absolute',
+    display: 'none',
+  });
   const [splitView, setSplitView] = React.useState(false);
   const [isDraggingFile, setIsDraggingFile] = React.useState(false);
   const [hideSplitLine, setHideSplitLine] = React.useState(false);
   const samOverlayRef = React.useRef<HTMLDivElement>(null);
-  const { segmentAtPoint, status: samStatus, progress: samProgress, loadingStep: samLoadingStep, error: samError, loadModel: loadSAMModel } = useSAM3();
+  const {
+    predictBatch,
+    hoverPreview,
+    cancelHover,
+    status: samStatus,
+    progress: samProgress,
+    loadingStep: samLoadingStep,
+    error: samError,
+    loadModel: loadSAMModel,
+    hoverMask,
+  } = useSAM3();
+
+  // Multi-click point state for SAM
+  const [samPoints, setSamPoints] = React.useState<{ x: number; y: number; label: 1 | 0 }[]>([]);
+  const samHoverTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
 
   const brushDataRef = React.useRef<string | undefined>(undefined);
   React.useEffect(() => {
     brushDataRef.current = activeFx?.mask?.brushData;
   }, [activeFx?.mask?.brushData]);
+
+  const isSAMMode = activeFx?.mask?.type === 'sam';
 
   const syncPaintCanvasSize = React.useCallback(() => {
     const container = containerRef.current;
@@ -86,13 +107,19 @@ export const Viewport: React.FC = () => {
           }
         }
 
-        // Match WebGL display size and position exactly
+        // Match WebGL display size and position exactly using getBoundingClientRect
+        // The WebGL canvas is centered via flexbox, so offsetLeft/offsetTop are incorrect
+        const containerRect = container.getBoundingClientRect();
+        const glRect = glCanvas.getBoundingClientRect();
+        const relativeLeft = glRect.left - containerRect.left;
+        const relativeTop = glRect.top - containerRect.top;
+
         setPaintStyle({
           position: 'absolute',
-          left: `${glCanvas.offsetLeft}px`,
-          top: `${glCanvas.offsetTop}px`,
-          width: `${glCanvas.clientWidth}px`,
-          height: `${glCanvas.clientHeight}px`,
+          left: `${relativeLeft}px`,
+          top: `${relativeTop}px`,
+          width: `${glRect.width}px`,
+          height: `${glRect.height}px`,
           cursor: maskBrushEraser ? 'cell' : 'crosshair',
           zIndex: 5,
           pointerEvents: 'auto',
@@ -167,6 +194,45 @@ export const Viewport: React.FC = () => {
       observer.disconnect();
     };
   }, [isPaintingMask, syncPaintCanvasSize]);
+
+  // Sync SAM overlay position to match WebGL canvas
+  React.useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !isSAMMode) return;
+
+    const glCanvas = container.querySelector('.webgl-canvas') as HTMLCanvasElement;
+    if (!glCanvas) return;
+
+    const updateOverlayPosition = () => {
+      const containerRect = container.getBoundingClientRect();
+      const glRect = glCanvas.getBoundingClientRect();
+      const relativeLeft = glRect.left - containerRect.left;
+      const relativeTop = glRect.top - containerRect.top;
+
+      setSamOverlayStyle({
+        position: 'absolute',
+        left: `${relativeLeft}px`,
+        top: `${relativeTop}px`,
+        width: `${glRect.width}px`,
+        height: `${glRect.height}px`,
+        zIndex: 10,
+        display: 'block',
+        pointerEvents: 'auto',
+        cursor: 'crosshair',
+      });
+    };
+
+    updateOverlayPosition();
+
+    const observer = new ResizeObserver(() => {
+      updateOverlayPosition();
+    });
+    observer.observe(glCanvas);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [isSAMMode]);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -264,48 +330,99 @@ export const Viewport: React.FC = () => {
     }
   };
 
-  // AI Masking click-to-segment handler
-  const isSAMMode = activeFx?.mask?.type === 'sam';
+  // AI Masking click-to-segment handler with multi-click & negative points
   const handleSAMClick = React.useCallback(
     async (e: React.MouseEvent<HTMLDivElement>) => {
       if (!isSAMMode || !activeFx || !mediaUrl) return;
 
-      const overlay = samOverlayRef.current;
       const container = containerRef.current;
-      if (!overlay || !container) return;
+      if (!container) return;
+
+      const glCanvas = container.querySelector('.webgl-canvas') as HTMLCanvasElement;
+      if (!glCanvas) return;
+      const rect = glCanvas.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      const clickY = e.clientY - rect.top;
+      if (clickX < 0 || clickY < 0 || clickX > rect.width || clickY > rect.height) return;
+
+      const normX = clickX / rect.width;
+      const normY = clickY / rect.height;
+
+      // Flood fill on Ctrl+click (or Cmd+click on macOS)
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        try {
+          const { floodFillCanvas } = await import('../../lib/floodFill');
+          const ffCanvas = document.createElement('canvas');
+          ffCanvas.width = glCanvas.width;
+          ffCanvas.height = glCanvas.height;
+          const ffCtx = ffCanvas.getContext('2d');
+          if (!ffCtx) return;
+          ffCtx.drawImage(glCanvas, 0, 0);
+          const result = floodFillCanvas(ffCanvas, Math.round(normX * ffCanvas.width), Math.round(normY * ffCanvas.height), {
+            tolerance: 32,
+            connectivity: 4,
+          });
+          if (result.filledPixels === 0) return;
+          const maskCanvas = document.createElement('canvas');
+          maskCanvas.width = result.width;
+          maskCanvas.height = result.height;
+          const mCtx = maskCanvas.getContext('2d');
+          if (!mCtx) return;
+          const rgba = new Uint8ClampedArray(result.width * result.height * 4);
+          for (let i = 0; i < result.mask.length; i++) {
+            const v = result.mask[i] ? 255 : 0;
+            rgba[i * 4] = v;
+            rgba[i * 4 + 1] = v;
+            rgba[i * 4 + 2] = v;
+            rgba[i * 4 + 3] = 255;
+          }
+          mCtx.putImageData(new ImageData(rgba, result.width, result.height), 0, 0);
+          const samMaskData = maskCanvas.toDataURL('image/png');
+          setActiveEffects((prev) =>
+            prev.map((fx) =>
+              fx.id === activeFx.id
+                ? { ...fx, mask: { ...(fx.mask || {}), type: 'sam', samMaskData, samClickPoint: { x: normX, y: normY } } }
+                : fx,
+            ),
+          );
+          setSamPoints([]);
+        } catch (err) {
+          console.error('[AI Masking] Flood fill failed:', err);
+        }
+        return;
+      }
+
+      // Right click = negative point, left click = positive point
+      const isRightClick = e.button === 2;
+      const newPoint = { x: normX, y: normY, label: (isRightClick ? 0 : 1) as 1 | 0 };
+
+      // Prevent context menu from showing on right click
+      if (isRightClick) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+
+      const nextPoints = [...samPoints, newPoint];
+      setSamPoints(nextPoints);
 
       try {
-        // Measure against the rendered canvas (not the overlay) so
-        // letterboxing inside the container doesn't skew coordinates
-        const glCanvas = container.querySelector('.webgl-canvas') as HTMLCanvasElement;
-        if (!glCanvas) return;
-        const rect = glCanvas.getBoundingClientRect();
-        const clickX = e.clientX - rect.left;
-        const clickY = e.clientY - rect.top;
-        if (clickX < 0 || clickY < 0 || clickX > rect.width || clickY > rect.height) return;
+        const positive = nextPoints.filter((p) => p.label === 1);
+        const negative = nextPoints.filter((p) => p.label === 0);
 
-        // Send file path + normalized click coordinates (0..1) to the main
-        // process — it scales them to the source image's native pixel size.
-        // Main loads the image from disk directly (no canvas tainting issues).
-        const mask = await segmentAtPoint(mediaUrl, {
-          x: clickX / rect.width,
-          y: clickY / rect.height,
-        });
+        const mask = await predictBatch(mediaUrl, positive, negative);
         if (!mask) {
-          console.warn('[AI Masking] segmentation returned no mask');
+          console.warn('[AI Masking] predictBatch returned no mask');
           return;
         }
 
-        // Build the mask canvas at the mask's own resolution (source image
-        // size) — the GPU samples it with normalized UVs, so it stretches
-        // to fit the viewport automatically.
         const maskCanvas = document.createElement('canvas');
         maskCanvas.width = mask.width;
         maskCanvas.height = mask.height;
         const ctx = maskCanvas.getContext('2d');
         if (!ctx) return;
 
-        // Convert 1-channel mask to RGBA for ImageData
         const rgba = new Uint8ClampedArray(mask.width * mask.height * 4);
         for (let i = 0; i < mask.data.length; i++) {
           const val = mask.data[i] ? 255 : 0;
@@ -314,8 +431,7 @@ export const Viewport: React.FC = () => {
           rgba[i * 4 + 2] = val;
           rgba[i * 4 + 3] = 255;
         }
-        const imageData = new ImageData(rgba, mask.width, mask.height);
-        ctx.putImageData(imageData, 0, 0);
+        ctx.putImageData(new ImageData(rgba, mask.width, mask.height), 0, 0);
         const samMaskData = maskCanvas.toDataURL('image/png');
 
         setActiveEffects((prev) =>
@@ -327,7 +443,7 @@ export const Viewport: React.FC = () => {
                     ...(fx.mask || {}),
                     type: 'sam',
                     samMaskData,
-                    samClickPoint: { x: clickX / rect.width, y: clickY / rect.height },
+                    samClickPoint: { x: normX, y: normY },
                   },
                 }
               : fx,
@@ -337,8 +453,81 @@ export const Viewport: React.FC = () => {
         console.error('[AI Masking] Click-to-segment failed:', err);
       }
     },
-    [isSAMMode, activeFx, mediaUrl, segmentAtPoint, setActiveEffects],
+    [isSAMMode, activeFx, mediaUrl, samPoints, predictBatch, setActiveEffects],
   );
+
+  // Debounced hover preview for SAM
+  const handleSAMMouseMove = React.useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (!isSAMMode || !mediaUrl || samStatus !== 'ready') return;
+      const container = containerRef.current;
+      if (!container) return;
+      const glCanvas = container.querySelector('.webgl-canvas') as HTMLCanvasElement;
+      if (!glCanvas) return;
+      const rect = glCanvas.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / rect.width;
+      const y = (e.clientY - rect.top) / rect.height;
+      if (x < 0 || y < 0 || x > 1 || y > 1) return;
+
+      if (samHoverTimeoutRef.current) {
+        clearTimeout(samHoverTimeoutRef.current);
+      }
+      samHoverTimeoutRef.current = setTimeout(() => {
+        hoverPreview(mediaUrl, { x, y }).catch(() => {
+          /* ignore hover errors */
+        });
+      }, 120);
+    },
+    [isSAMMode, mediaUrl, samStatus, hoverPreview],
+  );
+
+  const handleSAMMouseLeave = React.useCallback(() => {
+    if (samHoverTimeoutRef.current) {
+      clearTimeout(samHoverTimeoutRef.current);
+      samHoverTimeoutRef.current = null;
+    }
+    cancelHover();
+  }, [cancelHover]);
+
+  // Cleanup hover timeout on unmount to prevent leaks
+  React.useEffect(() => {
+    return () => {
+      if (samHoverTimeoutRef.current) {
+        clearTimeout(samHoverTimeoutRef.current);
+        samHoverTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
+  // Draw hover mask directly to a canvas ref (avoids setState-in-effect lint)
+  React.useEffect(() => {
+    const canvas = hoverCanvasRef.current;
+    if (!canvas || !hoverMask) return;
+    canvas.width = hoverMask.width;
+    canvas.height = hoverMask.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const rgba = new Uint8ClampedArray(hoverMask.width * hoverMask.height * 4);
+    for (let i = 0; i < hoverMask.data.length; i++) {
+      const v = hoverMask.data[i] ? 255 : 0;
+      rgba[i * 4] = v;
+      rgba[i * 4 + 1] = v;
+      rgba[i * 4 + 2] = v;
+      rgba[i * 4 + 3] = 180; // semi-transparent for preview
+    }
+    ctx.putImageData(new ImageData(rgba, hoverMask.width, hoverMask.height), 0, 0);
+  }, [hoverMask]);
+
+  // Keyboard shortcut: Escape clears SAM points
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isSAMMode) {
+        setSamPoints([]);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isSAMMode]);
 
   // Brush size shortcuts: [ decrease, ] increase
   React.useEffect(() => {
@@ -431,88 +620,79 @@ export const Viewport: React.FC = () => {
                 <div
                   ref={samOverlayRef}
                   onClick={handleSAMClick}
-                  style={{
-                    position: 'absolute',
-                    inset: 0,
-                    zIndex: 10,
-                    cursor: samStatus === 'segmenting' || samStatus === 'loading' ? 'wait' : 'crosshair',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
+                  onMouseMove={handleSAMMouseMove}
+                  onMouseLeave={handleSAMMouseLeave}
+                  onContextMenu={(e) => e.preventDefault()}
+                  style={samOverlayStyle}
+                  className={`sam-overlay ${samStatus === 'segmenting' || samStatus === 'loading' ? 'sam-overlay--loading' : 'sam-overlay--ready'}`}
                 >
-                  {(samStatus === 'loading' || samStatus === 'segmenting') && (
-                    <div
+                  {/* Hover preview canvas */}
+                  {hoverMask && (
+                    <canvas
+                      ref={hoverCanvasRef}
                       style={{
-                        background: 'rgba(0,0,0,0.85)',
-                        padding: '20px 28px',
-                        borderRadius: 12,
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
-                        gap: 14,
-                        color: '#fff',
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        height: '100%',
                         pointerEvents: 'none',
-                        minWidth: 280,
+                        opacity: 0.5,
+                        mixBlendMode: 'screen',
                       }}
-                    >
-                      <Loader2 size={28} style={{ animation: 'spin 1s linear infinite', color: 'var(--accent-primary)' }} />
+                    />
+                  )}
+                  {/* Positive / negative point indicators */}
+                  {samPoints.map((p, i) => (
+                    <div
+                      key={i}
+                      style={{
+                        position: 'absolute',
+                        left: `${p.x * 100}%`,
+                        top: `${p.y * 100}%`,
+                        width: 10,
+                        height: 10,
+                        borderRadius: '50%',
+                        background: p.label === 1 ? '#00ffaa' : '#ff5050',
+                        border: '2px solid #fff',
+                        transform: 'translate(-50%, -50%)',
+                        pointerEvents: 'none',
+                        zIndex: 11,
+                      }}
+                      title={p.label === 1 ? 'Positive point' : 'Negative point'}
+                    />
+                  ))}
+                  {(samStatus === 'loading' || samStatus === 'segmenting') && (
+                    <div className="sam-hud">
+                      <Loader2 size={28} className="sam-spinner" />
                       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-                        <span style={{ fontSize: 14, fontWeight: 600 }}>
+                        <span className="sam-hud__title">
                           {samStatus === 'loading' ? 'Loading AI Masking Model' : 'Generating Mask'}
                         </span>
-                        <span style={{ fontSize: 11, opacity: 0.7 }}>
+                        <span className="sam-hud__subtitle">
                           {samStatus === 'loading' ? samLoadingStep || 'Preparing...' : 'Processing segmentation...'}
                         </span>
                       </div>
-                      {/* Progress bar */}
-                      <div style={{ width: '100%', height: 4, background: 'rgba(255,255,255,0.15)', borderRadius: 2, overflow: 'hidden' }}>
+                      <div className="sam-hud__progress-track">
                         <div
-                          style={{
-                            width: `${samProgress}%`,
-                            height: '100%',
-                            background: 'var(--accent-primary)',
-                            borderRadius: 2,
-                            transition: 'width 0.3s ease',
-                          }}
+                          className="sam-hud__progress-fill"
+                          style={{ width: `${samProgress}%` }}
                         />
                       </div>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent-primary)' }}>{Math.round(samProgress)}%</span>
+                      <span className="sam-hud__percent">{Math.round(samProgress)}%</span>
                     </div>
                   )}
                   {samStatus === 'error' && samError && (
-                    <div
-                      style={{
-                        background: 'rgba(60,0,0,0.85)',
-                        padding: '12px 20px',
-                        borderRadius: 8,
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
-                        gap: 8,
-                        color: '#fff',
-                        fontSize: 13,
-                        maxWidth: '80%',
-                      }}
-                    >
-                      <span style={{ color: '#ff6b6b', fontWeight: 600 }}>AI Masking Error</span>
-                      <span style={{ fontSize: 12, opacity: 0.8, textAlign: 'center' }}>{samError}</span>
+                    <div className="sam-error">
+                      <span className="sam-error__title">AI Masking Error</span>
+                      <span className="sam-error__message">{samError}</span>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
                           loadSAMModel();
                         }}
-                        style={{
-                          marginTop: 4,
-                          padding: '4px 12px',
-                          background: 'var(--accent-primary)',
-                          border: 'none',
-                          borderRadius: 4,
-                          color: '#000',
-                          fontSize: 12,
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                        }}
+                        className="btn-primary"
+                        style={{ marginTop: 4 }}
                       >
                         Retry
                       </button>

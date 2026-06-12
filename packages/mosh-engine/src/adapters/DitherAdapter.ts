@@ -139,8 +139,15 @@ export class DitherAdapter {
     await fs.writeFile(configPath, JSON.stringify(config, null, 2));
 
     try {
-      console.log(`Starting dither_cli.py with config ${configPath}...`);
-      await runSpawn(this.pythonPath, [this.ditherCliPath, configPath]);
+      // Support both standalone PyInstaller executable and python script
+      const isStandalone = !this.ditherCliPath.endsWith(".py");
+      const cmd = isStandalone ? this.ditherCliPath : this.pythonPath;
+      const args = isStandalone
+        ? [configPath]
+        : [this.ditherCliPath, configPath];
+
+      console.log(`Starting dither backend: ${cmd} ${args.join(" ")}`);
+      await runSpawn(cmd, args);
 
       const outputExists = await fs
         .access(outputPath)

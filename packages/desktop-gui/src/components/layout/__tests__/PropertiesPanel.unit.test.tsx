@@ -67,14 +67,27 @@ describe("PropertiesPanel — Auto-Keyframe from Beats", () => {
   let user: ReturnType<typeof userEvent.setup>;
 
   beforeEach(() => {
+    vi.clearAllMocks();
     const mockIpc = installMockIpc();
     // Default invoke returns resolved promise so .then() doesn't crash
-    mockIpc.invoke.mockImplementation(() => Promise.resolve(null));
+    mockIpc.invoke.mockImplementation((channel: string) => {
+      if (channel === "env:status") {
+        return Promise.resolve({
+          mode: "system",
+          pythonOk: true,
+          venvOk: false,
+          pipOk: false,
+          ffmpegOk: true,
+          ffprobeOk: true,
+          ffglitchOk: false,
+        });
+      }
+      return Promise.resolve(null);
+    });
     vi.spyOn(StudioContextModule, "useStudio").mockReturnValue(
       createMockStudioContext(),
     );
     user = userEvent.setup();
-    vi.clearAllMocks();
   });
 
   function renderPanel() {

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useStudio } from '../../context/StudioContext';
 import { Tooltip } from '../atoms/Tooltip';
 import { Switch } from '../atoms/Switch';
@@ -43,11 +43,46 @@ export const PropertiesPanel: React.FC = () => {
     watermarkSettings,
     setWatermarkSettings,
   } = useStudio();
-  const { status: samStatus, progress: samProgress, loadingStep: samLoadingStep, error: samError } = useSAM3();
+  const {
+    status: samStatus,
+    progress: samProgress,
+    loadingStep: samLoadingStep,
+    error: samError,
+    selectedModel: samSelectedModel,
+    setSelectedModel: setSamSelectedModel,
+    threshold: samThreshold,
+    setThreshold: setSamThreshold,
+    downloadModel: downloadSamModel,
+    modelDownloadProgress,
+  } = useSAM3();
+  const {
+    postProcessParams,
+    setPostProcessParams,
+    maskLayers,
+    setMaskLayers,
+    backgroundRemovalEnabled,
+    setBackgroundRemovalEnabled,
+  } = useStudio();
   const [modsOpen, setModsOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [systemFonts, setSystemFonts] = useState<string[]>([]);
+  const [envMode, setEnvMode] = useState<'local' | 'system' | 'unconfigured'>('unconfigured');
+  const [envStatusOpen, setEnvStatusOpen] = useState(false);
+  const [envStatus, setEnvStatus] = useState<{ pythonOk: boolean; ffmpegOk: boolean; ffglitchOk: boolean } | null>(null);
   const [beatGenOpen, setBeatGenOpen] = useState(false);
+
+  // Fetch environment status on mount
+  useEffect(() => {
+    if (!window.ipcRenderer) return;
+    window.ipcRenderer.invoke('env:status').then((result) => {
+      const status = result as { mode: 'local' | 'system' | 'unconfigured'; pythonOk: boolean; ffmpegOk: boolean; ffglitchOk: boolean } | null;
+      if (!status) return;
+      setEnvMode(status.mode);
+      setEnvStatus({ pythonOk: status.pythonOk, ffmpegOk: status.ffmpegOk, ffglitchOk: status.ffglitchOk });
+    }).catch(() => {
+      // ignore
+    });
+  }, []);
   const [beatGenParam, setBeatGenParam] = useState('');
   const [beatGenMode, setBeatGenMode] = useState<BeatKeyframeMode>('pulse');
   const [beatGenMin, setBeatGenMin] = useState(0);
@@ -888,7 +923,44 @@ export const PropertiesPanel: React.FC = () => {
               )}
 
               {activeFx.mask?.type === 'sam' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '8px 0' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '8px 0' }}>
+                  {/* Model Selector */}
+                  <div className="control-group" style={{ marginBottom: '8px' }}>
+                    <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>SAM Model</label>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <select
+                        value={samSelectedModel}
+                        onChange={(e) => setSamSelectedModel(e.target.value as 'sam-vit-base' | 'sam-vit-large' | 'sam-vit-huge')}
+                        style={{ flex: 1, padding: '6px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px' }}
+                      >
+                        <option value="sam-vit-base">SAM ViT Base</option>
+                        <option value="sam-vit-large">SAM ViT Large</option>
+                        <option value="sam-vit-huge">SAM ViT Huge</option>
+                      </select>
+                      <Button
+                        variant="glass"
+                        size="sm"
+                        onClick={() => downloadSamModel(samSelectedModel)}
+                        disabled={samStatus === 'loading'}
+                      >
+                        {modelDownloadProgress[samSelectedModel] ? `${Math.round(modelDownloadProgress[samSelectedModel])}%` : 'Download'}
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Threshold Slider */}
+                  <div className="control-group" style={{ marginBottom: '8px' }}>
+                    <ControlGroup
+                      label="IoU Threshold"
+                      value={samThreshold}
+                      onChange={(val) => setSamThreshold(Number(val))}
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      defaultValue={0.0}
+                    />
+                  </div>
+
                   {/* SAM Model Status Badge */}
                   <div
                     style={{
@@ -949,8 +1021,82 @@ export const PropertiesPanel: React.FC = () => {
                     <span style={{ fontSize: '10px', color: '#00aaff', opacity: 0.9 }}>{samLoadingStep}</span>
                   )}
                   <span style={{ fontSize: '11px', color: 'var(--text-tertiary)' }}>
-                    Click on the canvas to segment the clicked object. The effect will apply only inside the segmented region.
+                    LMB = Add point, RMB = Exclude point, Ctrl+Click = Flood fill. Multi-click supported.
                   </span>
+
+                  {/* Background Removal Toggle */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
+                    <Switch
+                      checked={backgroundRemovalEnabled}
+                      onChange={setBackgroundRemovalEnabled}
+                    />
+                    <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Background Removal</span>
+                    <Tooltip content="Use AI to remove the background instead of segmenting foreground" />
+                  </div>
+
+                  {/* Post-Processing Controls */}
+                  <div style={{ marginTop: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '10px' }}>
+                    <label style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-secondary)', display: 'block', marginBottom: '8px' }}>Post-Processing</label>
+                    <ControlGroup
+                      label={`Grow: ${postProcessParams.grow}px`}
+                      value={postProcessParams.grow}
+                      onChange={(val) => setPostProcessParams((p) => ({ ...p, grow: Number(val) }))}
+                      min={-50}
+                      max={50}
+                      step={1}
+                      defaultValue={0}
+                    />
+                    <ControlGroup
+                      label={`Blur: ${postProcessParams.blur}px`}
+                      value={postProcessParams.blur}
+                      onChange={(val) => setPostProcessParams((p) => ({ ...p, blur: Number(val) }))}
+                      min={0}
+                      max={50}
+                      step={1}
+                      defaultValue={0}
+                    />
+                    <ControlGroup
+                      label={`Fill Holes: ${postProcessParams.fillHoles}`}
+                      value={postProcessParams.fillHoles}
+                      onChange={(val) => setPostProcessParams((p) => ({ ...p, fillHoles: Number(val) }))}
+                      min={0}
+                      max={1000}
+                      step={10}
+                      defaultValue={0}
+                    />
+                    <ControlGroup
+                      label={`Smooth: ${postProcessParams.smooth}px`}
+                      value={postProcessParams.smooth}
+                      onChange={(val) => setPostProcessParams((p) => ({ ...p, smooth: Number(val) }))}
+                      min={0}
+                      max={100}
+                      step={1}
+                      defaultValue={0}
+                    />
+                  </div>
+
+                  {/* Mask Layer List */}
+                  {maskLayers.length > 0 && (
+                    <div style={{ marginTop: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '10px' }}>
+                      <label style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-secondary)', display: 'block', marginBottom: '8px' }}>Mask Layers</label>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {maskLayers.map((layer) => (
+                          <div key={layer.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 8px', background: 'rgba(255,255,255,0.03)', borderRadius: '4px' }}>
+                            <Switch checked={layer.visible} onChange={(v) => setMaskLayers((prev) => prev.map((l) => l.id === layer.id ? { ...l, visible: v } : l))} />
+                            <span style={{ fontSize: '12px', color: 'var(--text-secondary)', flex: 1 }}>{layer.name}</span>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setMaskLayers((prev) => prev.filter((l) => l.id !== layer.id))}
+                            >
+                              Remove
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {activeFx.mask?.samMaskData && (
                     <div style={{ display: 'flex', gap: '8px' }}>
                       <Button
@@ -975,9 +1121,7 @@ export const PropertiesPanel: React.FC = () => {
                     </span>
                   )}
                 </div>
-              )}
-
-              {activeFx.mask && activeFx.mask.type !== 'none' && (
+              )}{activeFx.mask && activeFx.mask.type !== 'none' && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
                   <Switch 
                     checked={activeFx.mask.invert || false} 
@@ -992,6 +1136,60 @@ export const PropertiesPanel: React.FC = () => {
                   <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Invert Mask</span>
                 </div>
               )}
+            </div>
+
+            {/* 2.4b ENVIRONMENT SETTINGS */}
+            <div className="glass-panel" style={{ padding: '16px', background: 'rgba(255,255,255,0.02)', borderRadius: 'var(--radius-lg)', marginTop: '16px' }}>
+              <h4 style={{ fontSize: '12px', textTransform: 'uppercase', color: 'var(--text-secondary)', letterSpacing: '0.05em', marginBottom: '12px', fontWeight: 600 }}>
+                Backend Environment
+              </h4>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div className="control-group">
+                  <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Mode</label>
+                  <select
+                    value={envMode}
+                    onChange={async (e) => {
+                      const mode = e.target.value as 'local' | 'system';
+                      setEnvMode(mode);
+                      if (window.ipcRenderer) {
+                        await window.ipcRenderer.invoke('env:set-mode', mode);
+                        const status = await window.ipcRenderer.invoke('env:status') as { pythonOk: boolean; ffmpegOk: boolean; ffglitchOk: boolean };
+                        setEnvStatus({ pythonOk: status.pythonOk, ffmpegOk: status.ffmpegOk, ffglitchOk: status.ffglitchOk });
+                      }
+                      addToast(`Switched to ${mode} mode � restart may be needed`, 'info');
+                    }}
+                    style={{ width: '100%', padding: '6px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px' }}
+                  >
+                    <option value="local">Local Environment (Bundled)</option>
+                    <option value="system">System PATH</option>
+                  </select>
+                </div>
+                <Button variant="glass" size="sm" onClick={() => setEnvStatusOpen(!envStatusOpen)}>
+                  {envStatusOpen ? 'Hide' : 'Show'} Component Status
+                </Button>
+                {envStatusOpen && envStatus && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: envStatus.pythonOk ? 'var(--accent-primary)' : '#ff5050' }} />
+                      <span style={{ color: 'var(--text-secondary)' }}>Python</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: envStatus.ffmpegOk ? 'var(--accent-primary)' : '#ff5050' }} />
+                      <span style={{ color: 'var(--text-secondary)' }}>FFmpeg</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: envStatus.ffglitchOk ? 'var(--accent-primary)' : '#ff5050' }} />
+                      <span style={{ color: 'var(--text-secondary)' }}>FFglitch</span>
+                    </div>
+                  </div>
+                )}
+                {process.platform !== 'win32' && (
+                  <span style={{ fontSize: '11px', color: '#F59E0B' }}>
+                    FFglitch is not officially available for your platform.
+                    Datamoshing effects requiring FFglitch will be limited.
+                  </span>
+                )}
+              </div>
             </div>
 
             {/* 2.5 AUTO-KEYFRAME FROM BEATS SECTION */}

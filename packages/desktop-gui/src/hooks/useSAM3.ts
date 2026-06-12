@@ -1,26 +1,39 @@
 /**
  * SAM 3 / AI Masking integration for MoshDither Studio.
  *
- * Model loading and inference run in the MAIN PROCESS via IPC,
- * because Transformers.js filesystem cache requires Node.js fs access
- * which is unavailable in Electron's sandboxed renderer.
+ * Rebuilt with TRIX_ patterns:
+ *   - Multi-click positive + negative point segmentation
+ *   - Hover preview with debounce + abort
+ *   - Model selection & download progress
+ *   - Background removal integration
+ *   - Threshold control
  *
- * The renderer sends only the image file path + click coordinates.
- * Main loads the image from disk, runs inference, returns mask bytes.
- *
- * State lives in a module-level store shared by every component that
- * calls useSAM3(), so loading/segmenting status stays consistent
- * across the Viewport, PropertiesPanel, and anywhere else.
+ * Model loading and inference run in the MAIN PROCESS via IPC.
  */
 
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 
-export type SAM3Status = "idle" | "loading" | "ready" | "error" | "segmenting";
+export type SAM3Status =
+  | "idle"
+  | "loading"
+  | "ready"
+  | "error"
+  | "segmenting"
+  | "hovering";
+
+export type SAMModelId = "sam-vit-base" | "sam-vit-large" | "sam-vit-huge";
 
 export interface SAM3Mask {
   data: Uint8Array;
   width: number;
   height: number;
+  score?: number;
+}
+
+export interface SAM3Point {
+  x: number; // normalized 0..1
+  y: number; // normalized 0..1
+  label: 1 | 0; // 1 = positive (include), 0 = negative (exclude)
 }
 
 interface SAM3State {
@@ -28,6 +41,10 @@ interface SAM3State {
   progress: number;
   loadingStep: string;
   error: string | null;
+  selectedModel: SAMModelId;
+  threshold: number;
+  modelDownloadProgress: Record<string, number>;
+  hoverMask: SAM3Mask | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -38,6 +55,10 @@ let storeState: SAM3State = {
   progress: 0,
   loadingStep: "",
   error: null,
+  selectedModel: "sam-vit-base",
+  threshold: 0.0,
+  modelDownloadProgress: {},
+  hoverMask: null,
 };
 
 const listeners = new Set<() => void>();
@@ -63,26 +84,45 @@ interface SAM3ProgressEvent {
 }
 
 let progressUnsubscribe: (() => void) | null = null;
+let downloadProgressUnsubscribe: (() => void) | null = null;
 
 function attachProgressListener(): void {
-  if (progressUnsubscribe || !window.ipcRenderer) return;
-  progressUnsubscribe = window.ipcRenderer.on(
-    "sam3:progress",
-    (_event: unknown, ...args: unknown[]) => {
-      const info = args[0] as SAM3ProgressEvent;
-      if (storeState.status !== "loading") return;
-      if (info.status === "progress" && typeof info.progress === "number") {
+  if (!window.ipcRenderer) return;
+
+  if (!progressUnsubscribe) {
+    progressUnsubscribe = window.ipcRenderer.on(
+      "sam3:progress",
+      (_event: unknown, ...args: unknown[]) => {
+        const info = args[0] as SAM3ProgressEvent;
+        if (storeState.status !== "loading") return;
+        if (info.status === "progress" && typeof info.progress === "number") {
+          setStoreState({
+            progress: Math.max(storeState.progress, Math.round(info.progress)),
+            loadingStep: info.file
+              ? `Downloading ${info.file}...`
+              : "Downloading model files...",
+          });
+        } else if (info.status === "done" && info.file) {
+          setStoreState({ loadingStep: `Loaded ${info.file}` });
+        }
+      },
+    );
+  }
+
+  if (!downloadProgressUnsubscribe) {
+    downloadProgressUnsubscribe = window.ipcRenderer.on(
+      "sam3:download-progress",
+      (_event: unknown, ...args: unknown[]) => {
+        const info = args[0] as { model: string; progress: number };
         setStoreState({
-          progress: Math.max(storeState.progress, Math.round(info.progress)),
-          loadingStep: info.file
-            ? `Downloading ${info.file}...`
-            : "Downloading model files...",
+          modelDownloadProgress: {
+            ...storeState.modelDownloadProgress,
+            [info.model]: info.progress,
+          },
         });
-      } else if (info.status === "done" && info.file) {
-        setStoreState({ loadingStep: `Loaded ${info.file}` });
-      }
-    },
-  );
+      },
+    );
+  }
 }
 
 function detachProgressListener(): void {
@@ -90,12 +130,21 @@ function detachProgressListener(): void {
     progressUnsubscribe();
     progressUnsubscribe = null;
   }
+  if (downloadProgressUnsubscribe) {
+    downloadProgressUnsubscribe();
+    downloadProgressUnsubscribe = null;
+  }
 }
 
 let loadInFlight: Promise<boolean> | null = null;
 
-async function loadModelShared(): Promise<boolean> {
-  if (storeState.status === "ready") return true;
+async function loadModelShared(model?: SAMModelId): Promise<boolean> {
+  if (
+    storeState.status === "ready" &&
+    (!model || model === storeState.selectedModel)
+  ) {
+    return true;
+  }
   if (loadInFlight) return loadInFlight;
 
   if (!window.ipcRenderer) {
@@ -106,17 +155,22 @@ async function loadModelShared(): Promise<boolean> {
     return false;
   }
 
+  const targetModel = model ?? storeState.selectedModel;
+
   setStoreState({
     status: "loading",
     progress: 0,
     loadingStep: "Downloading model files...",
     error: null,
+    selectedModel: targetModel,
   });
   attachProgressListener();
 
   loadInFlight = (async () => {
     try {
-      const result = (await window.ipcRenderer.invoke("sam3:load-model")) as {
+      const result = (await window.ipcRenderer.invoke("sam3:load-model", {
+        model: targetModel,
+      })) as {
         ok: boolean;
         error?: string;
       };
@@ -154,17 +208,176 @@ async function segmentAtPointShared(
   imagePath: string,
   point: { x: number; y: number },
 ): Promise<SAM3Mask | null> {
+  return predictBatchShared(imagePath, [point], []);
+}
+
+async function predictBatchShared(
+  imagePath: string,
+  positivePoints: { x: number; y: number }[],
+  negativePoints: { x: number; y: number }[],
+): Promise<SAM3Mask | null> {
   if (!window.ipcRenderer) {
     console.warn("IPC not available. Run inside Electron.");
     return null;
   }
 
-  setStoreState({ status: "segmenting", loadingStep: "Segmenting object..." });
+  setStoreState({
+    status: "segmenting",
+    loadingStep: "Segmenting object...",
+    hoverMask: null,
+  });
 
   try {
-    const result = (await window.ipcRenderer.invoke("sam3:segment", {
+    const result = (await window.ipcRenderer.invoke("sam3:predict-batch", {
       imagePath,
-      point,
+      positivePoints,
+      negativePoints,
+      threshold: storeState.threshold,
+    })) as {
+      ok: boolean;
+      maskBase64?: string;
+      width?: number;
+      height?: number;
+      score?: number;
+      error?: string;
+    };
+
+    if (!result.ok || !result.maskBase64 || !result.width || !result.height) {
+      throw new Error(result.error || "Segmentation failed");
+    }
+
+    const rawBytes = Uint8Array.from(atob(result.maskBase64), (c) =>
+      c.charCodeAt(0),
+    );
+
+    setStoreState({ status: "ready", loadingStep: "" });
+    return {
+      data: rawBytes,
+      width: result.width,
+      height: result.height,
+      score: result.score,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    setStoreState({ status: "error", loadingStep: "", error: msg });
+    return null;
+  }
+}
+
+let hoverAbort: AbortController | null = null;
+let hoverTimeout: ReturnType<typeof setTimeout> | null = null;
+
+async function hoverPreviewShared(
+  imagePath: string,
+  point: { x: number; y: number },
+  debounceMs = 80,
+): Promise<SAM3Mask | null> {
+  if (!window.ipcRenderer) return null;
+
+  // Cancel previous hover
+  if (hoverAbort) {
+    hoverAbort.abort();
+    hoverAbort = null;
+  }
+  if (hoverTimeout) {
+    clearTimeout(hoverTimeout);
+    hoverTimeout = null;
+  }
+
+  return new Promise((resolve) => {
+    hoverTimeout = setTimeout(async () => {
+      const abort = new AbortController();
+      hoverAbort = abort;
+
+      try {
+        setStoreState({ status: "hovering" });
+
+        const result = (await window.ipcRenderer.invoke("sam3:hover-preview", {
+          imagePath,
+          point,
+          model: storeState.selectedModel,
+        })) as {
+          ok: boolean;
+          maskBase64?: string;
+          width?: number;
+          height?: number;
+          error?: string;
+        };
+
+        if (abort.signal.aborted) {
+          resolve(null);
+          return;
+        }
+
+        if (
+          !result.ok ||
+          !result.maskBase64 ||
+          !result.width ||
+          !result.height
+        ) {
+          setStoreState({ status: "ready", hoverMask: null });
+          resolve(null);
+          return;
+        }
+
+        const rawBytes = Uint8Array.from(atob(result.maskBase64), (c) =>
+          c.charCodeAt(0),
+        );
+
+        const mask = {
+          data: rawBytes,
+          width: result.width,
+          height: result.height,
+        };
+
+        setStoreState({ status: "ready", hoverMask: mask });
+        resolve(mask);
+      } catch {
+        if (!abort.signal.aborted) {
+          setStoreState({ status: "ready", hoverMask: null });
+        }
+        resolve(null);
+      } finally {
+        if (hoverAbort === abort) {
+          hoverAbort = null;
+        }
+      }
+    }, debounceMs);
+  });
+}
+
+function cancelHoverShared(): void {
+  if (hoverAbort) {
+    hoverAbort.abort();
+    hoverAbort = null;
+  }
+  if (hoverTimeout) {
+    clearTimeout(hoverTimeout);
+    hoverTimeout = null;
+  }
+  setStoreState({ status: "ready", hoverMask: null });
+}
+
+async function removeBackgroundShared(
+  imagePath: string,
+  model: string,
+  alphaMatting: boolean,
+): Promise<SAM3Mask | null> {
+  if (!window.ipcRenderer) {
+    console.warn("IPC not available. Run inside Electron.");
+    return null;
+  }
+
+  setStoreState({
+    status: "segmenting",
+    loadingStep: "Removing background...",
+  });
+
+  try {
+    const result = (await window.ipcRenderer.invoke("sam3:remove-background", {
+      imagePath,
+      model,
+      alphaMatting,
     })) as {
       ok: boolean;
       maskBase64?: string;
@@ -174,10 +387,9 @@ async function segmentAtPointShared(
     };
 
     if (!result.ok || !result.maskBase64 || !result.width || !result.height) {
-      throw new Error(result.error || "Segmentation failed");
+      throw new Error(result.error || "Background removal failed");
     }
 
-    // Decode raw mask bytes from base64
     const rawBytes = Uint8Array.from(atob(result.maskBase64), (c) =>
       c.charCodeAt(0),
     );
@@ -191,8 +403,48 @@ async function segmentAtPointShared(
   }
 }
 
-function unloadModelShared(): void {
-  setStoreState({ status: "idle", progress: 0, loadingStep: "", error: null });
+async function listModelsShared(): Promise<{
+  sam: Record<string, boolean>;
+  background_removal: Record<string, boolean>;
+}> {
+  if (!window.ipcRenderer) {
+    return { sam: {}, background_removal: {} };
+  }
+  return (await window.ipcRenderer.invoke("sam3:list-models")) as {
+    sam: Record<string, boolean>;
+    background_removal: Record<string, boolean>;
+  };
+}
+
+async function downloadModelShared(model: string): Promise<boolean> {
+  if (!window.ipcRenderer) return false;
+  const result = (await window.ipcRenderer.invoke("sam3:download-model", {
+    model,
+  })) as { ok: boolean; error?: string };
+  if (!result.ok) {
+    setStoreState({ error: result.error || `Failed to download ${model}` });
+  }
+  return result.ok;
+}
+
+async function unloadModelShared(): Promise<void> {
+  if (!window.ipcRenderer) return;
+  await window.ipcRenderer.invoke("sam3:unload-model");
+  setStoreState({
+    status: "idle",
+    progress: 0,
+    loadingStep: "",
+    error: null,
+    hoverMask: null,
+  });
+}
+
+function setThresholdShared(threshold: number): void {
+  setStoreState({ threshold });
+}
+
+function setSelectedModelShared(model: SAMModelId): void {
+  setStoreState({ selectedModel: model });
 }
 
 // ---------------------------------------------------------------------------
@@ -201,11 +453,49 @@ function unloadModelShared(): void {
 export function useSAM3() {
   const state = useSyncExternalStore(subscribe, getSnapshot);
 
-  const loadModel = useCallback(() => loadModelShared(), []);
+  // Use refs to avoid stale closures in callbacks
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
+  const loadModel = useCallback(
+    (model?: SAMModelId) => loadModelShared(model),
+    [],
+  );
   const unloadModel = useCallback(() => unloadModelShared(), []);
   const segmentAtPoint = useCallback(
     (imagePath: string, point: { x: number; y: number }) =>
       segmentAtPointShared(imagePath, point),
+    [],
+  );
+  const predictBatch = useCallback(
+    (
+      imagePath: string,
+      positivePoints: { x: number; y: number }[],
+      negativePoints: { x: number; y: number }[],
+    ) => predictBatchShared(imagePath, positivePoints, negativePoints),
+    [],
+  );
+  const hoverPreview = useCallback(
+    (imagePath: string, point: { x: number; y: number }, debounceMs?: number) =>
+      hoverPreviewShared(imagePath, point, debounceMs),
+    [],
+  );
+  const cancelHover = useCallback(() => cancelHoverShared(), []);
+  const removeBackground = useCallback(
+    (imagePath: string, model: string, alphaMatting: boolean) =>
+      removeBackgroundShared(imagePath, model, alphaMatting),
+    [],
+  );
+  const listModels = useCallback(() => listModelsShared(), []);
+  const downloadModel = useCallback(
+    (model: string) => downloadModelShared(model),
+    [],
+  );
+  const setThreshold = useCallback((t: number) => setThresholdShared(t), []);
+  const setSelectedModel = useCallback(
+    (m: SAMModelId) => setSelectedModelShared(m),
     [],
   );
 
@@ -214,5 +504,13 @@ export function useSAM3() {
     loadModel,
     unloadModel,
     segmentAtPoint,
+    predictBatch,
+    hoverPreview,
+    cancelHover,
+    removeBackground,
+    listModels,
+    downloadModel,
+    setThreshold,
+    setSelectedModel,
   };
 }

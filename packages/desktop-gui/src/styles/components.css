@@ -262,3 +262,102 @@ input[type="range"]::-webkit-slider-runnable-track {
 .recent-files__clear:hover {
   color: var(--text-primary);
 }
+
+/* SAM / AI Masking Overlay */
+.sam-overlay {
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sam-overlay--loading {
+  cursor: wait;
+}
+
+.sam-overlay--ready {
+  cursor: crosshair;
+}
+
+.sam-hud {
+  background: rgba(0, 0, 0, 0.85);
+  padding: 20px 28px;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  color: #fff;
+  pointer-events: none;
+  min-width: 280px;
+}
+
+.sam-hud__title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.sam-hud__subtitle {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.sam-hud__progress-track {
+  width: 100%;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.sam-hud__progress-fill {
+  height: 100%;
+  background: var(--accent-primary);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.sam-hud__percent {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent-primary);
+}
+
+.sam-error {
+  background: rgba(60, 0, 0, 0.85);
+  padding: 12px 20px;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: #ff8a8a;
+  pointer-events: none;
+  max-width: 320px;
+}
+
+.sam-error__title {
+  font-weight: 600;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sam-error__message {
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+@keyframes sam-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.sam-spinner {
+  animation: sam-spin 1s linear infinite;
+  color: var(--accent-primary);
+}

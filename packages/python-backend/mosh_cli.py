@@ -8,11 +8,23 @@ import subprocess
 # Add current folder to python path to resolve DatamoshLib imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Monkeypatch binary paths for DatamoshLib modules before importing them
+# Monkeypatch binary paths for DatamoshLib modules before importing them.
+# In a self-contained Electron build, the main process sets these env vars
+# so the script finds bundled binaries regardless of platform.
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-ffgac_path = os.path.join(BASE_DIR, "assets", "bin", "ffglitch-0.10.2-windows-x86_64", "ffgac.exe")
-ffedit_path = os.path.join(BASE_DIR, "assets", "bin", "ffglitch-0.10.2-windows-x86_64", "ffedit.exe")
-ffmpeg_path = os.path.join(BASE_DIR, "assets", "bin", "ffmpeg-master-latest-win64-gpl", "bin", "ffmpeg.exe")
+
+ffgac_path = os.environ.get(
+    "MOSHDITHER_FFGAC_PATH",
+    os.path.join(BASE_DIR, "assets", "bin", "ffglitch-0.10.2-windows-x86_64", "ffgac.exe"),
+)
+ffedit_path = os.environ.get(
+    "MOSHDITHER_FFEDIT_PATH",
+    os.path.join(BASE_DIR, "assets", "bin", "ffglitch-0.10.2-windows-x86_64", "ffedit.exe"),
+)
+ffmpeg_path = os.environ.get(
+    "MOSHDITHER_FFMPEG_PATH",
+    os.path.join(BASE_DIR, "assets", "bin", "ffmpeg-master-latest-win64-gpl", "bin", "ffmpeg.exe"),
+)
 
 from DatamoshLib.Tomato import tomato
 from DatamoshLib.Original import classic, repeat, pymodes, classic_new

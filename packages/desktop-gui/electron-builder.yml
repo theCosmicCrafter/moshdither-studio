@@ -21,6 +21,25 @@ asarUnpack:
   - "**/assets/models/**/*"
 
 # ---------------------------------------------------------------------------
+# Self-contained binaries (bundled by npm run build:backend)
+# These are copied into process.resourcesPath at install time so the app
+# works without any system PATH dependencies.
+# ---------------------------------------------------------------------------
+extraResources:
+  - from: assets/bin/ffmpeg
+    to: assets/bin/ffmpeg
+    filter:
+      - "**/*"
+  - from: assets/bin/ffglitch
+    to: assets/bin/ffglitch
+    filter:
+      - "**/*"
+  - from: assets/bin/python-backend
+    to: assets/bin/python-backend
+    filter:
+      - "**/*"
+
+# ---------------------------------------------------------------------------
 # Code Signing
 # ---------------------------------------------------------------------------
 # Windows: Set these environment variables before building:

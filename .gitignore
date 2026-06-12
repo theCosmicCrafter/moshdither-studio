@@ -48,3 +48,9 @@ coverage/
 
 # Downloaded tools (auto-fetched at runtime)
 tools/
+
+# Temporary artifact files from reference code exploration
+scripts/trix_*.js
+all_repos.json
+repos.json
+temp_repos.json

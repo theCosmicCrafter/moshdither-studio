@@ -18,7 +18,9 @@ import { KeyboardShortcutsEditor } from './components/organisms/KeyboardShortcut
 // AI model preload is now handled via IPC to main process (see menu:preload-model listener)
 import { StatusBar } from './components/layout/StatusBar';
 import { OnboardingModal } from './components/organisms/OnboardingModal';
+import { EnvironmentSetupModal } from './components/organisms/EnvironmentSetupModal';
 import { DebugOverlay } from './components/organisms/DebugOverlay';
+import { EmptyCanvas } from './components/organisms/EmptyCanvas';
 import { loadAutoSave, checkCrashRecovery, dismissCrashRecovery, type SerializedProject } from './utils/autoSave';
 import { registerCommand } from './utils/commands';
 
@@ -38,6 +40,20 @@ const AppContent: React.FC = () => {
   const [showRecovery, setShowRecovery] = React.useState(false);
   const [recoveryData, setRecoveryData] = React.useState<SerializedProject | null>(null);
   const [showShortcutsEditor, setShowShortcutsEditor] = React.useState(false);
+  const [showEnvSetup, setShowEnvSetup] = React.useState(false);
+
+  // Check environment configuration on mount
+  React.useEffect(() => {
+    if (isBrowser || !window.ipcRenderer) return;
+    window.ipcRenderer.invoke('env:status').then((result) => {
+      const status = result as { mode: string };
+      if (status.mode === 'unconfigured') {
+        setShowEnvSetup(true);
+      }
+    }).catch(() => {
+      // If IPC fails, just let the app start
+    });
+  }, [isBrowser]);
 
   // Check for crash recovery on mount
   React.useEffect(() => {
@@ -388,12 +404,31 @@ const AppContent: React.FC = () => {
         leftSidebar={<Sidebar />}
         centerWorkspace={
           <>
-            <Viewport />
-            <Timeline
-              currentTime={currentTime}
-              duration={duration || 10}
-              onTimeChange={setCurrentTime}
-            />
+            {mediaUrl ? (
+              <>
+                <Viewport />
+                <Timeline
+                  currentTime={currentTime}
+                  duration={duration || 10}
+                  onTimeChange={setCurrentTime}
+                />
+              </>
+            ) : (
+              <EmptyCanvas
+                onImport={async () => {
+                  if (!window.ipcRenderer) {
+                    addToast('IPC not available. Run inside Electron.', 'error');
+                    return;
+                  }
+                  try {
+                    const url = await window.ipcRenderer.invoke<string | null>('dialog:openMedia');
+                    if (url) setMediaUrl(url);
+                  } catch {
+                    addToast('Failed to open media file.', 'error');
+                  }
+                }}
+              />
+            )}
           </>
         }
         rightProperties={
@@ -434,6 +469,12 @@ const AppContent: React.FC = () => {
       <NoiseTexture />
       <CommandPalette />
       <StatusBar />
+      {showEnvSetup && (
+        <EnvironmentSetupModal
+          onComplete={() => setShowEnvSetup(false)}
+          onDismiss={() => setShowEnvSetup(false)}
+        />
+      )}
       <OnboardingModal />
       <DebugOverlay />
       {showShortcutsEditor && (
