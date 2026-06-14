@@ -32,8 +32,15 @@ def _ensure_loaded():
         from sam3.model_builder import build_sam3_image_model
         from sam3.model.sam3_image_processor import Sam3Processor
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        _sam3_model = build_sam3_image_model(device=device)
-        _sam3_processor = Sam3Processor(_sam3_model, device=device)
+        _sam3_model = build_sam3_image_model(
+            device=device,
+            eval_mode=True,
+            load_from_HF=True,
+            enable_segmentation=True,
+            enable_inst_interactivity=False,
+            compile=False,
+        )
+        _sam3_processor = Sam3Processor(_sam3_model, resolution=1008, confidence_threshold=0.3, device=device)
     return _sam3_model, _sam3_processor
 
 
@@ -52,14 +59,22 @@ def _get_image_state(image: Image.Image, image_path: str):
         cache_key = (image_path, 0, 0)
 
     if _image_cache_key == cache_key and _image_cache_state is not None:
-        # Return a deep copy of the cached state to prevent mutation by callers.
-        # Tensors are immutable during inference so deepcopy is safe here.
-        return copy.deepcopy(_image_cache_state)
+        # Shallow copy: only backbone_out dict is copied — tensors inside are shared
+        # (read-only during inference). This avoids deepcopy of large GPU tensors.
+        return {
+            "original_height": _image_cache_state["original_height"],
+            "original_width": _image_cache_state["original_width"],
+            "backbone_out": dict(_image_cache_state["backbone_out"]),
+        }
 
     _ensure_loaded()
     _image_cache_state = _sam3_processor.set_image(image)
     _image_cache_key = cache_key
-    return copy.deepcopy(_image_cache_state)
+    return {
+        "original_height": _image_cache_state["original_height"],
+        "original_width": _image_cache_state["original_width"],
+        "backbone_out": dict(_image_cache_state["backbone_out"]),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +125,7 @@ def _set_point_prompts(state: Dict, points: List[Tuple[float, float]], labels: L
     # Build tensors: shape [N_points, B=1, 2]
     points_t = torch.tensor(norm_points, device=device, dtype=torch.float32).unsqueeze(1)
     labels_t = torch.tensor(labels, device=device, dtype=torch.long).unsqueeze(1)
-    mask_t = torch.ones(1, len(points), device=device, dtype=torch.bool)
+    mask_t = torch.zeros(1, len(points), device=device, dtype=torch.bool)  # False = valid (not masked)
 
     # Ensure geometric prompt exists
     if "geometric_prompt" not in state:
@@ -264,10 +279,15 @@ def predict_text(image_path: str, text_prompt: str) -> Dict[str, Any]:
     if masks is None or len(masks) == 0:
         return {"status": "error", "error": f"No mask for prompt: {text_prompt}"}
 
-    best_idx = int(np.argmax(scores))
+    scores_np = scores.cpu().numpy() if hasattr(scores, 'cpu') else np.array(scores)
+    best_idx = int(np.argmax(scores_np))
     best_mask = masks[best_idx]
-    best_score = float(scores[best_idx])
+    best_score = float(scores_np[best_idx])
 
+    if hasattr(best_mask, "cpu"):
+        best_mask = best_mask.cpu().numpy()
+    if best_mask.ndim == 3 and best_mask.shape[0] == 1:
+        best_mask = best_mask[0]
     if best_mask.dtype == bool:
         mask_u8 = best_mask.astype(np.uint8)
     else:
