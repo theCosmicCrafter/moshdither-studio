@@ -13,6 +13,9 @@ import crypto from "node:crypto";
 const CACHE_DIR = path.join(os.homedir(), ".moshdither", "cache");
 const MAX_CACHE_SIZE_MB = 1024; // 1GB cap
 
+// In-memory size tracking to avoid O(n) disk scan on every write
+let cachedTotalSizeBytes = 0;
+
 function hashKey(input: string): string {
   return crypto.createHash("sha256").update(input).digest("hex").slice(0, 16);
 }
@@ -81,7 +84,12 @@ export function setCachedFrame(key: string, data: Buffer): void {
   };
   writeMeta(entry);
 
-  enforceSizeLimit();
+  // Update in-memory counter and check if eviction needed
+  cachedTotalSizeBytes += data.length;
+  const maxBytes = MAX_CACHE_SIZE_MB * 1024 * 1024;
+  if (cachedTotalSizeBytes > maxBytes) {
+    enforceSizeLimit();
+  }
 }
 
 function enforceSizeLimit(): void {
@@ -100,6 +108,7 @@ function enforceSizeLimit(): void {
   }
 
   const totalSize = entries.reduce((sum, e) => sum + e.sizeBytes, 0);
+  cachedTotalSizeBytes = totalSize; // Sync in-memory counter
   const maxBytes = MAX_CACHE_SIZE_MB * 1024 * 1024;
 
   if (totalSize <= maxBytes) return;
@@ -111,7 +120,10 @@ function enforceSizeLimit(): void {
     if (toEvict <= 0) break;
     const cachePath = getCachePath(entry.key);
     const metaPath = getMetaPath(entry.key);
-    if (fs.existsSync(cachePath)) fs.unlinkSync(cachePath);
+    if (fs.existsSync(cachePath)) {
+      fs.unlinkSync(cachePath);
+      cachedTotalSizeBytes -= entry.sizeBytes;
+    }
     if (fs.existsSync(metaPath)) fs.unlinkSync(metaPath);
     toEvict -= entry.sizeBytes;
   }
@@ -119,9 +131,13 @@ function enforceSizeLimit(): void {
 
 export function clearFrameCache(): void {
   if (!fs.existsSync(CACHE_DIR)) return;
+  // Only delete .png and .json files (bug 1.24 fix)
   for (const file of fs.readdirSync(CACHE_DIR)) {
-    fs.unlinkSync(path.join(CACHE_DIR, file));
+    if (file.endsWith(".png") || file.endsWith(".json")) {
+      fs.unlinkSync(path.join(CACHE_DIR, file));
+    }
   }
+  cachedTotalSizeBytes = 0; // Reset in-memory counter
 }
 
 export function getCacheStats(): { entries: number; sizeMB: number } {

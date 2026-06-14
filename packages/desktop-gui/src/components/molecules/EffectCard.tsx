@@ -1,6 +1,5 @@
 import * as React from 'react';
 import { Switch } from '../atoms/Switch';
-import { Icon } from '../atoms/Icon';
 import type { Effect } from '../../types/effectTypes';
 import { EFFECT_REGISTRY } from '../../types/effectTypes';
 import { CaretUp, CaretDown, X, CopySimple, ArrowLineDown } from '@phosphor-icons/react';
@@ -126,17 +125,11 @@ export const EffectCard: React.FC<EffectCardProps> = ({
           <Switch checked={effect.enabled} onChange={onToggle} />
         </div>
 
-        {/* Icon */}
+        {/* Thumbnail Preview */}
         <div
-          style={{
-            color: effect.enabled ? 'var(--accent-primary)' : 'var(--text-muted)',
-            display: 'flex',
-            alignItems: 'center',
-            transition: 'color 0.2s',
-          }}
-        >
-          <Icon name={EFFECT_REGISTRY[effect.type].icon} size={16} />
-        </div>
+          className={`effect-thumbnail effect-thumbnail--${effect.type}`}
+          title={EFFECT_REGISTRY[effect.type].name}
+        />
 
         {/* Name */}
         <div

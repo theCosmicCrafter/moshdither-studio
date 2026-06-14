@@ -18,10 +18,6 @@ export const CommandPalette: React.FC = () => {
   }, [query]);
 
   React.useEffect(() => {
-    queueMicrotask(() => setSelectedIndex(0));
-  }, [query]);
-
-  React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
@@ -96,7 +92,10 @@ export const CommandPalette: React.FC = () => {
         <input
           ref={inputRef}
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setSelectedIndex(0);
+          }}
           onKeyDown={handleKeyDown}
           placeholder="Type a command..."
           style={{

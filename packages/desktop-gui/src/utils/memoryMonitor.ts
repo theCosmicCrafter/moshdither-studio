@@ -12,7 +12,7 @@ export interface MemorySnapshot {
   usagePercent: number;
 }
 
-let _listener: ((mem: MemorySnapshot) => void) | null = null;
+const _listeners: Set<(mem: MemorySnapshot) => void> = new Set();
 let _intervalId: ReturnType<typeof setInterval> | null = null;
 let _warningThreshold = 0.85;
 let _criticalThreshold = 0.95;
@@ -67,7 +67,13 @@ export function startMemoryMonitoring(options?: {
     const mem = getMemoryInfo();
     if (!mem) return;
 
-    if (_listener) _listener(mem);
+    for (const listener of _listeners) {
+      try {
+        listener(mem);
+      } catch {
+        // Ignore listener errors
+      }
+    }
 
     if (mem.usagePercent >= _criticalThreshold && !criticaled) {
       criticaled = true;
@@ -99,9 +105,9 @@ export function stopMemoryMonitoring(): void {
 export function subscribeMemory(
   listener: (mem: MemorySnapshot) => void,
 ): () => void {
-  _listener = listener;
+  _listeners.add(listener);
   return () => {
-    if (_listener === listener) _listener = null;
+    _listeners.delete(listener);
   };
 }
 

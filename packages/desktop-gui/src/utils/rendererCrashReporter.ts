@@ -10,33 +10,49 @@ const isDebug =
   new URLSearchParams(window.location.search).has("debug") ||
   (window as unknown as { DEBUG?: boolean }).DEBUG === true;
 
-function logToMain(level: "error" | "warn", message: string, details?: unknown) {
+function logToMain(
+  level: "error" | "warn",
+  message: string,
+  details?: unknown,
+) {
   if (window.ipcRenderer) {
     window.ipcRenderer.send("renderer:log", { level, message, details });
   }
 }
 
 export function installRendererCrashReporter() {
-  window.onerror = (message, source, lineno, colno, error) => {
-    const msg = `[Renderer] ${message} at ${source}:${lineno}:${colno}`;
+  window.addEventListener("error", (event) => {
+    const { message, filename, lineno, colno, error } = event;
+    const msg = `[Renderer] ${message} at ${filename}:${lineno}:${colno}`;
     console.error(msg, error);
-    logToMain("error", msg, error?.stack);
+    logToMain("error", msg, error instanceof Error ? error.stack : undefined);
     if (isDebug) {
       // In debug mode, show a small overlay so developers notice immediately
-      showDebugOverlay("Error", msg, error?.stack);
+      showDebugOverlay(
+        "Error",
+        msg,
+        error instanceof Error ? error.stack : undefined,
+      );
     }
-    return false; // Let default handler run too
-  };
+  });
 
-  window.onunhandledrejection = (event) => {
+  window.addEventListener("unhandledrejection", (event) => {
     const reason = event.reason;
     const msg = `[Renderer] Unhandled rejection: ${reason}`;
     console.error(msg);
-    logToMain("error", msg, reason instanceof Error ? reason.stack : String(reason));
+    logToMain(
+      "error",
+      msg,
+      reason instanceof Error ? reason.stack : String(reason),
+    );
     if (isDebug) {
-      showDebugOverlay("Unhandled Rejection", msg, reason instanceof Error ? reason.stack : String(reason));
+      showDebugOverlay(
+        "Unhandled Rejection",
+        msg,
+        reason instanceof Error ? reason.stack : String(reason),
+      );
     }
-  };
+  });
 
   console.log("[CrashReporter] Renderer process installed.");
 }
@@ -55,12 +71,34 @@ function showDebugOverlay(title: string, message: string, stack?: string) {
     max-width:480px;word-break:break-word;
     box-shadow:0 4px 16px rgba(0,0,0,0.4);
   `;
-  overlay.innerHTML = `
-    <strong>${title}</strong><br/>
-    <code style="opacity:0.9">${message}</code>
-    ${stack ? `<pre style="margin-top:8px;max-height:200px;overflow:auto;opacity:0.8;font-size:11px">${stack}</pre>` : ""}
-    <button style="margin-top:8px;padding:4px 8px;background:rgba(255,255,255,0.2);border:none;color:#fff;border-radius:4px;cursor:pointer">Dismiss</button>
-  `;
-  overlay.querySelector("button")?.addEventListener("click", () => overlay.remove());
+
+  const strong = document.createElement("strong");
+  strong.textContent = title;
+  overlay.appendChild(strong);
+  overlay.appendChild(document.createElement("br"));
+
+  const code = document.createElement("code");
+  code.style.opacity = "0.9";
+  code.textContent = message;
+  overlay.appendChild(code);
+
+  if (stack) {
+    const pre = document.createElement("pre");
+    pre.style.marginTop = "8px";
+    pre.style.maxHeight = "200px";
+    pre.style.overflow = "auto";
+    pre.style.opacity = "0.8";
+    pre.style.fontSize = "11px";
+    pre.textContent = stack;
+    overlay.appendChild(pre);
+  }
+
+  const btn = document.createElement("button");
+  btn.style.cssText =
+    "margin-top:8px;padding:4px 8px;background:rgba(255,255,255,0.2);border:none;color:#fff;border-radius:4px;cursor:pointer";
+  btn.textContent = "Dismiss";
+  btn.addEventListener("click", () => overlay.remove());
+  overlay.appendChild(btn);
+
   document.body.appendChild(overlay);
 }

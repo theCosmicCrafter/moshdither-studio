@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { motion } from 'framer-motion';
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'danger' | 'ghost' | 'glass';
@@ -13,7 +14,11 @@ export const Button: React.FC<ButtonProps> = ({
   glow = false,
   style,
   className = '',
-  ...props
+  disabled,
+  onClick,
+  type = 'button',
+  title,
+  ...rest
 }) => {
   const getStyles = () => {
     const base: React.CSSProperties = {
@@ -23,7 +28,6 @@ export const Button: React.FC<ButtonProps> = ({
       fontWeight: 500,
       borderRadius: 'var(--radius-md)',
       fontFamily: 'var(--font-sans)',
-      transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
       gap: '8px',
       border: '1px solid transparent',
       userSelect: 'none',
@@ -83,13 +87,22 @@ export const Button: React.FC<ButtonProps> = ({
     };
   };
 
+  const MotionBtn = motion.button as unknown as React.FC<Record<string, unknown>>;
+
   return (
-    <button
+    <MotionBtn
       style={getStyles()}
       className={`btn-atom variant-${variant} ${className}`}
-      {...props}
+      disabled={disabled}
+      onClick={onClick}
+      type={type}
+      title={title}
+      whileHover={{ scale: disabled ? 1 : 1.02 }}
+      whileTap={{ scale: disabled ? 1 : 0.97 }}
+      transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+      {...rest}
     >
       {children}
-    </button>
+    </MotionBtn>
   );
 };

@@ -9,9 +9,13 @@ export const BatchProcessor: React.FC = () => {
 
   const selectFiles = async () => {
     if (!window.ipcRenderer) return;
-    const paths = await window.ipcRenderer.invoke<string[]>('dialog:openMediaMultiple');
-    if (paths && paths.length > 0) {
-      setFiles(paths);
+    try {
+      const paths = await window.ipcRenderer.invoke<string[]>('dialog:openMediaMultiple');
+      if (paths && paths.length > 0) {
+        setFiles(paths);
+      }
+    } catch {
+      // User cancelled or IPC error — ignore
     }
   };
 

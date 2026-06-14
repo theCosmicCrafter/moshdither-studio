@@ -30,6 +30,13 @@ export interface EnvStatusPayload {
   ffprobePath?: string;
   ffgacPath?: string;
   ffeditPath?: string;
+  installInProgress?: boolean;
+  installCheckpoint?: {
+    startedAt: string;
+    completedSteps: string[];
+    lastStep: string;
+    percent: number;
+  };
 }
 
 export interface InstallProgressPayload {
@@ -49,7 +56,7 @@ export const EnvironmentSetupModal: React.FC<EnvironmentSetupModalProps> = ({
 }) => {
   const [status, setStatus] = useState<EnvStatusPayload | null>(null);
   const [phase, setPhase] = useState<
-    "choose" | "installing" | "done" | "error"
+    "choose" | "resume" | "installing" | "done" | "error"
   >("choose");
   const [progress, setProgress] = useState<InstallProgressPayload | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -61,6 +68,11 @@ export const EnvironmentSetupModal: React.FC<EnvironmentSetupModalProps> = ({
         "env:status",
       )) as EnvStatusPayload;
       setStatus(result);
+      if (result.mode === "local" && result.installInProgress) {
+        // Installation was interrupted — show resume screen
+        setPhase("resume");
+        return;
+      }
       if (result.mode !== "unconfigured") {
         // Already configured; skip the modal
         onComplete();
@@ -85,8 +97,8 @@ export const EnvironmentSetupModal: React.FC<EnvironmentSetupModalProps> = ({
     ) => {
       setProgress(payload as InstallProgressPayload);
     };
-    window.ipcRenderer.on("env:install-progress", handler);
-    return () => window.ipcRenderer.off("env:install-progress", handler);
+    const unsub = window.ipcRenderer.on("env:install-progress", handler);
+    return () => unsub();
   }, []);
 
   async function handleInstallLocal() {
@@ -181,6 +193,31 @@ export const EnvironmentSetupModal: React.FC<EnvironmentSetupModalProps> = ({
                 Skip for now
               </Button>
             )}
+          </>
+        )}
+
+        {phase === "resume" && status?.installCheckpoint && (
+          <>
+            <h2 style={titleStyle}>Resume Installation</h2>
+            <p style={textStyle}>
+              A previous installation was interrupted at{" "}
+              <strong>{status.installCheckpoint.lastStep}</strong>{" "}
+              ({Math.round(status.installCheckpoint.percent)}%).
+              You can resume where it left off, or switch to system PATH.
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginTop: "8px" }}>
+              <Button variant="glass" onClick={handleInstallLocal}>
+                Resume Installation
+              </Button>
+              <Button variant="ghost" onClick={handleUseSystem}>
+                Use System PATH Instead
+              </Button>
+              {onDismiss && (
+                <Button variant="ghost" size="sm" onClick={onDismiss}>
+                  Skip for now
+                </Button>
+              )}
+            </div>
           </>
         )}
 

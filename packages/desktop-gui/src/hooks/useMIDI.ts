@@ -19,13 +19,18 @@ export function useMIDI(
   const [mappings, setMappings] = useState<MIDIMapping[]>([]);
 
   useEffect(() => {
+    let cancelled = false;
     initMIDI().then((success) => {
+      if (cancelled) return;
       setReady(success);
       if (success) {
         setDevices(getMIDIDevices());
         setMappings(getMIDIMappings());
       }
     });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {

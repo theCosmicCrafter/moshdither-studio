@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { motion } from 'framer-motion';
 
 interface SwitchProps {
   checked: boolean;
@@ -33,7 +34,7 @@ export const Switch: React.FC<SwitchProps> = ({
         boxShadow: checked ? '0 0 8px var(--accent-glow)' : 'none',
       }}
     >
-      <div
+      <motion.div
         style={{
           width: '14px',
           height: '14px',
@@ -41,10 +42,10 @@ export const Switch: React.FC<SwitchProps> = ({
           backgroundColor: '#ffffff',
           position: 'absolute',
           top: '2px',
-          left: checked ? '20px' : '2px',
-          transition: 'left 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
           boxShadow: '0 1px 3px rgba(0,0,0,0.4)',
         }}
+        animate={{ left: checked ? '20px' : '2px' }}
+        transition={{ type: 'spring', stiffness: 600, damping: 25 }}
       />
     </div>
   );

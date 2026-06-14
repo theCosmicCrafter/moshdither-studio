@@ -103,7 +103,9 @@ export function applyMaskPostProcessing(
   return { imageData: result, width, height };
 }
 
-/** Grow (dilate) or shrink (erode) a mask */
+/** Grow (dilate) or shrink (erode) a mask using GPU-accelerated canvas compositing.
+ *  O(n) instead of O(n×r²) — stamps the source at multiple angles.
+ */
 function applyGrowShrink(
   ctx: CanvasRenderingContext2D,
   growVal: number,
@@ -112,52 +114,32 @@ function applyGrowShrink(
 ): void {
   if (growVal === 0) return;
 
-  const src = ctx.getImageData(0, 0, w, h);
-  const dst = new Uint8ClampedArray(src.data);
   const radius = Math.abs(growVal);
+  const tmp = document.createElement("canvas");
+  tmp.width = w;
+  tmp.height = h;
+  const tmpCtx = tmp.getContext("2d")!;
+  tmpCtx.drawImage(ctx.canvas, 0, 0);
 
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const idx = (y * w + x) * 4;
-      let hasWhite = false;
-      let allWhite = true;
+  ctx.clearRect(0, 0, w, h);
 
-      for (let dy = -radius; dy <= radius; dy++) {
-        for (let dx = -radius; dx <= radius; dx++) {
-          const ny = y + dy;
-          const nx = x + dx;
-          if (ny < 0 || ny >= h || nx < 0 || nx >= w) {
-            // Out-of-bounds counts as black for erosion
-            allWhite = false;
-            continue;
-          }
-          const nidx = (ny * w + nx) * 4;
-          const isWhite = src.data[nidx] > 128;
-          if (isWhite) {
-            hasWhite = true;
-          } else {
-            allWhite = false;
-          }
-        }
-      }
-
-      const val =
-        growVal > 0
-          ? hasWhite
-            ? 255
-            : 0 // dilate: white if ANY neighbor is white
-          : allWhite
-            ? 255
-            : 0; // erode: white only if ALL neighbors are white
-
-      dst[idx] = val;
-      dst[idx + 1] = val;
-      dst[idx + 2] = val;
-      dst[idx + 3] = 255;
+  if (growVal > 0) {
+    // Dilation: stamp at 8 angles + original
+    for (let angle = 0; angle < 360; angle += 45) {
+      const rad = (angle * Math.PI) / 180;
+      ctx.drawImage(tmp, Math.cos(rad) * radius, Math.sin(rad) * radius);
     }
+    ctx.drawImage(tmp, 0, 0);
+  } else {
+    // Erosion: use destination-out compositing
+    ctx.drawImage(tmp, 0, 0);
+    ctx.globalCompositeOperation = "destination-out";
+    for (let angle = 0; angle < 360; angle += 45) {
+      const rad = (angle * Math.PI) / 180;
+      ctx.drawImage(tmp, Math.cos(rad) * radius, Math.sin(rad) * radius);
+    }
+    ctx.globalCompositeOperation = "source-over";
   }
-
-  ctx.putImageData(new ImageData(dst, w, h), 0, 0);
 }
 
 /** Fill holes smaller than minArea pixels */

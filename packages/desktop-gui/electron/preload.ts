@@ -35,13 +35,16 @@ const VALID_SEND_CHANNELS: string[] = [
   "cache:set-frame",
   "cache:clear",
   "cache:stats",
-  "sam3:get-cache-dir",
   "fonts:list",
   "sam3:load-model",
-  "sam3:segment",
   "sam3:predict-batch",
+  "sam3:predict-text",
+  "sam3:predict-point-pro",
+  "sam3:predict-text-pro",
+  "sam3:predict-groundingdino",
   "sam3:hover-preview",
   "sam3:remove-background",
+  "sam3:remove-background-batch",
   "sam3:list-models",
   "sam3:download-model",
   "sam3:model-status",
@@ -84,6 +87,12 @@ function validateChannel(channel: string, valid: string[]): void {
   }
 }
 
+// Map original listeners -> wrapped listeners for correct .off() removal
+const listenerMap = new WeakMap<
+  (event: unknown, ...args: unknown[]) => void,
+  (event: IpcRendererEvent, ...args: unknown[]) => void
+>();
+
 // --------- Expose a hardened IPC API to the Renderer process ---------
 contextBridge.exposeInMainWorld("ipcRenderer", {
   on(
@@ -93,6 +102,7 @@ contextBridge.exposeInMainWorld("ipcRenderer", {
     validateChannel(channel, VALID_RECEIVE_CHANNELS);
     const wrapped = (event: IpcRendererEvent, ...args: unknown[]) =>
       listener(event, ...args);
+    listenerMap.set(listener, wrapped);
     ipcRenderer.on(channel, wrapped);
     return () => ipcRenderer.off(channel, wrapped);
   },
@@ -101,10 +111,11 @@ contextBridge.exposeInMainWorld("ipcRenderer", {
     listener: (event: unknown, ...args: unknown[]) => void,
   ): void {
     validateChannel(channel, VALID_RECEIVE_CHANNELS);
-    ipcRenderer.off(
-      channel,
-      listener as (event: IpcRendererEvent, ...args: unknown[]) => void,
-    );
+    const wrapped = listenerMap.get(listener);
+    if (wrapped) {
+      ipcRenderer.off(channel, wrapped);
+      listenerMap.delete(listener);
+    }
   },
   send(channel: string, ...args: unknown[]): void {
     validateChannel(channel, VALID_SEND_CHANNELS);

@@ -5,6 +5,7 @@ import { Switch } from '../atoms/Switch';
 import { Button } from '../atoms/Button';
 import { ControlGroup } from '../molecules/ControlGroup';
 import { DebouncedControlGroup } from '../molecules/DebouncedControlGroup';
+import { AccordionSection } from '../molecules/AccordionSection';
 import { PaletteBuilder } from '../organisms/PaletteBuilder';
 import { KeyframeRail } from '../molecules/KeyframeRail';
 import type { EffectMask, BlendMode } from '../../types/effectTypes';
@@ -48,13 +49,16 @@ export const PropertiesPanel: React.FC = () => {
     progress: samProgress,
     loadingStep: samLoadingStep,
     error: samError,
-    selectedModel: samSelectedModel,
-    setSelectedModel: setSamSelectedModel,
     threshold: samThreshold,
     setThreshold: setSamThreshold,
-    downloadModel: downloadSamModel,
-    modelDownloadProgress,
+    predictText: predictSamText,
+    predictTextPro: predictSamTextPro,
+    predictGroundingDINO: predictSamGroundingDINO,
+    setProMode: setSamProMode,
+    proMode: samProMode,
   } = useSAM3();
+
+  const [samGroundingDino, setSamGroundingDino] = useState(false);
   const {
     postProcessParams,
     setPostProcessParams,
@@ -63,12 +67,10 @@ export const PropertiesPanel: React.FC = () => {
     backgroundRemovalEnabled,
     setBackgroundRemovalEnabled,
   } = useStudio();
-  const [modsOpen, setModsOpen] = useState(false);
-  const [exportOpen, setExportOpen] = useState(false);
   const [systemFonts, setSystemFonts] = useState<string[]>([]);
   const [envMode, setEnvMode] = useState<'local' | 'system' | 'unconfigured'>('unconfigured');
-  const [envStatusOpen, setEnvStatusOpen] = useState(false);
   const [envStatus, setEnvStatus] = useState<{ pythonOk: boolean; ffmpegOk: boolean; ffglitchOk: boolean } | null>(null);
+  const [envStatusOpen, setEnvStatusOpen] = useState(false);
   const [beatGenOpen, setBeatGenOpen] = useState(false);
 
   // Fetch environment status on mount
@@ -122,9 +124,13 @@ export const PropertiesPanel: React.FC = () => {
 
   const handleMTImport = async () => {
     if (!window.ipcRenderer) return;
-    const url = await window.ipcRenderer.invoke('dialog:openMedia');
-    if (url) {
-      updateParam('motionUrl', url);
+    try {
+      const url = await window.ipcRenderer.invoke('dialog:openMedia');
+      if (url) {
+        updateParam('motionUrl', url);
+      }
+    } catch {
+      // User cancelled or IPC error — ignore
     }
   };
 
@@ -924,202 +930,251 @@ export const PropertiesPanel: React.FC = () => {
 
               {activeFx.mask?.type === 'sam' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '8px 0' }}>
-                  {/* Model Selector */}
-                  <div className="control-group" style={{ marginBottom: '8px' }}>
-                    <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>SAM Model</label>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <select
-                        value={samSelectedModel}
-                        onChange={(e) => setSamSelectedModel(e.target.value as 'sam-vit-base' | 'sam-vit-large' | 'sam-vit-huge')}
-                        style={{ flex: 1, padding: '6px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px' }}
-                      >
-                        <option value="sam-vit-base">SAM ViT Base</option>
-                        <option value="sam-vit-large">SAM ViT Large</option>
-                        <option value="sam-vit-huge">SAM ViT Huge</option>
-                      </select>
-                      <Button
-                        variant="glass"
-                        size="sm"
-                        onClick={() => downloadSamModel(samSelectedModel)}
-                        disabled={samStatus === 'loading'}
-                      >
-                        {modelDownloadProgress[samSelectedModel] ? `${Math.round(modelDownloadProgress[samSelectedModel])}%` : 'Download'}
-                      </Button>
-                    </div>
-                  </div>
 
-                  {/* Threshold Slider */}
-                  <div className="control-group" style={{ marginBottom: '8px' }}>
-                    <ControlGroup
-                      label="IoU Threshold"
-                      value={samThreshold}
-                      onChange={(val) => setSamThreshold(Number(val))}
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      defaultValue={0.0}
-                    />
-                  </div>
-
-                  {/* SAM Model Status Badge */}
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      padding: '6px 10px',
-                      borderRadius: '6px',
-                      fontSize: '11px',
-                      fontWeight: 600,
-                      background:
-                        samStatus === 'ready'
-                          ? 'rgba(0,255,170,0.15)'
-                          : samStatus === 'loading'
-                            ? 'rgba(0,170,255,0.15)'
-                            : samStatus === 'error'
-                              ? 'rgba(255,80,80,0.15)'
-                              : 'rgba(255,255,255,0.05)',
-                      color:
-                        samStatus === 'ready'
-                          ? 'var(--accent-primary)'
-                          : samStatus === 'loading'
-                            ? '#00aaff'
-                            : samStatus === 'error'
-                              ? '#ff5050'
-                              : 'var(--text-tertiary)',
-                      border: `1px solid ${samStatus === 'ready' ? 'rgba(0,255,170,0.3)' : samStatus === 'loading' ? 'rgba(0,170,255,0.3)' : samStatus === 'error' ? 'rgba(255,80,80,0.3)' : 'rgba(255,255,255,0.1)'}`,
-                    }}
-                  >
-                    <span
-                      style={{
-                        width: 8,
-                        height: 8,
-                        borderRadius: '50%',
-                        background:
-                          samStatus === 'ready'
-                            ? 'var(--accent-primary)'
-                            : samStatus === 'loading'
-                              ? '#00aaff'
-                              : samStatus === 'error'
-                                ? '#ff5050'
-                                : '#888',
-                        animation: samStatus === 'loading' ? 'pulse 1.5s ease-in-out infinite' : 'none',
-                      }}
-                    />
-                    <span>
-                      {samStatus === 'ready'
-                        ? 'Model Ready'
-                        : samStatus === 'loading'
-                          ? `Loading Model ${Math.round(samProgress)}%`
-                          : samStatus === 'error'
-                            ? `Error: ${samError}`
-                            : 'Model Not Loaded'}
-                    </span>
-                  </div>
-                  {/* Loading step description */}
-                  {samStatus === 'loading' && samLoadingStep && (
-                    <span style={{ fontSize: '10px', color: '#00aaff', opacity: 0.9 }}>{samLoadingStep}</span>
-                  )}
-                  <span style={{ fontSize: '11px', color: 'var(--text-tertiary)' }}>
-                    LMB = Add point, RMB = Exclude point, Ctrl+Click = Flood fill. Multi-click supported.
-                  </span>
-
-                  {/* Background Removal Toggle */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
-                    <Switch
-                      checked={backgroundRemovalEnabled}
-                      onChange={setBackgroundRemovalEnabled}
-                    />
-                    <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Background Removal</span>
-                    <Tooltip content="Use AI to remove the background instead of segmenting foreground" />
-                  </div>
-
-                  {/* Post-Processing Controls */}
-                  <div style={{ marginTop: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '10px' }}>
-                    <label style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-secondary)', display: 'block', marginBottom: '8px' }}>Post-Processing</label>
-                    <ControlGroup
-                      label={`Grow: ${postProcessParams.grow}px`}
-                      value={postProcessParams.grow}
-                      onChange={(val) => setPostProcessParams((p) => ({ ...p, grow: Number(val) }))}
-                      min={-50}
-                      max={50}
-                      step={1}
-                      defaultValue={0}
-                    />
-                    <ControlGroup
-                      label={`Blur: ${postProcessParams.blur}px`}
-                      value={postProcessParams.blur}
-                      onChange={(val) => setPostProcessParams((p) => ({ ...p, blur: Number(val) }))}
-                      min={0}
-                      max={50}
-                      step={1}
-                      defaultValue={0}
-                    />
-                    <ControlGroup
-                      label={`Fill Holes: ${postProcessParams.fillHoles}`}
-                      value={postProcessParams.fillHoles}
-                      onChange={(val) => setPostProcessParams((p) => ({ ...p, fillHoles: Number(val) }))}
-                      min={0}
-                      max={1000}
-                      step={10}
-                      defaultValue={0}
-                    />
-                    <ControlGroup
-                      label={`Smooth: ${postProcessParams.smooth}px`}
-                      value={postProcessParams.smooth}
-                      onChange={(val) => setPostProcessParams((p) => ({ ...p, smooth: Number(val) }))}
-                      min={0}
-                      max={100}
-                      step={1}
-                      defaultValue={0}
-                    />
-                  </div>
-
-                  {/* Mask Layer List */}
-                  {maskLayers.length > 0 && (
-                    <div style={{ marginTop: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '10px' }}>
-                      <label style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-secondary)', display: 'block', marginBottom: '8px' }}>Mask Layers</label>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        {maskLayers.map((layer) => (
-                          <div key={layer.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 8px', background: 'rgba(255,255,255,0.03)', borderRadius: '4px' }}>
-                            <Switch checked={layer.visible} onChange={(v) => setMaskLayers((prev) => prev.map((l) => l.id === layer.id ? { ...l, visible: v } : l))} />
-                            <span style={{ fontSize: '12px', color: 'var(--text-secondary)', flex: 1 }}>{layer.name}</span>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => setMaskLayers((prev) => prev.filter((l) => l.id !== layer.id))}
-                            >
-                              Remove
-                            </Button>
+                  {/* STEP 1: Prepare Model */}
+                  <div className={`sam-step ${samStatus !== 'ready' ? 'sam-step--active' : ''}`}>
+                    <div className="sam-step__number">1</div>
+                    <div className="sam-step__content">
+                      <div className="sam-step__title">SAM 3</div>
+                      <div className="sam-step__body">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                          <div
+                            style={{
+                              width: '8px',
+                              height: '8px',
+                              borderRadius: '50%',
+                              background: samStatus === 'ready' ? 'var(--accent-primary)' : samStatus === 'error' ? '#ff5050' : samStatus === 'loading' ? '#00aaff' : 'var(--text-tertiary)',
+                              flexShrink: 0,
+                            }}
+                          />
+                          <span style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-secondary)' }}>
+                            {samStatus === 'ready' ? 'Ready' : samStatus === 'loading' ? `Downloading ${Math.round(samProgress)}%` : samStatus === 'error' ? `Error: ${samError}` : 'Click image to start'}
+                          </span>
+                        </div>
+                        {samStatus === 'loading' && (
+                          <div style={{ width: '100%', height: '3px', background: 'rgba(255,255,255,0.08)', borderRadius: '2px', overflow: 'hidden', marginTop: '4px' }}>
+                            <div
+                              style={{
+                                width: `${samProgress}%`,
+                                height: '100%',
+                                background: 'var(--accent-primary)',
+                                borderRadius: '2px',
+                                transition: 'width 0.2s ease',
+                              }}
+                            />
                           </div>
-                        ))}
+                        )}
+                        {samStatus === 'loading' && samLoadingStep && (
+                          <div style={{ fontSize: '10px', color: '#00aaff', marginTop: '4px' }}>{samLoadingStep}</div>
+                        )}
                       </div>
                     </div>
-                  )}
+                  </div>
 
-                  {activeFx.mask?.samMaskData && (
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <Button
-                        variant="glass"
-                        size="sm"
-                        style={{ flex: 1 }}
-                        onClick={() => {
-                          setActiveEffects(activeEffects.map(fx =>
-                            fx.id === activeFx.id
-                              ? { ...fx, mask: { ...(fx.mask || {}), type: 'sam', samMaskData: undefined, samClickPoint: undefined } }
-                              : fx
-                          ));
-                        }}
-                      >
-                        Clear AI Mask
-                      </Button>
+                  {/* STEP 2: Segment */}
+                  <div className={`sam-step ${samStatus === 'ready' && !activeFx.mask?.samMaskData ? 'sam-step--active' : ''}`}>
+                    <div className="sam-step__number">2</div>
+                    <div className="sam-step__content">
+                      <div className="sam-step__title">Segment</div>
+                      <div className="sam-step__body" style={{ opacity: samStatus === 'ready' ? 1 : 0.4, pointerEvents: samStatus === 'ready' ? 'auto' : 'none' }}>
+                        <ControlGroup
+                          label="IoU Threshold"
+                          value={samThreshold}
+                          onChange={(val) => setSamThreshold(Number(val))}
+                          min={0}
+                          max={1}
+                          step={0.05}
+                          defaultValue={0.0}
+                        />
+                        {/* Text-prompt segmentation (SAM 3) */}
+                        <div style={{ display: 'flex', gap: '6px', marginTop: '8px', marginBottom: '6px' }}>
+                          <input
+                            type="text"
+                            placeholder="Type object name (e.g. person, car)..."
+                            aria-label="Text prompt for segmentation"
+                            id="sam-text-prompt"
+                            style={{ flex: 1, padding: '6px 8px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px', fontSize: '12px' }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                const input = e.currentTarget;
+                                const prompt = input.value.trim();
+                                if (prompt && mediaUrl) {
+                                  const fn = samGroundingDino
+                                    ? predictSamGroundingDINO
+                                    : samProMode
+                                      ? predictSamTextPro
+                                      : predictSamText;
+                                  fn(mediaUrl, prompt)?.then((mask) => {
+                                    if (mask && activeFx) {
+                                      setActiveEffects((prev) =>
+                                        prev.map((fx) =>
+                                          fx.id === activeFx.id
+                                            ? { ...fx, mask: { ...fx.mask, type: 'sam', samMaskData: mask.dataUrl } }
+                                            : fx
+                                        )
+                                      );
+                                    }
+                                  });
+                                }
+                              }
+                            }}
+                          />
+                          <Button
+                            variant="glass"
+                            size="sm"
+                            onClick={() => {
+                              const input = document.getElementById('sam-text-prompt') as HTMLInputElement | null;
+                              const prompt = input?.value.trim() ?? '';
+                              if (prompt && mediaUrl) {
+                                const fn = samGroundingDino
+                                  ? predictSamGroundingDINO
+                                  : samProMode
+                                    ? predictSamTextPro
+                                    : predictSamText;
+                                fn(mediaUrl, prompt)?.then((mask) => {
+                                  if (mask && activeFx) {
+                                    setActiveEffects((prev) =>
+                                      prev.map((fx) =>
+                                        fx.id === activeFx.id
+                                          ? { ...fx, mask: { ...fx.mask, type: 'sam', samMaskData: mask.dataUrl } }
+                                          : fx
+                                      )
+                                    );
+                                  }
+                                });
+                              }
+                            }}
+                            disabled={samStatus !== 'ready'}
+                          >
+                            {samGroundingDino ? 'Detect (DINO)' : samProMode ? 'Detect (PRO)' : 'Detect'}
+                          </Button>
+                        </div>
+                        {/* Mode toggles */}
+                        <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginTop: '6px', marginBottom: '4px' }}>
+                          <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                            <Switch checked={samProMode} onChange={(v) => { setSamProMode(v); if (v) setSamGroundingDino(false); }} />
+                            <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>PRO</span>
+                            <Tooltip content="Advanced post-processing for hair, fur, fine details (median blur + morphological ops + connected components)" />
+                          </div>
+                          <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                            <Switch checked={samGroundingDino} onChange={(v) => { setSamGroundingDino(v); if (v) setSamProMode(false); }} />
+                            <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>DINO</span>
+                            <Tooltip content="Use GroundingDINO text-to-box detection for more precise object localization (slower, more accurate)" />
+                          </div>
+                        </div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
+                          LMB = Add point, RMB = Exclude, Ctrl+Click = Flood fill, or type a prompt above.
+                        </div>
+                        {activeFx.mask?.samClickPoint && !activeFx.mask?.samMaskData && (
+                          <div style={{ fontSize: '11px', color: 'var(--accent-primary)', marginTop: '4px' }}>
+                            Click on the preview to segment...
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  )}
-                  {activeFx.mask?.samClickPoint && !activeFx.mask?.samMaskData && (
-                    <span style={{ fontSize: '11px', color: 'var(--accent-primary)' }}>
-                      Click on the preview to segment...
-                    </span>
-                  )}
+                  </div>
+
+                  {/* STEP 3: Post-Process */}
+                  <div className="sam-step">
+                    <div className="sam-step__number">3</div>
+                    <div className="sam-step__content">
+                      <div className="sam-step__title">Post-Process</div>
+                      <div className="sam-step__body" style={{ opacity: activeFx.mask?.samMaskData ? 1 : 0.4, pointerEvents: activeFx.mask?.samMaskData ? 'auto' : 'none' }}>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '6px' }}>
+                          <Switch checked={backgroundRemovalEnabled} onChange={setBackgroundRemovalEnabled} />
+                          <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Background Removal</span>
+                          <Tooltip content="Remove background instead of segmenting foreground" />
+                        </div>
+                        <ControlGroup
+                          label={`Grow: ${postProcessParams.grow}px`}
+                          value={postProcessParams.grow}
+                          onChange={(val) => setPostProcessParams((p) => ({ ...p, grow: Number(val) }))}
+                          min={-50}
+                          max={50}
+                          step={1}
+                          defaultValue={0}
+                        />
+                        <ControlGroup
+                          label={`Blur: ${postProcessParams.blur}px`}
+                          value={postProcessParams.blur}
+                          onChange={(val) => setPostProcessParams((p) => ({ ...p, blur: Number(val) }))}
+                          min={0}
+                          max={50}
+                          step={1}
+                          defaultValue={0}
+                        />
+                        <ControlGroup
+                          label={`Fill Holes: ${postProcessParams.fillHoles}`}
+                          value={postProcessParams.fillHoles}
+                          onChange={(val) => setPostProcessParams((p) => ({ ...p, fillHoles: Number(val) }))}
+                          min={0}
+                          max={1000}
+                          step={10}
+                          defaultValue={0}
+                        />
+                        <ControlGroup
+                          label={`Smooth: ${postProcessParams.smooth}px`}
+                          value={postProcessParams.smooth}
+                          onChange={(val) => setPostProcessParams((p) => ({ ...p, smooth: Number(val) }))}
+                          min={0}
+                          max={100}
+                          step={1}
+                          defaultValue={0}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* STEP 4: Manage */}
+                  <div className={`sam-step ${activeFx.mask?.samMaskData ? 'sam-step--active' : ''}`}>
+                    <div className="sam-step__number">4</div>
+                    <div className="sam-step__content">
+                      <div className="sam-step__title">Manage Result</div>
+                      <div className="sam-step__body">
+                        {maskLayers.length > 0 && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '8px' }}>
+                            {maskLayers.map((layer) => (
+                              <div key={layer.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 8px', background: 'rgba(255,255,255,0.03)', borderRadius: '4px' }}>
+                                <Switch checked={layer.visible} onChange={(v) => setMaskLayers((prev) => prev.map((l) => l.id === layer.id ? { ...l, visible: v } : l))} />
+                                <span style={{ fontSize: '12px', color: 'var(--text-secondary)', flex: 1 }}>{layer.name}</span>
+                                <Button variant="ghost" size="sm" onClick={() => setMaskLayers((prev) => prev.filter((l) => l.id !== layer.id))}>Remove</Button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {activeFx.mask?.samMaskData && (
+                          <div style={{ display: 'flex', gap: '8px' }}>
+                            <Button variant="glass" size="sm" onClick={() => {
+                              setActiveEffects(activeEffects.map(fx =>
+                                fx.id === activeFx.id
+                                  ? { ...fx, mask: { ...(fx.mask || {}), type: 'sam', samMaskData: undefined, samClickPoint: undefined } }
+                                  : fx
+                              ));
+                            }}>
+                              Clear AI Mask
+                            </Button>
+                            <Button variant="glass" size="sm" onClick={() => {
+                              if (activeFx.mask?.samMaskData) {
+                                const newLayer = {
+                                  id: `layer-${Date.now()}`,
+                                  name: `SAM Mask ${maskLayers.length + 1}`,
+                                  visible: true,
+                                  maskData: activeFx.mask.samMaskData,
+                                  width: 0,
+                                  height: 0,
+                                  postProcessed: false,
+                                };
+                                setMaskLayers((prev) => [...prev, newLayer]);
+                              }
+                            }}>
+                              Add to Layers
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
                 </div>
               )}{activeFx.mask && activeFx.mask.type !== 'none' && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
@@ -1183,7 +1238,7 @@ export const PropertiesPanel: React.FC = () => {
                     </div>
                   </div>
                 )}
-                {process.platform !== 'win32' && (
+                {typeof process !== 'undefined' && process.platform !== 'win32' && (
                   <span style={{ fontSize: '11px', color: '#F59E0B' }}>
                     FFglitch is not officially available for your platform.
                     Datamoshing effects requiring FFglitch will be limited.
@@ -1325,112 +1380,64 @@ export const PropertiesPanel: React.FC = () => {
               </div>
             )}
 
-            {/* 3. AUDIO REACTIVITY SECTION (Collapsible Accordion) */}
-            <div style={{ display: 'flex', flexDirection: 'column' }}>
-              <div 
-                onClick={() => setModsOpen(!modsOpen)}
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  padding: '12px 16px',
-                  background: 'rgba(255,255,255,0.03)',
-                  border: '1px solid var(--border-color)',
-                  borderRadius: 'var(--radius-md)',
-                  cursor: 'pointer',
-                  fontWeight: 600,
-                  fontSize: '13px'
-                }}
-              >
-                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <span style={{ fontSize: '10px' }}>{modsOpen ? '▼' : '▶'}</span>
-                  Audio Reactivity & LFO
-                </span>
-              </div>
-              
-              {modsOpen && (
-                <div className="glass-panel" style={{ padding: '16px', borderTop: 'none', borderTopLeftRadius: 0, borderTopRightRadius: 0, display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                  <p style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                    Connect parameters of the active layer to LFO modulators or audio waveforms.
-                  </p>
+            {/* 3. AUDIO REACTIVITY SECTION */}
+            <AccordionSection title="Audio Reactivity & LFO" defaultOpen={false}>
+              <p style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.4, marginBottom: '16px' }}>
+                Connect parameters of the active layer to LFO modulators or audio waveforms.
+              </p>
 
-                  {/* Modulator 1: LFO */}
-                  <div style={{ background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                      <span style={{ fontSize: '13px', fontWeight: 600 }}>LFO 1 (Low Frequency Oscillator)</span>
-                      <Switch checked={activeFx.params.lfoEnabled || false} onChange={(val) => updateParam('lfoEnabled', val)} />
-                    </div>
-                    
-                    {activeFx.params.lfoEnabled && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px' }}>
-                        <div className="control-group" style={{ marginBottom: '8px' }}>
-                          <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Waveform</label>
-                          <select aria-label="Waveform" style={{ width: '100%', padding: '4px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px' }}>
-                            <option>Sine</option>
-                            <option>Triangle</option>
-                            <option>Sawtooth</option>
-                            <option>Square</option>
-                            <option>Noise (Random)</option>
-                          </select>
-                        </div>
-                        {renderSlider('LFO Rate (Hz)', 'lfoRate', 0.1, 10.0, 0.1, 1.0)}
-                        {renderSlider('LFO Depth (%)', 'lfoDepth', 0, 100, 1, 50)}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Modulator 2: Audio Reactivity */}
-                  <div style={{ background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                      <span style={{ fontSize: '13px', fontWeight: 600 }}>Audio Input Amplitude</span>
-                      <Switch checked={activeFx.params.audioEnabled || false} onChange={(val) => updateParam('audioEnabled', val)} />
-                    </div>
-                    
-                    {activeFx.params.audioEnabled && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px' }}>
-                        <div className="control-group" style={{ marginBottom: '8px' }}>
-                          <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Frequency Band</label>
-                          <select aria-label="Frequency Band" style={{ width: '100%', padding: '4px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px' }}>
-                            <option>Bass (Low Frequency)</option>
-                            <option>Mids (Speech range)</option>
-                            <option>Highs (Crisp treble)</option>
-                            <option>Full Spectrum</option>
-                          </select>
-                        </div>
-                        {renderSlider('Gain multiplier', 'audioGain', 0.5, 4.0, 0.1, 1.0)}
-                        {renderSlider('Smoothing factor', 'audioSmooth', 0.1, 0.9, 0.05, 0.5)}
-                      </div>
-                    )}
-                  </div>
+              {/* Modulator 1: LFO */}
+              <div style={{ background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                  <span style={{ fontSize: '13px', fontWeight: 600 }}>LFO 1 (Low Frequency Oscillator)</span>
+                  <Switch checked={activeFx.params.lfoEnabled || false} onChange={(val) => updateParam('lfoEnabled', val)} />
                 </div>
-              )}
-            </div>
 
-            {/* 4. OFFLINE EXPORT SECTION (Collapsible Accordion) */}
-            <div style={{ display: 'flex', flexDirection: 'column' }}>
-              <div 
-                onClick={() => setExportOpen(!exportOpen)}
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  padding: '12px 16px',
-                  background: 'rgba(255,255,255,0.03)',
-                  border: '1px solid var(--border-color)',
-                  borderRadius: 'var(--radius-md)',
-                  cursor: 'pointer',
-                  fontWeight: 600,
-                  fontSize: '13px'
-                }}
-              >
-                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <span style={{ fontSize: '10px' }}>{exportOpen ? '▼' : '▶'}</span>
-                  Export & Offline Render
-                </span>
+                {activeFx.params.lfoEnabled && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px' }}>
+                    <div className="control-group" style={{ marginBottom: '8px' }}>
+                      <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Waveform</label>
+                      <select aria-label="Waveform" style={{ width: '100%', padding: '4px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px' }}>
+                        <option>Sine</option>
+                        <option>Triangle</option>
+                        <option>Sawtooth</option>
+                        <option>Square</option>
+                        <option>Noise (Random)</option>
+                      </select>
+                    </div>
+                    {renderSlider('LFO Rate (Hz)', 'lfoRate', 0.1, 10.0, 0.1, 1.0)}
+                    {renderSlider('LFO Depth (%)', 'lfoDepth', 0, 100, 1, 50)}
+                  </div>
+                )}
               </div>
-              
-              {exportOpen && (
-                <div className="glass-panel" style={{ padding: '16px', borderTop: 'none', borderTopLeftRadius: 0, borderTopRightRadius: 0, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+
+              {/* Modulator 2: Audio Reactivity */}
+              <div style={{ background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                  <span style={{ fontSize: '13px', fontWeight: 600 }}>Audio Input Amplitude</span>
+                  <Switch checked={activeFx.params.audioEnabled || false} onChange={(val) => updateParam('audioEnabled', val)} />
+                </div>
+
+                {activeFx.params.audioEnabled && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px' }}>
+                    <div className="control-group" style={{ marginBottom: '8px' }}>
+                      <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Frequency Band</label>
+                      <select aria-label="Frequency Band" style={{ width: '100%', padding: '4px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px' }}>
+                        <option>Bass (Low Frequency)</option>
+                        <option>Mids (Speech range)</option>
+                        <option>Highs (Crisp treble)</option>
+                        <option>Full Spectrum</option>
+                      </select>
+                    </div>
+                    {renderSlider('Gain multiplier', 'audioGain', 0.5, 4.0, 0.1, 1.0)}
+                    {renderSlider('Smoothing factor', 'audioSmooth', 0.1, 0.9, 0.05, 0.5)}
+                  </div>
+                )}
+              </div>
+            </AccordionSection>
+
+            {/* 4. OFFLINE EXPORT SECTION */}
+            <AccordionSection title="Export & Offline Render" defaultOpen={false}>
                   <p style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
                     Fine-tune export boundaries and compile the stack using the Python CLI wrapper.
                   </p>
@@ -1771,9 +1778,7 @@ export const PropertiesPanel: React.FC = () => {
                       {isRendering ? 'Rendering Offline Pipeline...' : 'Render Full Stack (Python)'}
                     </Button>
                   </div>
-                </div>
-              )}
-            </div>
+            </AccordionSection>
 
           </div>
         </div>
@@ -1784,4 +1789,4 @@ export const PropertiesPanel: React.FC = () => {
       )}
     </aside>
   );
-};;
+};

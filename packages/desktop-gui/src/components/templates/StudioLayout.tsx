@@ -1,5 +1,7 @@
 import * as React from 'react';
 import { useResizablePanel } from '../../hooks/useResizablePanel';
+import { PanelContext } from '../../context/PanelContext';
+import type { PanelContextType } from '../../context/PanelContext';
 import { motion } from 'framer-motion';
 
 interface StudioLayoutProps {
@@ -66,7 +68,7 @@ const ResizeHandle: React.FC<{
       position: 'absolute',
       top: 0,
       bottom: 0,
-      [side === 'left' ? 'right' : 'left']: '-4px',
+      [side === 'left' ? 'right' : 'left']: '0',
       width: '8px',
       cursor: side === 'left' ? 'e-resize' : 'w-resize',
       zIndex: 30,
@@ -98,56 +100,77 @@ export const StudioLayout: React.FC<StudioLayoutProps> = ({
   const leftPanel = useResizablePanel('left');
   const rightPanel = useResizablePanel('right');
 
+  const panelValue: PanelContextType = {
+    left: {
+      width: leftPanel.width,
+      collapsed: leftPanel.collapsed,
+      setWidth: leftPanel.setWidth,
+      toggleCollapse: leftPanel.toggleCollapse,
+    },
+    right: {
+      width: rightPanel.width,
+      collapsed: rightPanel.collapsed,
+      setWidth: rightPanel.setWidth,
+      toggleCollapse: rightPanel.toggleCollapse,
+    },
+  };
+
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        height: '100vh',
-        width: '100vw',
-        backgroundColor: 'var(--bg-base)',
-        color: 'var(--text-primary)',
-        fontFamily: 'var(--font-sans)',
-        overflow: 'hidden',
-      }}
-    >
+    <PanelContext.Provider value={panelValue}>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateRows: 'var(--toolbar-height) minmax(0, 1fr)',
+          height: '100vh',
+          width: '100vw',
+          backgroundColor: 'var(--bg-base)',
+          color: 'var(--text-primary)',
+          fontFamily: 'var(--font-sans)',
+          overflow: 'hidden',
+        }}
+      >
       {/* Top Header */}
       <header
         style={{
-          height: 'var(--toolbar-height)',
+          gridRow: '1',
           borderBottom: '1px solid var(--border-subtle)',
           display: 'flex',
           alignItems: 'center',
           padding: '0 20px',
-          flexShrink: 0,
+          background: 'rgba(15, 15, 17, 0.65)',
+          backdropFilter: 'blur(24px) saturate(180%)',
+          WebkitBackdropFilter: 'blur(24px) saturate(180%)',
+          zIndex: 100,
         }}
       >
         {header}
       </header>
 
-      {/* Main Workspace */}
+      {/* Main Workspace Grid */}
       <div
         style={{
-          flex: 1,
-          display: 'flex',
+          gridRow: '2',
+          display: 'grid',
+          gridTemplateColumns: `${leftPanel.collapsed ? 60 : leftPanel.width}px minmax(0, 1fr) ${rightPanel.collapsed ? 60 : rightPanel.width}px`,
           overflow: 'hidden',
           width: '100%',
+          height: '100%',
+          transition: (leftPanel.isDragging || rightPanel.isDragging) ? 'none' : 'grid-template-columns var(--transition-slow)',
         }}
       >
         {/* Left Panel */}
         <aside
           style={{
-            width: `${leftPanel.width}px`,
+            position: 'relative',
             borderRight: '1px solid var(--border-subtle)',
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
-            background: 'rgba(15, 15, 17, 0.4)',
+            background: 'rgba(22, 22, 26, 0.4)',
             backdropFilter: 'blur(16px) saturate(180%)',
             WebkitBackdropFilter: 'blur(16px) saturate(180%)',
-            flexShrink: 0,
-            position: 'relative',
-            transition: leftPanel.isDragging ? 'none' : 'width var(--transition-slow)',
+            zIndex: 30,
+            boxShadow: '4px 0 24px rgba(0, 0, 0, 0.2)',
           }}
           onMouseEnter={(e) => {
             e.currentTarget.querySelectorAll('.panel-collapse-btn').forEach((el) => {
@@ -187,13 +210,14 @@ export const StudioLayout: React.FC<StudioLayoutProps> = ({
         {/* Center Panel */}
         <main
           style={{
-            flex: 1,
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
-            padding: 'var(--spacing-lg)',
-            gap: 'var(--spacing-lg)',
-            backgroundColor: '#070709',
+            padding: '0',
+            gap: '0',
+            backgroundColor: 'var(--bg-base)',
+            minWidth: 0,
+            minHeight: 0,
           }}
         >
           {centerWorkspace}
@@ -202,17 +226,15 @@ export const StudioLayout: React.FC<StudioLayoutProps> = ({
         {/* Right Panel */}
         <aside
           style={{
-            width: `${rightPanel.width}px`,
             borderLeft: '1px solid var(--border-subtle)',
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
-            background: 'rgba(15, 15, 17, 0.4)',
+            background: 'rgba(22, 22, 26, 0.4)',
             backdropFilter: 'blur(16px) saturate(180%)',
             WebkitBackdropFilter: 'blur(16px) saturate(180%)',
-            flexShrink: 0,
             position: 'relative',
-            transition: rightPanel.isDragging ? 'none' : 'width var(--transition-slow)',
+            minWidth: 0,
           }}
           onMouseEnter={(e) => {
             e.currentTarget.querySelectorAll('.panel-collapse-btn').forEach((el) => {
@@ -247,5 +269,6 @@ export const StudioLayout: React.FC<StudioLayoutProps> = ({
         </aside>
       </div>
     </div>
+    </PanelContext.Provider>
   );
 };

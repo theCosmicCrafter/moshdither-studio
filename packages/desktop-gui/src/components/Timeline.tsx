@@ -63,10 +63,11 @@ export const Timeline: React.FC<TimelineProps> = ({ duration, currentTime, onTim
       style={{
         display: "flex",
         flexDirection: "column",
+        flexShrink: 0,
         gap: 8,
         padding: "12px 16px",
-        background: "var(--surface-base, #0e0e14)",
-        borderTop: "1px solid var(--border-subtle, rgba(255,255,255,0.06))",
+        background: "var(--surface-base)",
+        borderTop: "1px solid var(--border-subtle)",
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>

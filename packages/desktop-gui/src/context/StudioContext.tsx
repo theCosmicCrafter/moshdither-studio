@@ -107,7 +107,6 @@ interface StudioState {
   maskLayers: MaskLayer[];
   postProcessParams: PostProcessParams;
   selectedSAMModel: string;
-  modelDownloadProgress: Record<string, number>;
   backgroundRemovalEnabled: boolean;
 }
 
@@ -155,7 +154,6 @@ export interface StudioContextType extends StudioState {
   setMaskLayers: (layers: MaskLayer[] | ((prev: MaskLayer[]) => MaskLayer[])) => void;
   setPostProcessParams: (params: PostProcessParams | ((prev: PostProcessParams) => PostProcessParams)) => void;
   setSelectedSAMModel: (model: string) => void;
-  setModelDownloadProgress: (progress: Record<string, number>) => void;
   setBackgroundRemovalEnabled: (enabled: boolean) => void;
 }
 
@@ -270,20 +268,58 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [watermarkSettings, setWatermarkSettingsState] = useState<WatermarkSettings>(
     () => loadPersisted<WatermarkSettings>('moshdither:watermark', DEFAULT_WATERMARK),
   );
-  const [maskLayers, setMaskLayers] = useState<MaskLayer[]>(
+  const [maskLayers, setMaskLayersState] = useState<MaskLayer[]>(
     () => loadPersisted<MaskLayer[]>('moshdither:maskLayers', []),
   );
+
+  // Wrapper that strips maskData before localStorage persistence
+  const setMaskLayers = useCallback((update: MaskLayer[] | ((prev: MaskLayer[]) => MaskLayer[])) => {
+    setMaskLayersState(update);
+  }, []);
   const [postProcessParams, setPostProcessParams] = useState<PostProcessParams>(
     () => loadPersisted<PostProcessParams>('moshdither:postProcessParams', { grow: 0, blur: 0, fillHoles: 0, smooth: 0 }),
   );
   const [selectedSAMModel, setSelectedSAMModel] = useState<string>(
-    () => loadPersisted<string>('moshdither:selectedSAMModel', 'sam-vit-base'),
+    () => loadPersisted<string>('moshdither:selectedSAMModel', 'sam3'),
   );
-  const [modelDownloadProgress, setModelDownloadProgress] = useState<Record<string, number>>({});
   const [backgroundRemovalEnabled, setBackgroundRemovalEnabled] = useState<boolean>(
     () => loadPersisted<boolean>('moshdither:bgRemovalEnabled', false),
   );
   const hasFetchedDefaultDir = useRef(false);
+
+  // Ref to store current state for auto-save without causing effect re-runs
+  const stateSnapshotRef = useRef({
+    activeEffects: activeEffectsState,
+    mediaUrl,
+    mediaType,
+    currentTime,
+    duration,
+    qualityMode,
+    zoomLevel,
+    pixelGrid,
+    aspectRatio,
+    exportFormat,
+    exportFps,
+    outputDirectory,
+  });
+
+  // Update ref whenever state changes
+  useEffect(() => {
+    stateSnapshotRef.current = {
+      activeEffects: activeEffectsState,
+      mediaUrl,
+      mediaType,
+      currentTime,
+      duration,
+      qualityMode,
+      zoomLevel,
+      pixelGrid,
+      aspectRatio,
+      exportFormat,
+      exportFps,
+      outputDirectory,
+    };
+  }, [activeEffectsState, mediaUrl, mediaType, currentTime, duration, qualityMode, zoomLevel, pixelGrid, aspectRatio, exportFormat, exportFps, outputDirectory]);
 
   const addRecentFile = useCallback((path: string) => {
     setRecentFiles((prev) => {
@@ -315,7 +351,14 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setRenderQueue((prev) => prev.filter((j) => j.status !== 'completed' && j.status !== 'failed'));
   }, []);
 
+  const toastTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
   const removeToast = useCallback((id: string) => {
+    const timer = toastTimersRef.current.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      toastTimersRef.current.delete(id);
+    }
     setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
@@ -324,10 +367,12 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setToasts(prev => [...prev, { id, message, type }]);
 
     // Auto dismiss after 4 seconds
-    setTimeout(() => {
-      removeToast(id);
+    const timer = setTimeout(() => {
+      toastTimersRef.current.delete(id);
+      setToasts(prev => prev.filter(t => t.id !== id));
     }, 4000);
-  }, [removeToast]);
+    toastTimersRef.current.set(id, timer);
+  }, []);
 
   const setOutputDirectory = useCallback((dir: string | null) => {
     setOutputDirectoryState(dir);
@@ -435,41 +480,18 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   }, [undo, redo, setFontSizeScale]);
 
   // Auto-save: serialize project state every 30 seconds
+  // Uses ref-based state snapshot to avoid resetting timer on every state change
   useEffect(() => {
     if (!window.ipcRenderer) return;
 
     startAutoSave(() => ({
       version: 1,
       savedAt: new Date().toISOString(),
-      activeEffects: activeEffectsState,
-      mediaUrl,
-      mediaType,
-      currentTime,
-      duration,
-      qualityMode,
-      zoomLevel,
-      pixelGrid,
-      aspectRatio,
-      exportFormat,
-      exportFps,
-      outputDirectory,
+      ...stateSnapshotRef.current,
     }));
 
     return () => stopAutoSave();
-  }, [
-    activeEffectsState,
-    mediaUrl,
-    mediaType,
-    currentTime,
-    duration,
-    qualityMode,
-    zoomLevel,
-    pixelGrid,
-    aspectRatio,
-    exportFormat,
-    exportFps,
-    outputDirectory,
-  ]);
+  }, []); // Empty deps: state is read from ref, not closure
 
   // Persist UI state to localStorage so it survives reloads
   useEffect(() => savePersisted('moshdither:activeEffects', activeEffectsState), [activeEffectsState]);
@@ -482,6 +504,11 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   useEffect(() => savePersisted('moshdither:highContrastMode', highContrastMode), [highContrastMode]);
   useEffect(() => savePersisted('moshdither:reducedMotion', reducedMotion), [reducedMotion]);
   useEffect(() => savePersisted('moshdither:colorBlindMode', colorBlindMode), [colorBlindMode]);
+  // Persist maskLayers with maskData stripped to avoid localStorage quota (bug 1.18)
+  useEffect(() => {
+    const layersWithoutData = maskLayers.map((l) => ({ ...l, maskData: null }));
+    savePersisted('moshdither:maskLayers', layersWithoutData);
+  }, [maskLayers]);
 
   // Apply accessibility settings to the document root
   useEffect(() => {
@@ -644,8 +671,6 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         setPostProcessParams,
         selectedSAMModel,
         setSelectedSAMModel,
-        modelDownloadProgress,
-        setModelDownloadProgress,
         backgroundRemovalEnabled,
         setBackgroundRemovalEnabled,
       }}

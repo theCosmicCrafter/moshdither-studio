@@ -1,4 +1,4 @@
-﻿import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import { useStudio } from '../../context/StudioContext';
 import { useAudioReactiveContext } from '../../hooks/useAudioReactiveContext';
 import { WEBGL_EFFECT_TYPES, BLEND_MODE_MAP } from '../../types/effectTypes';
@@ -83,7 +83,7 @@ void main() {
 export const WebGLCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
-  const { activeEffects, mediaUrl, proxyUrl, qualityMode, maskCanvas, maskLayers, postProcessParams, backgroundRemovalEnabled } = useStudio();
+  const { activeEffects, mediaUrl, proxyUrl, qualityMode, maskCanvas, maskLayers, backgroundRemovalEnabled } = useStudio();
   const { featuresRef: audioFeaturesRef } = useAudioReactiveContext();
   const previewUrl = proxyUrl || mediaUrl;
 
@@ -101,18 +101,43 @@ export const WebGLCanvas: React.FC = () => {
   // Pre-decoded SAM mask images: effectId -> HTMLImageElement
   const samMaskImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
 
+  // Multi-layer mask compositing: offscreen canvas + WebGL texture
+  const compositeMaskCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const compositeMaskTextureRef = useRef<WebGLTexture | null>(null);
+  const compositeMaskNeedsUpdateRef = useRef(true);
+
+  // Background removal mask cache
+  const bgRemovalMaskDataRef = useRef<string | null>(null);
+  const bgRemovalMaskImageRef = useRef<HTMLImageElement | null>(null);
+
   // Refs for values that change frequently — using them in the render loop
   // avoids tearing down and rebuilding the entire WebGL pipeline on every tweak.
   const activeEffectsRef = useRef(activeEffects);
   const maskCanvasRef = useRef(maskCanvas);
   const maskLayersRef = useRef(maskLayers);
-  const postProcessParamsRef = useRef(postProcessParams);
   const bgRemovalEnabledRef = useRef(backgroundRemovalEnabled);
-  useEffect(() => { activeEffectsRef.current = activeEffects; }, [activeEffects]);
+  const mediaUrlRef = useRef(mediaUrl);
+  // Track activeEffects and clean up orphaned SAM mask textures (bug 1.19 fix)
+  const glRef = useRef<WebGL2RenderingContext | null>(null);
+  useEffect(() => {
+    activeEffectsRef.current = activeEffects;
+
+    // Clean up textures for effects that are no longer active
+    const currentIds = new Set(activeEffects.map((e) => e.id));
+    for (const [effectId, texture] of samMaskTexturesRef.current.entries()) {
+      if (!currentIds.has(effectId)) {
+        const gl = glRef.current;
+        if (gl) gl.deleteTexture(texture);
+        samMaskTexturesRef.current.delete(effectId);
+        samMaskDataRef.current.delete(effectId);
+        samMaskImagesRef.current.delete(effectId);
+      }
+    }
+  }, [activeEffects]);
   useEffect(() => { maskCanvasRef.current = maskCanvas; }, [maskCanvas]);
   useEffect(() => { maskLayersRef.current = maskLayers; }, [maskLayers]);
-  useEffect(() => { postProcessParamsRef.current = postProcessParams; }, [postProcessParams]);
   useEffect(() => { bgRemovalEnabledRef.current = backgroundRemovalEnabled; }, [backgroundRemovalEnabled]);
+  useEffect(() => { mediaUrlRef.current = mediaUrl; }, [mediaUrl]);
 
   // Load image or video when previewUrl changes (uses proxy if available)
   useEffect(() => {
@@ -207,6 +232,8 @@ export const WebGLCanvas: React.FC = () => {
       }
     }
 
+    let cancelled = false;
+
     samEffects.forEach((fx) => {
       const dataUrl = fx.mask!.samMaskData!;
       if (!images.has(fx.id) || (images.get(fx.id) as HTMLImageElement).src !== dataUrl) {
@@ -214,16 +241,65 @@ export const WebGLCanvas: React.FC = () => {
         img.crossOrigin = 'anonymous';
         img.src = dataUrl;
         img.onload = () => {
+          if (cancelled) return;
           images.set(fx.id, img);
           // Trigger a re-render so the decoded image is picked up
           setMediaReadyRev((r) => r + 1);
         };
         img.onerror = () => {
+          if (cancelled) return;
           console.error('[WebGLCanvas] Failed to decode SAM mask image for effect', fx.id);
         };
       }
     });
+
+    return () => {
+      cancelled = true;
+    };
   }, [activeEffects]);
+
+  // Background removal: trigger IPC when enabled and media changes
+  useEffect(() => {
+    if (!backgroundRemovalEnabled || !mediaUrl) return;
+    if (!window.ipcRenderer) return;
+
+    let cancelled = false;
+    const imagePath = mediaUrl.startsWith('media://') ? mediaUrl : mediaUrl;
+    window.ipcRenderer.invoke('sam3:remove-background', {
+      imagePath,
+      model: 'birefnet-lite',
+      alphaMatting: false,
+    }).then((result: unknown) => {
+      if (cancelled) return;
+      const res = result as { ok: boolean; maskBase64?: string; error?: string };
+      if (res.ok && res.maskBase64) {
+        bgRemovalMaskDataRef.current = res.maskBase64;
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.src = `data:image/png;base64,${res.maskBase64}`;
+        img.onload = () => {
+          if (cancelled) return;
+          bgRemovalMaskImageRef.current = img;
+          compositeMaskNeedsUpdateRef.current = true;
+          setMediaReadyRev((r) => r + 1);
+        };
+      } else {
+        console.error('[WebGLCanvas] Background removal failed:', res.error);
+      }
+    }).catch((err: unknown) => {
+      if (cancelled) return;
+      console.error('[WebGLCanvas] Background removal IPC error:', err);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [backgroundRemovalEnabled, mediaUrl]);
+
+  // Mark composite mask dirty when mask layers change
+  useEffect(() => {
+    compositeMaskNeedsUpdateRef.current = true;
+  }, [maskLayers]);
 
   // Render loop with requestAnimationFrame
   useEffect(() => {
@@ -234,6 +310,20 @@ export const WebGLCanvas: React.FC = () => {
     const gl = canvas.getContext('webgl2');
     if (!gl) {
       console.error('WebGL 2 not supported');
+      return;
+    }
+    glRef.current = gl; // Store for texture cleanup
+
+    // Compile shared programs first — if this fails, bail before attaching listeners
+    let passthroughProgram: WebGLProgram;
+    let blendMaskProgram: WebGLProgram;
+    let blendModesProgram: WebGLProgram;
+    try {
+      passthroughProgram = getOrCreateProgram(gl, defaultVert, passthroughFrag);
+      blendMaskProgram = getOrCreateProgram(gl, defaultVert, blendMaskFrag);
+      blendModesProgram = getOrCreateProgram(gl, defaultVert, blendModesFrag);
+    } catch (e) {
+      console.error('Failed to compile core shaders:', e);
       return;
     }
 
@@ -284,19 +374,6 @@ export const WebGLCanvas: React.FC = () => {
     });
     resizeObserver.observe(wrapper);
 
-    // Compile shared programs once — they live in the global cache
-    let passthroughProgram: WebGLProgram;
-    let blendMaskProgram: WebGLProgram;
-    let blendModesProgram: WebGLProgram;
-    try {
-      passthroughProgram = getOrCreateProgram(gl, defaultVert, passthroughFrag);
-      blendMaskProgram = getOrCreateProgram(gl, defaultVert, blendMaskFrag);
-      blendModesProgram = getOrCreateProgram(gl, defaultVert, blendModesFrag);
-    } catch (e) {
-      console.error('Failed to compile core shaders:', e);
-      return;
-    }
-
     // Set up geometry
     const positionBuffer = trackBuffer(gl.createBuffer());
     gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
@@ -332,19 +409,11 @@ export const WebGLCanvas: React.FC = () => {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textureSource);
       const containerWidth = wrapper.clientWidth || canvas.clientWidth || 800;
       const containerHeight = wrapper.clientHeight || canvas.clientHeight || 600;
-      const sourceWidth = 'videoWidth' in textureSource ? textureSource.videoWidth : textureSource.width;
-      const sourceHeight = 'videoHeight' in textureSource ? textureSource.videoHeight : textureSource.height;
-      let scale = Math.min(containerWidth / sourceWidth, containerHeight / sourceHeight);
 
-      if (qualityMode === 'live') {
-        scale *= 0.5;
-      } else if (qualityMode === 'still') {
-        scale *= 0.3;
-      }
-
-      // Multiply by DPR so the drawing buffer matches physical pixels
-      canvas.width = Math.max(32, Math.round(sourceWidth * scale * dpr));
-      canvas.height = Math.max(32, Math.round(sourceHeight * scale * dpr));
+      // Size drawing buffer to container (not image) so canvas fills viewport.
+      // Shader handles aspect ratio via u_mediaAspect / u_canvasAspect.
+      canvas.width = Math.max(32, Math.round(containerWidth * dpr));
+      canvas.height = Math.max(32, Math.round(containerHeight * dpr));
     } else {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([40, 40, 40, 255]));
     }
@@ -357,6 +426,16 @@ export const WebGLCanvas: React.FC = () => {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+    // Create composite mask texture for multi-layer + bg-removal compositing
+    const compositeMaskTexture = trackTexture(gl.createTexture());
+    gl.bindTexture(gl.TEXTURE_2D, compositeMaskTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
+    compositeMaskTextureRef.current = compositeMaskTexture;
 
     // Create temp FBO for mask blending intermediate pass
     let tempFbo: WebGLFramebuffer | null = null;
@@ -417,6 +496,30 @@ export const WebGLCanvas: React.FC = () => {
       _setUniform1f(prog, 'u_audioRight', audio.right);
     }
 
+    // Update position buffer with letterboxed quad to preserve media aspect ratio
+    function _updateLetterboxQuad() {
+      const mediaW = textureSourceRef.current ? ('videoWidth' in textureSourceRef.current ? textureSourceRef.current.videoWidth : textureSourceRef.current.width) : 1;
+      const mediaH = textureSourceRef.current ? ('videoHeight' in textureSourceRef.current ? textureSourceRef.current.videoHeight : textureSourceRef.current.height) : 1;
+      const mediaAspect = mediaW / mediaH;
+      const canvasAspect = canvas!.width / canvas!.height;
+
+      let scaleX = 1, scaleY = 1;
+      if (mediaAspect > canvasAspect) {
+        // Image is wider — letterbox top/bottom
+        scaleY = canvasAspect / mediaAspect;
+      } else {
+        // Image is taller — letterbox left/right
+        scaleX = mediaAspect / canvasAspect;
+      }
+
+      const vertices = new Float32Array([
+        -scaleX, -scaleY,  scaleX, -scaleY,  -scaleX,  scaleY,
+        -scaleX,  scaleY,  scaleX, -scaleY,   scaleX,  scaleY,
+      ]);
+      gl!.bindBuffer(gl!.ARRAY_BUFFER, positionBuffer);
+      gl!.bufferData(gl!.ARRAY_BUFFER, vertices, gl!.STATIC_DRAW);
+    }
+
     let animationFrameId = 0;
     const startTime = Date.now();
 
@@ -444,6 +547,8 @@ export const WebGLCanvas: React.FC = () => {
       const numPasses = activeFxs.length;
 
       let currentInputTexture = texture;
+
+      _updateLetterboxQuad();
 
       if (numPasses === 0) {
         // Simple passthrough
@@ -604,11 +709,63 @@ export const WebGLCanvas: React.FC = () => {
             gl.uniform1i(gl.getUniformLocation(blendMaskProgram, 'u_glitched'), 1);
 
             // Determine which mask texture to bind
-            // TODO: Multi-layer mask compositing � combine maskLayers from StudioContext
-            // TODO: Background removal mask source when bgRemovalEnabledRef.current is true
             let boundMaskTexture = maskTexture;
             const isSAM = fx.mask!.type === 'sam';
-            if (isSAM && fx.mask!.samMaskData) {
+            const hasMaskLayers = maskLayersRef.current.some((l) => l.visible && l.maskData);
+            const hasBgRemoval = bgRemovalEnabledRef.current && bgRemovalMaskImageRef.current;
+            const needsComposite = hasMaskLayers || hasBgRemoval;
+
+            if (needsComposite) {
+              let compCanvas = compositeMaskCanvasRef.current;
+              if (!compCanvas) {
+                compCanvas = document.createElement('canvas');
+                compositeMaskCanvasRef.current = compCanvas;
+              }
+              const targetW = canvas.width;
+              const targetH = canvas.height;
+              if (compCanvas.width !== targetW || compCanvas.height !== targetH) {
+                compCanvas.width = targetW;
+                compCanvas.height = targetH;
+              }
+              const compCtx = compCanvas.getContext('2d');
+              if (compCtx) {
+                compCtx.clearRect(0, 0, targetW, targetH);
+                compCtx.fillStyle = 'rgba(0,0,0,0)';
+                compCtx.fillRect(0, 0, targetW, targetH);
+
+                if (isSAM && fx.mask!.samMaskData) {
+                  const samImg = samMaskImagesRef.current.get(fx.id);
+                  if (samImg && samImg.complete) {
+                    compCtx.drawImage(samImg, 0, 0, targetW, targetH);
+                  }
+                } else if (currentMaskCanvas) {
+                  compCtx.drawImage(currentMaskCanvas, 0, 0, targetW, targetH);
+                }
+
+                for (const layer of maskLayersRef.current) {
+                  if (!layer.visible || !layer.maskData) continue;
+                  const img = new Image();
+                  img.src = layer.maskData;
+                  if (img.complete && img.naturalWidth > 0) {
+                    compCtx.globalCompositeOperation = 'source-over';
+                    compCtx.drawImage(img, 0, 0, targetW, targetH);
+                  }
+                }
+
+                const bgImg = bgRemovalMaskImageRef.current;
+                if (hasBgRemoval && bgImg && bgImg.complete) {
+                  compCtx.globalCompositeOperation = 'source-over';
+                  compCtx.drawImage(bgImg, 0, 0, targetW, targetH);
+                }
+
+                const compTex = compositeMaskTextureRef.current;
+                if (compTex) {
+                  gl.bindTexture(gl.TEXTURE_2D, compTex);
+                  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, compCanvas);
+                  boundMaskTexture = compTex;
+                }
+              }
+            } else if (isSAM && fx.mask!.samMaskData) {
               const samTextures = samMaskTexturesRef.current;
               const samDataMap = samMaskDataRef.current;
               const samImages = samMaskImagesRef.current;
@@ -637,7 +794,6 @@ export const WebGLCanvas: React.FC = () => {
                 boundMaskTexture = samTex;
               }
             }
-
             gl.activeTexture(gl.TEXTURE2);
             gl.bindTexture(gl.TEXTURE_2D, boundMaskTexture);
             gl.uniform1i(gl.getUniformLocation(blendMaskProgram, 'u_mask'), 2);
@@ -737,11 +893,10 @@ export const WebGLCanvas: React.FC = () => {
         style={{
           maxWidth: '100%',
           maxHeight: '100%',
-          width: 'auto',
-          height: 'auto',
-          boxShadow: 'var(--shadow-lg)',
+          width: '100%',
+          height: '100%',
           background: '#000',
-          borderRadius: '4px',
+          borderRadius: '0',
           display: 'block',
         }}
       />

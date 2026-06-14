@@ -21,6 +21,23 @@ export interface FloodFillResult {
   filledPixels: number;
 }
 
+const DIRECTIONS_4: [number, number][] = [
+  [-1, 0],
+  [1, 0],
+  [0, -1],
+  [0, 1],
+];
+const DIRECTIONS_8: [number, number][] = [
+  [-1, -1],
+  [0, -1],
+  [1, -1],
+  [-1, 0],
+  [1, 0],
+  [-1, 1],
+  [0, 1],
+  [1, 1],
+];
+
 /**
  * Flood fill a region in an image starting from a seed point.
  *
@@ -65,15 +82,7 @@ export function floodFill(
     return dr <= tolerance && dg <= tolerance && db <= tolerance;
   }
 
-  const directions4 = [
-    [-1, 0], [1, 0], [0, -1], [0, 1],
-  ];
-  const directions8 = [
-    [-1, -1], [0, -1], [1, -1],
-    [-1, 0], [1, 0],
-    [-1, 1], [0, 1], [1, 1],
-  ];
-  const directions = connectivity === 8 ? directions8 : directions4;
+  const directions = connectivity === 8 ? DIRECTIONS_8 : DIRECTIONS_4;
 
   while (stack.length > 0 && filledPixels < maxArea) {
     const idx = stack.pop()!;

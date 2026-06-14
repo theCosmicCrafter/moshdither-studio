@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { AnimatePresence } from 'framer-motion';
 import { StudioProvider, useStudio } from './context/StudioContext';
 import { AudioReactiveProvider } from './context/AudioReactiveContext';
 import { Toolbar } from './components/layout/Toolbar';
@@ -133,18 +134,12 @@ const AppContent: React.FC = () => {
   // Auto-preload AI Masking model in background after app startup
   React.useEffect(() => {
     if (isBrowser) return;
-    // Delay to not block startup — preload after 3 seconds
-    const timer = setTimeout(() => {
-      console.log('[App] Auto-preloading AI Masking model in background...');
-      window.ipcRenderer.invoke('sam3:load-model').then((result: unknown) => {
-        const r = result as { ok: boolean; error?: string };
-        console.log('[App] Auto-preload result:', r.ok ? 'ready' : 'failed');
-      }).catch((err) => {
-        console.warn('[App] Auto-preload error (will retry on first use):', err);
-      });
-    }, 3000);
-    return () => clearTimeout(timer);
+    // SAM 3 is now handled by Python backend - no frontend preload needed
+    // Model loads lazily on first inference in Python
+    console.log('[App] SAM 3 handled by Python backend - skipping frontend preload');
   }, [isBrowser]);
+
+  const exportTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Listen for main-process WebGL export requests
   React.useEffect(() => {
@@ -183,10 +178,15 @@ const AppContent: React.FC = () => {
           recorder.onstop = () => resolve(new Blob(chunks, { type: "video/webm" }));
           recorder.onerror = (e) => reject(e);
           recorder.start(100); // collect 100ms chunks
-          setTimeout(() => {
+          exportTimeoutRef.current = setTimeout(() => {
             if (recorder.state !== "inactive") recorder.stop();
           }, payload.duration * 1000);
         });
+
+        if (exportTimeoutRef.current) {
+          clearTimeout(exportTimeoutRef.current);
+          exportTimeoutRef.current = null;
+        }
 
         const arrayBuffer = await blob.arrayBuffer();
         await window.ipcRenderer.invoke("main:save-webgl-blob", {
@@ -203,7 +203,13 @@ const AppContent: React.FC = () => {
     };
 
     const unsub = window.ipcRenderer.on("main:webgl-export-request", handler);
-    return () => unsub();
+    return () => {
+      unsub();
+      if (exportTimeoutRef.current) {
+        clearTimeout(exportTimeoutRef.current);
+        exportTimeoutRef.current = null;
+      }
+    };
   }, [isBrowser, setMediaUrl]);
 
   // Listen for render pipeline progress updates
@@ -460,9 +466,11 @@ const AppContent: React.FC = () => {
           pointerEvents: 'none',
         }}
       >
-        {toasts.map((toast) => (
-          <Toast key={toast.id} toast={toast} onClose={() => removeToast(toast.id)} />
-        ))}
+        <AnimatePresence>
+          {toasts.map((toast) => (
+            <Toast key={toast.id} toast={toast} onClose={() => removeToast(toast.id)} />
+          ))}
+        </AnimatePresence>
       </div>
 
       <RenderModal />

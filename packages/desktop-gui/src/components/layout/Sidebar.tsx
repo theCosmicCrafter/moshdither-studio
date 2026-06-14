@@ -52,32 +52,13 @@ export const Sidebar: React.FC = () => {
   };
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        height: '100%',
-        position: 'relative',
-        gap: '16px',
-        padding: '16px',
-      }}
-    >
+    <div className="sidebar-container">
       {/* Layers Section */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', flex: 1 }}>
-        <h3
-          style={{
-            margin: 0,
-            fontSize: '11px',
-            textTransform: 'uppercase',
-            color: 'var(--text-secondary)',
-            letterSpacing: '0.05em',
-            fontWeight: 600,
-          }}
-        >
+      <div className="sidebar-section">
+        <h3 className="sidebar-section-title">
           Layers & Effects
         </h3>
-        
-        <div style={{ flex: 1, overflowY: 'auto', paddingRight: '4px' }}>
+        <div className="sidebar-scroll-area">
           <EffectStack />
         </div>
       </div>
@@ -88,16 +69,7 @@ export const Sidebar: React.FC = () => {
       </div>
 
       {/* Layer Addition & Render triggers */}
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '8px',
-          borderTop: '1px solid var(--border-color)',
-          paddingTop: '16px',
-          flexShrink: 0,
-        }}
-      >
+      <div className="sidebar-footer">
         <div style={{ position: 'relative' }}>
           <Button
             variant="glass"

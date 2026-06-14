@@ -33,6 +33,7 @@ export const AudioWaveform: React.FC<AudioWaveformProps> = ({
     const audioCtx = new (window.AudioContext ||
       (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
 
+    let rafId = 0;
     fetch(mediaUrl)
       .then((res) => res.arrayBuffer())
       .then((arrayBuffer) => audioCtx.decodeAudioData(arrayBuffer))
@@ -51,7 +52,7 @@ export const AudioWaveform: React.FC<AudioWaveformProps> = ({
         }
         peaksRef.current = peaks;
         // schedule re-render so the draw effect can pick up peaks
-        requestAnimationFrame(() => setReady((v) => !v));
+        rafId = requestAnimationFrame(() => setReady((v) => !v));
       })
       .catch(() => {
         peaksRef.current = null;
@@ -59,6 +60,7 @@ export const AudioWaveform: React.FC<AudioWaveformProps> = ({
 
     return () => {
       cancelled = true;
+      if (rafId) cancelAnimationFrame(rafId);
       audioCtx.close().catch(() => {});
     };
   }, [mediaUrl]);

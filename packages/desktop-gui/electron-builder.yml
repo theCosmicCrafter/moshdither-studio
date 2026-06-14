@@ -26,15 +26,15 @@ asarUnpack:
 # works without any system PATH dependencies.
 # ---------------------------------------------------------------------------
 extraResources:
-  - from: assets/bin/ffmpeg
-    to: assets/bin/ffmpeg
+  - from: assets/bin/ffmpeg-master-latest-win64-gpl
+    to: assets/bin/ffmpeg-master-latest-win64-gpl
     filter:
       - "**/*"
-  - from: assets/bin/ffglitch
-    to: assets/bin/ffglitch
+  - from: assets/bin/ffglitch-0.10.2-windows-x86_64
+    to: assets/bin/ffglitch-0.10.2-windows-x86_64
     filter:
       - "**/*"
-  - from: assets/bin/python-backend
+  - from: packages/python-backend
     to: assets/bin/python-backend
     filter:
       - "**/*"

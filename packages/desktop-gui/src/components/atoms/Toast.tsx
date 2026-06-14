@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { motion } from 'framer-motion';
 import type { ToastItem } from '../../context/StudioContext';
 import { Icon } from './Icon';
 
@@ -37,7 +38,11 @@ export const Toast: React.FC<ToastProps> = ({ toast, onClose }) => {
   const { borderColor, glowColor, iconName, iconColor } = getStyles();
 
   return (
-    <div
+    <motion.div
+      initial={{ opacity: 0, x: 40, scale: 0.95 }}
+      animate={{ opacity: 1, x: 0, scale: 1 }}
+      exit={{ opacity: 0, x: 40, scale: 0.95 }}
+      transition={{ type: 'spring', stiffness: 400, damping: 30 }}
       role={toast.type === 'error' ? 'alert' : 'status'}
       aria-live={toast.type === 'error' ? 'assertive' : 'polite'}
       aria-atomic="true"
@@ -55,7 +60,6 @@ export const Toast: React.FC<ToastProps> = ({ toast, onClose }) => {
         WebkitBackdropFilter: 'var(--glass-blur)',
         color: 'var(--text-primary)',
         width: '320px',
-        animation: 'slideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards',
         pointerEvents: 'auto',
       }}
       className="toast-notification-item"
@@ -82,6 +86,6 @@ export const Toast: React.FC<ToastProps> = ({ toast, onClose }) => {
       >
         <Icon name="close" size={14} />
       </button>
-    </div>
+    </motion.div>
   );
 };

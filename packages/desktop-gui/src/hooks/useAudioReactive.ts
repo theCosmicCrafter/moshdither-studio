@@ -107,16 +107,22 @@ export function useAudioReactive({
       return;
     }
 
-    const audioCtx = new AudioContext();
-    audioCtxRef.current = audioCtx;
+    let source: MediaElementAudioSourceNode;
+    let audioCtx: AudioContext;
+    try {
+      audioCtx = new AudioContext();
+      audioCtxRef.current = audioCtx;
+      source = audioCtx.createMediaElementSource(mediaElement);
+    } catch {
+      // Media element has no audio track (e.g., silent video)
+      return;
+    }
+    sourceRef.current = source;
 
     const analyser = audioCtx.createAnalyser();
     analyser.fftSize = 2048;
     analyser.smoothingTimeConstant = 0.8;
     analyserRef.current = analyser;
-
-    const source = audioCtx.createMediaElementSource(mediaElement);
-    sourceRef.current = source;
 
     // Stereo split for left/right analysis
     const splitter = audioCtx.createChannelSplitter(2);

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useStudio } from '../../context/StudioContext';
+import { WorkspacePresetBar } from '../molecules/WorkspacePresetBar';
 import {
   UploadSimple,
   Export,
@@ -18,6 +19,16 @@ export const Toolbar: React.FC = () => {
   const [isMaximized, setIsMaximized] = useState(false);
   const isBrowser = !window.ipcRenderer;
   const isMac = navigator.platform.toLowerCase().includes('mac');
+  const recordTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  React.useEffect(() => {
+    return () => {
+      if (recordTimeoutRef.current) {
+        clearTimeout(recordTimeoutRef.current);
+        recordTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   // Track maximized state for frameless window controls
   useEffect(() => {
@@ -30,7 +41,11 @@ export const Toolbar: React.FC = () => {
   }, [isBrowser]);
 
   const handleImport = async () => {
-    if (window.ipcRenderer) {
+    if (!window.ipcRenderer) {
+      console.warn('ipcRenderer not available. Are you running in browser instead of Electron?');
+      return;
+    }
+    try {
       const filePath = await window.ipcRenderer.invoke('dialog:openMedia') as string | null;
       if (filePath) {
         setMediaUrl(filePath);
@@ -50,8 +65,8 @@ export const Toolbar: React.FC = () => {
           });
         }
       }
-    } else {
-      console.warn('ipcRenderer not available. Are you running in browser instead of Electron?');
+    } catch {
+      // User cancelled or IPC error — ignore
     }
   };
 
@@ -62,10 +77,10 @@ export const Toolbar: React.FC = () => {
   return (
     <header
       className="toolbar"
-      style={isMac ? {
+      style={{
         WebkitAppRegion: 'drag',
         appRegion: 'drag',
-      } as React.CSSProperties : undefined}
+      } as React.CSSProperties}
     >
       {/* Logo / Brand — left side */}
       <div className="toolbar__brand">
@@ -73,13 +88,12 @@ export const Toolbar: React.FC = () => {
         <span className="toolbar__brand-name">Moshdither</span>
       </div>
 
-      {/* Spacer pushes everything to the right */}
-      <div style={{ flex: 1, minWidth: 24 }} />
+      <WorkspacePresetBar />
 
-      {/* App-specific Actions — right side */}
+      {/* App-specific Actions — right side (non-draggable) */}
       <div
         className="toolbar__actions"
-        style={{ WebkitAppRegion: 'no-drag', appRegion: 'no-drag', marginLeft: 0 } as React.CSSProperties}
+        style={{ WebkitAppRegion: 'no-drag', appRegion: 'no-drag' } as React.CSSProperties}
       >
         <button className="btn-secondary" onClick={handleImport}>
           <UploadSimple size={14} />
@@ -169,7 +183,7 @@ export const Toolbar: React.FC = () => {
             };
             recorder.start();
             addToast(`Recording for ${recordDuration}s...`, 'info');
-            setTimeout(() => recorder.stop(), recordDuration * 1000);
+            recordTimeoutRef.current = setTimeout(() => recorder.stop(), recordDuration * 1000);
           }}
         >
           <Record weight="fill" size={14} />
@@ -177,7 +191,7 @@ export const Toolbar: React.FC = () => {
         </button>
       </div>
 
-      {/* Window controls — only on Windows/Linux (macOS has traffic lights) */}
+      {/* Window controls — hidden on macOS (traffic lights); shown everywhere else */}
       {!isBrowser && !isMac && (
         <div
           className="window-controls"
@@ -194,6 +208,9 @@ export const Toolbar: React.FC = () => {
           </button>
         </div>
       )}
+
+      {/* macOS traffic-light spacer */}
+      {isMac && <div style={{ width: 80 }} />}
     </header>
   );
 };

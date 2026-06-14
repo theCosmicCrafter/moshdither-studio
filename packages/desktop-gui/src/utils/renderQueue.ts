@@ -25,6 +25,7 @@ export interface RenderJob {
   startedAt?: number;
   completedAt?: number;
   error?: string;
+  _intervalId?: ReturnType<typeof setInterval>;
 }
 
 type JobListener = (jobs: RenderJob[]) => void;
@@ -82,6 +83,8 @@ export function cancelJob(jobId: string): void {
 export function removeJob(jobId: string): void {
   const idx = jobs.findIndex((j) => j.id === jobId);
   if (idx >= 0) {
+    const job = jobs[idx];
+    if (job._intervalId) clearInterval(job._intervalId);
     jobs.splice(idx, 1);
     notify();
   }
@@ -128,13 +131,21 @@ function processQueue(): void {
 function simulateRender(job: RenderJob): void {
   // This is a placeholder. In production, this would call window.ipcRenderer.invoke("render:pipeline", ...)
   let progress = 0;
-  const interval = setInterval(() => {
+  job._intervalId = setInterval(() => {
+    if (job.status === "cancelled") {
+      clearInterval(job._intervalId);
+      job._intervalId = undefined;
+      isProcessing = false;
+      processQueue();
+      return;
+    }
     progress += 5;
     job.progress = Math.min(progress, 99);
     notify();
 
     if (progress >= 100) {
-      clearInterval(interval);
+      clearInterval(job._intervalId);
+      job._intervalId = undefined;
       job.status = "completed";
       job.progress = 100;
       job.completedAt = Date.now();

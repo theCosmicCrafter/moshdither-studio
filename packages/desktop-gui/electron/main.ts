@@ -1,4 +1,4 @@
-﻿import {
+import {
   app,
   BrowserWindow,
   ipcMain,
@@ -21,6 +21,11 @@ import { MosherAdapter } from "../../mosh-engine/src/adapters/MosherAdapter";
 import { DitherAdapter } from "../../mosh-engine/src/adapters/DitherAdapter";
 import { installLogger, writeRendererLog, checkCrashMarker } from "./logger";
 import { initAutoUpdater } from "./updater";
+import {
+  startPythonBackend,
+  pythonRpcCall,
+  stopPythonBackend, // used in before-quit
+} from "./pythonBackend";
 import {
   getCachedFrame,
   setCachedFrame,
@@ -98,20 +103,20 @@ const binaries = {
   moshCli: path.join(projectRoot, "packages/python-backend/mosh_cli.py"),
   ditherCli: path.join(projectRoot, "references/dither_pie/dither_cli.py"),
   ffmpeg: path.join(
-    __dirname,
-    "../../assets/bin/ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe",
+    projectRoot,
+    "assets/bin/ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe",
   ),
   ffprobe: path.join(
-    __dirname,
-    "../../assets/bin/ffmpeg-master-latest-win64-gpl/bin/ffprobe.exe",
+    projectRoot,
+    "assets/bin/ffmpeg-master-latest-win64-gpl/bin/ffprobe.exe",
   ),
   ffgac: path.join(
-    __dirname,
-    "../../assets/bin/ffglitch-0.10.2-windows-x86_64/ffgac.exe",
+    projectRoot,
+    "assets/bin/ffglitch-0.10.2-windows-x86_64/ffgac.exe",
   ),
   ffedit: path.join(
-    __dirname,
-    "../../assets/bin/ffglitch-0.10.2-windows-x86_64/ffedit.exe",
+    projectRoot,
+    "assets/bin/ffglitch-0.10.2-windows-x86_64/ffedit.exe",
   ),
 };
 console.log("[BinaryResolver] Using bundled binaries:", binaries);
@@ -202,10 +207,9 @@ function createWindow() {
     minWidth: 960,
     minHeight: 600,
     icon: path.join(process.env.VITE_PUBLIC || "", "electron-vite.svg"),
-    // macOS: frameless with hidden title bar for traffic-light buttons
-    // Windows/Linux: keep native frame so the menu bar renders correctly
-    frame: !isMac,
-    titleBarStyle: isMac ? "hidden" : undefined,
+    // Frameless on all platforms — custom toolbar is the title bar
+    frame: false,
+    titleBarStyle: isMac ? "hidden" : "hidden",
     trafficLightPosition: isMac ? { x: 16, y: 14 } : undefined,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -278,6 +282,10 @@ ipcMain.handle("window:isMaximized", () => {
   return win?.isMaximized() ?? false;
 });
 
+app.on("before-quit", () => {
+  stopPythonBackend();
+});
+
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
@@ -318,10 +326,14 @@ function getPathFromMediaUrl(mediaUrl: string): string | null {
     const decoded = decodeURIComponent(mediaUrl);
     const url = new URL(decoded);
     if (url.host) {
-      if (url.host.length === 1) {
+      // Explicit regex check for Windows drive letter (e.g., "C", "D")
+      // Reject UNC paths (\\server\share) and other non-drive hosts
+      if (/^[a-zA-Z]$/.test(url.host)) {
         rawPath = url.host + ":" + url.pathname;
       } else {
-        rawPath = url.host + url.pathname;
+        // Non-drive host (e.g., UNC path) - reject for security
+        console.error("Blocked non-drive media URL host:", url.host);
+        return null;
       }
     } else {
       let p = url.pathname;
@@ -392,6 +404,11 @@ function validateIpcSender(event: Electron.IpcMainInvokeEvent): void {
 
 // Protocol registration must happen before app is ready if using registerSchemesAsPrivileged,
 // but registerFileProtocol can happen after ready.
+// Start Python backend on app startup
+startPythonBackend().catch((err) => {
+  console.error("[Main] Failed to start Python backend:", err);
+});
+
 app.whenReady().then(() => {
   const projectRoot = path.resolve(__dirname, "../../..");
   const defaultOutputDir = path.join(projectRoot, "outputs");
@@ -541,229 +558,25 @@ app.whenReady().then(() => {
   );
 
   // ---------------------------------------------------------------------------
-  // SAM / AI Masking Model — runs in main process (Node.js has fs access)
+  // SAM 3 / AI Masking — delegated to Python backend via JSON-RPC
   // ---------------------------------------------------------------------------
-  // Uses Hugging Face transformers.js SamModel (single-image segmentation).
-  // See: src/models/sam/modeling_sam.js in @huggingface/transformers
+  // All inference runs in the Python process. SAM 3 lazy-loads its checkpoint
+  // on first inference call through HuggingFace Hub.
   // ---------------------------------------------------------------------------
-  interface SamTensor {
-    dims: number[];
-    data: Float32Array | Uint8Array;
-    type: string;
-    size: number;
-  }
 
-  let samModel: unknown | null = null;
-  let samProcessor: unknown | null = null;
-  let samLoadPromise: Promise<void> | null = null;
-  let loadedModelId: string | null = null;
-
-  const SAM_CACHE_DIR = path.join(app.getPath("userData"), "sam-cache");
-  if (!fs.existsSync(SAM_CACHE_DIR)) {
-    fs.mkdirSync(SAM_CACHE_DIR, { recursive: true });
-  }
-
-  async function loadSAMModel(
-    modelKey?: string,
-    sender?: Electron.WebContents,
-  ): Promise<void> {
-    const targetModel = SAM_MODELS[modelKey ?? "sam-vit-base"];
-    if (!targetModel) {
-      throw new Error(`Unknown SAM model key: ${modelKey}`);
-    }
-
-    // If a different model is loaded, unload first
-    if (samModel && samProcessor && loadedModelId !== targetModel) {
-      samModel = null;
-      samProcessor = null;
-      samLoadPromise = null;
-      if (global.gc) {
-        try {
-          global.gc();
-        } catch {
-          // ignore
-        }
-      }
-    }
-
-    if (samModel && samProcessor) return;
-    if (samLoadPromise) {
-      await samLoadPromise;
-      return;
-    }
-
-    samLoadPromise = (async () => {
-      try {
-        const transformers = await import("@huggingface/transformers");
-        const { SamModel, AutoProcessor, env } = transformers;
-
-        env.useBrowserCache = false;
-        env.useFSCache = true;
-        env.cacheDir = SAM_CACHE_DIR;
-
-        const MODEL_ID = targetModel;
-
-        const progress_callback = (info: {
-          status: string;
-          file?: string;
-          progress?: number;
-        }) => {
-          if (sender && !sender.isDestroyed()) {
-            sender.send("sam3:progress", {
-              status: info.status,
-              file: info.file,
-              progress: info.progress,
-            });
-          }
-        };
-
-        console.log(`[Main] Loading SAM processor for ${MODEL_ID}...`);
-        samProcessor = await AutoProcessor.from_pretrained(MODEL_ID, {
-          cache_dir: SAM_CACHE_DIR,
-          progress_callback,
-        });
-        console.log("[Main] SAM processor loaded");
-
-        console.log(`[Main] Loading SAM model ${MODEL_ID}...`);
-        samModel = await SamModel.from_pretrained(MODEL_ID, {
-          cache_dir: SAM_CACHE_DIR,
-          progress_callback,
-        });
-        loadedModelId = MODEL_ID;
-        console.log("[Main] SAM model loaded");
-      } catch (err) {
-        samLoadPromise = null;
-        console.error("[Main] SAM load failed:", err);
-        throw err;
-      }
-    })();
-
-    await samLoadPromise;
-  }
-
-  ipcMain.handle("sam3:load-model", async (event, payload) => {
+  ipcMain.handle("sam3:load-model", async (event) => {
     validateIpcSender(event);
-    const { model } = (payload as { model?: string }) ?? {};
     try {
-      await loadSAMModel(model, event.sender);
-      return { ok: true };
+      // Check if SAM3 model is actually loaded in Python backend
+      const result = (await pythonRpcCall("sam3_list_models", {})) as {
+        models?: Record<string, boolean>;
+      };
+      const sam3Loaded = result.models?.sam3 ?? false;
+      return { ok: true, loaded: sam3Loaded };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return { ok: false, error: msg };
-    }
-  });
-
-  ipcMain.handle("sam3:segment", async (event, payload) => {
-    validateIpcSender(event);
-    const { imagePath, point } = payload as {
-      imagePath: string;
-      point: { x: number; y: number };
-    };
-
-    try {
-      await loadSAMModel(undefined, event.sender);
-      if (!samModel || !samProcessor) {
-        throw new Error("Model not loaded");
-      }
-
-      const filePath = imagePath.startsWith("media://")
-        ? getPathFromMediaUrl(imagePath)
-        : imagePath;
-      if (!filePath || !fs.existsSync(filePath)) {
-        throw new Error(`Image file not found: ${imagePath}`);
-      }
-
-      const { RawImage } = await import("@huggingface/transformers");
-      const rawImage = await RawImage.read(filePath);
-
-      const processor = samProcessor as {
-        (
-          image: unknown,
-          options: { input_points: number[][][] },
-        ): Promise<{
-          original_sizes: number[][];
-          reshaped_input_sizes: number[][];
-          [key: string]: unknown;
-        }>;
-        post_process_masks(
-          predMasks: unknown,
-          originalSizes: number[][],
-          reshapedSizes: number[][],
-        ): Promise<SamTensor[]>;
-      };
-      const model = samModel as {
-        (inputs: unknown): Promise<{
-          pred_masks: unknown;
-          iou_scores: SamTensor;
-        }>;
-      };
-
-      // Scale normalized click (0..1) to image pixels
-      const px = Math.round(point.x * rawImage.width);
-      const py = Math.round(point.y * rawImage.height);
-
-      // transformers.js expects input_points as [[[x, y]]] (batch, point_batch, points, 2)
-      const input_points = [[[px, py]]];
-
-      const inputs = await processor(rawImage, { input_points });
-      const outputs = await model(inputs);
-
-      const masks = await processor.post_process_masks(
-        outputs.pred_masks,
-        inputs.original_sizes,
-        inputs.reshaped_input_sizes,
-      );
-
-      if (!masks || masks.length === 0) {
-        throw new Error("post_process_masks returned empty result");
-      }
-
-      const maskTensor = masks[0]; // shape: [1, 3, H, W]  (bool)
-      const scores = outputs.iou_scores; // shape: [1, 1, 3] (float32)
-
-      if (!maskTensor.dims || maskTensor.dims.length !== 4) {
-        throw new Error(
-          `Unexpected mask tensor dims: ${JSON.stringify(maskTensor.dims)}`,
-        );
-      }
-      if (!scores.dims || scores.dims.length !== 3) {
-        throw new Error(
-          `Unexpected scores tensor dims: ${JSON.stringify(scores.dims)}`,
-        );
-      }
-
-      const numCandidates = maskTensor.dims[1];
-      const h = maskTensor.dims[2];
-      const w = maskTensor.dims[3];
-      const data = maskTensor.data as Uint8Array;
-
-      // scores.data is Float32Array of length 3 (for 3 candidates)
-      const scoresData = scores.data as Float32Array;
-      let bestIdx = 0;
-      for (let i = 1; i < numCandidates; i++) {
-        if (scoresData[i] > scoresData[bestIdx]) bestIdx = i;
-      }
-
-      // Extract the best candidate from the flat bool data
-      const candidateSize = h * w;
-      const offset = bestIdx * candidateSize;
-      const maskBytes = new Uint8Array(candidateSize);
-      for (let i = 0; i < candidateSize; i++) {
-        maskBytes[i] = data[offset + i] ? 255 : 0;
-      }
-
-      const maskBase64 = Buffer.from(maskBytes).toString("base64");
-
-      return {
-        ok: true,
-        maskBase64,
-        width: w,
-        height: h,
-      };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error("[Main] SAM segmentation failed:", msg);
-      return { ok: false, error: msg };
+      console.error("[Main] sam3:load-model check failed:", msg);
+      return { ok: false, error: msg, loaded: false };
     }
   });
 
@@ -772,24 +585,15 @@ app.whenReady().then(() => {
   // ---------------------------------------------------------------------------
   ipcMain.handle("sam3:predict-batch", async (event, payload) => {
     validateIpcSender(event);
-    const {
-      imagePath,
-      positivePoints,
-      negativePoints,
-      threshold = 0.0,
-    } = payload as {
+    const { imagePath, positivePoints, negativePoints } = payload as {
       imagePath: string;
       positivePoints: { x: number; y: number }[];
       negativePoints: { x: number; y: number }[];
       threshold?: number;
+      model?: string;
     };
 
     try {
-      await loadSAMModel(undefined, event.sender);
-      if (!samModel || !samProcessor) {
-        throw new Error("Model not loaded");
-      }
-
       const filePath = imagePath.startsWith("media://")
         ? getPathFromMediaUrl(imagePath)
         : imagePath;
@@ -797,100 +601,36 @@ app.whenReady().then(() => {
         throw new Error(`Image file not found: ${imagePath}`);
       }
 
-      const { RawImage } = await import("@huggingface/transformers");
-      const rawImage = await RawImage.read(filePath);
+      // Send normalized 0-1 coordinates directly to Python.
+      // Python loads the image and converts to pixel coords internally,
+      // eliminating the need for sharp/ffprobe in the main process.
+      const posNorm = positivePoints.map((p) => [p.x, p.y]);
+      const negNorm = negativePoints.map((p) => [p.x, p.y]);
 
-      const processor = samProcessor as {
-        (
-          image: unknown,
-          options: { input_points: number[][][]; input_labels?: number[][] },
-        ): Promise<{
-          original_sizes: number[][];
-          reshaped_input_sizes: number[][];
-          [key: string]: unknown;
-        }>;
-        post_process_masks(
-          predMasks: unknown,
-          originalSizes: number[][],
-          reshapedSizes: number[][],
-          threshold?: number,
-        ): Promise<SamTensor[]>;
-      };
-      const model = samModel as {
-        (inputs: unknown): Promise<{
-          pred_masks: unknown;
-          iou_scores: SamTensor;
-        }>;
+      const result = (await pythonRpcCall("sam3_predict_batch", {
+        image_path: filePath,
+        positive_points: posNorm,
+        negative_points: negNorm,
+        normalized: true,
+      })) as {
+        status: string;
+        mask?: string;
+        width?: number;
+        height?: number;
+        score?: number;
+        error?: string;
       };
 
-      const allPoints = [
-        ...positivePoints.map((p) => [
-          Math.round(p.x * rawImage.width),
-          Math.round(p.y * rawImage.height),
-        ]),
-        ...negativePoints.map((p) => [
-          Math.round(p.x * rawImage.width),
-          Math.round(p.y * rawImage.height),
-        ]),
-      ];
-
-      const labels = [
-        ...positivePoints.map(() => 1),
-        ...negativePoints.map(() => 0),
-      ];
-
-      const input_points = [allPoints];
-      const input_labels = [labels];
-
-      const inputs = await processor(rawImage, { input_points, input_labels });
-      const outputs = await model(inputs);
-
-      const masks = await processor.post_process_masks(
-        outputs.pred_masks,
-        inputs.original_sizes,
-        inputs.reshaped_input_sizes,
-        threshold,
-      );
-
-      if (!masks || masks.length === 0) {
-        throw new Error("post_process_masks returned empty result");
+      if (result.status !== "success" || !result.mask) {
+        throw new Error(result.error || "SAM 3 prediction failed");
       }
-
-      const maskTensor = masks[0];
-      const scores = outputs.iou_scores;
-
-      if (!maskTensor.dims || maskTensor.dims.length !== 4) {
-        throw new Error(
-          `Unexpected mask tensor dims: ${JSON.stringify(maskTensor.dims)}`,
-        );
-      }
-
-      const numCandidates = maskTensor.dims[1];
-      const h = maskTensor.dims[2];
-      const w = maskTensor.dims[3];
-      const data = maskTensor.data as Uint8Array;
-      const scoresData = scores.data as Float32Array;
-
-      let bestIdx = 0;
-      for (let i = 1; i < numCandidates; i++) {
-        if (scoresData[i] > scoresData[bestIdx]) bestIdx = i;
-      }
-
-      const candidateSize = h * w;
-      const offset = bestIdx * candidateSize;
-      const maskBytes = new Uint8Array(candidateSize);
-      for (let i = 0; i < candidateSize; i++) {
-        maskBytes[i] = data[offset + i] ? 255 : 0;
-      }
-
-      const maskBase64 = Buffer.from(maskBytes).toString("base64");
 
       return {
         ok: true,
-        maskBase64,
-        width: w,
-        height: h,
-        score: scoresData[bestIdx],
+        maskBase64: result.mask,
+        width: result.width,
+        height: result.height,
+        score: result.score,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -904,18 +644,13 @@ app.whenReady().then(() => {
   // ---------------------------------------------------------------------------
   ipcMain.handle("sam3:hover-preview", async (event, payload) => {
     validateIpcSender(event);
-    const { imagePath, point, model } = payload as {
+    const { imagePath, point } = payload as {
       imagePath: string;
       point: { x: number; y: number };
       model?: string;
     };
 
     try {
-      await loadSAMModel(model, event.sender);
-      if (!samModel || !samProcessor) {
-        throw new Error("Model not loaded");
-      }
-
       const filePath = imagePath.startsWith("media://")
         ? getPathFromMediaUrl(imagePath)
         : imagePath;
@@ -923,68 +658,68 @@ app.whenReady().then(() => {
         throw new Error(`Image file not found: ${imagePath}`);
       }
 
-      const { RawImage } = await import("@huggingface/transformers");
-      const rawImage = await RawImage.read(filePath);
-
-      const processor = samProcessor as {
-        (
-          image: unknown,
-          options: { input_points: number[][][] },
-        ): Promise<{
-          original_sizes: number[][];
-          reshaped_input_sizes: number[][];
-          [key: string]: unknown;
-        }>;
-        post_process_masks(
-          predMasks: unknown,
-          originalSizes: number[][],
-          reshapedSizes: number[][],
-        ): Promise<SamTensor[]>;
-      };
-      const samModelFn = samModel as {
-        (inputs: unknown): Promise<{
-          pred_masks: unknown;
-          iou_scores: SamTensor;
-        }>;
-      };
-
-      const px = Math.round(point.x * rawImage.width);
-      const py = Math.round(point.y * rawImage.height);
-      const input_points = [[[px, py]]];
-
-      const inputs = await processor(rawImage, { input_points });
-      const outputs = await samModelFn(inputs);
-
-      const masks = await processor.post_process_masks(
-        outputs.pred_masks,
-        inputs.original_sizes,
-        inputs.reshaped_input_sizes,
-      );
-
-      if (!masks || masks.length === 0) {
-        throw new Error("post_process_masks returned empty result");
+      // Get image dimensions via sharp or ffprobe fallback
+      let imgW = 0,
+        imgH = 0;
+      try {
+        const sharp = await import("sharp");
+        const meta = await sharp.default(filePath).metadata();
+        imgW = meta.width || 0;
+        imgH = meta.height || 0;
+      } catch {
+        // sharp not available, try ffprobe
+        try {
+          const meta = await readMediaMetadata(filePath);
+          const videoStream = (
+            meta.streams as Array<{ width?: number; height?: number }>
+          )?.find(
+            (s: { width?: number; height?: number }) => s.width && s.height,
+          );
+          imgW =
+            videoStream?.width ||
+            (meta.format as { width?: number })?.width ||
+            0;
+          imgH =
+            videoStream?.height ||
+            (meta.format as { height?: number })?.height ||
+            0;
+        } catch {
+          console.warn(
+            "[SAM] Could not determine image dimensions for hover preview",
+          );
+        }
       }
 
-      const maskTensor = masks[0];
-      const h = maskTensor.dims[2];
-      const w = maskTensor.dims[3];
-      const data = maskTensor.data as Uint8Array;
-
-      const candidateSize = h * w;
-      const bestIdx = 0;
-      const offset = bestIdx * candidateSize;
-      const maskBytes = new Uint8Array(candidateSize);
-      for (let i = 0; i < candidateSize; i++) {
-        maskBytes[i] = data[offset + i] ? 255 : 0;
+      if (!imgW || !imgH) {
+        throw new Error(
+          `Could not determine image dimensions for ${imagePath}`,
+        );
       }
 
-      const maskBase64 = Buffer.from(maskBytes).toString("base64");
+      const px = Math.round(point.x * imgW);
+      const py = Math.round(point.y * imgH);
+
+      const result = (await pythonRpcCall("sam3_predict_point", {
+        image_path: filePath,
+        x: px,
+        y: py,
+      })) as {
+        status: string;
+        mask?: string;
+        width?: number;
+        height?: number;
+        error?: string;
+      };
+
+      if (result.status !== "success" || !result.mask) {
+        throw new Error(result.error || "SAM 3 hover preview failed");
+      }
 
       return {
         ok: true,
-        maskBase64,
-        width: w,
-        height: h,
+        maskBase64: result.mask,
+        width: result.width,
+        height: result.height,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -993,116 +728,278 @@ app.whenReady().then(() => {
   });
 
   // ---------------------------------------------------------------------------
-  // Model Management (list / download / status / unload)
+  // SAM Text-Prompt Segmentation (SAM 3 key feature)
   // ---------------------------------------------------------------------------
-  const MODEL_DOWNLOADS = new Map<
-    string,
-    { progress: number; abort: AbortController }
-  >();
-  const MODEL_DIR = path.join(app.getPath("userData"), "models");
-  if (!fs.existsSync(MODEL_DIR)) {
-    fs.mkdirSync(MODEL_DIR, { recursive: true });
-  }
-
-  const SAM_MODELS: Record<string, string> = {
-    "sam-vit-base": "Xenova/sam-vit-base",
-    "sam-vit-large": "Xenova/sam-vit-large",
-    "sam-vit-huge": "Xenova/sam-vit-huge",
-  };
-
-  ipcMain.handle("sam3:list-models", async () => {
-    const sam: Record<string, boolean> = {};
-    for (const [key, modelId] of Object.entries(SAM_MODELS)) {
-      // transformers.js stores caches in models--<org>--<model> format
-      const cacheName = `models--${modelId.replace("/", "--")}`;
-      const modelDir = path.join(SAM_CACHE_DIR, cacheName);
-      sam[key] = fs.existsSync(modelDir);
-    }
-    return { sam, background_removal: {} };
-  });
-
-  ipcMain.handle("sam3:download-model", async (event, payload) => {
+  ipcMain.handle("sam3:predict-text", async (event, payload) => {
     validateIpcSender(event);
-    const { model } = payload as { model: string };
+    const { imagePath, textPrompt } = payload as {
+      imagePath: string;
+      textPrompt: string;
+    };
 
     try {
-      const transformers = await import("@huggingface/transformers");
-      const { env } = transformers;
-      env.useBrowserCache = false;
-      env.useFSCache = true;
-      env.cacheDir = SAM_CACHE_DIR;
-
-      const modelId = SAM_MODELS[model];
-      if (!modelId) {
-        throw new Error(`Unknown model: ${model}`);
+      const filePath = imagePath.startsWith("media://")
+        ? getPathFromMediaUrl(imagePath)
+        : imagePath;
+      if (!filePath || !fs.existsSync(filePath)) {
+        throw new Error(`Image file not found: ${imagePath}`);
       }
 
-      const progressCallback = (info: {
+      const result = (await pythonRpcCall("sam3_predict_text", {
+        image_path: filePath,
+        text_prompt: textPrompt,
+      })) as {
         status: string;
-        file?: string;
-        progress?: number;
-      }) => {
-        if (!event.sender.isDestroyed()) {
-          const entry = MODEL_DOWNLOADS.get(model);
-          if (entry) {
-            entry.progress = info.progress ?? entry.progress;
-          }
-          event.sender.send("sam3:download-progress", {
-            model,
-            progress: info.progress ?? 0,
-            status: info.status,
-            file: info.file,
-          });
-        }
+        mask?: string;
+        width?: number;
+        height?: number;
+        score?: number;
+        error?: string;
       };
 
-      MODEL_DOWNLOADS.set(model, {
-        progress: 0,
-        abort: new AbortController(),
-      });
+      if (result.status !== "success" || !result.mask) {
+        throw new Error(result.error || "SAM 3 text prediction failed");
+      }
 
-      await transformers.AutoProcessor.from_pretrained(modelId, {
-        cache_dir: SAM_CACHE_DIR,
-        progress_callback: progressCallback,
-      });
-      await transformers.SamModel.from_pretrained(modelId, {
-        cache_dir: SAM_CACHE_DIR,
-        progress_callback: progressCallback,
-      });
-
-      MODEL_DOWNLOADS.delete(model);
-      return { ok: true };
+      return {
+        ok: true,
+        maskBase64: result.mask,
+        width: result.width,
+        height: result.height,
+        score: result.score,
+      };
     } catch (err) {
-      MODEL_DOWNLOADS.delete(model);
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[Main] SAM text prediction failed:", msg);
+      return { ok: false, error: msg };
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // SAM Point PRO Mode (advanced post-processing for hair/fine details)
+  // ---------------------------------------------------------------------------
+  ipcMain.handle("sam3:predict-point-pro", async (event, payload) => {
+    validateIpcSender(event);
+    const { imagePath, point } = payload as {
+      imagePath: string;
+      point: { x: number; y: number };
+    };
+
+    try {
+      const filePath = imagePath.startsWith("media://")
+        ? getPathFromMediaUrl(imagePath)
+        : imagePath;
+      if (!filePath || !fs.existsSync(filePath)) {
+        throw new Error(`Image file not found: ${imagePath}`);
+      }
+
+      // Get image dimensions via sharp or ffprobe fallback
+      let imgW = 0,
+        imgH = 0;
+      try {
+        const sharp = await import("sharp");
+        const meta = await sharp.default(filePath).metadata();
+        imgW = meta.width || 0;
+        imgH = meta.height || 0;
+      } catch {
+        // sharp not available, try ffprobe
+        try {
+          const meta = await readMediaMetadata(filePath);
+          const videoStream = (
+            meta.streams as Array<{ width?: number; height?: number }>
+          )?.find(
+            (s: { width?: number; height?: number }) => s.width && s.height,
+          );
+          imgW =
+            videoStream?.width ||
+            (meta.format as { width?: number })?.width ||
+            0;
+          imgH =
+            videoStream?.height ||
+            (meta.format as { height?: number })?.height ||
+            0;
+        } catch {
+          console.warn(
+            "[SAM] Could not determine image dimensions for PRO point prediction",
+          );
+        }
+      }
+
+      if (!imgW || !imgH) {
+        throw new Error(
+          `Could not determine image dimensions for ${imagePath}`,
+        );
+      }
+
+      const px = Math.round(point.x * imgW);
+      const py = Math.round(point.y * imgH);
+
+      const result = (await pythonRpcCall("sam3_predict_point_pro", {
+        image_path: filePath,
+        x: px,
+        y: py,
+      })) as {
+        status: string;
+        mask?: string;
+        width?: number;
+        height?: number;
+        score?: number;
+        error?: string;
+      };
+
+      if (result.status !== "success" || !result.mask) {
+        throw new Error(result.error || "SAM 3 PRO point prediction failed");
+      }
+
+      return {
+        ok: true,
+        maskBase64: result.mask,
+        width: result.width,
+        height: result.height,
+        score: result.score,
+      };
+    } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { ok: false, error: msg };
     }
   });
 
-  ipcMain.handle("sam3:model-status", async () => {
-    return {
-      active_downloads: Array.from(MODEL_DOWNLOADS.keys()),
+  // ---------------------------------------------------------------------------
+  // SAM Text PRO Mode (advanced post-processing for text-prompt masks)
+  // ---------------------------------------------------------------------------
+  ipcMain.handle("sam3:predict-text-pro", async (event, payload) => {
+    validateIpcSender(event);
+    const { imagePath, textPrompt } = payload as {
+      imagePath: string;
+      textPrompt: string;
     };
+
+    try {
+      const filePath = imagePath.startsWith("media://")
+        ? getPathFromMediaUrl(imagePath)
+        : imagePath;
+      if (!filePath || !fs.existsSync(filePath)) {
+        throw new Error(`Image file not found: ${imagePath}`);
+      }
+
+      const result = (await pythonRpcCall("sam3_predict_text_pro", {
+        image_path: filePath,
+        text_prompt: textPrompt,
+      })) as {
+        status: string;
+        mask?: string;
+        width?: number;
+        height?: number;
+        score?: number;
+        error?: string;
+      };
+
+      if (result.status !== "success" || !result.mask) {
+        throw new Error(result.error || "SAM 3 PRO text prediction failed");
+      }
+
+      return {
+        ok: true,
+        maskBase64: result.mask,
+        width: result.width,
+        height: result.height,
+        score: result.score,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: msg };
+    }
   });
 
-  ipcMain.handle("sam3:unload-model", async () => {
-    samModel = null;
-    samProcessor = null;
-    samLoadPromise = null;
+  // ---------------------------------------------------------------------------
+  // GroundingDINO text-to-box detection + SAM 3 segmentation
+  // ---------------------------------------------------------------------------
+  ipcMain.handle("sam3:predict-groundingdino", async (event, payload) => {
+    validateIpcSender(event);
+    const { imagePath, textPrompt, threshold } = payload as {
+      imagePath: string;
+      textPrompt: string;
+      threshold?: number;
+    };
 
-    if (global.gc) {
-      try {
-        global.gc();
-      } catch {
-        // ignore
+    try {
+      const filePath = imagePath.startsWith("media://")
+        ? getPathFromMediaUrl(imagePath)
+        : imagePath;
+      if (!filePath || !fs.existsSync(filePath)) {
+        throw new Error(`Image file not found: ${imagePath}`);
       }
-    }
 
+      const result = (await pythonRpcCall("sam3_predict_groundingdino", {
+        image_path: filePath,
+        text_prompt: textPrompt,
+        threshold: threshold ?? 0.3,
+        device: process.env.CUDA_VISIBLE_DEVICES ? "cuda" : "cpu",
+      })) as {
+        status: string;
+        mask?: string;
+        width?: number;
+        height?: number;
+        boxes?: number[][];
+        scores?: number[];
+        error?: string;
+      };
+
+      if (result.status !== "success" || !result.mask) {
+        throw new Error(result.error || "GroundingDINO prediction failed");
+      }
+
+      return {
+        ok: true,
+        maskBase64: result.mask,
+        width: result.width,
+        height: result.height,
+        boxes: result.boxes,
+        scores: result.scores,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: msg };
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Model Management (SAM 3 has a single model that auto-downloads on first use)
+  // ---------------------------------------------------------------------------
+  ipcMain.handle("sam3:list-models", async () => {
+    try {
+      const result = (await pythonRpcCall("sam3_list_models", {})) as {
+        sam: Record<string, boolean>;
+        background_removal: Record<string, boolean>;
+      };
+      return result;
+    } catch (err) {
+      console.error("[Main] list-models failed:", err);
+      return { sam: { sam3: true }, background_removal: {} };
+    }
+  });
+
+  ipcMain.handle("sam3:download-model", async () => {
     return { ok: true };
   });
 
+  ipcMain.handle("sam3:model-status", async () => {
+    return { active_downloads: [] };
+  });
+
+  ipcMain.handle("sam3:unload-model", async () => {
+    try {
+      await pythonRpcCall("sam3_unload_models", {});
+      return { ok: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[Main] Unload model failed:", msg);
+      return { ok: false, error: msg };
+    }
+  });
+
   // ---------------------------------------------------------------------------
-  // Background Removal (delegated to Python backend)
+  // Background Removal (delegated to Python backend via RPC)
   // ---------------------------------------------------------------------------
   ipcMain.handle("sam3:remove-background", async (event, payload) => {
     validateIpcSender(event);
@@ -1113,12 +1010,6 @@ app.whenReady().then(() => {
     };
 
     try {
-      const pythonScript = path.join(
-        app.getAppPath(),
-        "scripts",
-        "remove_background.py",
-      );
-
       const filePath = imagePath.startsWith("media://")
         ? getPathFromMediaUrl(imagePath)
         : imagePath;
@@ -1126,68 +1017,69 @@ app.whenReady().then(() => {
         throw new Error(`Image file not found: ${imagePath}`);
       }
 
-      if (!fs.existsSync(pythonScript)) {
-        return {
-          ok: false,
-          error:
-            "Python backend not available. Please install the background removal Python script at scripts/remove_background.py",
-        };
+      const result = (await pythonRpcCall("sam3_remove_background", {
+        image_path: filePath,
+        model: model || "u2net",
+        alpha_matting: alphaMatting ?? false,
+      })) as {
+        status: string;
+        mask?: string;
+        width?: number;
+        height?: number;
+        error?: string;
+      };
+
+      if (result.status !== "success" || !result.mask) {
+        throw new Error(result.error || "Background removal failed");
       }
 
-      const { spawn } = await import("child_process");
-      const args = [
-        pythonScript,
-        "--input",
-        filePath,
-        "--model",
-        model,
-        "--output",
-        "-",
-      ];
-      if (alphaMatting) args.push("--alpha-matting");
-
-      return new Promise((resolve) => {
-        const proc = spawn(resolvePythonPath(), args, {
-          stdio: ["ignore", "pipe", "pipe"],
-        });
-        let stdout = "";
-        let stderr = "";
-
-        proc.stdout.on("data", (data: Buffer) => {
-          stdout += data.toString();
-        });
-        proc.stderr.on("data", (data: Buffer) => {
-          stderr += data.toString();
-        });
-
-        proc.on("close", (code) => {
-          if (code !== 0) {
-            resolve({
-              ok: false,
-              error: stderr || `Python process exited with code ${code}`,
-            });
-            return;
-          }
-
-          try {
-            const result = JSON.parse(stdout);
-            if (result.mask_base64) {
-              resolve({
-                ok: true,
-                maskBase64: result.mask_base64,
-                width: result.width ?? 0,
-                height: result.height ?? 0,
-              });
-            } else {
-              resolve({ ok: false, error: "No mask returned from Python" });
-            }
-          } catch {
-            resolve({ ok: false, error: "Invalid JSON from Python backend" });
-          }
-        });
-      });
+      return {
+        ok: true,
+        maskBase64: result.mask,
+        width: result.width,
+        height: result.height,
+      };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      console.error("[Main] Background removal failed:", msg);
+      return { ok: false, error: msg };
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Background Removal Batch (for video frames)
+  // ---------------------------------------------------------------------------
+  ipcMain.handle("sam3:remove-background-batch", async (event, payload) => {
+    validateIpcSender(event);
+    const { imagePaths, model, alphaMatting } = payload as {
+      imagePaths: string[];
+      model: string;
+      alphaMatting: boolean;
+    };
+
+    try {
+      const filePaths = imagePaths.map((p) =>
+        p.startsWith("media://") ? getPathFromMediaUrl(p) : p,
+      );
+      const result = (await pythonRpcCall("sam3_remove_background_batch", {
+        image_paths: filePaths,
+        model: model || "u2net",
+        alpha_matting: alphaMatting ?? false,
+      })) as Array<{
+        status: string;
+        mask?: string;
+        width?: number;
+        height?: number;
+        error?: string;
+      }>;
+
+      return {
+        ok: true,
+        results: result,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[Main] Batch background removal failed:", msg);
       return { ok: false, error: msg };
     }
   });

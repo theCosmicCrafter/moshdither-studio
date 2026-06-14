@@ -4,7 +4,6 @@ import { WebGLCanvas } from '../canvas/WebGLCanvas';
 import { Switch } from '../atoms/Switch';
 import { Icon } from '../atoms/Icon';
 import { SplitView } from './SplitView';
-import { AudioWaveform } from './AudioWaveform';
 import { collectStrokePoints, renderStroke, BRUSH_PRESETS } from '../../lib/BrushEngine';
 import { useSAM3 } from '../../hooks/useSAM3';
 import { Loader2 } from 'lucide-react';
@@ -21,8 +20,6 @@ export const Viewport: React.FC = () => {
     aspectRatio,
     setAspectRatio,
     isPlaying,
-    currentTime,
-    duration,
     isPaintingMask,
     maskBrushSize,
     setMaskBrushSize,
@@ -39,8 +36,7 @@ export const Viewport: React.FC = () => {
   const paintCanvasRef = React.useRef<HTMLCanvasElement>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [isDrawing, setIsDrawing] = React.useState(false);
-  const lastPoint = React.useRef<{ x: number; y: number } | null>(null);
-  const strokePoints = React.useRef<ReturnType<typeof collectStrokePoints>>([]);
+  const lastPoint = React.useRef<import('../../lib/BrushEngine').BrushPoint | null>(null);
   const [brushPreset, setBrushPreset] = React.useState('softRound');
 
   const activeFx = React.useMemo(
@@ -54,7 +50,14 @@ export const Viewport: React.FC = () => {
   });
   const [samOverlayStyle, setSamOverlayStyle] = React.useState<React.CSSProperties>({
     position: 'absolute',
-    display: 'none',
+    top: 0,
+    left: 0,
+    width: '100%',
+    height: '100%',
+    zIndex: 10,
+    display: 'block',
+    pointerEvents: 'auto',
+    cursor: 'crosshair',
   });
   const [splitView, setSplitView] = React.useState(false);
   const [isDraggingFile, setIsDraggingFile] = React.useState(false);
@@ -68,7 +71,6 @@ export const Viewport: React.FC = () => {
     progress: samProgress,
     loadingStep: samLoadingStep,
     error: samError,
-    loadModel: loadSAMModel,
     hoverMask,
   } = useSAM3();
 
@@ -92,17 +94,31 @@ export const Viewport: React.FC = () => {
       if (glCanvas) {
         // Only set canvas resolution if changed to prevent clearing painted drawings
         if (canvas.width !== glCanvas.width || canvas.height !== glCanvas.height) {
+          // Snapshot current canvas contents before resize (preserves in-progress strokes)
+          const currentData = canvas.toDataURL();
+
           canvas.width = glCanvas.width;
           canvas.height = glCanvas.height;
 
           const ctx = canvas.getContext('2d');
-          const brushData = brushDataRef.current;
-          if (ctx && brushData) {
+          if (ctx) {
+            // Restore from snapshot first (includes any unsaved in-progress stroke)
             const img = new Image();
-            img.src = brushData;
+            img.src = currentData;
             img.onload = () => {
               ctx.drawImage(img, 0, 0);
-              setMaskCanvas(canvas);
+              // Then overlay any saved brushData if it exists (committed strokes)
+              const brushData = brushDataRef.current;
+              if (brushData && brushData !== currentData) {
+                const brushImg = new Image();
+                brushImg.src = brushData;
+                brushImg.onload = () => {
+                  ctx.drawImage(brushImg, 0, 0);
+                  setMaskCanvas(canvas);
+                };
+              } else {
+                setMaskCanvas(canvas);
+              }
             };
           }
         }
@@ -131,24 +147,13 @@ export const Viewport: React.FC = () => {
     }
   }, [isPaintingMask, maskBrushEraser, setMaskCanvas]);
 
-  // Helper to get CSS aspect ratio value
-  const getAspectRatioStyle = (): string => {
-    switch (aspectRatio) {
-      case '1:1':
-        return '1 / 1';
-      case '16:9':
-        return '16 / 9';
-      case '4:3':
-        return '4 / 3';
-      default:
-        return 'auto';
-    }
-  };
-
   // Sync / initialize drawing canvas size and contents
   React.useEffect(() => {
     const canvas = paintCanvasRef.current;
     const container = containerRef.current;
+    let cancelled = false;
+    let img: HTMLImageElement | null = null;
+
     if (canvas && container && isPaintingMask) {
       const glCanvas = container.querySelector('.webgl-canvas') as HTMLCanvasElement;
       if (glCanvas) {
@@ -157,13 +162,15 @@ export const Viewport: React.FC = () => {
         const ctx = canvas.getContext('2d');
         if (ctx) {
           ctx.clearRect(0, 0, canvas.width, canvas.height);
-          
+
           if (activeFx?.mask?.brushData) {
-            const img = new Image();
+            img = new Image();
             img.src = activeFx.mask.brushData;
             img.onload = () => {
-              ctx.drawImage(img, 0, 0);
-              setMaskCanvas(canvas);
+              if (!cancelled && img) {
+                ctx.drawImage(img, 0, 0);
+                setMaskCanvas(canvas);
+              }
             };
           } else {
             setMaskCanvas(canvas);
@@ -173,6 +180,11 @@ export const Viewport: React.FC = () => {
     } else {
       setMaskCanvas(null);
     }
+
+    return () => {
+      cancelled = true;
+      img = null;
+    };
   }, [isPaintingMask, selectedEffectId, activeFx?.mask?.brushData, syncPaintCanvasSize, setMaskCanvas]);
 
   // Sync size automatically on WebGL canvas resize
@@ -219,6 +231,9 @@ export const Viewport: React.FC = () => {
         display: 'block',
         pointerEvents: 'auto',
         cursor: 'crosshair',
+        border: '2px dashed rgba(0, 255, 170, 0.3)',
+        borderRadius: '4px',
+        boxSizing: 'border-box',
       });
     };
 
@@ -254,7 +269,12 @@ export const Viewport: React.FC = () => {
     const files = e.dataTransfer.files;
     if (files.length > 0) {
       const file = files[0];
-      const url = URL.createObjectURL(file);
+      // Electron exposes File.path for dropped files (native absolute path).
+      // Convert to media:// so the main process can resolve it for SAM/ffprobe.
+      const nativePath = (file as File & { path?: string }).path;
+      const url = nativePath
+        ? `media://${nativePath.replace(/\\/g, '/')}`
+        : URL.createObjectURL(file);
       setMediaUrl(url);
       setMediaType(file.type.startsWith('video') ? 'video' : 'image');
       return;
@@ -267,30 +287,19 @@ export const Viewport: React.FC = () => {
     }
   };
 
-  const getCanvasMousePos = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    const canvas = paintCanvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    return {
-      x: (e.clientX - rect.left) * scaleX,
-      y: (e.clientY - rect.top) * scaleY,
-    };
-  };
-
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     e.preventDefault();
     const canvas = paintCanvasRef.current;
     if (!canvas) return;
+    canvas.setPointerCapture(e.pointerId);
     setIsDrawing(true);
-    lastPoint.current = getCanvasMousePos(e);
-    strokePoints.current = collectStrokePoints(e.nativeEvent, canvas);
 
+    const points = collectStrokePoints(e.nativeEvent, canvas);
     const ctx = canvas.getContext('2d');
-    if (ctx && strokePoints.current.length > 0) {
+    if (ctx && points.length > 0) {
       const preset = BRUSH_PRESETS[brushPreset] || BRUSH_PRESETS.softRound;
-      renderStroke(ctx, strokePoints.current, { ...preset, size: maskBrushSize }, maskBrushEraser);
+      const result = renderStroke(ctx, points, { ...preset, size: maskBrushSize }, maskBrushEraser);
+      lastPoint.current = result.lastPos;
     }
   };
 
@@ -299,24 +308,33 @@ export const Viewport: React.FC = () => {
     e.preventDefault();
     const canvas = paintCanvasRef.current;
     if (!canvas) return;
-    const pos = getCanvasMousePos(e);
-    lastPoint.current = pos;
 
-    const newPoints = collectStrokePoints(e.nativeEvent, canvas);
-    strokePoints.current.push(...newPoints);
-
+    const points = collectStrokePoints(e.nativeEvent, canvas);
     const ctx = canvas.getContext('2d');
-    if (ctx && newPoints.length > 0) {
+    if (ctx && points.length > 0) {
       const preset = BRUSH_PRESETS[brushPreset] || BRUSH_PRESETS.softRound;
-      renderStroke(ctx, newPoints, { ...preset, size: maskBrushSize }, maskBrushEraser);
+      const result = renderStroke(ctx, points, { ...preset, size: maskBrushSize }, maskBrushEraser, lastPoint.current);
+      lastPoint.current = result.lastPos;
     }
   };
 
-  const handlePointerUp = () => {
+  const handlePointerCancel = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = paintCanvasRef.current;
+    if (canvas) {
+      try { canvas.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    }
+    setIsDrawing(false);
+    lastPoint.current = null;
+  };
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = paintCanvasRef.current;
+    if (canvas) {
+      try { canvas.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    }
     setIsDrawing(false);
     lastPoint.current = null;
 
-    const canvas = paintCanvasRef.current;
     if (canvas && activeFx) {
       const dataUrl = canvas.toDataURL();
       // Use functional update to avoid stale closure on activeEffects
@@ -332,21 +350,40 @@ export const Viewport: React.FC = () => {
 
   // AI Masking click-to-segment handler with multi-click & negative points
   const handleSAMClick = React.useCallback(
-    async (e: React.MouseEvent<HTMLDivElement>) => {
-      if (!isSAMMode || !activeFx || !mediaUrl) return;
+    async (e: React.PointerEvent<HTMLDivElement>) => {
+      e.stopPropagation(); // Prevent drag/drop from firing
+      e.preventDefault();  // Prevent default pointer behavior
+      console.log('[SAM CLICK] fired', { isSAMMode, hasActiveFx: !!activeFx, hasMediaUrl: !!mediaUrl, button: e.button, ctrl: e.ctrlKey });
+      if (!isSAMMode || !activeFx || !mediaUrl) {
+        console.log('[SAM CLICK] early return — missing prerequisites');
+        return;
+      }
 
       const container = containerRef.current;
-      if (!container) return;
+      if (!container) {
+        console.log('[SAM CLICK] early return — no container');
+        return;
+      }
 
       const glCanvas = container.querySelector('.webgl-canvas') as HTMLCanvasElement;
-      if (!glCanvas) return;
+      if (!glCanvas) {
+        console.log('[SAM CLICK] early return — no .webgl-canvas');
+        return;
+      }
       const rect = glCanvas.getBoundingClientRect();
-      const clickX = e.clientX - rect.left;
-      const clickY = e.clientY - rect.top;
-      if (clickX < 0 || clickY < 0 || clickX > rect.width || clickY > rect.height) return;
+      // Scale display coordinates to actual canvas pixel dimensions
+      const scaleX = glCanvas.width / rect.width;
+      const scaleY = glCanvas.height / rect.height;
+      const clickX = (e.clientX - rect.left) * scaleX;
+      const clickY = (e.clientY - rect.top) * scaleY;
+      if (clickX < 0 || clickY < 0 || clickX > glCanvas.width || clickY > glCanvas.height) {
+        console.log('[SAM CLICK] early return — click outside canvas bounds');
+        return;
+      }
 
-      const normX = clickX / rect.width;
-      const normY = clickY / rect.height;
+      const normX = clickX / glCanvas.width;
+      const normY = clickY / glCanvas.height;
+      console.log('[SAM CLICK] coords', { clickX, clickY, normX, normY, rect: { w: rect.width, h: rect.height } });
 
       // Flood fill on Ctrl+click (or Cmd+click on macOS)
       if (e.ctrlKey || e.metaKey) {
@@ -410,29 +447,33 @@ export const Viewport: React.FC = () => {
       try {
         const positive = nextPoints.filter((p) => p.label === 1);
         const negative = nextPoints.filter((p) => p.label === 0);
+        console.log('[SAM CLICK] calling predictBatch', { mediaUrl, positiveCount: positive.length, negativeCount: negative.length });
 
         const mask = await predictBatch(mediaUrl, positive, negative);
+        console.log('[SAM CLICK] predictBatch result', { hasMask: !!mask, maskSize: mask ? `${mask.width}x${mask.height}` : 'null' });
         if (!mask) {
           console.warn('[AI Masking] predictBatch returned no mask');
           return;
         }
 
-        const maskCanvas = document.createElement('canvas');
-        maskCanvas.width = mask.width;
-        maskCanvas.height = mask.height;
-        const ctx = maskCanvas.getContext('2d');
-        if (!ctx) return;
-
-        const rgba = new Uint8ClampedArray(mask.width * mask.height * 4);
-        for (let i = 0; i < mask.data.length; i++) {
-          const val = mask.data[i] ? 255 : 0;
-          rgba[i * 4] = val;
-          rgba[i * 4 + 1] = val;
-          rgba[i * 4 + 2] = val;
-          rgba[i * 4 + 3] = 255;
-        }
-        ctx.putImageData(new ImageData(rgba, mask.width, mask.height), 0, 0);
-        const samMaskData = maskCanvas.toDataURL('image/png');
+        const samMaskData = mask.dataUrl || (() => {
+          // Fallback: create data URL from raw bytes if dataUrl missing
+          const c = document.createElement('canvas');
+          c.width = mask.width;
+          c.height = mask.height;
+          const cx = c.getContext('2d');
+          if (!cx) return '';
+          const rgba = new Uint8ClampedArray(mask.width * mask.height * 4);
+          for (let i = 0; i < mask.data.length; i++) {
+            const val = mask.data[i] ? 255 : 0;
+            rgba[i * 4] = val;
+            rgba[i * 4 + 1] = val;
+            rgba[i * 4 + 2] = val;
+            rgba[i * 4 + 3] = 255;
+          }
+          cx.putImageData(new ImageData(rgba, mask.width, mask.height), 0, 0);
+          return c.toDataURL('image/png');
+        })();
 
         setActiveEffects((prev) =>
           prev.map((fx) =>
@@ -465,8 +506,10 @@ export const Viewport: React.FC = () => {
       const glCanvas = container.querySelector('.webgl-canvas') as HTMLCanvasElement;
       if (!glCanvas) return;
       const rect = glCanvas.getBoundingClientRect();
-      const x = (e.clientX - rect.left) / rect.width;
-      const y = (e.clientY - rect.top) / rect.height;
+      const scaleX = glCanvas.width / rect.width;
+      const scaleY = glCanvas.height / rect.height;
+      const x = ((e.clientX - rect.left) * scaleX) / glCanvas.width;
+      const y = ((e.clientY - rect.top) * scaleY) / glCanvas.height;
       if (x < 0 || y < 0 || x > 1 || y > 1) return;
 
       if (samHoverTimeoutRef.current) {
@@ -503,19 +546,44 @@ export const Viewport: React.FC = () => {
   React.useEffect(() => {
     const canvas = hoverCanvasRef.current;
     if (!canvas || !hoverMask) return;
-    canvas.width = hoverMask.width;
-    canvas.height = hoverMask.height;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    const rgba = new Uint8ClampedArray(hoverMask.width * hoverMask.height * 4);
-    for (let i = 0; i < hoverMask.data.length; i++) {
-      const v = hoverMask.data[i] ? 255 : 0;
-      rgba[i * 4] = v;
-      rgba[i * 4 + 1] = v;
-      rgba[i * 4 + 2] = v;
-      rgba[i * 4 + 3] = 180; // semi-transparent for preview
+
+    let cancelled = false;
+    let img: HTMLImageElement | null = null;
+
+    if (hoverMask.dataUrl) {
+      // Use base64 PNG directly from Python backend
+      img = new Image();
+      img.onload = () => {
+        if (cancelled) return;
+        canvas.width = hoverMask.width;
+        canvas.height = hoverMask.height;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.globalAlpha = 0.7; // semi-transparent for preview
+        ctx.drawImage(img!, 0, 0);
+        ctx.globalAlpha = 1.0;
+      };
+      img.src = hoverMask.dataUrl;
+    } else {
+      // Fallback: create from raw bytes if dataUrl missing
+      canvas.width = hoverMask.width;
+      canvas.height = hoverMask.height;
+      const rgba = new Uint8ClampedArray(hoverMask.width * hoverMask.height * 4);
+      for (let i = 0; i < hoverMask.data.length; i++) {
+        const v = hoverMask.data[i] ? 255 : 0;
+        rgba[i * 4] = v;
+        rgba[i * 4 + 1] = v;
+        rgba[i * 4 + 2] = v;
+        rgba[i * 4 + 3] = 180; // semi-transparent for preview
+      }
+      ctx.putImageData(new ImageData(rgba, hoverMask.width, hoverMask.height), 0, 0);
     }
-    ctx.putImageData(new ImageData(rgba, hoverMask.width, hoverMask.height), 0, 0);
+
+    return () => {
+      cancelled = true;
+      img = null;
+    };
   }, [hoverMask]);
 
   // Keyboard shortcut: Escape clears SAM points
@@ -554,12 +622,13 @@ export const Viewport: React.FC = () => {
       style={{
         display: 'flex',
         flexDirection: 'column',
-        flex: 1,
-        height: '100%',
-        padding: '0', // Full screen viewport
+        flex: '1 1 0%',
+        minHeight: 0,
+        minWidth: 0,
+        padding: '0',
         background: 'var(--bg-panel)',
         borderRadius: 'var(--radius-lg)',
-        border: '1px solid var(--border-color)',
+        border: '1px solid var(--border-subtle)',
         overflow: 'hidden',
         position: 'relative',
       }}
@@ -582,11 +651,8 @@ export const Viewport: React.FC = () => {
               transition: 'transform 0.15s cubic-bezier(0.16, 1, 0.3, 1)',
               transform: `scale(${zoomLevel})`,
               transformOrigin: 'center center',
-              aspectRatio: aspectRatio !== 'free' ? getAspectRatioStyle() : 'auto',
               width: '100%',
-              height: aspectRatio !== 'free' ? 'auto' : '100%',
-              maxWidth: '100%',
-              maxHeight: '100%',
+              height: '100%',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -614,12 +680,14 @@ export const Viewport: React.FC = () => {
                   onPointerDown={handlePointerDown}
                   onPointerMove={handlePointerMove}
                   onPointerUp={handlePointerUp}
+                  onPointerCancel={handlePointerCancel}
+                  onPointerLeave={handlePointerCancel}
                 />
               )}
               {isSAMMode && (
                 <div
                   ref={samOverlayRef}
-                  onClick={handleSAMClick}
+                  onPointerDown={handleSAMClick}
                   onMouseMove={handleSAMMouseMove}
                   onMouseLeave={handleSAMMouseLeave}
                   onContextMenu={(e) => e.preventDefault()}
@@ -689,23 +757,18 @@ export const Viewport: React.FC = () => {
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          loadSAMModel();
+                          // SAM model auto-loads on next segmentation attempt
+                          window.location.reload();
                         }}
                         className="btn-primary"
                         style={{ marginTop: 4 }}
                       >
-                        Retry
+                        Reload
                       </button>
                     </div>
                   )}
                 </div>
               )}
-              <AudioWaveform
-                mediaUrl={mediaUrl}
-                currentTime={currentTime}
-                duration={duration}
-                isPlaying={isPlaying}
-              />
             </div>
           </div>
         ) : (
@@ -746,8 +809,8 @@ export const Viewport: React.FC = () => {
               padding: '6px 14px',
               boxShadow: 'var(--shadow-lg)',
               zIndex: 100,
-              backdropFilter: 'var(--glass-blur)',
-              WebkitBackdropFilter: 'var(--glass-blur)',
+              backdropFilter: 'blur(12px) saturate(180%)',
+              WebkitBackdropFilter: 'blur(12px) saturate(180%)',
               pointerEvents: 'auto',
             }}
             className="viewport-hud-controls animate-fade-in"

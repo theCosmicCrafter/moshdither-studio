@@ -8,3 +8,25 @@ rich>=13.0.0
 
 # JWT verification for RPC session tokens (AUD-009 hardening)
 PyJWT>=2.8.0
+
+# SAM 3 (Meta Segment Anything Model 3)
+torch>=2.0.0
+torchvision>=0.15.0
+timm>=1.0.17
+numpy>=1.26,<2
+tqdm
+ftfy==6.1.1
+regex
+iopath>=0.1.10
+huggingface_hub
+pillow
+
+# GroundingDINO text detection → SAM segmentation
+transformers>=4.36.0
+
+# SAM PRO mode post-processing (connected components, morph ops)
+opencv-python>=4.8.0
+
+# Background removal
+rembg>=2.0.50
+onnxruntime>=1.15.0
