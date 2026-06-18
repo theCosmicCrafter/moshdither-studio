@@ -6,9 +6,10 @@ export interface Preset {
   name: string;
   createdAt: string;
   stack: StackEntry[];
+  thumbnail?: string; // base64 PNG data URL
 }
 
-const STORAGE_KEY = "moshdither_presets_v1";
+const STORAGE_KEY = "moshdither_presets_v2";
 
 function loadPresets(): Preset[] {
   try {
@@ -22,6 +23,53 @@ function loadPresets(): Preset[] {
 
 function savePresets(presets: Preset[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(presets));
+}
+
+/** Generate a simple gradient thumbnail based on preset effects. */
+function generateThumbnail(stack: StackEntry[]): string {
+  const canvas = document.createElement("canvas");
+  canvas.width = 160;
+  canvas.height = 90;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return "";
+
+  // Base gradient
+  const grd = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+  grd.addColorStop(0, "#1a1a2e");
+  grd.addColorStop(1, "#16213e");
+  ctx.fillStyle = grd;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Draw colored bars based on effect categories
+  const colors: Record<string, string> = {
+    dithering: "#e94560",
+    glitch: "#f39c12",
+    color: "#3498db",
+    artistic: "#9b59b6",
+    noise: "#2ecc71",
+    analog: "#e74c3c",
+    composite: "#1abc9c",
+    pixel_geo: "#f1c40f",
+  };
+
+  const barHeight = 6;
+  const gap = 2;
+  let y = 8;
+  for (const entry of stack) {
+    if (!entry.enabled) continue;
+    const cat = entry.effectId.split(".")[0] || "default";
+    ctx.fillStyle = colors[cat] || "#ffffff";
+    ctx.fillRect(8, y, Math.max(20, 140 * (Object.keys(entry.params).length / 10)), barHeight);
+    y += barHeight + gap;
+    if (y > canvas.height - 8) break;
+  }
+
+  // Label
+  ctx.fillStyle = "rgba(255,255,255,0.8)";
+  ctx.font = "10px sans-serif";
+  ctx.fillText(`${stack.filter((e) => e.enabled).length} fx`, 8, canvas.height - 8);
+
+  return canvas.toDataURL("image/png");
 }
 
 export function usePresets() {
@@ -39,11 +87,13 @@ export function usePresets() {
 
   const savePreset = useCallback(
     (name: string) => {
+      const thumbnail = generateThumbnail(effectStack);
       const preset: Preset = {
         id: `preset-${Date.now()}`,
         name: name.trim() || `Preset ${presets.length + 1}`,
         createdAt: new Date().toISOString(),
         stack: JSON.parse(JSON.stringify(effectStack)), // deep clone
+        thumbnail,
       };
       setPresets((prev) => [preset, ...prev]);
       setStatusMessage(`Preset "${preset.name}" saved`);
@@ -54,19 +104,17 @@ export function usePresets() {
   const loadPreset = useCallback(
     (preset: Preset) => {
       clearStack();
-      // Small delay to let clearStack propagate before adding
       setTimeout(() => {
         for (const entry of preset.stack) {
           const effect = allEffects.find((e) => e.id === entry.effectId);
           if (!effect) continue;
-          // Add to stack then update params to match preset
           addToStack(effect);
-          // The last added item will be selected; update its params
           const store = useAppStore.getState();
           const last = store.effectStack[store.effectStack.length - 1];
           if (last && last.effectId === entry.effectId) {
             store.updateStackParams(last.id, entry.params);
             if (!entry.enabled) store.toggleStackItem(last.id);
+            if (entry.maskId !== undefined) store.setStackItemMask(last.id, entry.maskId);
           }
         }
       }, 0);
@@ -83,5 +131,43 @@ export function usePresets() {
     [setStatusMessage]
   );
 
-  return { presets, savePreset, loadPreset, deletePreset };
+  const exportPresets = useCallback(
+    (ids?: string[]) => {
+      const toExport = ids ? presets.filter((p) => ids.includes(p.id)) : presets;
+      const blob = new Blob([JSON.stringify(toExport, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `moshdither-presets-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setStatusMessage(`Exported ${toExport.length} presets`);
+    },
+    [presets, setStatusMessage]
+  );
+
+  const importPresets = useCallback(
+    (file: File) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const imported = JSON.parse(reader.result as string) as Preset[];
+          if (!Array.isArray(imported)) throw new Error("Invalid file format");
+          const valid = imported.filter((p) => p.id && p.name && Array.isArray(p.stack));
+          setPresets((prev) => {
+            const existingIds = new Set(prev.map((p) => p.id));
+            const newPresets = valid.filter((p) => !existingIds.has(p.id));
+            return [...newPresets, ...prev];
+          });
+          setStatusMessage(`Imported ${valid.length} presets`);
+        } catch {
+          setStatusMessage("Failed to import presets");
+        }
+      };
+      reader.readAsText(file);
+    },
+    [setStatusMessage]
+  );
+
+  return { presets, savePreset, loadPreset, deletePreset, exportPresets, importPresets };
 }

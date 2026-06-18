@@ -1,14 +1,27 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { usePresets } from "../../hooks/usePresets";
-import { Save, FolderOpen, Trash2, Bookmark } from "lucide-react";
+import { Save, FolderOpen, Trash2, Bookmark, Download, Upload } from "lucide-react";
 
 export default function PresetPanel() {
-  const { presets, savePreset, loadPreset, deletePreset } = usePresets();
+  const { presets, savePreset, loadPreset, deletePreset, exportPresets, importPresets } = usePresets();
   const [name, setName] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleSave = () => {
     savePreset(name);
     setName("");
+  };
+
+  const handleImportClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      importPresets(file);
+      e.target.value = "";
+    }
   };
 
   return (
@@ -72,13 +85,67 @@ export default function PresetPanel() {
         </button>
       </div>
 
+      {/* Import / Export */}
+      <div style={{ display: "flex", gap: 4 }}>
+        <button
+          onClick={() => exportPresets()}
+          title="Export all presets"
+          style={{
+            flex: 1,
+            padding: "4px 8px",
+            fontSize: 11,
+            borderRadius: 3,
+            border: "1px solid #444",
+            background: "#222",
+            color: "#ddd",
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 4,
+          }}
+        >
+          <Download size={12} />
+          Export
+        </button>
+        <button
+          onClick={handleImportClick}
+          title="Import presets"
+          style={{
+            flex: 1,
+            padding: "4px 8px",
+            fontSize: 11,
+            borderRadius: 3,
+            border: "1px solid #444",
+            background: "#222",
+            color: "#ddd",
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 4,
+          }}
+        >
+          <Upload size={12} />
+          Import
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".json"
+          aria-label="Import presets file"
+          style={{ display: "none" }}
+          onChange={handleFileChange}
+        />
+      </div>
+
       {/* Preset list */}
       <div
         style={{
           display: "flex",
           flexDirection: "column",
-          gap: 3,
-          maxHeight: 160,
+          gap: 4,
+          maxHeight: 200,
           overflowY: "auto",
         }}
       >
@@ -93,12 +160,28 @@ export default function PresetPanel() {
               style={{
                 display: "flex",
                 alignItems: "center",
-                justifyContent: "space-between",
+                gap: 6,
                 padding: "4px 6px",
                 borderRadius: 3,
                 background: "#222",
+                cursor: "pointer",
               }}
+              onClick={() => loadPreset(preset)}
+              title={preset.name}
             >
+              {preset.thumbnail && (
+                <img
+                  src={preset.thumbnail}
+                  alt=""
+                  style={{
+                    width: 48,
+                    height: 27,
+                    borderRadius: 2,
+                    objectFit: "cover",
+                    flexShrink: 0,
+                  }}
+                />
+              )}
               <span
                 style={{
                   overflow: "hidden",
@@ -107,13 +190,15 @@ export default function PresetPanel() {
                   flex: 1,
                   fontSize: 11,
                 }}
-                title={preset.name}
               >
                 {preset.name}
               </span>
               <div style={{ display: "flex", gap: 2 }}>
                 <button
-                  onClick={() => loadPreset(preset)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    loadPreset(preset);
+                  }}
                   title="Load preset"
                   style={{
                     padding: "2px 4px",
@@ -128,7 +213,10 @@ export default function PresetPanel() {
                   <FolderOpen size={12} />
                 </button>
                 <button
-                  onClick={() => deletePreset(preset.id)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    deletePreset(preset.id);
+                  }}
                   title="Delete preset"
                   style={{
                     padding: "2px 4px",
