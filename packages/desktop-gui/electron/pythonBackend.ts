@@ -11,6 +11,12 @@ let _pythonPort: number | null = null;
 let _pythonToken: string | null = null;
 let _pythonProcess: ReturnType<typeof spawn> | null = null;
 
+const _stdoutListeners: ((data: string) => void)[] = [];
+
+export function addStdoutListener(listener: (data: string) => void) {
+  _stdoutListeners.push(listener);
+}
+
 const RPC_TIMEOUT = 600_000; // 10 minutes — covers first-run model download + heavy inference
 
 function getProjectRoot(): string {
@@ -63,14 +69,23 @@ export function startPythonBackend(): Promise<{ port: number; token: string }> {
 
     _pythonProcess = proc;
 
-    let stdout = "";
     let stderr = "";
 
     proc.stdout!.on("data", (data: Buffer) => {
-      stdout += data.toString();
+      const text = data.toString();
+
+      // Notify custom listeners
+      for (const listener of _stdoutListeners) {
+        try {
+          listener(text);
+        } catch (err) {
+          console.error("[PythonBackend] stdout listener failed:", err);
+        }
+      }
+
       // Parse RPC_PORT line (RPC_TOKEN only printed if not set in env)
-      const portMatch = stdout.match(/RPC_PORT:(\d+)/);
-      const tokenMatch = stdout.match(/RPC_TOKEN:([a-f0-9]+)/);
+      const portMatch = text.match(/RPC_PORT:(\d+)/);
+      const tokenMatch = text.match(/RPC_TOKEN:([a-f0-9]+)/);
       if (portMatch) {
         _pythonPort = parseInt(portMatch[1], 10);
       }

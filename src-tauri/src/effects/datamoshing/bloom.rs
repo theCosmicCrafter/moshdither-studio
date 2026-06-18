@@ -10,7 +10,9 @@ pub struct BloomDatamosh {
 
 impl BloomDatamosh {
     pub fn new(bloom_size: u32) -> Self {
-        Self { bloom_size: bloom_size.clamp(2, 20) }
+        Self {
+            bloom_size: bloom_size.clamp(2, 20),
+        }
     }
 }
 
@@ -27,23 +29,49 @@ impl Effect for BloomDatamosh {
             name: "Bloom".to_string(),
             category: EffectCategory::Datamoshing,
             media_type: MediaType::Video,
-            parameters: vec![
-                ParameterDef {
-                    id: "bloom_size".to_string(),
-                    name: "Bloom Size".to_string(),
-                    param_type: ParamType::Slider,
-                    default: json!(5),
-                    min: Some(2.0),
-                    max: Some(20.0),
-                    step: Some(1.0),
-                    options: None,
-                },
-            ],
+            parameters: vec![ParameterDef {
+                id: "bloom_size".to_string(),
+                name: "Bloom Size".to_string(),
+                param_type: ParamType::Slider,
+                default: json!(5),
+                min: Some(2.0),
+                max: Some(20.0),
+                step: Some(1.0),
+                options: None,
+            }],
         }
     }
 
-    fn process_frame(&self, input: &Frame, _m: Option<&Mask>, _p: &ParameterValues) -> Result<Frame> {
-        Ok(input.clone())
+    fn is_temporal(&self) -> bool {
+        true
+    }
+
+    fn process_frame(
+        &self,
+        input: &Frame,
+        _m: Option<&Mask>,
+        _params: &ParameterValues,
+    ) -> Result<Frame> {
+        let mut out = input.data.clone();
+        for _pass in 0..3 {
+            for i in (0..out.len()).step_by(4) {
+                for c in 0..3 {
+                    let v = (out[i + c] as f32 * 1.4).min(280.0) as u8;
+                    out[i + c] = v;
+                }
+            }
+        }
+        for i in (0..out.len()).step_by(4) {
+            for c in 0..3 {
+                let v = (out[i + c] as f32 * 1.4).min(255.0) as u8;
+                out[i + c] = v;
+            }
+        }
+        Ok(Frame {
+            width: input.width,
+            height: input.height,
+            data: out,
+        })
     }
 
     fn process_video(
@@ -91,7 +119,9 @@ mod tests {
     fn test_bloom_duplicates() {
         let e = BloomDatamosh::new(3);
         let seg = make_segment(6);
-        let r = e.process_video(&seg, None, &serde_json::Map::new()).unwrap();
+        let r = e
+            .process_video(&seg, None, &serde_json::Map::new())
+            .unwrap();
         assert_eq!(r.frames.len(), 6);
         // First 3 frames should all be frame 0
         assert_eq!(r.frames[0].data[0], 0);

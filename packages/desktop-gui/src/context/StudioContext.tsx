@@ -10,6 +10,7 @@ import { getAllBindings, eventToKeyString } from '../utils/keyboardShortcuts';
 import { getCommands } from '../utils/commands';
 import type { WatermarkSettings } from '../utils/watermark';
 import { DEFAULT_WATERMARK } from '../utils/watermark';
+import { useSafeStorage } from '../hooks/useSafeStorage';
 
 export interface ToastItem {
   id: string;
@@ -224,9 +225,7 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [maskBrushSize, setMaskBrushSize] = useState<number>(30);
   const [maskBrushEraser, setMaskBrushEraser] = useState<boolean>(false);
   const [maskCanvas, setMaskCanvas] = useState<HTMLCanvasElement | null>(null);
-  const [outputDirectory, setOutputDirectoryState] = useState<string | null>(
-    localStorage.getItem('outputDirectory')
-  );
+  const [outputDirectory, setOutputDirectoryState, outputDirectoryLoaded] = useSafeStorage('outputDirectory');
   const [exportFormat, setExportFormatState] = useState<'same' | 'png' | 'jpg' | 'gif' | 'mp4'>(() => {
     const saved = localStorage.getItem('exportFormat');
     if (saved === 'same' || saved === 'png' || saved === 'jpg' || saved === 'gif' || saved === 'mp4') {
@@ -242,14 +241,20 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   });
   const [renderProgress, setRenderProgress] = useState<{ percent: number; logs: string[] }>({ percent: 0, logs: [] });
   const [renderQueue, setRenderQueue] = useState<RenderJob[]>([]);
-  const [recentFiles, setRecentFiles] = useState<string[]>(() => {
-    try {
-      const saved = localStorage.getItem('recentFiles');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
+  
+  // recentFiles with safeStorage
+  const [recentFilesRaw, setRecentFilesRaw, recentFilesLoaded] = useSafeStorage('recentFiles');
+  const [recentFiles, setRecentFiles] = useState<string[]>([]);
+  useEffect(() => {
+    if (recentFilesLoaded && recentFilesRaw) {
+      try {
+        const parsed = JSON.parse(recentFilesRaw);
+        queueMicrotask(() => setRecentFiles(parsed));
+      } catch {
+        queueMicrotask(() => setRecentFiles([]));
+      }
     }
-  });
+  }, [recentFilesRaw, recentFilesLoaded]);
   const [fontSizeScale, setFontSizeScale] = useState<number>(
     () => loadPersisted<number>('moshdither:fontSizeScale', 1),
   );
@@ -324,15 +329,15 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const addRecentFile = useCallback((path: string) => {
     setRecentFiles((prev) => {
       const next = [path, ...prev.filter((p) => p !== path)].slice(0, 20);
-      localStorage.setItem('recentFiles', JSON.stringify(next));
+      setRecentFilesRaw(JSON.stringify(next));
       return next;
     });
-  }, []);
+  }, [setRecentFilesRaw]);
 
   const clearRecentFiles = useCallback(() => {
     setRecentFiles([]);
-    localStorage.removeItem('recentFiles');
-  }, []);
+    setRecentFilesRaw(null);
+  }, [setRecentFilesRaw]);
 
   const addRenderJob = useCallback((job: Omit<RenderJob, 'id' | 'status' | 'progress'>) => {
     const id = `job-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -376,12 +381,7 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   const setOutputDirectory = useCallback((dir: string | null) => {
     setOutputDirectoryState(dir);
-    if (dir) {
-      localStorage.setItem('outputDirectory', dir);
-    } else {
-      localStorage.removeItem('outputDirectory');
-    }
-  }, []);
+  }, [setOutputDirectoryState]);
 
   const setWatermarkSettings = useCallback((settings: WatermarkSettings) => {
     setWatermarkSettingsState(settings);
@@ -399,13 +399,13 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   }, []);
 
   useEffect(() => {
-    if (!outputDirectory && window.ipcRenderer && !hasFetchedDefaultDir.current) {
+    if (outputDirectoryLoaded && !outputDirectory && window.ipcRenderer && !hasFetchedDefaultDir.current) {
       hasFetchedDefaultDir.current = true;
       window.ipcRenderer.invoke<string>('get-default-output-dir').then((dir) => {
         setOutputDirectory(dir);
       });
     }
-  }, [outputDirectory, setOutputDirectory]);
+  }, [outputDirectory, setOutputDirectory, outputDirectoryLoaded]);
 
   // Intercept changes to activeEffects to record history
   const setActiveEffects = useCallback((newEffects: Effect[] | ((prev: Effect[]) => Effect[])) => {
@@ -415,7 +415,7 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       setFuture([]); // Reset redo stack on new action
       return resolved;
     });
-  }, []);
+  }, [setActiveEffectsState]);
 
   const undo = useCallback(() => {
     setPast(p => {
@@ -427,7 +427,7 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       });
       return p.slice(0, -1);
     });
-  }, []);
+  }, [setActiveEffectsState]);
 
   const redo = useCallback(() => {
     setFuture(f => {
@@ -439,7 +439,7 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       });
       return f.slice(1);
     });
-  }, []);
+  }, [setActiveEffectsState]);
 
   // Keyboard listeners: built-in + custom bindings from shortcuts registry
   useEffect(() => {
@@ -590,11 +590,24 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         setIsRendering(false);
       }
     })();
-  }, [renderQueue]);
+  }, [renderQueue, addToast, updateRenderJob]);
 
-  return (
-    <StudioContext.Provider
-      value={{
+  // Clear old masks when changing the source image
+   
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setActiveEffects((effects) =>
+      effects.map((e) => ({
+        ...e,
+        maskId: undefined, // Strip mask bindings
+      }))
+    );
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMaskLayers([]);
+  }, [mediaUrl]);
+
+  // Wrap context value in useMemo to prevent massive cascade re-renders during video playback
+  const contextValue = React.useMemo(() => ({
         activeEffects: activeEffectsState,
         setActiveEffects,
         mediaUrl,
@@ -673,8 +686,50 @@ export const StudioProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         setSelectedSAMModel,
         backgroundRemovalEnabled,
         setBackgroundRemovalEnabled,
-      }}
-    >
+      }), 
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      [
+        activeEffectsState,
+        mediaUrl,
+        mediaType,
+        isPlaying,
+        currentTime,
+        duration,
+        qualityMode,
+        zoomLevel,
+        pixelGrid,
+        aspectRatio,
+        selectedEffectId,
+        toasts,
+        past.length,
+        future.length,
+        isRendering,
+        isPaintingMask,
+        maskBrushSize,
+        maskBrushEraser,
+        maskCanvas,
+        outputDirectory,
+        exportFormat,
+        exportFps,
+        renderProgress,
+        renderQueue,
+        recentFiles,
+        fontSizeScale,
+        highContrastMode,
+        reducedMotion,
+        colorBlindMode,
+        proxyUrl,
+        inTime,
+        outTime,
+        watermarkSettings,
+        maskLayers,
+        postProcessParams,
+        selectedSAMModel,
+        backgroundRemovalEnabled,
+      ]);
+
+  return (
+    <StudioContext.Provider value={contextValue}>
       {children}
     </StudioContext.Provider>
   );

@@ -669,39 +669,61 @@ input[type="range"].custom-range-slider::-moz-range-thumb {
   flex-direction: column;
   height: 100%;
   position: relative;
-  gap: 16px;
-  padding: 16px;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
 }
 
 .sidebar-section {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0;
   flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .sidebar-section-title {
   margin: 0;
-  font-size: 11px;
+  font-size: 10px;
+  font-weight: 700;
   text-transform: uppercase;
-  color: var(--text-secondary);
-  letter-spacing: 0.05em;
-  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.sidebar-section-title::before {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  opacity: 0.65;
+  flex-shrink: 0;
 }
 
 .sidebar-scroll-area {
   flex: 1;
   overflow-y: auto;
-  padding-right: 4px;
+  overflow-x: hidden;
+  padding: 6px 8px;
 }
 
 .sidebar-footer {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  border-top: 1px solid var(--border-color);
-  padding-top: 16px;
+  gap: 6px;
+  border-top: 1px solid var(--border-subtle);
+  padding: 8px;
   flex-shrink: 0;
+  background: rgba(10, 10, 14, 0.5);
 }
 
 /* SAM Step workflow */

@@ -1,4 +1,5 @@
 pub mod atkinson;
+pub mod auto_palette;
 pub mod bayer;
 pub mod blue_noise;
 pub mod burkes;
@@ -13,6 +14,7 @@ pub mod stucki;
 pub mod threshold;
 
 pub use atkinson::AtkinsonDither;
+pub use auto_palette::AutoPaletteDither;
 pub use bayer::BayerDither;
 pub use blue_noise::BlueNoiseDither;
 pub use burkes::BurkesDither;

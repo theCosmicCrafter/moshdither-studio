@@ -36,6 +36,7 @@ impl EffectRegistry {
         self.register(super::dithering::ThresholdDither::default());
         self.register(super::dithering::RiemersmaDither);
         self.register(super::dithering::HalftoneDither::default());
+        self.register(super::dithering::AutoPaletteDither);
 
         // Analog
         self.register(super::analog::Scanlines::default());
@@ -74,6 +75,8 @@ impl EffectRegistry {
         self.register(super::glitch::ByteInsert::default());
         self.register(super::glitch::ByteReverse::default());
         self.register(super::glitch::ByteZero::default());
+        self.register(super::glitch::PngChunkGlitch);
+        self.register(super::glitch::CrcMismatchGlitch);
 
         // Noise
         self.register(super::noise::SaltPepperNoise::default());
@@ -96,6 +99,14 @@ impl EffectRegistry {
         self.register(super::datamoshing::RepeatDatamosh::default());
         self.register(super::datamoshing::CombineDatamosh::default());
         self.register(super::datamoshing::MotionTransfer);
+        self.register(super::datamoshing::ZoomGlitch);
+        self.register(super::datamoshing::ShearGlitch);
+        self.register(super::datamoshing::VibrateGlitch);
+        self.register(super::datamoshing::StopGlitch::default());
+        self.register(super::datamoshing::BufferGlitch);
+        self.register(super::datamoshing::DelayGlitch);
+        self.register(super::datamoshing::MirrorGlitch);
+        self.register(super::datamoshing::OpticalFlow::default());
 
         // Segmentation
         self.register(super::segmentation::MaskIsolate);

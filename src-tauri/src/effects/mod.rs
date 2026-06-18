@@ -5,6 +5,7 @@ pub mod composite;
 pub mod datamoshing;
 pub mod dithering;
 pub mod glitch;
+pub mod motion;
 pub mod noise;
 pub mod pixel_geo;
 pub mod segmentation;

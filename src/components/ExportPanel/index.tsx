@@ -36,6 +36,7 @@ export default function ExportPanel() {
   const mediaInfo = useAppStore((s) => s.mediaInfo);
   const audioEnabled = useAppStore((s) => s.audioEnabled);
   const audioFilePath = useAppStore((s) => s.audioFilePath);
+  const audioBakeData = useAppStore((s) => s.audioBakeData);
   const filePath = useAppStore((s) => s.filePath);
   const activeMask = useAppStore((s) => s.activeMask);
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
@@ -103,6 +104,8 @@ export default function ExportPanel() {
     const width = resolution.w === 0 ? undefined : resolution.w;
     const height = resolution.h === 0 ? undefined : resolution.h;
 
+    const audioBakeJson = audioBakeData ? JSON.stringify(audioBakeData) : null;
+
     try {
       const outputPath = await exportVideo(filePath, stack, {
         maskB64: activeMask,
@@ -110,6 +113,7 @@ export default function ExportPanel() {
         fps,
         width,
         height,
+        audioBakeJson,
       });
 
       if (progressTimerRef.current) {
@@ -244,6 +248,16 @@ export default function ExportPanel() {
           />
           Include audio track
         </label>
+      )}
+
+      {/* Audio bake status */}
+      {audioEnabled && audioFilePath && (
+        <div style={{ fontSize: 10, color: audioBakeData ? "#4caf50" : "#888", display: "flex", alignItems: "center", gap: 4 }}>
+          <HardDrive size={10} />
+          {audioBakeData
+            ? `Audio baked: ${audioBakeData.totalFrames} frames`
+            : "Audio not baked (effects will be static)"}
+        </div>
       )}
 
       {/* Active effects count */}

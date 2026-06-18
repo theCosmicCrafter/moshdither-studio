@@ -172,7 +172,11 @@ export default function Toolbar({ onFileLoaded }: Props) {
       const effectiveFps = Math.max(1, fps * playbackSpeed);
       intervalId = window.setInterval(() => {
         const s = useAppStore.getState();
-        s.setCurrentTime((s.currentTime + 1) % 100);
+        const inPt = s.inPoint ?? 0;
+        const outPt = s.outPoint ?? 99;
+        let next = s.currentTime + 1;
+        if (next > outPt) next = inPt;
+        s.setCurrentTime(next);
         handleProcess();
       }, 1000 / effectiveFps);
     }

@@ -100,6 +100,8 @@ export const WebGLCanvas: React.FC = () => {
   const samMaskDataRef = useRef<Map<string, string>>(new Map());
   // Pre-decoded SAM mask images: effectId -> HTMLImageElement
   const samMaskImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
+  // Pre-decoded layer masks: layerId -> HTMLImageElement
+  const maskLayerImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
 
   // Multi-layer mask compositing: offscreen canvas + WebGL texture
   const compositeMaskCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -134,8 +136,50 @@ export const WebGLCanvas: React.FC = () => {
       }
     }
   }, [activeEffects]);
+
+  // Cleanup all textures on unmount
+  useEffect(() => {
+    const samTextures = samMaskTexturesRef.current;
+    const samData = samMaskDataRef.current;
+    const samImages = samMaskImagesRef.current;
+    const maskLayerImages = maskLayerImagesRef.current;
+
+    return () => {
+      const gl = glRef.current;
+      if (gl) {
+        if (compositeMaskTextureRef.current) {
+          gl.deleteTexture(compositeMaskTextureRef.current);
+          compositeMaskTextureRef.current = null;
+        }
+        for (const tex of samTextures.values()) {
+          gl.deleteTexture(tex);
+        }
+        samTextures.clear();
+        samData.clear();
+        samImages.clear();
+        maskLayerImages.clear();
+      }
+    };
+  }, []);
   useEffect(() => { maskCanvasRef.current = maskCanvas; }, [maskCanvas]);
-  useEffect(() => { maskLayersRef.current = maskLayers; }, [maskLayers]);
+  useEffect(() => { 
+    maskLayersRef.current = maskLayers;
+    // Pre-decode Base64 mask layer data to prevent frame-blocking synchronous decodes in the render loop
+    for (const layer of maskLayers) {
+      if (layer.maskData && !maskLayerImagesRef.current.has(layer.id)) {
+        const img = new Image();
+        img.src = layer.maskData;
+        maskLayerImagesRef.current.set(layer.id, img);
+      }
+    }
+    // Clean up removed layers
+    const currentIds = new Set(maskLayers.map((l) => l.id));
+    for (const id of maskLayerImagesRef.current.keys()) {
+      if (!currentIds.has(id)) {
+        maskLayerImagesRef.current.delete(id);
+      }
+    }
+  }, [maskLayers]);
   useEffect(() => { bgRemovalEnabledRef.current = backgroundRemovalEnabled; }, [backgroundRemovalEnabled]);
   useEffect(() => { mediaUrlRef.current = mediaUrl; }, [mediaUrl]);
 
@@ -428,14 +472,19 @@ export const WebGLCanvas: React.FC = () => {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
     // Create composite mask texture for multi-layer + bg-removal compositing
-    const compositeMaskTexture = trackTexture(gl.createTexture());
+    // This texture persists across renders via compositeMaskTextureRef, so it
+    // must NOT be added to resources.textures which gets deleted on cleanup.
+    let compositeMaskTexture = compositeMaskTextureRef.current;
+    if (!compositeMaskTexture) {
+      compositeMaskTexture = gl.createTexture();
+      compositeMaskTextureRef.current = compositeMaskTexture;
+    }
     gl.bindTexture(gl.TEXTURE_2D, compositeMaskTexture);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
-    compositeMaskTextureRef.current = compositeMaskTexture;
 
     // Create temp FBO for mask blending intermediate pass
     let tempFbo: WebGLFramebuffer | null = null;
@@ -497,6 +546,7 @@ export const WebGLCanvas: React.FC = () => {
     }
 
     // Update position buffer with letterboxed quad to preserve media aspect ratio
+    let lastScaleX = 1, lastScaleY = 1;
     function _updateLetterboxQuad() {
       const mediaW = textureSourceRef.current ? ('videoWidth' in textureSourceRef.current ? textureSourceRef.current.videoWidth : textureSourceRef.current.width) : 1;
       const mediaH = textureSourceRef.current ? ('videoHeight' in textureSourceRef.current ? textureSourceRef.current.videoHeight : textureSourceRef.current.height) : 1;
@@ -512,12 +562,16 @@ export const WebGLCanvas: React.FC = () => {
         scaleX = mediaAspect / canvasAspect;
       }
 
+      if (scaleX === lastScaleX && scaleY === lastScaleY) return;
+      lastScaleX = scaleX;
+      lastScaleY = scaleY;
+
       const vertices = new Float32Array([
         -scaleX, -scaleY,  scaleX, -scaleY,  -scaleX,  scaleY,
         -scaleX,  scaleY,  scaleX, -scaleY,   scaleX,  scaleY,
       ]);
       gl!.bindBuffer(gl!.ARRAY_BUFFER, positionBuffer);
-      gl!.bufferData(gl!.ARRAY_BUFFER, vertices, gl!.STATIC_DRAW);
+      gl!.bufferSubData(gl!.ARRAY_BUFFER, 0, vertices);
     }
 
     let animationFrameId = 0;
@@ -612,6 +666,7 @@ export const WebGLCanvas: React.FC = () => {
 
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, currentInputTexture);
+          gl.uniform1i(gl.getUniformLocation(program, 'u_image'), 0);
 
           const positionLocation = gl.getAttribLocation(program, 'a_position');
           gl.enableVertexAttribArray(positionLocation);
@@ -744,9 +799,8 @@ export const WebGLCanvas: React.FC = () => {
 
                 for (const layer of maskLayersRef.current) {
                   if (!layer.visible || !layer.maskData) continue;
-                  const img = new Image();
-                  img.src = layer.maskData;
-                  if (img.complete && img.naturalWidth > 0) {
+                  const img = maskLayerImagesRef.current.get(layer.id);
+                  if (img && img.complete && img.naturalWidth > 0) {
                     compCtx.globalCompositeOperation = 'source-over';
                     compCtx.drawImage(img, 0, 0, targetW, targetH);
                   }
@@ -777,7 +831,8 @@ export const WebGLCanvas: React.FC = () => {
                   samTex = gl.createTexture();
                   if (samTex) {
                     samTextures.set(fx.id, samTex);
-                    resources.textures.push(samTex);
+                    // SAM textures persist across renders via samMaskTexturesRef,
+                    // do NOT add to resources.textures which gets deleted on cleanup
                   }
                 }
                 if (samTex) {

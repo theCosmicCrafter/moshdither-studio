@@ -8,78 +8,91 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in MoshDither Studio, please report it responsibly:
+If you discover a security vulnerability, please email the maintainers directly
+instead of opening a public issue.
 
-1. **Do not open a public issue.**
-2. Email the maintainers at: **security@moshdither.studio** (placeholder — update before release)
-3. Include:
-   - A clear description of the vulnerability
-   - Steps to reproduce
-   - Affected versions
-   - Potential impact assessment
+We will acknowledge receipt within 48 hours and provide a timeline for a fix.
 
-We aim to respond within 48 hours and provide a fix timeline within 72 hours.
+## Scope
 
-## Security Model
+This project is a desktop creative tool. Security concerns primarily involve:
 
-### Threat Model
+- File system access (image/video I/O)
+- Network access (only for downloading SAM3 models on user request)
+- FFmpeg sidecar execution
 
-MoshDither Studio is a local-first desktop application. The primary threats are:
+## Security Toolchain
 
-1. **Local privilege escalation** via the Python RPC server
-2. **Path traversal** via file loading or media protocol abuse
-3. **IPC exploitation** via compromised renderer process
-4. **Dependency vulnerabilities** in Electron, Node.js, or Python packages
+This project implements a comprehensive security stack with multi-layer scanning:
 
-### Mitigations Implemented
+### Pre-Commit Hooks (.pre-commit-config.yaml)
 
-| Layer | Mitigation |
-|-------|-----------|
-| **Renderer** | `contextIsolation: true`, `sandbox: true`, CSP meta tag, no `nodeIntegration` |
-| **Preload** | Strict IPC channel whitelist (`VALID_SEND_CHANNELS`, `VALID_RECEIVE_CHANNELS`) |
-| **Main Process** | IPC sender validation (`validateIpcSender`), navigation/window blocking |
-| **Custom Protocol** | `media://` protocol with path traversal prevention |
-| **Python RPC** | Token auth (`X-RPC-Token`), ephemeral port, method allowlist, 1MB payload cap |
-| **Packaging** | Electron fuses: `runAsNode: false`, `nodeOptions: false`, ASAR integrity validation |
+- **gitleaks** - Secret detection in staged files
+- **detect-secrets** - Baseline-aware secret scanning
+- **semgrep** - Multi-language SAST (OWASP Top 10, secrets, security audit)
+- **bandit** - Python-specific SAST
+- **njsscan** - Node.js/JavaScript SAST
+- **pip-audit** - Python dependency CVE scanning
 
-### Hardening Checklist
+Install: `pip install pre-commit && pre-commit install`
 
-- [x] Context isolation enabled
-- [x] Node integration disabled
-- [x] Sandbox enabled
-- [x] CSP defined
-- [x] `will-navigate` handler blocks external URLs
-- [x] `setWindowOpenHandler` denies popups
-- [x] Permission handler restricts to `media` only
-- [x] IPC sender origin validation
-- [x] Custom protocol path sanitization
-- [x] Python RPC token authentication
-- [x] Python input validation (method allowlist, schema checks)
-- [x] ffmpeg argument list construction (no shell injection)
-- [x] Electron fuses flipped for production builds
+### CI/CD Pipeline (.github/workflows/security.yml)
 
-## Dependencies
+- **Semgrep** - Full SAST with SARIF upload
+- **CodeQL** - Semantic analysis for Python and JavaScript
+- **TruffleHog** - Full git history secret scanning
+- **Snyk Code** - AI-powered SAST
+- **Bandit** - Python SAST with SARIF output
+- **Trivy** - Dependency and container scanning
 
-### Electron Security
+### Local Tools (tools/)
 
-The app targets the latest stable Electron release. Chromium and Node.js vulnerabilities are patched via Electron updates.
+- **scan-gate.ps1** - Pre-push security gate (Semgrep + Gitleaks + Bandit + njsscan)
+- **sarif-digest.py** - Multi-tool SARIF aggregator
+- **mcp-security.py** - MCP server exposing scanners as tools (localhost:9991)
 
-### Python Dependencies
+### Agent Skills (.claude/skills/security/)
 
-Run `pip-audit` periodically to check for known vulnerabilities in Python packages:
+- **security-scan** - Multi-tool scan pipeline execution
+- **vuln-triage** - Finding classification (CONFIRMED/FALSE-POSITIVE/NEEDS-CONTEXT)
+- **sast-fix** - Minimal secure fix generation
+- **secret-gate** - Pre-commit secret detection
+- **best_skill.md** - Security-aware code generation guidelines
 
-```bash
-pip install pip-audit
-pip-audit --requirement packages/python-backend/requirements.txt
-```
+### IDE Extensions (.vscode/extensions.json)
 
-### Node Dependencies
+- Semgrep, Snyk Security, SonarLint (inline SAST)
+- GitLens, Error Lens, SARIF Explorer
+- GitHub Advanced Security, DotENV
 
-```bash
-cd packages/desktop-gui
-npm audit
-```
+### Secrets Management
 
-## Acknowledgments
+- **.secrets.baseline** - detect-secrets baseline
+- **.gitleaks.toml** - Custom gitleaks rules (if needed)
+- GitHub Secret Scanning enabled on repository
 
-We thank security researchers who responsibly disclose vulnerabilities. Contributors will be acknowledged in release notes unless they prefer anonymity.
+## Secure Development Guidelines
+
+### Code Generation
+
+Before writing code that touches user input, DB queries, file paths, subprocess, or crypto:
+
+1. Check taint flow from untrusted input to dangerous sinks
+2. Never hardcode secrets - use environment variables
+3. Use parameterized queries - never string concat for SQL
+4. Use `subprocess.run(list, shell=False)` - never shell=True with user data
+5. Canonicalize paths with `realpath + starts_with` check before open()
+6. Use argon2id for password hashing - never MD5/SHA1
+7. Use AES-256-GCM with random IV for encryption - never ECB mode
+
+### After Generation
+
+Emit audit comment: `# SECURITY: [CLEAN | REVIEW: <concern>] - [vuln type if flagged]`
+
+### Commit Workflow
+
+1. Stage changes: `git add .`
+2. Run local gate: `.\tools\scan-gate.ps1`
+3. If clean, commit: `git commit -m "..."`
+4. Pre-commit hooks run automatically
+5. Push triggers CI security pipeline

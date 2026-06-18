@@ -56,6 +56,7 @@ export const PropertiesPanel: React.FC = () => {
     predictGroundingDINO: predictSamGroundingDINO,
     setProMode: setSamProMode,
     proMode: samProMode,
+    loadModel: loadSamModel,
   } = useSAM3();
 
   const [samGroundingDino, setSamGroundingDino] = useState(false);
@@ -967,6 +968,21 @@ export const PropertiesPanel: React.FC = () => {
                         {samStatus === 'loading' && samLoadingStep && (
                           <div style={{ fontSize: '10px', color: '#00aaff', marginTop: '4px' }}>{samLoadingStep}</div>
                         )}
+                        {samStatus !== 'ready' && samStatus !== 'loading' && (
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            style={{ marginTop: '8px', width: '100%' }}
+                            onClick={() => loadSamModel()}
+                          >
+                            Load SAM 3 Model
+                          </Button>
+                        )}
+                        {samStatus === 'loading' && (
+                          <div style={{ fontSize: '10px', color: 'var(--text-tertiary)', marginTop: '8px' }}>
+                            Loading model... {Math.round(samProgress)}%
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1062,9 +1078,61 @@ export const PropertiesPanel: React.FC = () => {
                             <Tooltip content="Use GroundingDINO text-to-box detection for more precise object localization (slower, more accurate)" />
                           </div>
                         </div>
-                        <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
-                          LMB = Add point, RMB = Exclude, Ctrl+Click = Flood fill, or type a prompt above.
+                        {/* Viewport-redirect callout — all SAM interaction happens on the main canvas */}
+                        <div style={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: '10px',
+                          background: 'rgba(0, 255, 170, 0.06)',
+                          border: '1px solid rgba(0, 255, 170, 0.22)',
+                          borderRadius: 'var(--radius-md)',
+                          padding: '10px 12px',
+                          marginTop: '10px',
+                        }}>
+                          <span style={{ fontSize: '16px', lineHeight: 1, marginTop: 1 }}>🎯</span>
+                          <div>
+                            <div style={{ fontSize: '12px', fontWeight: 600, color: '#00ffaa', marginBottom: 3 }}>
+                              Draw on the main canvas
+                            </div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                              When SAM mode is active, click anywhere on the image in the viewport to segment. Right-click to exclude areas. Press <kbd style={{ fontSize: '10px', background: 'rgba(255,255,255,0.1)', border: '1px solid var(--border-color)', borderRadius: 3, padding: '0 4px' }}>Esc</kbd> to clear points.
+                            </div>
+                          </div>
                         </div>
+
+                        {/* Committed mask thumbnail */}
+                        {activeFx.mask?.samMaskData && (
+                          <div style={{ marginTop: '10px' }}>
+                            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '5px', fontWeight: 600 }}>Active Mask</div>
+                            <div style={{ position: 'relative', display: 'inline-block', borderRadius: 'var(--radius-sm)', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
+                              <img
+                                src={activeFx.mask.samMaskData}
+                                alt="SAM mask"
+                                style={{
+                                  display: 'block',
+                                  width: '100%',
+                                  maxWidth: 220,
+                                  height: 'auto',
+                                  imageRendering: 'pixelated',
+                                  opacity: 0.85,
+                                  filter: 'invert(1) sepia(1) saturate(4) hue-rotate(120deg)',
+                                }}
+                              />
+                              <div style={{
+                                position: 'absolute',
+                                bottom: 4,
+                                right: 4,
+                                background: 'rgba(0,0,0,0.65)',
+                                borderRadius: 'var(--radius-sm)',
+                                padding: '2px 6px',
+                                fontSize: '10px',
+                                color: '#00ffaa',
+                                fontWeight: 600,
+                              }}>MASK</div>
+                            </div>
+                          </div>
+                        )}
+
                         {activeFx.mask?.samClickPoint && !activeFx.mask?.samMaskData && (
                           <div style={{ fontSize: '11px', color: 'var(--accent-primary)', marginTop: '4px' }}>
                             Click on the preview to segment...

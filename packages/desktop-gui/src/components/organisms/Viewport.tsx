@@ -11,6 +11,7 @@ import { Loader2 } from 'lucide-react';
 export const Viewport: React.FC = () => {
   const {
     mediaUrl,
+    proxyUrl,
     qualityMode,
     setQualityMode,
     zoomLevel,
@@ -32,6 +33,8 @@ export const Viewport: React.FC = () => {
     setActiveEffects,
     selectedEffectId,
   } = useStudio();
+
+  const previewUrl = proxyUrl || mediaUrl;
 
   const paintCanvasRef = React.useRef<HTMLCanvasElement>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
@@ -84,68 +87,169 @@ export const Viewport: React.FC = () => {
     brushDataRef.current = activeFx?.mask?.brushData;
   }, [activeFx?.mask?.brushData]);
 
+  // Track native media dimensions so overlays can match the image display area
+  const mediaDimensionsRef = React.useRef<{ width: number; height: number } | null>(null);
+  const [mediaDimensionsLoaded, setMediaDimensionsLoaded] = React.useState(0);
+  const syncPaintCanvasSizeRef = React.useRef<() => void>(() => {});
+
+  const previousUrlRef = React.useRef<string | null>(null);
+
+  React.useEffect(() => {
+    let isCancelled = false;
+
+    if (!previewUrl) {
+      mediaDimensionsRef.current = null;
+      return;
+    }
+
+    const isVideo = previewUrl.match(/\.(mp4|webm|avi|mov|mkv)$/i);
+    if (isVideo) {
+      const vid = document.createElement('video');
+      vid.crossOrigin = 'anonymous';
+      vid.src = previewUrl;
+      vid.onloadedmetadata = () => {
+        if (isCancelled) return;
+        mediaDimensionsRef.current = { width: vid.videoWidth, height: vid.videoHeight };
+        setMediaDimensionsLoaded((n) => n + 1);
+        requestAnimationFrame(() => syncPaintCanvasSizeRef.current());
+      };
+    } else {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        if (isCancelled) return;
+        mediaDimensionsRef.current = { width: img.naturalWidth, height: img.naturalHeight };
+        setMediaDimensionsLoaded((n) => n + 1);
+        requestAnimationFrame(() => syncPaintCanvasSizeRef.current());
+      };
+      img.src = previewUrl;
+    }
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [previewUrl]);
+
+  /** Compute the image display rect inside the letterboxed WebGL canvas */
+  const getImageDisplayRect = React.useCallback(() => {
+    const container = containerRef.current;
+    const glCanvas = container?.querySelector('.webgl-canvas') as HTMLCanvasElement | null;
+    if (!container || !glCanvas) return null;
+
+    const mediaDim = mediaDimensionsRef.current;
+    if (!mediaDim) {
+      // Media dimensions not loaded yet — fall back to full canvas
+      return {
+        left: 0,
+        top: 0,
+        width: glCanvas.clientWidth,
+        height: glCanvas.clientHeight,
+        mediaWidth: glCanvas.clientWidth,
+        mediaHeight: glCanvas.clientHeight,
+      };
+    }
+
+    // Measure exact bounding client rects to handle arbitrary layout positioning (SplitView, centering, etc.)
+    const canvasRect = glCanvas.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+
+    // Scale by 1 / zoomLevel to recover unscaled CSS layout coordinates (matching position: absolute in CSS)
+    const relativeLeft = (canvasRect.left - containerRect.left) / zoomLevel;
+    const relativeTop = (canvasRect.top - containerRect.top) / zoomLevel;
+
+    const glWidth = canvasRect.width / zoomLevel;
+    const glHeight = canvasRect.height / zoomLevel;
+    
+    const canvasAspect = glWidth / glHeight;
+    const mediaAspect = mediaDim.width / mediaDim.height;
+
+    let imgW = glWidth;
+    let imgH = glHeight;
+    let imgLeft = relativeLeft;
+    let imgTop = relativeTop;
+
+    if (mediaAspect > canvasAspect) {
+      // Image is wider — letterbox top/bottom
+      imgH = glWidth / mediaAspect;
+      imgTop = relativeTop + (glHeight - imgH) / 2;
+    } else if (mediaAspect < canvasAspect) {
+      // Image is taller — letterbox left/right
+      imgW = glHeight * mediaAspect;
+      imgLeft = relativeLeft + (glWidth - imgW) / 2;
+    }
+
+    return {
+      left: imgLeft,
+      top: imgTop,
+      width: imgW,
+      height: imgH,
+      mediaWidth: mediaDim.width,
+      mediaHeight: mediaDim.height,
+    };
+  }, [zoomLevel]);
+
   const isSAMMode = activeFx?.mask?.type === 'sam';
 
   const syncPaintCanvasSize = React.useCallback(() => {
     const container = containerRef.current;
     const canvas = paintCanvasRef.current;
     if (container && canvas && isPaintingMask) {
-      const glCanvas = container.querySelector('.webgl-canvas') as HTMLCanvasElement;
-      if (glCanvas) {
-        // Only set canvas resolution if changed to prevent clearing painted drawings
-        if (canvas.width !== glCanvas.width || canvas.height !== glCanvas.height) {
-          // Snapshot current canvas contents before resize (preserves in-progress strokes)
-          const currentData = canvas.toDataURL();
+      const imgRect = getImageDisplayRect();
+      if (!imgRect) return;
 
-          canvas.width = glCanvas.width;
-          canvas.height = glCanvas.height;
+      const { left, top, width, height, mediaWidth, mediaHeight } = imgRect;
 
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            // Restore from snapshot first (includes any unsaved in-progress stroke)
-            const img = new Image();
-            img.src = currentData;
-            img.onload = () => {
-              ctx.drawImage(img, 0, 0);
-              // Then overlay any saved brushData if it exists (committed strokes)
-              const brushData = brushDataRef.current;
-              if (brushData && brushData !== currentData) {
-                const brushImg = new Image();
-                brushImg.src = brushData;
-                brushImg.onload = () => {
-                  ctx.drawImage(brushImg, 0, 0);
-                  setMaskCanvas(canvas);
-                };
-              } else {
+      // Only set canvas resolution if changed to prevent clearing painted drawings
+      if (canvas.width !== mediaWidth || canvas.height !== mediaHeight) {
+        // Snapshot current canvas contents before resize (preserves in-progress strokes)
+        const currentData = canvas.toDataURL();
+
+        canvas.width = Math.round(mediaWidth);
+        canvas.height = Math.round(mediaHeight);
+
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          // Restore from snapshot first (includes any unsaved in-progress stroke)
+          const img = new Image();
+          img.src = currentData;
+          img.onload = () => {
+            ctx.drawImage(img, 0, 0);
+            // Then overlay any saved brushData if it exists (committed strokes)
+            const brushData = brushDataRef.current;
+            if (brushData && brushData !== currentData) {
+              const brushImg = new Image();
+              brushImg.src = brushData;
+              brushImg.onload = () => {
+                ctx.drawImage(brushImg, 0, 0);
                 setMaskCanvas(canvas);
-              }
-            };
-          }
+              };
+            } else {
+              setMaskCanvas(canvas);
+            }
+          };
         }
-
-        // Match WebGL display size and position exactly using getBoundingClientRect
-        // The WebGL canvas is centered via flexbox, so offsetLeft/offsetTop are incorrect
-        const containerRect = container.getBoundingClientRect();
-        const glRect = glCanvas.getBoundingClientRect();
-        const relativeLeft = glRect.left - containerRect.left;
-        const relativeTop = glRect.top - containerRect.top;
-
-        setPaintStyle({
-          position: 'absolute',
-          left: `${relativeLeft}px`,
-          top: `${relativeTop}px`,
-          width: `${glRect.width}px`,
-          height: `${glRect.height}px`,
-          cursor: maskBrushEraser ? 'cell' : 'crosshair',
-          zIndex: 5,
-          pointerEvents: 'auto',
-          opacity: 0.5,
-          borderRadius: '4px',
-          display: 'block',
-        });
       }
+
+      setPaintStyle({
+        position: 'absolute',
+        left: `${left}px`,
+        top: `${top}px`,
+        width: `${width}px`,
+        height: `${height}px`,
+        cursor: maskBrushEraser ? 'cell' : 'crosshair',
+        zIndex: 5,
+        pointerEvents: 'auto',
+        opacity: 0.5,
+        borderRadius: '4px',
+        display: 'block',
+      });
     }
-  }, [isPaintingMask, maskBrushEraser, setMaskCanvas]);
+  }, [isPaintingMask, maskBrushEraser, setMaskCanvas, getImageDisplayRect]);
+
+  // Keep ref pointing to latest syncPaintCanvasSize for callbacks outside React's render cycle
+  React.useEffect(() => {
+    syncPaintCanvasSizeRef.current = syncPaintCanvasSize;
+  }, [syncPaintCanvasSize]);
 
   // Sync / initialize drawing canvas size and contents
   React.useEffect(() => {
@@ -207,7 +311,7 @@ export const Viewport: React.FC = () => {
     };
   }, [isPaintingMask, syncPaintCanvasSize]);
 
-  // Sync SAM overlay position to match WebGL canvas
+  // Sync SAM overlay position to match image display area
   React.useEffect(() => {
     const container = containerRef.current;
     if (!container || !isSAMMode) return;
@@ -216,22 +320,19 @@ export const Viewport: React.FC = () => {
     if (!glCanvas) return;
 
     const updateOverlayPosition = () => {
-      const containerRect = container.getBoundingClientRect();
-      const glRect = glCanvas.getBoundingClientRect();
-      const relativeLeft = glRect.left - containerRect.left;
-      const relativeTop = glRect.top - containerRect.top;
+      const imgRect = getImageDisplayRect();
+      if (!imgRect) return;
 
       setSamOverlayStyle({
         position: 'absolute',
-        left: `${relativeLeft}px`,
-        top: `${relativeTop}px`,
-        width: `${glRect.width}px`,
-        height: `${glRect.height}px`,
+        left: `${imgRect.left}px`,
+        top: `${imgRect.top}px`,
+        width: `${imgRect.width}px`,
+        height: `${imgRect.height}px`,
         zIndex: 10,
         display: 'block',
         pointerEvents: 'auto',
         cursor: 'crosshair',
-        border: '2px dashed rgba(0, 255, 170, 0.3)',
         borderRadius: '4px',
         boxSizing: 'border-box',
       });
@@ -247,7 +348,7 @@ export const Viewport: React.FC = () => {
     return () => {
       observer.disconnect();
     };
-  }, [isSAMMode]);
+  }, [isSAMMode, mediaDimensionsLoaded, zoomLevel, getImageDisplayRect]);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -275,6 +376,11 @@ export const Viewport: React.FC = () => {
       const url = nativePath
         ? `media://${nativePath.replace(/\\/g, '/')}`
         : URL.createObjectURL(file);
+      
+      if (previousUrlRef.current && previousUrlRef.current.startsWith('blob:')) {
+        URL.revokeObjectURL(previousUrlRef.current);
+      }
+      previousUrlRef.current = url;
       setMediaUrl(url);
       setMediaType(file.type.startsWith('video') ? 'video' : 'image');
       return;
@@ -365,38 +471,41 @@ export const Viewport: React.FC = () => {
         return;
       }
 
-      const glCanvas = container.querySelector('.webgl-canvas') as HTMLCanvasElement;
-      if (!glCanvas) {
-        console.log('[SAM CLICK] early return — no .webgl-canvas');
-        return;
-      }
-      const rect = glCanvas.getBoundingClientRect();
-      // Scale display coordinates to actual canvas pixel dimensions
-      const scaleX = glCanvas.width / rect.width;
-      const scaleY = glCanvas.height / rect.height;
-      const clickX = (e.clientX - rect.left) * scaleX;
-      const clickY = (e.clientY - rect.top) * scaleY;
-      if (clickX < 0 || clickY < 0 || clickX > glCanvas.width || clickY > glCanvas.height) {
-        console.log('[SAM CLICK] early return — click outside canvas bounds');
+      const imgRect = getImageDisplayRect();
+      if (!imgRect) {
+        console.log('[SAM CLICK] early return — no image rect');
         return;
       }
 
-      const normX = clickX / glCanvas.width;
-      const normY = clickY / glCanvas.height;
-      console.log('[SAM CLICK] coords', { clickX, clickY, normX, normY, rect: { w: rect.width, h: rect.height } });
+      // Scale display coordinates to native media pixel dimensions
+      const scaleX = imgRect.mediaWidth / imgRect.width;
+      const scaleY = imgRect.mediaHeight / imgRect.height;
+      // Use nativeEvent.offsetX/Y which are immune to CSS transform scaling
+      // since all children of samOverlayRef have pointerEvents: 'none'.
+      const clickX = e.nativeEvent.offsetX * scaleX;
+      const clickY = e.nativeEvent.offsetY * scaleY;
+      if (clickX < 0 || clickY < 0 || clickX > imgRect.mediaWidth || clickY > imgRect.mediaHeight) {
+        console.log('[SAM CLICK] early return — click outside image bounds');
+        return;
+      }
+
+      const normX = clickX / imgRect.mediaWidth;
+      const normY = clickY / imgRect.mediaHeight;
+      console.log('[SAM CLICK] coords', { clickX, clickY, normX, normY, imgRect: { w: imgRect.width, h: imgRect.height } });
 
       // Flood fill on Ctrl+click (or Cmd+click on macOS)
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
         e.stopPropagation();
         try {
+          const glCanvas = container.querySelector('.webgl-canvas') as HTMLCanvasElement;
           const { floodFillCanvas } = await import('../../lib/floodFill');
           const ffCanvas = document.createElement('canvas');
-          ffCanvas.width = glCanvas.width;
-          ffCanvas.height = glCanvas.height;
+          ffCanvas.width = glCanvas ? glCanvas.width : imgRect.mediaWidth;
+          ffCanvas.height = glCanvas ? glCanvas.height : imgRect.mediaHeight;
           const ffCtx = ffCanvas.getContext('2d');
           if (!ffCtx) return;
-          ffCtx.drawImage(glCanvas, 0, 0);
+          if (glCanvas) ffCtx.drawImage(glCanvas, 0, 0);
           const result = floodFillCanvas(ffCanvas, Math.round(normX * ffCanvas.width), Math.round(normY * ffCanvas.height), {
             tolerance: 32,
             connectivity: 4,
@@ -494,22 +603,21 @@ export const Viewport: React.FC = () => {
         console.error('[AI Masking] Click-to-segment failed:', err);
       }
     },
-    [isSAMMode, activeFx, mediaUrl, samPoints, predictBatch, setActiveEffects],
+    [isSAMMode, activeFx, mediaUrl, samPoints, predictBatch, setActiveEffects, getImageDisplayRect],
   );
 
   // Debounced hover preview for SAM
   const handleSAMMouseMove = React.useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
       if (!isSAMMode || !mediaUrl || samStatus !== 'ready') return;
-      const container = containerRef.current;
-      if (!container) return;
-      const glCanvas = container.querySelector('.webgl-canvas') as HTMLCanvasElement;
-      if (!glCanvas) return;
-      const rect = glCanvas.getBoundingClientRect();
-      const scaleX = glCanvas.width / rect.width;
-      const scaleY = glCanvas.height / rect.height;
-      const x = ((e.clientX - rect.left) * scaleX) / glCanvas.width;
-      const y = ((e.clientY - rect.top) * scaleY) / glCanvas.height;
+      const imgRect = getImageDisplayRect();
+      if (!imgRect) return;
+
+      const scaleX = imgRect.mediaWidth / imgRect.width;
+      const scaleY = imgRect.mediaHeight / imgRect.height;
+      // Use nativeEvent.offsetX/Y since e.target is always the samOverlay div (children are pointerEvents: none)
+      const x = (e.nativeEvent.offsetX * scaleX) / imgRect.mediaWidth;
+      const y = (e.nativeEvent.offsetY * scaleY) / imgRect.mediaHeight;
       if (x < 0 || y < 0 || x > 1 || y > 1) return;
 
       if (samHoverTimeoutRef.current) {
@@ -519,9 +627,9 @@ export const Viewport: React.FC = () => {
         hoverPreview(mediaUrl, { x, y }).catch(() => {
           /* ignore hover errors */
         });
-      }, 120);
+      }, 50);
     },
-    [isSAMMode, mediaUrl, samStatus, hoverPreview],
+    [isSAMMode, mediaUrl, samStatus, hoverPreview, getImageDisplayRect],
   );
 
   const handleSAMMouseLeave = React.useCallback(() => {
@@ -694,7 +802,7 @@ export const Viewport: React.FC = () => {
                   style={samOverlayStyle}
                   className={`sam-overlay ${samStatus === 'segmenting' || samStatus === 'loading' ? 'sam-overlay--loading' : 'sam-overlay--ready'}`}
                 >
-                  {/* Hover preview canvas */}
+                  {/* Hover preview canvas — shown while mouse moves over candidates */}
                   {hoverMask && (
                     <canvas
                       ref={hoverCanvasRef}
@@ -705,7 +813,7 @@ export const Viewport: React.FC = () => {
                         width: '100%',
                         height: '100%',
                         pointerEvents: 'none',
-                        opacity: 0.5,
+                        opacity: 0.45,
                         mixBlendMode: 'screen',
                       }}
                     />
@@ -784,6 +892,36 @@ export const Viewport: React.FC = () => {
             <Icon name="folder" size={48} style={{ opacity: 0.5 }} />
             <span style={{ fontSize: '14px', fontWeight: 500 }}>No Media Loaded</span>
             <span style={{ fontSize: '12px', opacity: 0.8 }}>Import an image or video file to start.</span>
+          </div>
+        )}
+
+        {/* AI Mask Mode HUD badge — shown top-left when SAM mode is active */}
+        {isSAMMode && mediaUrl && (
+          <div
+            style={{
+              position: 'absolute',
+              top: '12px',
+              left: '12px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              background: 'rgba(0, 255, 170, 0.12)',
+              border: '1px solid rgba(0, 255, 170, 0.5)',
+              borderRadius: 'var(--radius-lg)',
+              padding: '4px 10px',
+              fontSize: '11px',
+              fontWeight: 600,
+              color: '#00ffaa',
+              backdropFilter: 'blur(8px)',
+              zIndex: 100,
+              pointerEvents: 'none',
+            }}
+          >
+            <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#00ffaa', display: 'inline-block' }} />
+            AI MASK MODE
+            <span style={{ opacity: 0.6, fontWeight: 400, marginLeft: 2 }}>
+              · Click to segment · Right-click to exclude
+            </span>
           </div>
         )}
 

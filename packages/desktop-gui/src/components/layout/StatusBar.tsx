@@ -81,7 +81,6 @@ export const StatusBar: React.FC = () => {
             title="Clear frame cache"
             onClick={handleClearCache}
             className="status-bar__cache"
-            style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: 'inherit', fontFamily: 'inherit' }}
           >
             Cache: {cacheStats.entries} frames ({cacheStats.sizeMB} MB)
           </button>

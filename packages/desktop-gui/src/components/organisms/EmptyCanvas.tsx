@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { motion } from 'framer-motion';
+import { useStudio } from '../../context/StudioContext';
 
 interface EmptyCanvasProps {
   onImport: () => void;
@@ -12,7 +13,9 @@ export const EmptyCanvas: React.FC<EmptyCanvasProps> = ({
   recentFiles = [],
   onOpenRecent,
 }) => {
+  const { setMediaUrl, setMediaType } = useStudio();
   const [isDragOver, setIsDragOver] = React.useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -30,38 +33,56 @@ export const EmptyCanvas: React.FC<EmptyCanvasProps> = ({
     if (files.length > 0) {
       const file = files[0];
       if (file.type.startsWith('image/') || file.type.startsWith('video/')) {
-        onImport();
+        const nativePath = (file as File & { path?: string }).path;
+        const url = nativePath && window.ipcRenderer
+          ? `media://${nativePath.replace(/\\/g, '/')}`
+          : URL.createObjectURL(file);
+        setMediaUrl(url);
+        setMediaType(file.type.startsWith('video') ? 'video' : 'image');
       }
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      const file = files[0];
+      const nativePath = (file as File & { path?: string }).path;
+      const url = nativePath && window.ipcRenderer
+        ? `media://${nativePath.replace(/\\/g, '/')}`
+        : URL.createObjectURL(file);
+      setMediaUrl(url);
+      setMediaType(file.type.startsWith('video') ? 'video' : 'image');
+    }
+  };
+
+  const handleImportClick = () => {
+    if (window.ipcRenderer) {
+      onImport();
+    } else {
+      fileInputRef.current?.click();
     }
   };
 
   return (
     <div
-      style={{
-        flex: 1,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: '32px',
-        position: 'relative',
-        overflow: 'hidden',
-      }}
+      className="empty-canvas"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {/* Hidden file input for browser fallback */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*,video/*"
+        onChange={handleFileChange}
+        style={{ display: 'none' }}
+      />
+
       {/* Animated background glow */}
       <motion.div
-        style={{
-          position: 'absolute',
-          width: '400px',
-          height: '400px',
-          borderRadius: '50%',
-          background: 'radial-gradient(circle, var(--accent-primary-glow) 0%, transparent 70%)',
-          filter: 'blur(60px)',
-          opacity: 0.4,
-        }}
+        className="empty-canvas__bg-glow"
         animate={{
           scale: [1, 1.2, 1],
           opacity: [0.3, 0.5, 0.3],
@@ -75,19 +96,7 @@ export const EmptyCanvas: React.FC<EmptyCanvasProps> = ({
 
       {/* Drop zone */}
       <motion.div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          gap: '24px',
-          padding: '48px 64px',
-          borderRadius: 'var(--radius-md)',
-          border: `2px dashed ${isDragOver ? 'var(--accent-primary)' : 'var(--border-default)'}`,
-          background: isDragOver ? 'rgba(0, 255, 200, 0.05)' : 'rgba(255, 255, 255, 0.02)',
-          transition: 'all var(--transition-base)',
-          position: 'relative',
-          zIndex: 1,
-        }}
+        className={`empty-canvas__drop-zone${isDragOver ? ' empty-canvas__drop-zone--drag-over' : ''}`}
         animate={isDragOver ? { scale: 1.02 } : { scale: 1 }}
         transition={{ duration: 0.2 }}
       >
@@ -97,7 +106,7 @@ export const EmptyCanvas: React.FC<EmptyCanvasProps> = ({
           height="64"
           viewBox="0 0 64 64"
           fill="none"
-          style={{ color: 'var(--accent-primary)' }}
+          className="empty-canvas__icon"
           animate={{ y: [0, -4, 0] }}
           transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
         >
@@ -106,49 +115,24 @@ export const EmptyCanvas: React.FC<EmptyCanvasProps> = ({
           <path d="M20 40H44" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
         </motion.svg>
 
-        <div style={{ textAlign: 'center' }}>
-          <h2
-            style={{
-              fontSize: '20px',
-              fontWeight: 600,
-              color: 'var(--text-primary)',
-              marginBottom: '8px',
-              fontFamily: 'var(--font-display)',
-            }}
-          >
-            MoshDither Studio
-          </h2>
-          <p style={{ fontSize: '14px', color: 'var(--text-secondary)', maxWidth: '280px' }}>
+        <div className="empty-canvas__text">
+          <h2 className="empty-canvas__title">MoshDither Studio</h2>
+          <p className="empty-canvas__subtitle">
             Drop an image or video here, or import to start creating.
           </p>
         </div>
 
         <button
           type="button"
-          onClick={onImport}
-          style={{
-            padding: '10px 24px',
-            borderRadius: 'var(--radius-md)',
-            background: 'var(--accent-primary)',
-            color: '#000',
-            fontSize: '14px',
-            fontWeight: 600,
-            border: 'none',
-            cursor: 'pointer',
-            transition: 'all var(--transition-base)',
-          }}
-          onMouseEnter={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.boxShadow = 'var(--glow-primary)';
-          }}
-          onMouseLeave={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.boxShadow = 'none';
-          }}
+          onClick={handleImportClick}
+          className="empty-canvas__cta"
         >
           Import Media
         </button>
 
-        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-          or press <kbd style={{ padding: '2px 6px', background: 'var(--bg-surface)', borderRadius: '4px', fontFamily: 'var(--font-mono)', fontSize: '11px' }}>Ctrl+O</kbd>
+        <span className="empty-canvas__shortcut">
+          or press{' '}
+          <kbd className="empty-canvas__kbd">Ctrl+O</kbd>
         </span>
       </motion.div>
 
@@ -158,45 +142,16 @@ export const EmptyCanvas: React.FC<EmptyCanvasProps> = ({
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.3 }}
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '8px',
-            alignItems: 'center',
-            zIndex: 1,
-          }}
+          className="empty-canvas__recent"
         >
-          <span style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '0.05em' }}>
-            Recent Files
-          </span>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' }}>
+          <span className="empty-canvas__recent-label">Recent Files</span>
+          <div className="empty-canvas__recent-list">
             {recentFiles.slice(0, 5).map((file, i) => (
               <button
                 key={i}
                 type="button"
                 onClick={() => onOpenRecent?.(file)}
-                style={{
-                  padding: '6px 12px',
-                  borderRadius: 'var(--radius-md)',
-                  background: 'var(--bg-surface)',
-                  border: '1px solid var(--border-subtle)',
-                  color: 'var(--text-secondary)',
-                  fontSize: '12px',
-                  cursor: 'pointer',
-                  maxWidth: '200px',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  transition: 'all var(--transition-fast)',
-                }}
-                onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border-default)';
-                  (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)';
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border-subtle)';
-                  (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)';
-                }}
+                className="empty-canvas__recent-item"
                 title={file}
               >
                 {file.split(/[\\/]/).pop()}

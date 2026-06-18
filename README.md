@@ -1,121 +1,76 @@
 # MoshDither Studio
 
-> **A production-grade desktop creative tool for datamoshing, dithering, and real-time WebGL post-processing.**
+A unified desktop application for datamoshing, dithering, glitch art, and video effects. Combines the capabilities of 37+ existing tools into a single, modern, cross-platform creative suite.
 
-MoshDither Studio combines glitch art techniques (datamoshing via FFglitch), pixel art dithering algorithms, and real-time WebGL shader effects into a unified creative pipeline. Built with Electron, React 19, TypeScript, and Python.
-
----
+> **Status:** Early development. Not yet ready for production use.
 
 ## Features
 
-- **Real-Time WebGL Preview** — Chain shader effects (halftone, analog glitch, CRT phosphor, temporal noise, epsilon glow) with live preview
-- **Datamoshing Engine** — Python-powered FFglitch integration for classic and modern datamoshing modes
-- **Dithering Library** — Bayer, error diffusion, blue noise, polka dot, wavelet, adaptive variance, and halftone dithering
-- **Mask Painting** — Brush-based mask editor with eraser support for selective effect application
-- **Video & Image Export** — Render pipeline with format selection (PNG, JPG, GIF, MP4)
-- **Effect Stacking** — Layer multiple effects with independent time ranges and parameters
-- **Undo/Redo** — Full history stack (50 states) for non-destructive editing
+- **Datamoshing**: I-frame removal, frame reordering/repetition, motion transfer, cross-video mosh
+- **Dithering**: 15+ algorithms (Bayer, Floyd-Steinberg, Atkinson, Blue Noise, and more)
+- **Glitch**: JPEG/PNG corruption, databending, byte-level manipulation
+- **Analog Effects**: VHS, scanlines, chromatic aberration, CRT simulation
+- **Pixel Geometry**: Pixel sorting, kaleidoscope, wave distortion
+- **Segmentation**: SAM3-powered mask generation (point, box, auto) for selective effects
+- **Mask-Driven Pipeline**: Apply any effect inside, outside, or masked-to-alpha
+- **Linear Effect Stack**: Reorderable, previewable stack of effects
 
----
+## Tech Stack
 
-## Architecture
+| Layer         | Technology                        |
+| ------------- | --------------------------------- |
+| Desktop Shell | Tauri v2                          |
+| Backend       | Rust                              |
+| Frontend      | Vite + React + TypeScript         |
+| Styling       | Tailwind CSS                      |
+| State         | Zustand                           |
+| Video         | FFmpeg (sidecar)                  |
+| Segmentation  | ONNX Runtime (`ort` crate) + SAM3 |
 
-```
-packages/
-  desktop-gui/     Electron + React + Vite renderer process
-  mosh-engine/     TypeScript adapters for Python backend (datamoshing, dithering)
-  python-backend/  Python RPC server (FFglitch, ffmpeg, neural downscale placeholder)
-```
-
-- **Main Process:** Node.js/Electron — file dialogs, Python spawning, IPC routing, custom protocol (`media://`)
-- **Renderer Process:** React 19 + WebGL2 — UI, canvas rendering, effect parameter editing
-- **Python Backend:** `mosh_cli.py` (FFglitch/ffmpeg) + `main.py` (secure RPC server)
-
----
-
-## Quick Start
+## Development
 
 ### Prerequisites
 
-- Node.js 22+
-- Python 3.12+
-- ffmpeg (bundled for Windows; macOS/Linux must install separately)
+- [Rust](https://rustup.rs/) (stable toolchain)
+- [Node.js](https://nodejs.org/) 18+ with npm or pnpm
+- FFmpeg binaries (downloaded automatically on first build)
 
-### Install
+### Setup
 
 ```bash
-# Clone
-git clone <repo-url>
-cd moshdither-studio
-
-# Install Node dependencies
-cd packages/desktop-gui
+# Install frontend dependencies
 npm install
 
-# Install Python dependencies
-cd ../python-backend
-pip install -r requirements.txt
+# Install Tauri CLI globally (optional)
+npm install -g @tauri-apps/cli
+
+# Run in development mode
+npm run tauri:dev
 ```
-
-### Development
-
-```bash
-cd packages/desktop-gui
-npm run dev
-```
-
-This starts the Vite dev server and launches the Electron window.
 
 ### Build
 
 ```bash
-cd packages/desktop-gui
-npm run build
+# Build for production
+npm run tauri:build
 ```
 
-Output is written to `dist/` (renderer) and `dist-electron/` (main + preload).
+## Contributing
 
-### Tests
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## Production Release & Code Signing
+
+Before distributing MoshDither Studio, ensure you configure code signing for Windows (Authenticode) and macOS (Developer ID) in your environment variables before running the build command.
+
+1. **macOS**: Export `APPLE_SIGNING_IDENTITY` and `APPLE_CERTIFICATE_PASSWORD`
+2. **Windows**: Export `TAURI_SIGN_PFX_PATH` and `TAURI_SIGN_PFX_PASSWORD`
 
 ```bash
-cd packages/desktop-gui
-npm test           # Unit tests (jsdom)
+# Build the production release installers
+npm run tauri:build
 ```
-
-```bash
-cd packages/python-backend
-pytest             # Python tests
-```
-
----
-
-## Security
-
-See [`SECURITY.md`](./SECURITY.md) for vulnerability reporting and hardening summary.
-
-Key security features:
-- Context isolation + sandbox in all renderers
-- IPC channel whitelist in preload script
-- Custom `media://` protocol with path traversal prevention
-- Python RPC token authentication (`X-RPC-Token`)
-- Electron fuses flipped for production builds (`runAsNode: false`, etc.)
-- Content Security Policy enforced
-
----
-
-## Documentation
-
-| Document | Description |
-|----------|-------------|
-| [`docs/PRODUCTION_HARDENING_PLAN.md`](./docs/PRODUCTION_HARDENING_PLAN.md) | Security & performance hardening roadmap |
-| [`docs/DESIGN_SPEC_UNIFIED.md`](./docs/DESIGN_SPEC_UNIFIED.md) | UI/UX design system (OKLCH colors, typography, components) |
-| [`docs/API_SPEC.md`](./docs/API_SPEC.md) | IPC channels and Python RPC API reference |
-| [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | System architecture and data flow |
-| [`packages/desktop-gui/README.md`](./packages/desktop-gui/README.md) | Frontend-specific build and dev docs |
-| [`packages/python-backend/README.md`](./packages/python-backend/README.md) | Python backend setup and API docs |
-
----
 
 ## License
 
-[MIT](LICENSE) © 2026 MoshDither Studio Contributors
+MIT — see [LICENSE](LICENSE).

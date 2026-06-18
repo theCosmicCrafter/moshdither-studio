@@ -52,17 +52,16 @@ export const Toolbar: React.FC = () => {
         addRecentFile(filePath);
         const isVideo = /\.(mp4|webm|mov)$/i.test(filePath);
         if (isVideo) {
-          const { generateProxy } = await import('../../utils/proxyMedia');
-          const ffmpegPath = 'ffmpeg';
-          generateProxy(ffmpegPath, filePath.replace(/^media:\/\//, ''), (pct) => {
-            if (pct >= 100) {
-              addToast('Proxy generated for smooth playback', 'success');
-            }
-          }).then((proxyPath) => {
-            setProxyUrl(`media://${proxyPath.replace(/\\/g, '/')}`);
-          }).catch(() => {
-            // Proxy generation failed; fallback to original
-          });
+          window.ipcRenderer.invoke('proxy:generate', filePath)
+            .then((proxyUrl) => {
+              if (proxyUrl) {
+                setProxyUrl(proxyUrl as string);
+                addToast('Proxy generated for smooth playback', 'success');
+              }
+            })
+            .catch(() => {
+              // Proxy generation failed; fallback to original
+            });
         }
       }
     } catch {
@@ -190,6 +189,9 @@ export const Toolbar: React.FC = () => {
           Record
         </button>
       </div>
+
+      {/* Spacer to push window controls to the right */}
+      <div style={{ flex: 1 }} />
 
       {/* Window controls — hidden on macOS (traffic lights); shown everywhere else */}
       {!isBrowser && !isMac && (

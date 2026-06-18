@@ -11,7 +11,9 @@ pub struct CombineDatamosh {
 
 impl CombineDatamosh {
     pub fn new(stride: u32) -> Self {
-        Self { stride: stride.max(2) }
+        Self {
+            stride: stride.max(2),
+        }
     }
 }
 
@@ -28,23 +30,51 @@ impl Effect for CombineDatamosh {
             name: "Combine".to_string(),
             category: EffectCategory::Datamoshing,
             media_type: MediaType::Video,
-            parameters: vec![
-                ParameterDef {
-                    id: "stride".to_string(),
-                    name: "Stride".to_string(),
-                    param_type: ParamType::Slider,
-                    default: json!(3),
-                    min: Some(2.0),
-                    max: Some(10.0),
-                    step: Some(1.0),
-                    options: None,
-                },
-            ],
+            parameters: vec![ParameterDef {
+                id: "stride".to_string(),
+                name: "Stride".to_string(),
+                param_type: ParamType::Slider,
+                default: json!(3),
+                min: Some(2.0),
+                max: Some(10.0),
+                step: Some(1.0),
+                options: None,
+            }],
         }
     }
 
-    fn process_frame(&self, input: &Frame, _m: Option<&Mask>, _p: &ParameterValues) -> Result<Frame> {
-        Ok(input.clone())
+    fn is_temporal(&self) -> bool {
+        true
+    }
+
+    fn process_frame(
+        &self,
+        input: &Frame,
+        _m: Option<&Mask>,
+        params: &ParameterValues,
+    ) -> Result<Frame> {
+        let stride = params
+            .get("stride")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(self.stride as u64) as usize;
+        let w = input.width as usize;
+        let h = input.height as usize;
+        let mut out = input.data.clone();
+        for y in (0..h).step_by(stride) {
+            if y + 1 < h {
+                let src_row_start = y * w * 4;
+                for yy in (y + 1)..(y + stride).min(h) {
+                    let dst_row_start = yy * w * 4;
+                    out[dst_row_start..dst_row_start + w * 4]
+                        .copy_from_slice(&input.data[src_row_start..src_row_start + w * 4]);
+                }
+            }
+        }
+        Ok(Frame {
+            width: input.width,
+            height: input.height,
+            data: out,
+        })
     }
 
     fn process_video(
@@ -97,7 +127,9 @@ mod tests {
     fn test_combine() {
         let e = CombineDatamosh::new(3);
         let seg = make_segment(6);
-        let r = e.process_video(&seg, None, &serde_json::Map::new()).unwrap();
+        let r = e
+            .process_video(&seg, None, &serde_json::Map::new())
+            .unwrap();
         assert!(r.frames.len() > 6);
     }
 }

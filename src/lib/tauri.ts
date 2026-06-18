@@ -191,6 +191,7 @@ export async function exportVideo(
     fps?: number;
     width?: number;
     height?: number;
+    audioBakeJson?: string | null;
   } = {}
 ): Promise<string> {
   const path = await open({
@@ -213,5 +214,6 @@ export async function exportVideo(
     fps: options.fps ?? null,
     width: options.width ?? null,
     height: options.height ?? null,
+    audioBakeJson: options.audioBakeJson ?? null,
   });
 }

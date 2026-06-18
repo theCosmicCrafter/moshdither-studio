@@ -4,6 +4,7 @@ pub mod byte_reverse;
 pub mod byte_zero;
 pub mod databend;
 pub mod jpeg_quantize;
+pub mod png_chunk;
 pub mod slice_shift;
 
 pub use byte_flip::ByteFlip;
@@ -12,4 +13,5 @@ pub use byte_reverse::ByteReverse;
 pub use byte_zero::ByteZero;
 pub use databend::Databend;
 pub use jpeg_quantize::JpegQuantize;
+pub use png_chunk::{CrcMismatchGlitch, PngChunkGlitch};
 pub use slice_shift::SliceShift;

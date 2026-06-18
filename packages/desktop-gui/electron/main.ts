@@ -25,6 +25,7 @@ import {
   startPythonBackend,
   pythonRpcCall,
   stopPythonBackend, // used in before-quit
+  addStdoutListener,
 } from "./pythonBackend";
 import {
   getCachedFrame,
@@ -37,7 +38,6 @@ import {
   type WatermarkSettings,
 } from "../src/utils/watermark";
 import getSystemFonts from "get-system-fonts";
-import { resolvePythonPath } from "./binaryResolver";
 import {
   getEnvironmentStatus,
   installLocalEnvironment,
@@ -393,10 +393,20 @@ interface PipelineEffect {
  */
 function validateIpcSender(event: Electron.IpcMainInvokeEvent): void {
   const senderUrl = event.senderFrame?.url ?? "";
+  
+  // In development, allow localhost or 127.0.0.1 origins
+  const isDev = !!process.env["VITE_DEV_SERVER_URL"];
+  const isLocalhost = isDev && (
+    senderUrl.startsWith("http://localhost:") || 
+    senderUrl.startsWith("http://127.0.0.1:")
+  );
+
   const trusted =
     senderUrl.startsWith("file://") ||
     senderUrl.startsWith("media://") ||
+    isLocalhost ||
     (VITE_DEV_SERVER_URL ? senderUrl.startsWith(VITE_DEV_SERVER_URL) : false);
+
   if (!trusted) {
     throw new Error(`Unauthorized IPC sender: ${senderUrl}`);
   }
@@ -415,6 +425,27 @@ app.whenReady().then(() => {
   if (!fs.existsSync(defaultOutputDir)) {
     fs.mkdirSync(defaultOutputDir, { recursive: true });
   }
+
+  addStdoutListener((text) => {
+    // Parse progress
+    const progressMatch = text.match(/SAM3_DOWNLOAD_PROGRESS:(\d+(\.\d+)?)/);
+    if (progressMatch && win && !win.isDestroyed()) {
+      const progress = parseFloat(progressMatch[1]);
+      win.webContents.send("sam3:download-progress", {
+        model: "sam3",
+        progress: progress,
+        status: "progress"
+      });
+    }
+
+    if (text.includes("SAM3_DOWNLOAD_COMPLETE") && win && !win.isDestroyed()) {
+      win.webContents.send("sam3:download-progress", {
+        model: "sam3",
+        progress: 100,
+        status: "success"
+      });
+    }
+  });
 
   // Expose the Python RPC auth token to the renderer (via IPC) so it can
   // make authenticated requests to the local Python backend.
@@ -567,7 +598,7 @@ app.whenReady().then(() => {
   ipcMain.handle("sam3:load-model", async (event) => {
     validateIpcSender(event);
     try {
-      // Check if SAM3 model is actually loaded in Python backend
+      // Quick check: is SAM3 model loaded in Python backend?
       const result = (await pythonRpcCall("sam3_list_models", {})) as {
         models?: Record<string, boolean>;
       };
@@ -576,6 +607,24 @@ app.whenReady().then(() => {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error("[Main] sam3:load-model check failed:", msg);
+      return { ok: false, error: msg, loaded: false };
+    }
+  });
+
+  ipcMain.handle("sam3:preload-model", async (event) => {
+    validateIpcSender(event);
+    try {
+      // Trigger actual model loading in Python backend (may take a while)
+      const result = (await pythonRpcCall("sam3_load_model", {})) as {
+        status: string;
+        loaded?: boolean;
+        error?: string;
+      };
+      const ok = result.status === "success" && result.loaded;
+      return { ok, loaded: ok, error: result.error };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[Main] sam3:preload-model failed:", msg);
       return { ok: false, error: msg, loaded: false };
     }
   });
@@ -640,14 +689,16 @@ app.whenReady().then(() => {
   });
 
   // ---------------------------------------------------------------------------
-  // SAM Hover Preview (lightweight single-point preview)
+  // SAM Box Prediction (drag-to-draw box prompt)
   // ---------------------------------------------------------------------------
-  ipcMain.handle("sam3:hover-preview", async (event, payload) => {
+  ipcMain.handle("sam3:predict-box", async (event, payload) => {
     validateIpcSender(event);
-    const { imagePath, point } = payload as {
+    const { imagePath, x1, y1, x2, y2 } = payload as {
       imagePath: string;
-      point: { x: number; y: number };
-      model?: string;
+      x1: number;
+      y1: number;
+      x2: number;
+      y2: number;
     };
 
     try {
@@ -658,56 +709,69 @@ app.whenReady().then(() => {
         throw new Error(`Image file not found: ${imagePath}`);
       }
 
-      // Get image dimensions via sharp or ffprobe fallback
-      let imgW = 0,
-        imgH = 0;
-      try {
-        const sharp = await import("sharp");
-        const meta = await sharp.default(filePath).metadata();
-        imgW = meta.width || 0;
-        imgH = meta.height || 0;
-      } catch {
-        // sharp not available, try ffprobe
-        try {
-          const meta = await readMediaMetadata(filePath);
-          const videoStream = (
-            meta.streams as Array<{ width?: number; height?: number }>
-          )?.find(
-            (s: { width?: number; height?: number }) => s.width && s.height,
-          );
-          imgW =
-            videoStream?.width ||
-            (meta.format as { width?: number })?.width ||
-            0;
-          imgH =
-            videoStream?.height ||
-            (meta.format as { height?: number })?.height ||
-            0;
-        } catch {
-          console.warn(
-            "[SAM] Could not determine image dimensions for hover preview",
-          );
-        }
-      }
-
-      if (!imgW || !imgH) {
-        throw new Error(
-          `Could not determine image dimensions for ${imagePath}`,
-        );
-      }
-
-      const px = Math.round(point.x * imgW);
-      const py = Math.round(point.y * imgH);
-
-      const result = (await pythonRpcCall("sam3_predict_point", {
+      const result = (await pythonRpcCall("sam3_predict_box", {
         image_path: filePath,
-        x: px,
-        y: py,
+        x1,
+        y1,
+        x2,
+        y2,
+        normalized: true,
       })) as {
         status: string;
         mask?: string;
         width?: number;
         height?: number;
+        score?: number;
+        error?: string;
+      };
+
+      if (result.status !== "success" || !result.mask) {
+        throw new Error(result.error || "SAM 3 box prediction failed");
+      }
+
+      return {
+        ok: true,
+        maskBase64: result.mask,
+        width: result.width,
+        height: result.height,
+        score: result.score,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[Main] SAM box prediction failed:", msg);
+      return { ok: false, error: msg };
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // SAM Hover Preview (lightweight single-point preview)
+  // ---------------------------------------------------------------------------
+  ipcMain.handle("sam3:hover-preview", async (event, payload) => {
+    validateIpcSender(event);
+    const { imagePath, point } = payload as {
+      imagePath: string;
+      point: { x: number; y: number };
+    };
+
+    try {
+      const filePath = imagePath.startsWith("media://")
+        ? getPathFromMediaUrl(imagePath)
+        : imagePath;
+      if (!filePath || !fs.existsSync(filePath)) {
+        throw new Error(`Image file not found: ${imagePath}`);
+      }
+
+      const result = (await pythonRpcCall("sam3_predict_point", {
+        image_path: filePath,
+        x: point.x,
+        y: point.y,
+        normalized: true,
+      })) as {
+        status: string;
+        mask?: string;
+        width?: number;
+        height?: number;
+        score?: number;
         error?: string;
       };
 
@@ -720,6 +784,7 @@ app.whenReady().then(() => {
         maskBase64: result.mask,
         width: result.width,
         height: result.height,
+        score: result.score,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -793,51 +858,11 @@ app.whenReady().then(() => {
         throw new Error(`Image file not found: ${imagePath}`);
       }
 
-      // Get image dimensions via sharp or ffprobe fallback
-      let imgW = 0,
-        imgH = 0;
-      try {
-        const sharp = await import("sharp");
-        const meta = await sharp.default(filePath).metadata();
-        imgW = meta.width || 0;
-        imgH = meta.height || 0;
-      } catch {
-        // sharp not available, try ffprobe
-        try {
-          const meta = await readMediaMetadata(filePath);
-          const videoStream = (
-            meta.streams as Array<{ width?: number; height?: number }>
-          )?.find(
-            (s: { width?: number; height?: number }) => s.width && s.height,
-          );
-          imgW =
-            videoStream?.width ||
-            (meta.format as { width?: number })?.width ||
-            0;
-          imgH =
-            videoStream?.height ||
-            (meta.format as { height?: number })?.height ||
-            0;
-        } catch {
-          console.warn(
-            "[SAM] Could not determine image dimensions for PRO point prediction",
-          );
-        }
-      }
-
-      if (!imgW || !imgH) {
-        throw new Error(
-          `Could not determine image dimensions for ${imagePath}`,
-        );
-      }
-
-      const px = Math.round(point.x * imgW);
-      const py = Math.round(point.y * imgH);
-
       const result = (await pythonRpcCall("sam3_predict_point_pro", {
         image_path: filePath,
-        x: px,
-        y: py,
+        x: point.x,
+        y: point.y,
+        normalized: true,
       })) as {
         status: string;
         mask?: string;
@@ -966,7 +991,8 @@ app.whenReady().then(() => {
   // ---------------------------------------------------------------------------
   // Model Management (SAM 3 has a single model that auto-downloads on first use)
   // ---------------------------------------------------------------------------
-  ipcMain.handle("sam3:list-models", async () => {
+  ipcMain.handle("sam3:list-models", async (event) => {
+    validateIpcSender(event);
     try {
       const result = (await pythonRpcCall("sam3_list_models", {})) as {
         sam: Record<string, boolean>;
@@ -979,12 +1005,41 @@ app.whenReady().then(() => {
     }
   });
 
-  ipcMain.handle("sam3:download-model", async () => {
-    return { ok: true };
+  ipcMain.handle("sam3:download-model", async (event) => {
+    validateIpcSender(event);
+    try {
+      const result = (await pythonRpcCall("sam3_download_model", {})) as {
+        status: string;
+        message: string;
+      };
+      return { ok: result.status === "success" };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[Main] sam3:download-model failed:", msg);
+      return { ok: false, error: msg };
+    }
   });
 
-  ipcMain.handle("sam3:model-status", async () => {
-    return { active_downloads: [] };
+  ipcMain.handle("sam3:model-status", async (event) => {
+    validateIpcSender(event);
+    try {
+      const result = (await pythonRpcCall("sam3_model_status", {})) as {
+        status: string;
+        progress: number;
+        error?: string;
+      };
+      const active_downloads = result.status === "downloading" ? ["sam3"] : [];
+      return {
+        active_downloads,
+        progress: result.progress,
+        status: result.status,
+        error: result.error,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[Main] sam3:model-status failed:", msg);
+      return { active_downloads: [], error: msg };
+    }
   });
 
   ipcMain.handle("sam3:unload-model", async () => {
@@ -1442,6 +1497,7 @@ app.whenReady().then(() => {
       watermarkSettings?: WatermarkSettings,
     ) => {
       validateIpcSender(event);
+      const tempFiles: string[] = [];
       try {
         let currentPath = getPathFromMediaUrl(inputUrl);
         if (!currentPath) {
@@ -1532,6 +1588,7 @@ app.whenReady().then(() => {
             }
 
             await mosher.applyMosh(currentPath, tempOut, params);
+            tempFiles.push(tempOut);
             currentPath = tempOut;
             reportProgress(`Applied datamosh (${params.mode})`);
           } else if (fx.type === "dither") {
@@ -1740,6 +1797,7 @@ app.whenReady().then(() => {
               },
             );
             await runFfmpeg(watermarkedArgs);
+            tempFiles.push(conversionTempPath);
             currentPath = conversionTempPath;
             reportProgress(`Converted to ${targetExtLower}`);
           }
@@ -1763,9 +1821,26 @@ app.whenReady().then(() => {
         reportProgress(`Saved to ${finalOutputPath}`);
 
         const normalized = finalOutputPath.replace(/\\/g, "/");
+        // Clean up intermediate temp files (but not the final output)
+        for (const tmp of tempFiles) {
+          try {
+            if (fs.existsSync(tmp) && tmp !== finalOutputPath)
+              fs.unlinkSync(tmp);
+          } catch {
+            /* ignore */
+          }
+        }
         return `media://${normalized}`;
       } catch (err) {
         console.error("Render pipeline error:", err);
+        // Clean up intermediate temp files on failure too
+        for (const tmp of tempFiles) {
+          try {
+            if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+          } catch {
+            /* ignore */
+          }
+        }
         return null;
       }
     },
@@ -1775,9 +1850,10 @@ app.whenReady().then(() => {
   ipcMain.on(
     "renderer:log",
     (
-      _event,
+      event: Electron.IpcMainEvent,
       payload: { level: string; message: string; details?: unknown },
     ) => {
+      validateIpcSender(event);
       writeRendererLog(payload.level, payload.message, payload.details);
     },
   );
@@ -1795,6 +1871,11 @@ app.whenReady().then(() => {
 
   ipcMain.handle("autosave:write", (event, data: string) => {
     validateIpcSender(event);
+    const MAX_AUTOSAVE_BYTES = 5 * 1024 * 1024; // 5 MB cap
+    if (Buffer.byteLength(data, "utf-8") > MAX_AUTOSAVE_BYTES) {
+      console.error("[AutoSave] Payload exceeds 5 MB limit; rejecting write.");
+      return false;
+    }
     if (!fs.existsSync(AUTOSAVE_DIR)) {
       fs.mkdirSync(AUTOSAVE_DIR, { recursive: true });
     }
@@ -1821,7 +1902,8 @@ app.whenReady().then(() => {
   // ---------------------------------------------------------------------------
   // Crash recovery handlers
   // ---------------------------------------------------------------------------
-  ipcMain.handle("crash:check", () => {
+  ipcMain.handle("crash:check", (event) => {
+    validateIpcSender(event);
     return fs.existsSync(CRASH_MARKER_PATH);
   });
 

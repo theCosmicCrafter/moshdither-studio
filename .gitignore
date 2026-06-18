@@ -1,56 +1,25 @@
-# Outputs
-outputs/
-
-# Binary assets (large)
-assets/bin/ffglitch-0.10.2-windows-x86_64/
-assets/bin/ffmpeg-master-latest-win64-gpl/
-assets/bin/*.zip
-
-# References (external repos with own .git)
-references/
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.venv/
-venv/
-ENV/
-env/
-
-# Environment variables
+/node_modules
+/.vscode
+/.idea
+/dist
+/dist-ssr
+*.local
 .env
-.env.local
-.env.*.local
 
-# Editor / OS
+# Tauri
+/src-tauri/target
+/src-tauri/gen
+/src-tauri/Cargo.lock
+
+# OS
 .DS_Store
 Thumbs.db
-*.swp
-*.swo
-*~
 
-# Logs
-*.log
-logs/
+# Test artifacts
+/tests/fixtures/output
+/coverage
 
-# Coverage / test artifacts
-coverage/
-.nyc_output/
-*.tsbuildinfo
-
-# Build artifacts (covered by package-level .gitignore but belt-and-suspenders)
-**/dist/
-**/dist-ssr/
-**/dist-electron/
-**/build/
-
-# Downloaded tools (auto-fetched at runtime)
-tools/
-
-# Temporary artifact files from reference code exploration
-scripts/trix_*.js
-all_repos.json
-repos.json
-temp_repos.json
+# FFmpeg sidecars (downloaded at build time)
+/src-tauri/binaries/*.exe
+/src-tauri/binaries/ffmpeg*
+/src-tauri/binaries/ffprobe*

@@ -14,7 +14,7 @@
  *   docs/FFGLITCH_MAC_LINUX.md for build-from-source instructions.
  */
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { Button } from "../atoms/Button";
 
 export interface EnvStatusPayload {
@@ -62,7 +62,7 @@ export const EnvironmentSetupModal: React.FC<EnvironmentSetupModalProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isWindows] = useState(() => navigator.userAgent.includes("Windows"));
 
-  async function fetchStatus() {
+  const fetchStatus = useCallback(async () => {
     try {
       const result = (await window.ipcRenderer.invoke(
         "env:status",
@@ -81,13 +81,13 @@ export const EnvironmentSetupModal: React.FC<EnvironmentSetupModalProps> = ({
       // If IPC fails, assume system mode so the app at least starts
       onComplete();
     }
-  }
+  }, [onComplete]);
 
   useEffect(() => {
     // Fetch environment status on mount — legitimate initialization pattern
-    // eslint-disable-next-line react/no-set-state-in-effect, react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchStatus();
-  }, []);
+  }, [fetchStatus]);
 
   useEffect(() => {
     // Listen for installation progress from main process

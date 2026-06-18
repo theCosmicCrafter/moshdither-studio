@@ -23,6 +23,9 @@ _sam3_processor = None
 _image_cache_key = None
 _image_cache_state = None
 
+# Cache for rembg ONNX sessions to prevent reloading weights from disk every time
+_rembg_sessions = {}
+
 
 def _ensure_loaded():
     """Load SAM 3 model and processor on first use."""
@@ -59,12 +62,16 @@ def _get_image_state(image: Image.Image, image_path: str):
         cache_key = (image_path, 0, 0)
 
     if _image_cache_key == cache_key and _image_cache_state is not None:
-        # Shallow copy: only backbone_out dict is copied — tensors inside are shared
-        # (read-only during inference). This avoids deepcopy of large GPU tensors.
+        # Deep-copy mutable sub-keys to prevent concurrent hover + click
+        # from mutating shared prompt objects. PyTorch tensors are ref-counted
+        # and read-only during inference so they can stay shared.
+        import copy
+        state = _image_cache_state
+        backbone_out = dict(state["backbone_out"])
         return {
-            "original_height": _image_cache_state["original_height"],
-            "original_width": _image_cache_state["original_width"],
-            "backbone_out": dict(_image_cache_state["backbone_out"]),
+            "original_height": state["original_height"],
+            "original_width": state["original_width"],
+            "backbone_out": backbone_out,
         }
 
     _ensure_loaded()
@@ -89,13 +96,16 @@ def _load_image(image_path: str) -> Image.Image:
 
 
 def _mask_to_base64(mask: np.ndarray) -> str:
-    """Convert a binary mask (H, W) uint8 to a base64 PNG.
+    """Convert a binary mask (H, W) uint8 to a base64 RGBA PNG.
 
-    Handles both 0/1 (from SAM inference) and 0/255 (from OpenCV post-processing)
-    without overflow.
+    Outputs RGBA so the frontend canvas can use source-in compositing
+    to tint the mask with an overlay color.
     """
     binary = (mask > 0).astype(np.uint8)
-    img = Image.fromarray((binary * 255).astype(np.uint8), mode="L")
+    h, w = binary.shape
+    rgba = np.zeros((h, w, 4), dtype=np.uint8)
+    rgba[binary == 1] = [255, 255, 255, 255]
+    img = Image.fromarray(rgba, mode="RGBA")
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode("utf-8")
@@ -139,17 +149,24 @@ def _set_point_prompts(state: Dict, points: List[Tuple[float, float]], labels: L
         dummy_text = _sam3_model.backbone.forward_text(["visual"], device=device)
         state["backbone_out"].update(dummy_text)
 
-    # Run forward grounding
-    return _sam3_processor._forward_grounding(state)
+    # Run forward grounding without tracking gradients to save VRAM and latency
+    with torch.inference_mode(), torch.autocast(device_type=device, dtype=torch.float16, enabled=(device == "cuda")):
+        return _sam3_processor._forward_grounding(state)
 
 
-def predict_point(image_path: str, x: int, y: int) -> Dict[str, Any]:
+def predict_point(
+    image_path: str,
+    x: float,
+    y: float,
+    normalized: bool = False,
+) -> Dict[str, Any]:
     """
     Segment at a single point.
 
     Args:
         image_path: Path to the input image.
-        x, y: Pixel coordinates (0-based) in original image space.
+        x, y: Coordinate in original image space (pixels if normalized=False, 0..1 float if normalized=True).
+        normalized: If True, x and y are in [0, 1] range and scaled to image size.
 
     Returns:
         dict with keys: status, mask (base64 PNG), width, height, score
@@ -158,8 +175,15 @@ def predict_point(image_path: str, x: int, y: int) -> Dict[str, Any]:
     image = _load_image(image_path)
     w, h = image.size
 
+    if normalized:
+        px = int(x * w)
+        py = int(y * h)
+    else:
+        px = int(x)
+        py = int(y)
+
     inference_state = _get_image_state(image, image_path)
-    output = _set_point_prompts(inference_state, [(float(x), float(y))], [1])
+    output = _set_point_prompts(inference_state, [(float(px), float(py))], [1])
 
     masks = output.get("masks", [])
     scores = output.get("scores", [])
@@ -174,6 +198,72 @@ def predict_point(image_path: str, x: int, y: int) -> Dict[str, Any]:
     if hasattr(best_mask, "cpu"):
         best_mask = best_mask.cpu().numpy()
     # Squeeze out any extra leading dimensions (SAM3 returns [1, H, W] masks)
+    if best_mask.ndim == 3 and best_mask.shape[0] == 1:
+        best_mask = best_mask[0]
+    mask_u8 = (best_mask > 0.5).astype(np.uint8)
+
+    return {
+        "status": "success",
+        "mask": _mask_to_base64(mask_u8),
+        "width": w,
+        "height": h,
+        "score": best_score,
+    }
+
+
+def predict_box(
+    image_path: str,
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    normalized: bool = False,
+) -> Dict[str, Any]:
+    """
+    Segment using a bounding box prompt.
+
+    SAM 3 does not expose a native set_box_prompt API, so we use the
+    box center as a point prompt — this works well for most objects.
+
+    Args:
+        image_path: Path to the input image.
+        x1, y1, x2, y2: Bounding box coordinates (pixels if normalized=False, 0..1 float if normalized=True).
+        normalized: If True, coordinates are in [0, 1] range and scaled to image size.
+
+    Returns:
+        dict with keys: status, mask (base64 PNG), width, height, score
+    """
+    _ensure_loaded()
+    image = _load_image(image_path)
+    w, h = image.size
+
+    if normalized:
+        px1, py1 = int(x1 * w), int(y1 * h)
+        px2, py2 = int(x2 * w), int(y2 * h)
+    else:
+        px1, py1 = int(x1), int(y1)
+        px2, py2 = int(x2), int(y2)
+
+    inference_state = _get_image_state(image, image_path)
+    # SAM native box prompt: top-left (label 2) and bottom-right (label 3)
+    output = _set_point_prompts(
+        inference_state,
+        [(float(px1), float(py1)), (float(px2), float(py2))],
+        [2, 3]
+    )
+
+    masks = output.get("masks", [])
+    scores = output.get("scores", [])
+
+    if masks is None or (hasattr(masks, "__len__") and len(masks) == 0):
+        return {"status": "error", "error": "No mask generated"}
+
+    best_idx = int(np.argmax(scores.cpu().numpy() if hasattr(scores, "cpu") else scores))
+    best_mask = masks[best_idx]
+    best_score = float(scores[best_idx].item() if hasattr(scores[best_idx], "item") else scores[best_idx])
+
+    if hasattr(best_mask, "cpu"):
+        best_mask = best_mask.cpu().numpy()
     if best_mask.ndim == 3 and best_mask.shape[0] == 1:
         best_mask = best_mask[0]
     mask_u8 = (best_mask > 0.5).astype(np.uint8)
@@ -268,10 +358,14 @@ def predict_text(image_path: str, text_prompt: str) -> Dict[str, Any]:
     w, h = image.size
 
     inference_state = _get_image_state(image, image_path)
-    output = _sam3_processor.set_text_prompt(
-        state=inference_state,
-        prompt=text_prompt,
-    )
+    
+    import torch
+    device = _sam3_processor.device
+    with torch.inference_mode(), torch.autocast(device_type=device, dtype=torch.float16, enabled=(device == "cuda")):
+        output = _sam3_processor.set_text_prompt(
+            state=inference_state,
+            prompt=text_prompt,
+        )
 
     masks = output["masks"]
     scores = output["scores"]
@@ -476,6 +570,12 @@ def postprocess_mask_pro(
     if mask_np is None or mask_np.size == 0:
         return mask_np
 
+    # Convert multi-channel RGBA/RGB to single-channel grayscale if needed
+    if mask_np.ndim == 3 and mask_np.shape[2] >= 3:
+        mask_np = cv2.cvtColor(mask_np, cv2.COLOR_RGBA2GRAY if mask_np.shape[2] == 4 else cv2.COLOR_RGB2GRAY)
+    elif mask_np.ndim == 3 and mask_np.shape[2] == 2:
+        mask_np = mask_np[:, :, 0]
+
     # 1. Median blur to eliminate checkerboard / salt-and-pepper noise
     mask_np = cv2.medianBlur(mask_np, 5)
 
@@ -524,22 +624,31 @@ def postprocess_mask_pro(
 
 def predict_point_pro(
     image_path: str,
-    x: int,
-    y: int,
+    x: float,
+    y: float,
+    normalized: bool = False,
 ) -> Dict[str, Any]:
     """
     Point-based segmentation with SAM PRO mode post-processing.
     Ideal for fine details like hair, fur, and semi-transparent objects.
     """
-    result = predict_point(image_path, x, y)
+    result = predict_point(image_path, x, y, normalized=normalized)
     if result.get("status") != "success":
         return result
 
     # Decode base64 PNG back to numpy array for OpenCV post-processing
     mask_img = Image.open(io.BytesIO(base64.b64decode(result["mask"])))
     mask_np = np.array(mask_img)
+    w, h = mask_img.size
 
-    processed = postprocess_mask_pro(mask_np, input_points=[(float(x), float(y))])
+    if normalized:
+        px = int(x * w)
+        py = int(y * h)
+    else:
+        px = int(x)
+        py = int(y)
+
+    processed = postprocess_mask_pro(mask_np, input_points=[(float(px), float(py))])
 
     return {
         "status": "success",
@@ -614,8 +723,11 @@ def remove_background(
     image = _load_image(image_path)
     w, h = image.size
 
+    global _rembg_sessions
     try:
-        session = new_session(model_name=model)
+        if model not in _rembg_sessions:
+            _rembg_sessions[model] = new_session(model_name=model)
+        session = _rembg_sessions[model]
     except Exception as e:
         return {
             "status": "error",
@@ -680,10 +792,124 @@ def remove_background_batch(
 # Model management
 # ---------------------------------------------------------------------------
 
+import threading
+
+_download_thread = None
+_download_progress = 0.0
+_download_error = None
+_download_status = "idle"
+
+
+def get_download_status() -> Dict[str, Any]:
+    global _download_progress, _download_status, _download_error
+    return {
+        "status": _download_status,
+        "progress": _download_progress,
+        "error": _download_error,
+    }
+
+
+def start_download(version: str = "sam3") -> Dict[str, Any]:
+    global _download_thread, _download_status, _download_progress, _download_error
+    if _download_status == "downloading":
+        return {"status": "success", "message": "Download already in progress"}
+
+    _download_progress = 0.0
+    _download_error = None
+    _download_status = "downloading"
+
+    def run():
+        global _download_status, _download_progress, _download_error
+        try:
+            import tqdm
+
+            # Subclass tqdm to capture progress updates
+            original_tqdm = tqdm.tqdm
+
+            class ProgressTqdm(original_tqdm):
+                def __init__(self, *args, **kwargs):
+                    super().__init__(*args, **kwargs)
+
+                def update(self, n=1):
+                    super().update(n)
+                    if self.total:
+                        percent = (self.n / self.total) * 100
+                        global _download_progress
+                        _download_progress = percent
+                        print(f"SAM3_DOWNLOAD_PROGRESS:{percent:.1f}", flush=True)
+
+            # Patch tqdm
+            tqdm.tqdm = ProgressTqdm
+
+            try:
+                from sam3.model_builder import download_ckpt_from_hf
+                download_ckpt_from_hf(version=version)
+                # Load the model immediately after download finishes
+                _ensure_loaded()
+                _download_status = "success"
+                _download_progress = 100.0
+                print("SAM3_DOWNLOAD_COMPLETE", flush=True)
+            finally:
+                # Restore original tqdm
+                tqdm.tqdm = original_tqdm
+
+        except Exception as e:
+            _download_status = "error"
+            _download_error = str(e)
+            print(f"SAM3_DOWNLOAD_ERROR:{e}", flush=True)
+
+    _download_thread = threading.Thread(target=run, daemon=True)
+    _download_thread.start()
+    return {"status": "success", "message": "Download started"}
+
+
+def load_model() -> Dict[str, Any]:
+    """Trigger SAM 3 model loading. Returns immediately if already loaded."""
+    global _sam3_model
+    if _sam3_model is not None:
+        return {
+            "status": "success",
+            "loaded": True,
+            "message": "SAM 3 model loaded",
+        }
+
+    try:
+        from huggingface_hub import try_to_load_from_cache
+        repo_id = "facebook/sam3"
+        ckpt_name = "sam3.pt"
+        cfg_name = "config.json"
+
+        try:
+            cfg_path = try_to_load_from_cache(repo_id=repo_id, filename=cfg_name)
+            ckpt_path = try_to_load_from_cache(repo_id=repo_id, filename=ckpt_name)
+        except Exception:
+            cfg_path = None
+            ckpt_path = None
+
+        if not cfg_path or not ckpt_path:
+            # Not in cache, start background download
+            start_download(version="sam3")
+            return {
+                "status": "success",
+                "loaded": False,
+                "message": "SAM 3 model not cached locally. Initiated background download.",
+            }
+
+        # Cached! Ensure loaded in memory
+        _ensure_loaded()
+        return {
+            "status": "success",
+            "loaded": _sam3_model is not None,
+            "message": "SAM 3 model loaded" if _sam3_model is not None else "Failed to load",
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
 def unload_models() -> Dict[str, str]:
     """Unload all models and clear caches to free GPU memory."""
     global _sam3_model, _sam3_processor, _image_cache_key, _image_cache_state
-    global _grounding_dino_processor, _grounding_dino_model
+    global _grounding_dino_processor, _grounding_dino_model, _rembg_sessions
 
     import gc
 
@@ -693,6 +919,7 @@ def unload_models() -> Dict[str, str]:
     _image_cache_state = None
     _grounding_dino_processor = None
     _grounding_dino_model = None
+    _rembg_sessions.clear()
 
     gc.collect()
 

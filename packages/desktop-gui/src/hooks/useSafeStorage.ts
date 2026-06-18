@@ -8,8 +8,9 @@ import { useState, useCallback, useEffect } from "react";
  */
 export function useSafeStorage(
   key: string,
-): [string | null, (val: string | null) => Promise<void>] {
+): [string | null, (val: string | null) => Promise<void>, boolean] {
   const [value, setValueState] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(() => !window.ipcRenderer);
 
   // Load encrypted value from main process on mount
   useEffect(() => {
@@ -18,10 +19,16 @@ export function useSafeStorage(
     window.ipcRenderer
       .invoke<string | null>("safe-storage:read", key)
       .then((val) => {
-        if (!cancelled) setValueState(val);
+        if (!cancelled) {
+          setValueState(val);
+          setLoaded(true);
+        }
       })
       .catch(() => {
         // If safeStorage is unavailable, stay at null (in-memory fallback)
+        if (!cancelled) {
+          setLoaded(true);
+        }
       });
     return () => {
       cancelled = true;
@@ -49,5 +56,5 @@ export function useSafeStorage(
     [key],
   );
 
-  return [value, setValue];
+  return [value, setValue, loaded];
 }

@@ -29,23 +29,66 @@ impl Effect for RiseDatamosh {
             name: "Rise".to_string(),
             category: EffectCategory::Datamoshing,
             media_type: MediaType::Video,
-            parameters: vec![
-                ParameterDef {
-                    id: "start_drop".to_string(),
-                    name: "Start Drop Interval".to_string(),
-                    param_type: ParamType::Slider,
-                    default: json!(5),
-                    min: Some(2.0),
-                    max: Some(60.0),
-                    step: Some(1.0),
-                    options: None,
-                },
-            ],
+            parameters: vec![ParameterDef {
+                id: "start_drop".to_string(),
+                name: "Start Drop Interval".to_string(),
+                param_type: ParamType::Slider,
+                default: json!(5),
+                min: Some(2.0),
+                max: Some(60.0),
+                step: Some(1.0),
+                options: None,
+            }],
         }
     }
 
-    fn process_frame(&self, input: &Frame, _m: Option<&Mask>, _p: &ParameterValues) -> Result<Frame> {
-        Ok(input.clone())
+    fn is_temporal(&self) -> bool {
+        true
+    }
+
+    fn process_frame(
+        &self,
+        input: &Frame,
+        _m: Option<&Mask>,
+        _params: &ParameterValues,
+    ) -> Result<Frame> {
+        let len = input.data.len();
+        let mut out = input.data.clone();
+        for i in (0..len).step_by(4) {
+            let r = out[i];
+            let g = out[i + 1];
+            let b = out[i + 2];
+            if r <= 15 && g <= 15 && b <= 15 {
+                out[i] = 0;
+                out[i + 1] = 0;
+                out[i + 2] = 0;
+            } else if r > 15 && r <= 60 && g > 15 && g <= 60 && b > 15 && b <= 60 {
+                out[i] = 0;
+                out[i + 1] = 184;
+                out[i + 2] = 255;
+            } else if r > 60 && r <= 120 && g > 60 && g <= 120 && b > 60 && b <= 120 {
+                out[i] = 255;
+                out[i + 1] = 0;
+                out[i + 2] = 193;
+            } else if r > 120 && r <= 180 && g > 120 && g <= 180 && b > 120 && b <= 180 {
+                out[i] = 150;
+                out[i + 1] = 0;
+                out[i + 2] = 255;
+            } else if r > 180 && r <= 234 && g > 180 && g <= 234 && b > 180 && b <= 234 {
+                out[i] = 0;
+                out[i + 1] = 255;
+                out[i + 2] = 249;
+            } else if r >= 235 && g >= 235 && b >= 235 {
+                out[i] = 255;
+                out[i + 1] = 255;
+                out[i + 2] = 255;
+            }
+        }
+        Ok(Frame {
+            width: input.width,
+            height: input.height,
+            data: out,
+        })
     }
 
     fn process_video(
@@ -94,7 +137,9 @@ mod tests {
     fn test_progressive_drop() {
         let e = RiseDatamosh::new(5);
         let seg = make_segment(20);
-        let r = e.process_video(&seg, None, &serde_json::Map::new()).unwrap();
+        let r = e
+            .process_video(&seg, None, &serde_json::Map::new())
+            .unwrap();
         assert!(r.frames.len() < 20);
     }
 }

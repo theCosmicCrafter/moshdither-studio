@@ -1,0 +1,7 @@
+Traceback (most recent call last):
+  File "C:\Users\richk\CascadeProjects\moshdither-studio\packages\python-backend\test_trace2.py", line 4, in <module>
+    import sam3_service
+  File "C:\Users\richk\CascadeProjects\moshdither-studio\packages\python-backend\sam3_service.py", line 809
+    global _download_status, _download_error
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+SyntaxError: name '_download_status' is assigned to before global declaration

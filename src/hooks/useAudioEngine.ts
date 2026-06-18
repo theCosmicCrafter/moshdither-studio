@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import { AudioEngine, setGlobalAudioEngine } from "../engine/audio/AudioEngine";
 import { AudioParameterMapper } from "../engine/audio/AudioParameterMapper";
+import { AudioFeatureExtractor } from "../engine/audio/AudioFeatureExtractor";
 import { useAppStore } from "../store";
 import type { FrameAudioFeatures } from "../engine/audio/types";
 
@@ -12,6 +13,7 @@ import type { FrameAudioFeatures } from "../engine/audio/types";
  *   2. Feeds live features into AudioParameterMapper
  *   3. Syncs mapped values + raw audio state into the store
  *   4. Exposes controls for the UI to use
+ *   5. Bakes audio features for export parity
  */
 export function useAudioEngine() {
   const engineRef = useRef<AudioEngine | null>(null);
@@ -23,6 +25,7 @@ export function useAudioEngine() {
   const setAudioBandEnergies = useAppStore((s) => s.setAudioBandEnergies);
   const setAudioBeatFlags = useAppStore((s) => s.setAudioBeatFlags);
   const setAudioMappedValues = useAppStore((s) => s.setAudioMappedValues);
+  const setAudioBakeData = useAppStore((s) => s.setAudioBakeData);
   const audioBindings = useAppStore((s) => s.audioBindings);
   const audioVolume = useAppStore((s) => s.audioVolume);
 
@@ -138,8 +141,19 @@ export function useAudioEngine() {
       async (file: File | string) => {
         const engine = getEngine();
         await engine.loadFile(file);
+        // Bake audio features for export parity (only for File objects)
+        if (file instanceof File) {
+          try {
+            const bakeData = await AudioFeatureExtractor.extractFromFile(file, { fps: 30 });
+            setAudioBakeData(bakeData);
+          } catch (e) {
+            // eslint-disable-next-line no-console
+            console.warn("Audio bake failed:", e);
+            setAudioBakeData(null);
+          }
+        }
       },
-      [getEngine]
+      [getEngine, setAudioBakeData]
     ),
     startMicrophone: useCallback(async () => {
       const engine = getEngine();

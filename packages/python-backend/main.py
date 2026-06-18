@@ -16,8 +16,10 @@ except ImportError:
 MAX_CONTENT_LENGTH = 1_048_576  # 1 MB
 ALLOWED_METHODS = {
     "neural_downscale",
+    "sam3_load_model",
     "sam3_predict_point",
     "sam3_predict_batch",
+    "sam3_predict_box",
     "sam3_predict_text",
     "sam3_predict_point_pro",
     "sam3_predict_text_pro",
@@ -26,6 +28,8 @@ ALLOWED_METHODS = {
     "sam3_remove_background_batch",
     "sam3_unload_models",
     "sam3_list_models",
+    "sam3_download_model",
+    "sam3_model_status",
 }
 
 
@@ -155,10 +159,15 @@ class RPCRequestHandler(BaseHTTPRequestHandler):
                 image_path = params.get("image_path")
                 x = params.get("x")
                 y = params.get("y")
+                normalized = params.get("normalized", False)
                 if not image_path or x is None or y is None:
                     self._reject(400, "Missing image_path, x, or y")
                     return
-                result = sam3_service.predict_point(image_path, int(x), int(y))
+                result = sam3_service.predict_point(image_path, float(x), float(y), normalized=normalized)
+
+            elif method == "sam3_load_model":
+                import sam3_service
+                result = sam3_service.load_model()
 
             elif method == "sam3_predict_batch":
                 import sam3_service
@@ -178,6 +187,21 @@ class RPCRequestHandler(BaseHTTPRequestHandler):
                     neg_tuples = [(int(p[0]), int(p[1])) for p in negative if len(p) >= 2]
                 result = sam3_service.predict_batch(image_path, pos_tuples, neg_tuples, normalized=normalized)
 
+            elif method == "sam3_predict_box":
+                import sam3_service
+                image_path = params.get("image_path")
+                x1 = params.get("x1")
+                y1 = params.get("y1")
+                x2 = params.get("x2")
+                y2 = params.get("y2")
+                normalized = params.get("normalized", False)
+                if not image_path or x1 is None or y1 is None or x2 is None or y2 is None:
+                    self._reject(400, "Missing image_path, x1, y1, x2, or y2")
+                    return
+                result = sam3_service.predict_box(
+                    image_path, float(x1), float(y1), float(x2), float(y2), normalized=normalized
+                )
+
             elif method == "sam3_predict_text":
                 import sam3_service
                 image_path = params.get("image_path")
@@ -192,10 +216,11 @@ class RPCRequestHandler(BaseHTTPRequestHandler):
                 image_path = params.get("image_path")
                 x = params.get("x")
                 y = params.get("y")
+                normalized = params.get("normalized", False)
                 if not image_path or x is None or y is None:
                     self._reject(400, "Missing image_path, x, or y")
                     return
-                result = sam3_service.predict_point_pro(image_path, int(x), int(y))
+                result = sam3_service.predict_point_pro(image_path, float(x), float(y), normalized=normalized)
 
             elif method == "sam3_predict_text_pro":
                 import sam3_service
@@ -262,14 +287,23 @@ class RPCRequestHandler(BaseHTTPRequestHandler):
                 import sam3_service
                 result = sam3_service.list_models()
 
+            elif method == "sam3_download_model":
+                import sam3_service
+                result = sam3_service.start_download()
+
+            elif method == "sam3_model_status":
+                import sam3_service
+                result = sam3_service.get_download_status()
+
             self._send_json(
                 200,
                 {"jsonrpc": "2.0", "result": result, "id": req_id},
             )
         except Exception as e:
             import traceback
+            tb = traceback.format_exc()
             traceback.print_exc()
-            self._reject(500, str(e), req_id)
+            self._reject(500, f"{e}\n{tb}", req_id)
 
 
 def run(port: int = 0) -> None:

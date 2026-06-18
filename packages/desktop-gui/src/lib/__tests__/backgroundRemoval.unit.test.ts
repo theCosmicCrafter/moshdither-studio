@@ -76,7 +76,7 @@ describe("backgroundRemoval", () => {
     const mockIpc = installMockIpc();
     mockIpc.invoke.mockResolvedValue({ ok: true });
 
-    const onProgress = (_progress: number) => {
+    const onProgress = () => {
       /* no-op for test */
     };
     await downloadModel("birefnet-lite", onProgress);

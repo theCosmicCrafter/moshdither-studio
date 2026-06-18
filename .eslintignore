@@ -1,0 +1,5 @@
+references/
+src-tauri/
+node_modules/
+dist/
+packages/

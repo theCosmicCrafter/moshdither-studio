@@ -270,10 +270,10 @@ pub fn save_media(
     Ok(path)
 }
 
-/// Export a video by decoding, applying the effect stack via `process_video`, and re-encoding.
-/// Effects that implement custom `process_video` (e.g. temporal / cross-frame effects)
-/// will work correctly; others fall back to per-frame `process_frame` inside their own
-/// `process_video` implementation.
+/// Export a video by decoding, applying the effect stack, and re-encoding.
+/// Audio-reactive effects receive per-frame audio params when `audio_bake_json` is provided.
+/// Temporal effects (datamoshing) use `process_video` for cross-frame correctness.
+/// Non-temporal effects are processed frame-by-frame with audio params injected.
 #[tauri::command]
 pub fn export_video(
     state: State<'_, AppState>,
@@ -285,6 +285,7 @@ pub fn export_video(
     fps: Option<f64>,
     width: Option<u32>,
     height: Option<u32>,
+    audio_bake_json: Option<String>,
 ) -> std::result::Result<String, String> {
     // Decode the full source video
     let mut segment = decode_video(&source_path, None)
@@ -307,7 +308,11 @@ pub fn export_video(
 
     let global_mask = decode_mask_b64(mask_b64)?;
 
-    // Apply the effect stack using `process_video` so temporal effects work
+    // Deserialize audio bake data if provided
+    let audio_data: Option<crate::audio::AudioBakeData> = audio_bake_json
+        .and_then(|json| serde_json::from_str(&json).ok());
+
+    // Apply the effect stack
     let registry = state.registry.lock().unwrap();
     for call in &stack {
         let effect = registry
@@ -323,9 +328,29 @@ pub fn export_video(
         };
         let active_mask = per_effect_mask.as_ref().or(global_mask.as_ref());
 
-        segment = effect
-            .process_video(&segment, active_mask, &call.params)
-            .map_err(|e| e.to_string())?;
+        if effect.is_temporal() || audio_data.is_none() {
+            // Temporal effects or when no audio data: use process_video with original params
+            segment = effect
+                .process_video(&segment, active_mask, &call.params)
+                .map_err(|e| e.to_string())?;
+        } else {
+            // Non-temporal with audio: process frame-by-frame with per-frame audio params
+            let mut frames = Vec::with_capacity(segment.frames.len());
+            for (frame_idx, frame) in segment.frames.iter().enumerate() {
+                let mut frame_params = call.params.clone();
+                if let Some(ref audio) = audio_data {
+                    audio.inject_params(&mut frame_params, frame_idx);
+                }
+                frames.push(
+                    effect.process_frame(frame, active_mask, &frame_params)
+                        .map_err(|e| e.to_string())?
+                );
+            }
+            segment = crate::effects::VideoSegment {
+                frames,
+                fps: segment.fps,
+            };
+        }
 
         // Post-process mask blend for effects that don't handle masking internally
         if !effect.handles_masking() {

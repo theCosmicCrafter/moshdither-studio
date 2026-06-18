@@ -68,6 +68,14 @@ pub trait Effect: Send + Sync {
         false
     }
 
+    /// Whether this effect is temporal (cross-frame).
+    /// Temporal effects MUST use `process_video` during export because they read
+    /// adjacent frames. Non-temporal effects can be processed frame-by-frame
+    /// with per-frame audio params injected.
+    fn is_temporal(&self) -> bool {
+        false
+    }
+
     /// Process a single frame (images or preview).
     fn process_frame(
         &self,

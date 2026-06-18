@@ -64,43 +64,24 @@ export const Sidebar: React.FC = () => {
       </div>
 
       {/* Preset Section */}
-      <div style={{ flexShrink: 0 }}>
+      <div className="sidebar-preset-section">
         <PresetManager />
       </div>
 
       {/* Layer Addition & Render triggers */}
       <div className="sidebar-footer">
-        <div style={{ position: 'relative' }}>
+        <div className="add-effect-wrapper">
           <Button
             variant="glass"
             style={{ width: '100%', borderColor: 'var(--accent-glow)' }}
             onClick={() => setShowAddMenu(!showAddMenu)}
           >
             <Icon name="plus" size={14} style={{ color: 'var(--accent-primary)' }} />
-            <span style={{ color: 'var(--accent-primary)', fontWeight: 600 }}>Add Effect Layer</span>
+            <span className="add-effect-trigger-label">Add Effect Layer</span>
           </Button>
 
           {showAddMenu && (
-            <div
-              style={{
-                position: 'absolute',
-                bottom: '100%',
-                left: 0,
-                right: 0,
-                background: 'rgba(28, 28, 30, 0.95)',
-                border: '1px solid var(--border-color)',
-                borderRadius: 'var(--radius-lg)',
-                padding: '6px',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '4px',
-                zIndex: 100,
-                marginBottom: '8px',
-                boxShadow: 'var(--shadow-lg)',
-                backdropFilter: 'var(--glass-blur)',
-                WebkitBackdropFilter: 'var(--glass-blur)',
-              }}
-            >
+            <div className="add-effect-menu">
               {ALL_EFFECT_TYPES.map((type) => {
                 const meta = EFFECT_REGISTRY[type];
                 const suffix = meta.category === 'webgl' ? ' (WebGL)' : ' (Offline)';
@@ -109,16 +90,6 @@ export const Sidebar: React.FC = () => {
                     key={type}
                     onClick={() => addEffect(type)}
                     className="add-effect-btn"
-                    style={{
-                      background: 'transparent',
-                      border: 'none',
-                      color: '#fff',
-                      padding: '8px var(--spacing-sm)',
-                      textAlign: 'left',
-                      cursor: 'pointer',
-                      borderRadius: 'var(--radius-sm)',
-                      fontSize: '13px',
-                    }}
                   >
                     {meta.name}{suffix}
                   </button>

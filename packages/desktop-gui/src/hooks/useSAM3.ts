@@ -121,11 +121,20 @@ function attachProgressListener(): void {
           file?: string;
         };
         // Skip per-file progress to avoid flickering; only use total progress
-        if (info.status === "progress" && info.file) return;
-        setStoreState({
-          progress: Math.round(info.progress),
-          loadingStep: `Downloading model... ${Math.round(info.progress)}%`,
-        });
+        if (info.status === "success") {
+          _modelReady = true;
+          setStoreState({
+            status: "ready",
+            progress: 100,
+            loadingStep: "",
+            error: null,
+          });
+        } else {
+          setStoreState({
+            progress: Math.round(info.progress),
+            loadingStep: `Downloading model... ${Math.round(info.progress)}%`,
+          });
+        }
       },
     );
   }
@@ -159,7 +168,8 @@ async function ensureModelReady(): Promise<boolean> {
   });
 
   try {
-    const result = (await window.ipcRenderer.invoke("sam3:load-model", {
+    // First check if model is already loaded
+    const checkResult = (await window.ipcRenderer.invoke("sam3:load-model", {
       model: "sam3",
     })) as {
       ok: boolean;
@@ -169,28 +179,61 @@ async function ensureModelReady(): Promise<boolean> {
       error?: string;
     };
 
-    if (!result.ok) {
+    if (!checkResult.ok) {
       setStoreState({
         status: "error",
         progress: 0,
         loadingStep: "",
-        error: result.error || "Failed to load SAM 3",
+        error: checkResult.error || "Failed to load SAM 3",
       });
       return false;
     }
 
-    // Model will auto-download on first predict call (lazy load via Python backend).
-    // Mark ready here so we don't re-check on every subsequent click.
-    if (!result.loaded) {
+    if (checkResult.loaded) {
       _modelReady = true;
       setStoreState({
         status: "ready",
-        progress: 0,
+        progress: 100,
         loadingStep: "",
         error: null,
       });
       return true;
     }
+
+    // Model not loaded — trigger actual loading via preload-model
+    setStoreState({
+      status: "loading",
+      progress: 10,
+      loadingStep: "Loading SAM 3 model into memory...",
+      error: null,
+    });
+
+    const loadResult = (await window.ipcRenderer.invoke(
+      "sam3:preload-model",
+    )) as {
+      ok: boolean;
+      loaded?: boolean;
+      error?: string;
+    };
+
+    if (!loadResult.ok || !loadResult.loaded) {
+      setStoreState({
+        status: "error",
+        progress: 0,
+        loadingStep: "",
+        error: loadResult.error || "Failed to load SAM 3 model",
+      });
+      return false;
+    }
+
+    _modelReady = true;
+    setStoreState({
+      status: "ready",
+      progress: 100,
+      loadingStep: "",
+      error: null,
+    });
+    return true;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     setStoreState({
@@ -201,15 +244,73 @@ async function ensureModelReady(): Promise<boolean> {
     });
     return false;
   }
+}
 
-  _modelReady = true;
+async function predictBoxShared(
+  imagePath: string,
+  box: { x1: number; y1: number; x2: number; y2: number },
+): Promise<SAM3Mask | null> {
+  console.log("[SAM3 predictBoxShared] called", { imagePath, box });
+  if (!window.ipcRenderer) {
+    console.warn("IPC not available. Run inside Electron.");
+    return null;
+  }
+
+  if (!(await ensureModelReady())) return null;
+
   setStoreState({
-    status: "ready",
-    progress: 100,
-    loadingStep: "",
-    error: null,
+    status: "segmenting",
+    loadingStep: "Segmenting with box...",
+    hoverMask: null,
   });
-  return true;
+
+  try {
+    const payload = {
+      imagePath,
+      x1: box.x1,
+      y1: box.y1,
+      x2: box.x2,
+      y2: box.y2,
+    };
+    console.log("[SAM3 predictBoxShared] IPC payload", payload);
+    const result = (await window.ipcRenderer.invoke(
+      "sam3:predict-box",
+      payload,
+    )) as {
+      ok: boolean;
+      maskBase64?: string;
+      width?: number;
+      height?: number;
+      score?: number;
+      error?: string;
+    };
+    console.log("[SAM3 predictBoxShared] IPC result", {
+      ok: result?.ok,
+      hasMask: !!result?.maskBase64,
+      error: result?.error,
+    });
+
+    if (!result.ok || !result.maskBase64 || !result.width || !result.height) {
+      throw new Error(result.error || "Box segmentation failed");
+    }
+
+    const rawBytes = Uint8Array.from(atob(result.maskBase64), (c) =>
+      c.charCodeAt(0),
+    );
+
+    setStoreState({ status: "ready", loadingStep: "" });
+    return {
+      data: rawBytes,
+      width: result.width,
+      height: result.height,
+      score: result.score,
+      dataUrl: `data:image/png;base64,${result.maskBase64}`,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    setStoreState({ status: "error", loadingStep: "", error: msg });
+    return null;
+  }
 }
 
 async function predictBatchShared(
@@ -690,6 +791,69 @@ export function useSAM3() {
   const setProMode = useCallback((enabled: boolean) => {
     setStoreState({ proMode: enabled });
   }, []);
+  const loadModel = useCallback(async () => {
+    if (!window.ipcRenderer) return false;
+    setStoreState({
+      status: "loading",
+      progress: 0,
+      loadingStep: "Downloading SAM 3 model (one-time)...",
+      error: null,
+    });
+    try {
+      const result = (await window.ipcRenderer.invoke(
+        "sam3:preload-model",
+        {},
+      )) as {
+        ok: boolean;
+        loaded?: boolean;
+        error?: string;
+      };
+      if (result.ok) {
+        if (result.loaded) {
+          _modelReady = true;
+          setStoreState({
+            status: "ready",
+            progress: 100,
+            loadingStep: "",
+            error: null,
+          });
+          return true;
+        } else {
+          // Asynchronous download successfully initiated
+          setStoreState({
+            status: "loading",
+            progress: 0,
+            loadingStep: "Downloading SAM 3 model...",
+            error: null,
+          });
+          return false;
+        }
+      }
+      setStoreState({
+        status: "error",
+        progress: 0,
+        loadingStep: "",
+        error: result.error || "Failed to preload SAM 3 model",
+      });
+      return false;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setStoreState({
+        status: "error",
+        progress: 0,
+        loadingStep: "",
+        error: msg,
+      });
+      return false;
+    }
+  }, []);
+  const predictBox = useCallback(
+    (
+      imagePath: string,
+      box: { x1: number; y1: number; x2: number; y2: number },
+    ) => predictBoxShared(imagePath, box),
+    [],
+  );
   const predictBatch = useCallback(
     (
       imagePath: string,
@@ -743,7 +907,9 @@ export function useSAM3() {
   return {
     ...state,
     unloadModel,
+    loadModel,
     segmentAtPoint,
+    predictBox,
     predictBatch,
     predictText,
     predictPointPro,

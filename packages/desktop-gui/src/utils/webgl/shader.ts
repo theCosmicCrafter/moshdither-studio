@@ -164,7 +164,7 @@ export function getOrCreateProgram(
 ): WebGLProgram {
   const key = hashShaderPair(vertexSrc, fragmentSrc);
   let prog = programCache.get(key);
-  if (!prog || !gl.isProgram(prog)) {
+  if (!prog) {
     prog = createProgramFromSources(gl, vertexSrc, fragmentSrc);
     programCache.set(key, prog);
   }

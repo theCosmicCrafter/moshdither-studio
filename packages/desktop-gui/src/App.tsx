@@ -76,11 +76,16 @@ const AppContent: React.FC = () => {
   }, [isBrowser]);
 
   // Listen for native menu events from main process
-  React.useEffect(() => {
+    // Use a ref to access the latest state without triggering re-renders
+    const stateRef = React.useRef({ mediaUrl, outputDirectory, exportFormat, exportFps, activeEffects, watermarkSettings });
+    React.useEffect(() => {
+      stateRef.current = { mediaUrl, outputDirectory, exportFormat, exportFps, activeEffects, watermarkSettings };
+    }, [mediaUrl, outputDirectory, exportFormat, exportFps, activeEffects, watermarkSettings]);
+
+    React.useEffect(() => {
     if (isBrowser || !window.ipcRenderer) return;
 
     const handleImport = () => {
-      // Trigger the same logic as the Import button
       window.ipcRenderer.invoke('dialog:openMedia').then((filePath: unknown) => {
         if (filePath) {
           setMediaUrl(filePath as string);
@@ -89,19 +94,19 @@ const AppContent: React.FC = () => {
     };
 
     const handleExport = () => {
-      if (!mediaUrl) {
+      const state = stateRef.current;
+      if (!state.mediaUrl) {
         addToast('No media loaded to export.', 'error');
         return;
       }
-      // Trigger render pipeline
       addRenderJob({
         name: `Export ${new Date().toLocaleTimeString()}`,
-        inputUrl: mediaUrl,
-        outputDirectory: outputDirectory || '',
-        exportFormat: exportFormat || 'same',
-        exportFps: exportFps || 30,
-        activeEffects,
-        watermarkSettings,
+        inputUrl: state.mediaUrl,
+        outputDirectory: state.outputDirectory || '',
+        exportFormat: state.exportFormat || 'same',
+        exportFps: state.exportFps || 30,
+        activeEffects: state.activeEffects,
+        watermarkSettings: state.watermarkSettings,
       });
     };
 
@@ -129,7 +134,7 @@ const AppContent: React.FC = () => {
       removeShortcuts();
       removePreload();
     };
-  }, [isBrowser]);
+  }, [isBrowser, addToast, addRenderJob, setMediaUrl]);
 
   // Auto-preload AI Masking model in background after app startup
   React.useEffect(() => {

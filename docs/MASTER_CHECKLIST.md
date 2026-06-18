@@ -34,11 +34,11 @@
 - [x] **WebGL Audio Uniform Injection**
   - [x] Global audio uniforms injected into every render pass
   - [x] Continuous RAF render loop when audio enabled
-- [ ] **Export Integration**
-  - [ ] Pass AudioBakeData JSON to Rust export_video
-  - [ ] Rust command accepts audio_bake_json parameter
-  - [ ] Rust effects read frame-indexed audio values
-  - [ ] Audio-reactive Rust effect implementations
+- [x] **Export Integration**
+  - [x] Pass AudioBakeData JSON to Rust export_video
+  - [x] Rust command accepts audio_bake_json parameter
+  - [x] Rust effects read frame-indexed audio values
+  - [x] Audio-reactive Rust effect implementations
 
 ## Timeline & Transport
 
