@@ -1,2 +1,13 @@
-export { shaderRegistry } from './registry';
-export { passThroughShader } from './passThrough';
+export { shaderRegistry } from "./registry";
+export { passThroughShader } from "./passThrough";
+export { lutShader } from "./lutColorGrading";
+export { ditherHalftoneShader } from "./ditherHalftone";
+export { noiseGrainShader } from "./noiseGrain";
+export { vhsCrtShader } from "./vhsCrt";
+export { scanlinesShader } from "./scanlines";
+export { chromaticAberrationShader } from "./chromaticAberration";
+export { pixelateShader } from "./pixelate";
+export { posterizeShader } from "./posterize";
+export { hueSaturationShader } from "./hueSaturation";
+export { rgbShiftShader } from "./rgbShift";
+export { invertShader } from "./invert";
