@@ -4,6 +4,7 @@ import { getFrameData, getMediaInfo, loadMediaFile, loadMediaFromBase64, sam3Box
 import { useAppStore } from "../store";
 import { WebGLContext, MediaUploader, EffectChain } from "../engine/webgl2";
 import { stackToRenderPasses, buildShaderMap } from "../utils/effectConverter";
+import ScopesOverlay from "./ScopesOverlay";
 
 interface Props {
   isDropTarget?: boolean;
@@ -811,6 +812,14 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
                       onMouseMove={handleCanvasMouseMove}
                       onMouseUp={handleCanvasMouseUp}
                       onMouseLeave={handleCanvasMouseLeave}
+                    />
+                  )}
+
+                  {/* Scopes overlay */}
+                  {mediaInfo && (
+                    <ScopesOverlay
+                      width={Math.min(mediaInfo.width, 256)}
+                      height={Math.min(mediaInfo.height, 128)}
                     />
                   )}
                 </div>

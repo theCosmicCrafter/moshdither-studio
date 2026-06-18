@@ -116,6 +116,8 @@ export interface AppState {
   zoom: number;
   statusMessage: string;
   playbackSpeed: number;
+  scopeMode: "none" | "histogram" | "waveform" | "rgb_parade";
+  scopesVisible: boolean;
 
   // Export
   exportProgress: number;
@@ -143,6 +145,8 @@ export interface AppState {
   setZoom: (z: number) => void;
   setStatusMessage: (msg: string) => void;
   setPlaybackSpeed: (speed: number) => void;
+  setScopeMode: (mode: "none" | "histogram" | "waveform" | "rgb_parade") => void;
+  setScopesVisible: (v: boolean) => void;
   setExportProgress: (progress: number) => void;
   setExportIsRunning: (v: boolean) => void;
   requestExportCancel: () => void;
@@ -226,6 +230,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   zoom: 1,
   statusMessage: "Ready",
   playbackSpeed: 1,
+  scopeMode: "none",
+  scopesVisible: false,
   activeMask: null,
   maskVisible: true,
   sam3Ready: false,
@@ -330,6 +336,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   setZoom: (z) => set({ zoom: Math.max(0.1, Math.min(5, z)) }),
   setStatusMessage: (msg) => set({ statusMessage: msg }),
   setPlaybackSpeed: (speed) => set({ playbackSpeed: Math.max(0.25, Math.min(4, speed)) }),
+  setScopeMode: (mode) => set({ scopeMode: mode }),
+  setScopesVisible: (v) => set({ scopesVisible: v }),
   setExportProgress: (progress) => set({ exportProgress: Math.max(0, Math.min(100, progress)) }),
   setExportIsRunning: (v) => set({ exportIsRunning: v }),
   requestExportCancel: () => set({ exportCancelRequested: true }),
