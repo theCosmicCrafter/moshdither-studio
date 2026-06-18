@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 
 /// Locate the FFmpeg binary. Tries bundled sidecar first, then PATH.
 pub fn ffmpeg_binary() -> Result<String> {
-    // Check bundled binary next to executable (production)
+    // Check bundled binary next to executable (production — Tauri strips suffix)
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let bundled = dir.join("ffmpeg.exe");
@@ -16,10 +16,12 @@ pub fn ffmpeg_binary() -> Result<String> {
             }
         }
     }
-    // Check development path (src-tauri/bin)
-    let dev = Path::new("bin").join("ffmpeg.exe");
-    if dev.exists() {
-        return Ok(dev.to_string_lossy().to_string());
+    // Check development path (src-tauri/bin) with target triple suffix
+    for name in ["ffmpeg-x86_64-pc-windows-msvc.exe", "ffmpeg.exe"] {
+        let dev = Path::new("bin").join(name);
+        if dev.exists() {
+            return Ok(dev.to_string_lossy().to_string());
+        }
     }
     // Fallback to PATH
     Ok("ffmpeg".to_string())
@@ -35,9 +37,11 @@ pub fn ffprobe_binary() -> Result<String> {
             }
         }
     }
-    let dev = Path::new("bin").join("ffprobe.exe");
-    if dev.exists() {
-        return Ok(dev.to_string_lossy().to_string());
+    for name in ["ffprobe-x86_64-pc-windows-msvc.exe", "ffprobe.exe"] {
+        let dev = Path::new("bin").join(name);
+        if dev.exists() {
+            return Ok(dev.to_string_lossy().to_string());
+        }
     }
     Ok("ffprobe".to_string())
 }

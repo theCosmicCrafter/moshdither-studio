@@ -43,7 +43,7 @@ struct Sam3Request {
     fill_holes: Option<bool>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Sam3Response {
     status: String,
     #[serde(default)]
@@ -252,6 +252,14 @@ impl Sam3Engine {
             labels: None,
             boxes: None,
             index: None,
+            grid_size: None,
+            iou_threshold: None,
+            min_mask_region_area: None,
+            mask_b64: None,
+            grow: None,
+            shrink: None,
+            feather: None,
+            fill_holes: None,
         })?;
         if resp.status == "ok" {
             Ok((resp.width, resp.height))
@@ -270,6 +278,14 @@ impl Sam3Engine {
             labels: None,
             boxes: None,
             index: None,
+            grid_size: None,
+            iou_threshold: None,
+            min_mask_region_area: None,
+            mask_b64: None,
+            grow: None,
+            shrink: None,
+            feather: None,
+            fill_holes: None,
         })?;
         if resp.status == "ok" {
             let mut results = Vec::with_capacity(resp.count);
@@ -296,6 +312,14 @@ impl Sam3Engine {
             labels,
             boxes: None,
             index: None,
+            grid_size: None,
+            iou_threshold: None,
+            min_mask_region_area: None,
+            mask_b64: None,
+            grow: None,
+            shrink: None,
+            feather: None,
+            fill_holes: None,
         })?;
         if resp.status == "ok" {
             let mut results = Vec::with_capacity(resp.count);
@@ -425,6 +449,14 @@ impl Sam3Engine {
             labels: None,
             boxes: None,
             index: None,
+            grid_size: None,
+            iou_threshold: None,
+            min_mask_region_area: None,
+            mask_b64: None,
+            grow: None,
+            shrink: None,
+            feather: None,
+            fill_holes: None,
         })?;
         if resp.status == "ok" {
             Ok(())
@@ -443,6 +475,14 @@ impl Sam3Engine {
             labels: None,
             boxes: None,
             index: None,
+            grid_size: None,
+            iou_threshold: None,
+            min_mask_region_area: None,
+            mask_b64: None,
+            grow: None,
+            shrink: None,
+            feather: None,
+            fill_holes: None,
         });
         if let Some(mut child) = self.child.lock().take() {
             let _ = child.kill();
