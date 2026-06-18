@@ -8,6 +8,7 @@ pub mod ffmpeg;
 pub mod optical_flow;
 pub mod sam3_engine;
 pub mod segmentation;
+pub mod spout;
 pub mod utils;
 
 use commands::{
