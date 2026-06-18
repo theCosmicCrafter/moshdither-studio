@@ -851,6 +851,21 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
             </span>
             <span style={{ color: "var(--text-dim)" }}>|</span>
             <span>{Math.round(zoom * 100)}%</span>
+            <button
+              onClick={() => useAppStore.getState().setZoom(1)}
+              className="px-1 rounded"
+              style={{
+                background: zoom === 1 ? "rgba(74, 144, 217, 0.25)" : "transparent",
+                border: "1px solid var(--border-secondary)",
+                cursor: "pointer",
+                color: zoom === 1 ? "var(--accent)" : "var(--text-muted)",
+                fontSize: 10,
+                fontFamily: "var(--font-mono)",
+              }}
+              title="Pixel peep 1:1 (100%)"
+            >
+              1:1
+            </button>
           </div>
           <button
             onClick={toggleFullscreen}
