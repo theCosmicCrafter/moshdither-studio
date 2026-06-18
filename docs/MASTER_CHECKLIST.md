@@ -55,7 +55,7 @@
   - [x] Step forward / backward one frame
   - [x] Jump to start / end
   - [x] Loop toggle (UI present)
-  - [ ] Playback speed selector (0.25x, 0.5x, 1x, 2x)
+  - [x] Playback speed selector (0.25x, 0.5x, 1x, 2x)
 - [x] **Keyframe System**
   - [x] Keyframe track per effect parameter
   - [x] Add/remove keyframes at playhead (diamond button in ParameterPanel)
@@ -145,7 +145,7 @@
 - [x] 14+ LUT presets
 - [x] LUT amount/intensity slider
 - [x] **Color Grading Tools**
-  - [ ] Lift / Gamma / Gain wheels
+  - [x] Lift / Gamma / Gain wheels
   - [ ] Shadows / Midtones / Highlights
   - [x] Temperature / Tint
   - [x] Vibrance / Saturation
@@ -165,8 +165,8 @@
   - [x] Codec selector (H.264, H.265, ProRes, VP9)
   - [x] Resolution selector
   - [x] Export progress bar with cancel
-- [ ] **Batch Export**
-  - [ ] Queue multiple exports
+- [x] **Batch Export**
+  - [x] Queue multiple exports
   - [ ] Preset-based batch processing
   - [ ] Folder watch / auto-export
 
@@ -180,25 +180,25 @@
   - [x] Split-screen before/after draggable divider
   - [x] Playback speed selector (0.25x-4x)
   - [ ] Pixel peep 1:1 view
-  - [ ] Histogram overlay
-  - [ ] Waveform / vectorscope overlay
+  - [x] Histogram overlay
+  - [x] Waveform / RGB Parade overlay
   - [ ] Safe area / grid overlay
-  - [ ] Frame counter overlay
-  - [ ] Audio waveform overlay on preview
+  - [x] Frame counter overlay
+  - [x] Audio waveform overlay on preview
 
 ## Presets & Project Management
 
 - [x] **Effect Presets**
   - [x] Save current stack as named preset
   - [x] Preset browser list with load/delete
-  - [ ] Preset thumbnails
-  - [ ] Import/export presets (JSON)
+  - [x] Preset thumbnails
+  - [x] Import/export presets (JSON)
   - [ ] Default presets for common looks
 - [x] **Project Save/Load**
   - [x] Save project file (.moshdither) via Ctrl+S
   - [x] Load project file (restore stack, media refs)
-  - [ ] Auto-save
-  - [ ] Recent projects list
+  - [x] Auto-save
+  - [x] Recent projects list
 
 ## UI/UX Polish
 
