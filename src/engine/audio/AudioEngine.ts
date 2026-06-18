@@ -57,6 +57,14 @@ export class AudioEngine {
     return this.analyser;
   }
 
+  /** Get current time-domain waveform data (128 samples). */
+  getTimeDomainData(): Uint8Array | null {
+    if (!this.analyser) return null;
+    const data = new Uint8Array(this.analyser.frequencyBinCount);
+    this.analyser.getByteTimeDomainData(data);
+    return data;
+  }
+
   get bufferSize(): number {
     return this._bufferSize;
   }
@@ -434,4 +442,15 @@ export class AudioEngine {
     this.analyser = null;
     this.gainNode = null;
   }
+}
+
+/** Global singleton for accessing the active audio engine from any component. */
+let _globalAudioEngine: AudioEngine | null = null;
+
+export function setGlobalAudioEngine(engine: AudioEngine | null) {
+  _globalAudioEngine = engine;
+}
+
+export function getGlobalAudioEngine(): AudioEngine | null {
+  return _globalAudioEngine;
 }

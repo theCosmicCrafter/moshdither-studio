@@ -5,6 +5,7 @@ import { useAppStore } from "../store";
 import { WebGLContext, MediaUploader, EffectChain } from "../engine/webgl2";
 import { stackToRenderPasses, buildShaderMap } from "../utils/effectConverter";
 import ScopesOverlay from "./ScopesOverlay";
+import PlaybackOverlay from "./PlaybackOverlay";
 
 interface Props {
   isDropTarget?: boolean;
@@ -822,6 +823,9 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
                       height={Math.min(mediaInfo.height, 128)}
                     />
                   )}
+
+                  {/* Playback overlay */}
+                  {mediaInfo && <PlaybackOverlay />}
                 </div>
               )}
             </div>

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from "react";
-import { AudioEngine } from "../engine/audio/AudioEngine";
+import { AudioEngine, setGlobalAudioEngine } from "../engine/audio/AudioEngine";
 import { AudioParameterMapper } from "../engine/audio/AudioParameterMapper";
 import { useAppStore } from "../store";
 import type { FrameAudioFeatures } from "../engine/audio/types";
@@ -30,6 +30,7 @@ export function useAudioEngine() {
   const getEngine = useCallback(() => {
     if (!engineRef.current) {
       engineRef.current = new AudioEngine();
+      setGlobalAudioEngine(engineRef.current);
     }
     return engineRef.current;
   }, []);
