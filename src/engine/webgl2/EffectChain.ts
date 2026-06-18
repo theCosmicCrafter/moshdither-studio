@@ -1,6 +1,6 @@
-import { WebGLContext } from './WebGLContext';
-import { FullscreenQuad } from './FullscreenQuad';
-import { EffectShader, RenderPass } from './types';
+import { WebGLContext } from "./WebGLContext";
+import { FullscreenQuad } from "./FullscreenQuad";
+import { EffectShader, RenderPass } from "./types";
 
 export class EffectChain {
   private ctx: WebGLContext;
@@ -20,10 +20,10 @@ export class EffectChain {
 
   private ensurePingPongTextures(w: number, h: number) {
     if (this.initialized) return;
-    this.ctx.createTexture('fbo_a', w, h);
-    this.ctx.createTexture('fbo_b', w, h);
-    this.ctx.createFramebuffer('fb_a', this.ctx.getTexture('fbo_a')!);
-    this.ctx.createFramebuffer('fb_b', this.ctx.getTexture('fbo_b')!);
+    this.ctx.createTexture("fbo_a", w, h);
+    this.ctx.createTexture("fbo_b", w, h);
+    this.ctx.createFramebuffer("fb_a", this.ctx.getTexture("fbo_a")!);
+    this.ctx.createFramebuffer("fb_b", this.ctx.getTexture("fbo_b")!);
     this.initialized = true;
   }
 
@@ -37,7 +37,7 @@ export class EffectChain {
     this.ensurePingPongTextures(this.width, this.height);
     const gl = this.gl;
     let inputTex = sourceTexture;
-    let outputFB = 'fb_a';
+    let outputFB = "fb_a";
 
     for (let i = 0; i < passes.length; i++) {
       const pass = passes[i];
@@ -55,26 +55,33 @@ export class EffectChain {
       // Bind input texture to unit 0
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, inputTex);
-      const samplerLoc = gl.getUniformLocation(program, 'tDiffuse');
+      const samplerLoc = gl.getUniformLocation(program, "tDiffuse");
       if (samplerLoc !== null) gl.uniform1i(samplerLoc, 0);
 
       // Set uniforms
       for (const [name, value] of Object.entries(pass.uniforms)) {
         const loc = gl.getUniformLocation(program, name);
         if (loc === null) continue;
-        if (typeof value === 'number') {
-          gl.uniform1f(loc, value);
+        // Determine declared type from shader definition
+        const udef = shader.uniforms.find((u) => u.name === name);
+        const type = udef?.type;
+        if (typeof value === "number") {
+          if (type === "int") {
+            gl.uniform1i(loc, Math.floor(value));
+          } else {
+            gl.uniform1f(loc, value);
+          }
         } else if (Array.isArray(value)) {
           if (value.length === 2) gl.uniform2f(loc, value[0], value[1]);
           else if (value.length === 3) gl.uniform3f(loc, value[0], value[1], value[2]);
           else if (value.length === 4) gl.uniform4f(loc, value[0], value[1], value[2], value[3]);
-        } else if (typeof value === 'boolean') {
+        } else if (typeof value === "boolean") {
           gl.uniform1i(loc, value ? 1 : 0);
         }
       }
 
       // Set resolution uniform
-      const resLoc = gl.getUniformLocation(program, 'resolution');
+      const resLoc = gl.getUniformLocation(program, "resolution");
       if (resLoc !== null) gl.uniform2f(resLoc, this.width, this.height);
 
       // Render to framebuffer or screen
@@ -85,8 +92,8 @@ export class EffectChain {
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
         this.quad.draw();
-        inputTex = this.ctx.getTexture(fbName === 'fb_a' ? 'fbo_a' : 'fbo_b')!;
-        outputFB = outputFB === 'fb_a' ? 'fb_b' : 'fb_a';
+        inputTex = this.ctx.getTexture(fbName === "fb_a" ? "fbo_a" : "fbo_b")!;
+        outputFB = outputFB === "fb_a" ? "fb_b" : "fb_a";
       } else {
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         this.quad.draw();
@@ -118,9 +125,9 @@ export class EffectChain {
         gl_FragColor = texture2D(tDiffuse, vUv);
       }
     `;
-    const program = this.ctx.getOrCreateProgram('__blit', vs, fs);
+    const program = this.ctx.getOrCreateProgram("__blit", vs, fs);
     gl.useProgram(program);
-    gl.uniform1i(gl.getUniformLocation(program, 'tDiffuse'), 0);
+    gl.uniform1i(gl.getUniformLocation(program, "tDiffuse"), 0);
     this.quad.draw();
   }
 
@@ -129,10 +136,10 @@ export class EffectChain {
     this.height = height;
     if (this.initialized) {
       // Recreate FBO textures at new size
-      this.ctx.createTexture('fbo_a', width, height);
-      this.ctx.createTexture('fbo_b', width, height);
-      this.ctx.createFramebuffer('fb_a', this.ctx.getTexture('fbo_a')!);
-      this.ctx.createFramebuffer('fb_b', this.ctx.getTexture('fbo_b')!);
+      this.ctx.createTexture("fbo_a", width, height);
+      this.ctx.createTexture("fbo_b", width, height);
+      this.ctx.createFramebuffer("fb_a", this.ctx.getTexture("fbo_a")!);
+      this.ctx.createFramebuffer("fb_b", this.ctx.getTexture("fbo_b")!);
     }
   }
 

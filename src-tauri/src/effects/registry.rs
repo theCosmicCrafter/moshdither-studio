@@ -24,6 +24,7 @@ impl EffectRegistry {
     fn register_defaults(&mut self) {
         // Dithering
         self.register(super::dithering::BayerDither::default());
+        self.register(super::dithering::PaletteDither);
         self.register(super::dithering::FloydSteinbergDither);
         self.register(super::dithering::AtkinsonDither);
         self.register(super::dithering::BlueNoiseDither::default());
@@ -34,6 +35,7 @@ impl EffectRegistry {
         self.register(super::dithering::RandomNoiseDither);
         self.register(super::dithering::ThresholdDither::default());
         self.register(super::dithering::RiemersmaDither);
+        self.register(super::dithering::HalftoneDither::default());
 
         // Analog
         self.register(super::analog::Scanlines::default());
@@ -48,6 +50,11 @@ impl EffectRegistry {
         // Color
         self.register(super::color::RgbShift::default());
         self.register(super::color::ChannelSwap::default());
+        self.register(super::color::Invert::default());
+        self.register(super::color::LutGrading::default());
+
+        // Composite
+        self.register(super::composite::Overlay::default());
 
         // Pixel Geometry
         self.register(super::pixel_geo::PixelSort::default());

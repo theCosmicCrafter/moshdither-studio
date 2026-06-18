@@ -2,6 +2,7 @@ import { Eye, EyeOff, FolderOpen, Loader2, Play, Redo2, Save, Square, Trash2, Un
 import { useCallback, useEffect, useRef, useState } from "react";
 import { applyEffectStack, exportVideo, getFrameData, loadMediaFile, sam3LoadImage, saveMedia } from "../lib/tauri";
 import { useAppStore } from "../store";
+import { stackToRustPayload } from "../utils/effectConverter";
 
 interface Props {
   onFileLoaded: () => Promise<boolean>;
@@ -59,9 +60,12 @@ export default function Toolbar({ onFileLoaded }: Props) {
     setIsProcessing(true);
     setStatusMessage("Processing effect stack...");
     try {
-      const activeStack = state.effectStack
-        .filter((e) => e.enabled)
-        .map((e) => ({ effect_id: e.effectId, params: { ...e.params, time: state.currentTime } }));
+      const activeStack = stackToRustPayload(
+        state.effectStack,
+        state.activeMask,
+        state.sam3Masks,
+        state.currentTime
+      );
       const result = await applyEffectStack(activeStack, state.activeMask);
       setPreviewDataUrl(result);
       setStatusMessage("Processing complete");
@@ -114,9 +118,12 @@ export default function Toolbar({ onFileLoaded }: Props) {
       setStatusMessage("Exporting video...");
       setIsProcessing(true);
       try {
-        const activeStack = state.effectStack
-          .filter((e) => e.enabled)
-          .map((e) => ({ effect_id: e.effectId, params: { ...e.params, time: state.currentTime } }));
+        const activeStack = stackToRustPayload(
+          state.effectStack,
+          state.activeMask,
+          state.sam3Masks,
+          state.currentTime
+        );
         const outPath = await exportVideo(path, activeStack, {
           maskB64: state.activeMask,
         });

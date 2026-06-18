@@ -176,6 +176,7 @@ pub fn apply_effect(
 pub struct EffectCall {
     pub effect_id: String,
     pub params: serde_json::Map<String, serde_json::Value>,
+    pub mask_b64: Option<String>,
 }
 
 /// Apply a stack of effects to the currently loaded image.
@@ -192,7 +193,7 @@ pub fn apply_effect_stack(
         .clone();
     drop(frame_lock);
 
-    let mask = decode_mask_b64(mask_b64)?;
+    let global_mask = decode_mask_b64(mask_b64)?;
 
     let registry = state.registry.lock().unwrap();
     for call in stack {
@@ -201,13 +202,22 @@ pub fn apply_effect_stack(
             .ok_or_else(|| format!("Effect '{}' not found", call.effect_id))?;
         let previous = working.clone();
         let effect_handles_mask = effect.handles_masking();
+
+        // Per-effect mask overrides global mask
+        let per_effect_mask = if let Some(ref b64) = call.mask_b64 {
+            decode_mask_b64(Some(b64.clone()))?
+        } else {
+            None
+        };
+        let active_mask = per_effect_mask.as_ref().or(global_mask.as_ref());
+
         working = effect
-            .process_frame(&working, mask.as_ref(), &call.params)
+            .process_frame(&working, active_mask, &call.params)
             .map_err(|e| e.to_string())?;
 
         // Only apply post-process mask blend for effects that don't handle masking internally.
         if !effect_handles_mask {
-            if let Some(m) = &mask {
+            if let Some(m) = active_mask {
                 if m.width == working.width && m.height == working.height {
                     for i in 0..(working.width * working.height) as usize {
                         let mask_val = m.data[i] as f32 / 255.0;
@@ -295,7 +305,7 @@ pub fn export_video(
         }
     }
 
-    let mask = decode_mask_b64(mask_b64)?;
+    let global_mask = decode_mask_b64(mask_b64)?;
 
     // Apply the effect stack using `process_video` so temporal effects work
     let registry = state.registry.lock().unwrap();
@@ -304,13 +314,22 @@ pub fn export_video(
             .get(&call.effect_id)
             .ok_or_else(|| format!("Effect '{}' not found", call.effect_id))?;
         let previous = segment.clone();
+
+        // Per-effect mask overrides global mask
+        let per_effect_mask = if let Some(ref b64) = call.mask_b64 {
+            decode_mask_b64(Some(b64.clone()))?
+        } else {
+            None
+        };
+        let active_mask = per_effect_mask.as_ref().or(global_mask.as_ref());
+
         segment = effect
-            .process_video(&segment, mask.as_ref(), &call.params)
+            .process_video(&segment, active_mask, &call.params)
             .map_err(|e| e.to_string())?;
 
         // Post-process mask blend for effects that don't handle masking internally
         if !effect.handles_masking() {
-            if let Some(m) = &mask {
+            if let Some(m) = active_mask {
                 for (i, frame) in segment.frames.iter_mut().enumerate() {
                     if m.width == frame.width && m.height == frame.height {
                         let prev = &previous.frames[i];

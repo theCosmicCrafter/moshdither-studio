@@ -190,6 +190,9 @@ export { blendModesShader } from "./blendModes";
 import { curvesShader } from "./curves";
 export { curvesShader } from "./curves";
 
+import { paletteDitherShader } from "./paletteDither";
+export { paletteDitherShader } from "./paletteDither";
+
 // Register all shaders into the global registry
 shaderRegistry.register(passThroughShader);
 shaderRegistry.register(lutShader);
@@ -254,3 +257,4 @@ shaderRegistry.register(transformShader);
 shaderRegistry.register(colorGradeShader);
 shaderRegistry.register(blendModesShader);
 shaderRegistry.register(curvesShader);
+shaderRegistry.register(paletteDitherShader);

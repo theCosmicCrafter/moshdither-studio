@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getFrameData, getMediaInfo, loadMediaFile, loadMediaFromBase64, sam3BoxPrompt, sam3PointPrompt } from "../lib/tauri";
 import { useAppStore } from "../store";
 import { WebGLContext, MediaUploader, EffectChain } from "../engine/webgl2";
+import { stackToRenderPasses, buildShaderMap } from "../utils/effectConverter";
 
 interface Props {
   isDropTarget?: boolean;
@@ -36,6 +37,11 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
   const mediaInfo = useAppStore((s) => s.mediaInfo);
   const showBeforeAfter = useAppStore((s) => s.showBeforeAfter);
   const zoom = useAppStore((s) => s.zoom);
+  const effectStack = useAppStore((s) => s.effectStack);
+  const audioEnabled = useAppStore((s) => s.audioEnabled);
+  const audioBandEnergies = useAppStore((s) => s.audioBandEnergies);
+  const audioBeatFlags = useAppStore((s) => s.audioBeatFlags);
+  const audioMappedValues = useAppStore((s) => s.audioMappedValues);
   const activeMask = useAppStore((s) => s.activeMask);
   const maskVisible = useAppStore((s) => s.maskVisible);
   const sam3Ready = useAppStore((s) => s.sam3Ready);
@@ -62,6 +68,7 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
   const uploaderRef = useRef<MediaUploader | null>(null);
   const chainRef = useRef<EffectChain | null>(null);
   const sourceTexRef = useRef<WebGLTexture | null>(null);
+  const rafRef = useRef<number>(0);
   const sam3CanvasRef = useRef<HTMLCanvasElement>(null);
   const hoverTimeoutRef = useRef<number | null>(null);
   const isProcessingRef = useRef(false);
@@ -72,6 +79,7 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
   const [splitPosition, setSplitPosition] = useState(50);
   const [isSplitDragging, setIsSplitDragging] = useState(false);
   const [isHtmlDropTarget, setIsHtmlDropTarget] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   // Box-drag state
   const [isBoxDragging, setIsBoxDragging] = useState(false);
@@ -454,32 +462,123 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
     };
   }, []);
 
-  // Render previewDataUrl to WebGL when it changes
+  // Invalidate texture when original image changes
   useEffect(() => {
-    if (!previewDataUrl || !glCtxRef.current || !uploaderRef.current) return;
+    sourceTexRef.current = null;
+  }, [originalDataUrl]);
+
+  // WebGL real-time preview: re-render when image or effect stack changes
+  useEffect(() => {
+    // Always use the original (unprocessed) image as the WebGL source texture
+    if (!originalDataUrl || !glCtxRef.current || !uploaderRef.current) return;
     const uploader = uploaderRef.current;
     const chain = chainRef.current;
     if (!chain) return;
 
-    // Simple blit for now - just show the source image
     const render = async () => {
       try {
-        const tex = await uploader.uploadImage(previewDataUrl);
-        sourceTexRef.current = tex;
-        // For now just blit with no effects (pass-through)
-        chain.render(tex, [], new Map());
+        // Resize chain to match media dimensions
+        if (mediaInfo) {
+          chain.resize(mediaInfo.width, mediaInfo.height);
+          const canvas = webglCanvasRef.current;
+          if (canvas) {
+            canvas.width = mediaInfo.width;
+            canvas.height = mediaInfo.height;
+          }
+        }
+
+        // Upload source image (cached per originalDataUrl)
+        let tex = sourceTexRef.current;
+        if (!tex) {
+          tex = await uploader.uploadImage(originalDataUrl);
+          sourceTexRef.current = tex;
+        }
+
+        // Build render passes from active effect stack
+        const passes = stackToRenderPasses(effectStack);
+
+        // Inject global audio uniforms into every pass
+        const audioUniforms: Record<string, number> = {
+          u_bass: audioBandEnergies.bass ?? 0,
+          u_band0: audioBandEnergies.subBass ?? 0,
+          u_band1: audioBandEnergies.bass ?? 0,
+          u_band2: audioBandEnergies.lowMid ?? 0,
+          u_band3: audioBandEnergies.mid ?? 0,
+          u_band4: audioBandEnergies.highMid ?? 0,
+          u_band5: audioBandEnergies.presence ?? 0,
+          u_band6: audioBandEnergies.brilliance ?? 0,
+          u_centroid: audioMappedValues.centroid ?? 0,
+          u_rms: audioMappedValues.rms ?? 0,
+          u_energy: audioMappedValues.energy ?? 0,
+          u_flux: audioMappedValues.flux ?? 0,
+          u_beatBass: audioBeatFlags.bass ? 1 : 0,
+          u_beatMid: audioBeatFlags.mid ? 1 : 0,
+          u_beatTreble: audioBeatFlags.treble ? 1 : 0,
+        };
+        for (const pass of passes) {
+          Object.assign(pass.uniforms, audioUniforms);
+        }
+
+        const shaderMap = buildShaderMap(passes);
+
+        // Render to WebGL canvas
+        chain.render(tex, passes, shaderMap);
       } catch (e) {
         console.error('WebGL render failed:', e);
       }
     };
+
     render();
-  }, [previewDataUrl]);
+
+    // Continuous render loop when audio is active so uniforms update every frame
+    if (audioEnabled) {
+      const loop = () => {
+        render();
+        rafRef.current = requestAnimationFrame(loop);
+      };
+      rafRef.current = requestAnimationFrame(loop);
+    }
+
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+    };
+  }, [originalDataUrl, effectStack, mediaInfo, audioEnabled, audioBandEnergies, audioBeatFlags, audioMappedValues]);
 
   // ── Cleanup hover on unmount ───────────────────────────────
   useEffect(() => {
     return () => {
       if (hoverTimeoutRef.current) window.clearTimeout(hoverTimeoutRef.current);
     };
+  }, []);
+
+  // ── Fullscreen toggle ──────────────────────────────────────
+  const toggleFullscreen = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    if (!document.fullscreenElement) {
+      el.requestFullscreen().catch(() => {});
+      setIsFullscreen(true);
+    } else {
+      document.exitFullscreen().catch(() => {});
+      setIsFullscreen(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "F11") {
+        e.preventDefault();
+        toggleFullscreen();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [toggleFullscreen]);
+
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", handler);
+    return () => document.removeEventListener("fullscreenchange", handler);
   }, []);
 
   // ── Clear hover mask when switching modes ──────────────────
@@ -501,7 +600,7 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
       {/* Canvas Area */}
       <div
         ref={containerRef}
-        className={`flex-1 relative overflow-hidden ${!mediaLoaded ? "checkerboard" : ""}`}
+        className={`flex-1 relative overflow-hidden ${!mediaLoaded ? "checkerboard" : ""} ${isFullscreen ? "bg-black" : ""}`}
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
@@ -740,10 +839,15 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
             <span style={{ color: "var(--text-dim)" }}>|</span>
             <span>{Math.round(zoom * 100)}%</span>
           </div>
-          <div className="flex items-center gap-1">
+          <button
+            onClick={toggleFullscreen}
+            className="flex items-center gap-1"
+            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)" }}
+            title="Toggle fullscreen (F11)"
+          >
             <Maximize2 size={11} />
-            <span>Fit</span>
-          </div>
+            <span>Fullscreen</span>
+          </button>
         </div>
       )}
     </div>

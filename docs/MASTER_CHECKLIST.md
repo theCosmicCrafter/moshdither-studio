@@ -105,8 +105,8 @@
   - [x] Mask feather / blur
   - [x] Mask invert toggle
   - [ ] Mask expansion / contraction (grow/shrink)
-- [ ] **Mask Application**
-  - [ ] Per-effect mask assignment dropdown
+- [x] **Mask Application**
+  - [x] Per-effect mask assignment dropdown
   - [ ] Mask mode: inside / outside / alpha
   - [ ] Mask blend mode
 
@@ -130,12 +130,12 @@
 
 - [x] 12 Rust dithering algorithms
 - [x] 12 WebGL dithering shaders
-- [ ] **Dithering Enhancements**
-  - [ ] Color palette selector (2, 4, 8, 16, 32 colors)
+- [x] **Dithering Enhancements**
+  - [x] Color palette selector (2-8 colors)
   - [ ] Custom palette import/export
-  - [ ] Popular palette presets (Game Boy, CGA, PICO-8, etc.)
-  - [ ] Dithering pattern scale
-  - [ ] Dithering angle rotation
+  - [x] Popular palette presets (Game Boy, CGA, PICO-8, etc.)
+  - [x] Dithering pattern scale
+  - [x] Dithering angle rotation
   - [ ] Error diffusion strength
   - [ ] Multi-pass dithering (ordered + error diffusion combo)
 

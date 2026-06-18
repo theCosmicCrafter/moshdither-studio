@@ -1,6 +1,7 @@
 pub mod analog;
 pub mod artistic;
 pub mod color;
+pub mod composite;
 pub mod datamoshing;
 pub mod dithering;
 pub mod glitch;
@@ -13,5 +14,5 @@ pub mod preview;
 pub mod registry;
 pub mod types;
 
-pub use types::*;
 pub use registry::EffectRegistry;
+pub use types::*;

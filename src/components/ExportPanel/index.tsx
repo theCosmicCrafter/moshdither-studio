@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useAppStore } from "../../store";
 import { exportVideo } from "../../lib/tauri";
+import { stackToRustPayload } from "../../utils/effectConverter";
 import {
   Film,
   ArrowDownToLine,
@@ -81,10 +82,12 @@ export default function ExportPanel() {
       setExportProgress(progress);
     }, 300);
 
-    const stack = activeEffects.map((e) => ({
-      effect_id: e.effectId,
-      params: e.params as Record<string, unknown>,
-    }));
+    const state = useAppStore.getState();
+    const stack = stackToRustPayload(
+      activeEffects,
+      state.activeMask,
+      state.sam3Masks
+    );
 
     const width = resolution.w === 0 ? undefined : resolution.w;
     const height = resolution.h === 0 ? undefined : resolution.h;

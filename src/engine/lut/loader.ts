@@ -6,6 +6,7 @@ export interface LUTPreset {
 }
 
 export const LUT_PRESETS: LUTPreset[] = [
+  // Instagram-style presets
   { name: "Amatorka", url: "/lut/amatorka.png" },
   { name: "Brannan", url: "/lut/brannan.png" },
   { name: "Earlybird", url: "/lut/earlybird.png" },
@@ -20,6 +21,28 @@ export const LUT_PRESETS: LUTPreset[] = [
   { name: "Toaster", url: "/lut/toaster.png" },
   { name: "Walden", url: "/lut/walden.png" },
   { name: "X-Pro", url: "/lut/xpro.png" },
+  // Film / Movie looks
+  { name: "Analog Film 01", url: "/lut/analog_film_01.png" },
+  { name: "Dramatic 01", url: "/lut/dramatic_01.png" },
+  { name: "Motion Picture 01", url: "/lut/motion_picture_01.png" },
+  { name: "High Contrast 01", url: "/lut/high_contrast_01.png" },
+  { name: "CinePrint 160T", url: "/lut/cineprint_160t.png" },
+  { name: "CinePrint 250D", url: "/lut/cineprint_250d.png" },
+  { name: "CinePrint 500T", url: "/lut/cineprint_500t.png" },
+  { name: "Kodak 250D", url: "/lut/kodak_250d.png" },
+  { name: "28 Days Later", url: "/lut/movie_28_days.png" },
+  { name: "300", url: "/lut/movie_300.png" },
+  { name: "3:10 to Yuma", url: "/lut/movie_yuma.png" },
+  // Cinematic / Creative
+  { name: "Cinematica 01", url: "/lut/cinematica_01.png" },
+  { name: "Hollywood Tones", url: "/lut/hollywood_tones.png" },
+  { name: "Back to the Future", url: "/lut/back_to_future.png" },
+  { name: "Futuristic 01", url: "/lut/futuristic_01.png" },
+  { name: "Sci-Fi 01", url: "/lut/sci_fi_01.png" },
+  { name: "Midnight", url: "/lut/midnight.png" },
+  { name: "Cyber Night", url: "/lut/cyber_night.png" },
+  { name: "Vintage Action", url: "/lut/vintage_action.png" },
+  { name: "Vintage Blockbuster", url: "/lut/vintage_blockbuster.png" },
 ];
 
 export class LUTLoader {

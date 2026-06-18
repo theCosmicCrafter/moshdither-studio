@@ -155,7 +155,7 @@ export async function getFrameData(): Promise<string> {
 }
 
 export async function applyEffectStack(
-  stack: { effect_id: string; params: Record<string, unknown> }[],
+  stack: { effect_id: string; params: Record<string, unknown>; mask_b64?: string | null }[],
   maskB64?: string | null
 ): Promise<string> {
   return invoke("apply_effect_stack", { stack, maskB64 });
@@ -184,7 +184,7 @@ export async function saveMedia(): Promise<void> {
 
 export async function exportVideo(
   sourcePath: string,
-  stack: { effect_id: string; params: Record<string, unknown> }[],
+  stack: { effect_id: string; params: Record<string, unknown>; mask_b64?: string | null }[],
   options: {
     maskB64?: string | null;
     codec?: string;

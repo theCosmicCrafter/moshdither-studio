@@ -25,6 +25,7 @@ export interface StackEntry {
   effectName: string;
   params: Record<string, unknown>;
   enabled: boolean;
+  maskId: string | null; // null = no mask, "active" = global activeMask, "sam3-0" etc = SAM3 masks
 }
 
 export interface AudioBinding {
@@ -134,6 +135,7 @@ export interface AppState {
   removeFromStack: (id: string) => void;
   moveStackItem: (fromIndex: number, toIndex: number) => void;
   updateStackParams: (id: string, params: Record<string, unknown>) => void;
+  setStackItemMask: (id: string, maskId: string | null) => void;
   toggleStackItem: (id: string) => void;
   selectStackItem: (id: string | null) => void;
   setIsProcessing: (v: boolean) => void;
@@ -263,6 +265,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       effectName: effect.name,
       params: defaults,
       enabled: true,
+      maskId: null,
     };
     set((state) => ({
       pastStacks: [...state.pastStacks, state.effectStack],
@@ -305,6 +308,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       effectStack: state.effectStack.map((e) =>
         e.id === id ? { ...e, params: { ...e.params, ...params } } : e
       ),
+    })),
+
+  setStackItemMask: (id, maskId) =>
+    set((state) => ({
+      pastStacks: [...state.pastStacks, state.effectStack],
+      futureStacks: [],
+      effectStack: state.effectStack.map((e) => (e.id === id ? { ...e, maskId } : e)),
     })),
 
   toggleStackItem: (id) =>
