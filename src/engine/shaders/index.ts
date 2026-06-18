@@ -193,6 +193,9 @@ export { curvesShader } from "./curves";
 import { paletteDitherShader } from "./paletteDither";
 export { paletteDitherShader } from "./paletteDither";
 
+import { liftGammaGainShader } from "./liftGammaGain";
+export { liftGammaGainShader } from "./liftGammaGain";
+
 // Register all shaders into the global registry
 shaderRegistry.register(passThroughShader);
 shaderRegistry.register(lutShader);
@@ -258,3 +261,4 @@ shaderRegistry.register(colorGradeShader);
 shaderRegistry.register(blendModesShader);
 shaderRegistry.register(curvesShader);
 shaderRegistry.register(paletteDitherShader);
+shaderRegistry.register(liftGammaGainShader);

@@ -114,6 +114,24 @@ const rustToWebGL: Record<string, WebGLMapping> = {
       return Math.floor(mode);
     },
   },
+  "color.lift_gamma_gain": {
+    shaderId: "lift_gamma_gain",
+    paramMap: {
+      lift_r: "lift",
+      lift_g: "lift",
+      lift_b: "lift",
+      gamma_r: "gamma",
+      gamma_g: "gamma",
+      gamma_b: "gamma",
+      gain_r: "gain",
+      gain_g: "gain",
+      gain_b: "gain",
+      amount: "amount",
+    },
+    transform: (_k, v) => {
+      return typeof v === "number" ? v : 0;
+    },
+  },
 
   // Artistic
   "artistic.posterize": {
@@ -264,16 +282,41 @@ export function stackToRenderPasses(stack: StackEntry[]): RenderPass[] {
 
     if (!shaderRegistry.has(mapping.shaderId)) continue;
 
-    const uniforms: Record<string, number | number[] | boolean> = {};
+    const uniformGroups: Record<string, { rustParam: string; value: unknown }[]> = {};
     for (const [rustParam, webglUniform] of Object.entries(mapping.paramMap)) {
       const rawValue = entry.params[rustParam];
       if (rawValue === undefined) continue;
+      if (!uniformGroups[webglUniform]) uniformGroups[webglUniform] = [];
+      uniformGroups[webglUniform].push({ rustParam, value: rawValue });
+    }
 
-      if (mapping.transform) {
-        uniforms[webglUniform] = mapping.transform(rustParam, rawValue);
+    const uniforms: Record<string, number | number[] | boolean> = {};
+    for (const [webglUniform, group] of Object.entries(uniformGroups)) {
+      if (group.length === 1) {
+        const { rustParam, value } = group[0];
+        if (mapping.transform) {
+          uniforms[webglUniform] = mapping.transform(rustParam, value);
+        } else {
+          const num = typeof value === "number" ? value : Number(value);
+          uniforms[webglUniform] = Number.isNaN(num) ? 0 : num;
+        }
       } else {
-        const num = typeof rawValue === "number" ? rawValue : Number(rawValue);
-        uniforms[webglUniform] = Number.isNaN(num) ? 0 : num;
+        // Multiple params map to same uniform: try to combine into vec3
+        const r = group.find((g) => g.rustParam.endsWith("_r"));
+        const g_ = group.find((g) => g.rustParam.endsWith("_g"));
+        const b = group.find((g) => g.rustParam.endsWith("_b"));
+        if (r && g_ && b) {
+          const getVal = (item: typeof r) => {
+            const v = item.value;
+            return typeof v === "number" ? v : Number(v);
+          };
+          uniforms[webglUniform] = [getVal(r), getVal(g_), getVal(b)];
+        } else {
+          // Fallback: use last value
+          const last = group[group.length - 1];
+          const num = typeof last.value === "number" ? last.value : Number(last.value);
+          uniforms[webglUniform] = Number.isNaN(num) ? 0 : num;
+        }
       }
     }
 

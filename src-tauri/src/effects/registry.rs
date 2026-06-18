@@ -51,6 +51,7 @@ impl EffectRegistry {
         self.register(super::color::RgbShift::default());
         self.register(super::color::ChannelSwap::default());
         self.register(super::color::Invert::default());
+        self.register(super::color::LiftGammaGain);
         self.register(super::color::LutGrading::default());
 
         // Composite
