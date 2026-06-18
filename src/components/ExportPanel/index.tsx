@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useAppStore } from "../../store";
 import { exportVideo } from "../../lib/tauri";
 import { stackToRustPayload } from "../../utils/effectConverter";
+import { useBatchQueue } from "../../hooks/useBatchQueue";
 import {
   Film,
   ArrowDownToLine,
@@ -9,6 +10,10 @@ import {
   Monitor,
   Video,
   HardDrive,
+  Plus,
+  Play,
+  Trash,
+  List,
 } from "lucide-react";
 
 const CODECS = [
@@ -40,6 +45,10 @@ export default function ExportPanel() {
   const setExportProgress = useAppStore((s) => s.setExportProgress);
   const resetExport = useAppStore((s) => s.resetExport);
   const requestExportCancel = useAppStore((s) => s.requestExportCancel);
+
+  const { queue, isProcessing, currentJobId, addJob, removeJob, clearQueue, processQueue } =
+    useBatchQueue();
+  const [showQueue, setShowQueue] = useState(false);
 
   const [format, setFormat] = useState<"mp4" | "webm" | "gif" | "png_seq">("mp4");
   const [codec, setCodec] = useState("h264");
@@ -371,6 +380,169 @@ export default function ExportPanel() {
           <ArrowDownToLine size={14} />
           Export Video
         </button>
+      )}
+
+      {/* Batch Queue */}
+      <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+        <button
+          onClick={() => {
+            const res = RESOLUTIONS.find((r) => r.id === resolutionId)!;
+            addJob({
+              name: `${format} ${codec} ${resolutionId}`,
+              format,
+              codec,
+              resolutionW: res.w === 0 ? undefined : res.w,
+              resolutionH: res.h === 0 ? undefined : res.h,
+              fps,
+              quality,
+            });
+          }}
+          disabled={!mediaInfo || !filePath}
+          style={{
+            flex: 1,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 4,
+            padding: "4px 0",
+            fontSize: 11,
+            borderRadius: 3,
+            border: "1px solid #444",
+            background: "#222",
+            color: "#ddd",
+            cursor: "pointer",
+          }}
+        >
+          <Plus size={11} />
+          Add to Queue
+        </button>
+        <button
+          onClick={() => setShowQueue((v) => !v)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 4,
+            padding: "4px 8px",
+            fontSize: 11,
+            borderRadius: 3,
+            border: "1px solid #444",
+            background: "#222",
+            color: "#ddd",
+            cursor: "pointer",
+          }}
+        >
+          <List size={11} />
+          {queue.length}
+        </button>
+      </div>
+
+      {showQueue && (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+            maxHeight: 140,
+            overflowY: "auto",
+          }}
+        >
+          {queue.length === 0 ? (
+            <div style={{ color: "#666", textAlign: "center", fontSize: 11 }}>Queue empty</div>
+          ) : (
+            queue.map((job) => (
+              <div
+                key={job.id}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  padding: "3px 6px",
+                  borderRadius: 3,
+                  background: currentJobId === job.id ? "#2a3f2a" : "#1f1f1f",
+                  fontSize: 11,
+                }}
+              >
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                  {job.name}
+                </span>
+                <span
+                  style={{
+                    fontSize: 10,
+                    color:
+                      job.status === "completed"
+                        ? "#4caf50"
+                        : job.status === "failed"
+                        ? "#f44336"
+                        : job.status === "running"
+                        ? "#ff9800"
+                        : "#888",
+                    marginRight: 4,
+                  }}
+                >
+                  {job.status === "completed" && job.outputPath ? "Done" : job.status}
+                </span>
+                {job.status === "pending" && (
+                  <button
+                    onClick={() => removeJob(job.id)}
+                    title="Remove job"
+                    style={{
+                      background: "none",
+                      border: "none",
+                      color: "#f44",
+                      cursor: "pointer",
+                      padding: 0,
+                    }}
+                  >
+                    <Trash size={11} />
+                  </button>
+                )}
+              </div>
+            ))
+          )}
+          {queue.some((j) => j.status === "pending") && !isProcessing && (
+            <button
+              onClick={() => processQueue()}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 4,
+                padding: "4px 0",
+                fontSize: 11,
+                borderRadius: 3,
+                border: "none",
+                background: "#2a6f3c",
+                color: "#fff",
+                cursor: "pointer",
+              }}
+            >
+              <Play size={11} />
+              Process Queue
+            </button>
+          )}
+          {queue.length > 0 && (
+            <button
+              onClick={clearQueue}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 4,
+                padding: "4px 0",
+                fontSize: 11,
+                borderRadius: 3,
+                border: "1px solid #444",
+                background: "transparent",
+                color: "#f44",
+                cursor: "pointer",
+              }}
+            >
+              <Trash size={11} />
+              Clear Queue
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
