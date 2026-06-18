@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import { useAppStore, type StackEntry } from "../store";
+import { DEFAULT_PRESETS } from "./defaultPresets";
 
 export interface Preset {
   id: string;
@@ -14,10 +15,18 @@ const STORAGE_KEY = "moshdither_presets_v2";
 function loadPresets(): Preset[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    return JSON.parse(raw) as Preset[];
+    const userPresets: Preset[] = raw ? (JSON.parse(raw) as Preset[]) : [];
+    // Merge default presets (avoid duplicates by id)
+    const existingIds = new Set(userPresets.map((p) => p.id));
+    const merged = [...userPresets];
+    for (const preset of DEFAULT_PRESETS) {
+      if (!existingIds.has(preset.id)) {
+        merged.push({ ...preset, thumbnail: generateThumbnail(preset.stack) });
+      }
+    }
+    return merged;
   } catch {
-    return [];
+    return DEFAULT_PRESETS.map((p) => ({ ...p, thumbnail: generateThumbnail(p.stack) }));
   }
 }
 
@@ -125,6 +134,11 @@ export function usePresets() {
 
   const deletePreset = useCallback(
     (id: string) => {
+      // Prevent deletion of built-in default presets
+      if (id.startsWith("default-preset-")) {
+        setStatusMessage("Built-in presets cannot be deleted");
+        return;
+      }
       setPresets((prev) => prev.filter((p) => p.id !== id));
       setStatusMessage("Preset deleted");
     },

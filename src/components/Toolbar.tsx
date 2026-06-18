@@ -1,4 +1,4 @@
-import { Eye, EyeOff, FolderOpen, Loader2, Play, Redo2, Save, Square, Trash2, Undo2, ZoomIn, ZoomOut } from "lucide-react";
+import { Eye, EyeOff, FolderOpen, Loader2, Play, Redo2, Save, Square, Trash2, Undo2, ZoomIn, ZoomOut, Gauge } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { applyEffectStack, exportVideo, getFrameData, loadMediaFile, sam3LoadImage, saveMedia } from "../lib/tauri";
 import { useAppStore } from "../store";
@@ -28,6 +28,8 @@ export default function Toolbar({ onFileLoaded }: Props) {
   const canRedo = useAppStore((s) => s.canRedo());
   const currentTime = useAppStore((s) => s.currentTime);
   const setCurrentTime = useAppStore((s) => s.setCurrentTime);
+  const playbackSpeed = useAppStore((s) => s.playbackSpeed);
+  const setPlaybackSpeed = useAppStore((s) => s.setPlaybackSpeed);
   const [isLooping, setIsLooping] = useState(false);
   const [fps, setFps] = useState(12);
   const processRef = useRef(false);
@@ -167,16 +169,17 @@ export default function Toolbar({ onFileLoaded }: Props) {
   useEffect(() => {
     let intervalId: number;
     if (isLooping && mediaLoaded && effectStack.length > 0) {
+      const effectiveFps = Math.max(1, fps * playbackSpeed);
       intervalId = window.setInterval(() => {
         const s = useAppStore.getState();
         s.setCurrentTime((s.currentTime + 1) % 100);
         handleProcess();
-      }, 1000 / fps);
+      }, 1000 / effectiveFps);
     }
     return () => {
       if (intervalId) clearInterval(intervalId);
     };
-  }, [isLooping, mediaLoaded, effectStack, activeMask, fps, handleProcess]);
+  }, [isLooping, mediaLoaded, effectStack, activeMask, fps, playbackSpeed, handleProcess]);
 
   return (
     <div
@@ -336,6 +339,26 @@ export default function Toolbar({ onFileLoaded }: Props) {
             title={`${fps} FPS`}
           />
           <span className="text-[10px] font-mono w-4 text-right text-[var(--accent)]">{fps}</span>
+        </div>
+        <div
+          className="w-px h-5 mx-1"
+          style={{ background: "var(--border-secondary)" }}
+        />
+        <div className="flex items-center gap-1.5 ml-1 mr-1">
+          <Gauge size={12} style={{ color: "var(--text-muted)" }} />
+          <select
+            value={playbackSpeed}
+            onChange={(e) => setPlaybackSpeed(parseFloat(e.target.value))}
+            className="bg-transparent text-[10px] font-mono text-[var(--accent)] border border-[var(--border-secondary)] rounded px-1 py-0.5 cursor-pointer outline-none"
+            title="Playback speed"
+            style={{ background: "var(--bg-secondary)" }}
+          >
+            <option value={0.25}>0.25x</option>
+            <option value={0.5}>0.5x</option>
+            <option value={1}>1x</option>
+            <option value={2}>2x</option>
+            <option value={4}>4x</option>
+          </select>
         </div>
         <div
           className="w-px h-5 mx-1"
