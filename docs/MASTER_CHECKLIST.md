@@ -47,7 +47,7 @@
   - [x] Frame number display
   - [x] Current time / duration display
   - [x] Playhead with drag scrubbing
-  - [ ] In/out point markers
+  - [x] In/out point markers
   - [ ] Zoom in/out on timeline
   - [ ] Effect stack markers on timeline
 - [x] **Transport Controls**
@@ -179,7 +179,7 @@
   - [x] Full screen preview (F11)
   - [x] Split-screen before/after draggable divider
   - [x] Playback speed selector (0.25x-4x)
-  - [ ] Pixel peep 1:1 view
+  - [x] Pixel peep 1:1 view
   - [x] Histogram overlay
   - [x] Waveform / RGB Parade overlay
   - [ ] Safe area / grid overlay
@@ -193,7 +193,7 @@
   - [x] Preset browser list with load/delete
   - [x] Preset thumbnails
   - [x] Import/export presets (JSON)
-  - [ ] Default presets for common looks
+  - [x] Default presets for common looks
 - [x] **Project Save/Load**
   - [x] Save project file (.moshdither) via Ctrl+S
   - [x] Load project file (restore stack, media refs)
