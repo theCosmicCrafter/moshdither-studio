@@ -58,6 +58,11 @@ export interface AppState {
   // Timeline
   currentTime: number;
   setCurrentTime: (t: number) => void;
+  inPoint: number | null;
+  outPoint: number | null;
+  setInPoint: (t: number | null) => void;
+  setOutPoint: (t: number | null) => void;
+  clearInOut: () => void;
 
   // Media
   mediaLoaded: boolean;
@@ -232,6 +237,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   playbackSpeed: 1,
   scopeMode: "none",
   scopesVisible: false,
+  inPoint: null,
+  outPoint: null,
   activeMask: null,
   maskVisible: true,
   sam3Ready: false,
@@ -338,6 +345,25 @@ export const useAppStore = create<AppState>((set, get) => ({
   setPlaybackSpeed: (speed) => set({ playbackSpeed: Math.max(0.25, Math.min(4, speed)) }),
   setScopeMode: (mode) => set({ scopeMode: mode }),
   setScopesVisible: (v) => set({ scopesVisible: v }),
+  setInPoint: (t) =>
+    set((state) => {
+      const val = t === null ? null : Math.max(0, Math.min(99, t));
+      return {
+        inPoint: val,
+        outPoint:
+          state.outPoint !== null && val !== null && state.outPoint <= val ? null : state.outPoint,
+      };
+    }),
+  setOutPoint: (t) =>
+    set((state) => {
+      const val = t === null ? null : Math.max(0, Math.min(99, t));
+      return {
+        outPoint: val,
+        inPoint:
+          state.inPoint !== null && val !== null && state.inPoint >= val ? null : state.inPoint,
+      };
+    }),
+  clearInOut: () => set({ inPoint: null, outPoint: null }),
   setExportProgress: (progress) => set({ exportProgress: Math.max(0, Math.min(100, progress)) }),
   setExportIsRunning: (v) => set({ exportIsRunning: v }),
   requestExportCancel: () => set({ exportCancelRequested: true }),

@@ -18,6 +18,9 @@ export function useKeyboardShortcuts() {
   const setAudioPlaying = useAppStore((s) => s.setAudioPlaying);
   const audioPlaying = useAppStore((s) => s.audioPlaying);
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
+  const setInPoint = useAppStore((s) => s.setInPoint);
+  const setOutPoint = useAppStore((s) => s.setOutPoint);
+  const clearInOut = useAppStore((s) => s.clearInOut);
   const { saveProject, openProject } = useProject();
 
   useEffect(() => {
@@ -112,10 +115,38 @@ export function useKeyboardShortcuts() {
           }
           break;
 
+        case "i":
+          if (!isInput && !isMeta) {
+            e.preventDefault();
+            setInPoint(Math.round(currentTime));
+            setStatusMessage(`In point set at frame ${Math.round(currentTime)}`);
+          }
+          break;
+
+        case "I":
+          if (!isInput && e.altKey) {
+            e.preventDefault();
+            clearInOut();
+            setStatusMessage("In/Out points cleared");
+          }
+          break;
+
         case "o":
           if (isMeta) {
             e.preventDefault();
             openProject();
+          } else if (!isInput) {
+            e.preventDefault();
+            setOutPoint(Math.round(currentTime));
+            setStatusMessage(`Out point set at frame ${Math.round(currentTime)}`);
+          }
+          break;
+
+        case "x":
+          if (!isInput && !isMeta) {
+            e.preventDefault();
+            clearInOut();
+            setStatusMessage("In/Out points cleared");
           }
           break;
 
@@ -140,5 +171,8 @@ export function useKeyboardShortcuts() {
     setStatusMessage,
     saveProject,
     openProject,
+    setInPoint,
+    setOutPoint,
+    clearInOut,
   ]);
 }

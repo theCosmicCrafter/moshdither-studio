@@ -19,6 +19,11 @@ export default function Timeline() {
   const audioBpm = useAppStore((s) => s.audioBpm);
   const playbackSpeed = useAppStore((s) => s.playbackSpeed);
   const setPlaybackSpeed = useAppStore((s) => s.setPlaybackSpeed);
+  const inPoint = useAppStore((s) => s.inPoint);
+  const outPoint = useAppStore((s) => s.outPoint);
+  const setInPoint = useAppStore((s) => s.setInPoint);
+  const setOutPoint = useAppStore((s) => s.setOutPoint);
+  const clearInOut = useAppStore((s) => s.clearInOut);
 
   const scrubberRef = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
@@ -106,6 +111,60 @@ export default function Timeline() {
           F:{currentFrame.toString().padStart(5, "0")}
         </div>
 
+        {/* In/Out buttons */}
+        <div style={{ display: "flex", gap: 2, alignItems: "center" }}>
+          <button
+            onClick={() => setInPoint(Math.round(currentTime))}
+            title="Set in point (I)"
+            style={{
+              fontSize: 9,
+              padding: "1px 4px",
+              borderRadius: 2,
+              border: "1px solid #2ecc71",
+              background: inPoint !== null ? "rgba(46, 204, 113, 0.2)" : "transparent",
+              color: "#2ecc71",
+              cursor: "pointer",
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            IN
+          </button>
+          <button
+            onClick={() => setOutPoint(Math.round(currentTime))}
+            title="Set out point (O)"
+            style={{
+              fontSize: 9,
+              padding: "1px 4px",
+              borderRadius: 2,
+              border: "1px solid #e74c3c",
+              background: outPoint !== null ? "rgba(231, 76, 60, 0.2)" : "transparent",
+              color: "#e74c3c",
+              cursor: "pointer",
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            OUT
+          </button>
+          {(inPoint !== null || outPoint !== null) && (
+            <button
+              onClick={() => clearInOut()}
+              title="Clear in/out (X)"
+              style={{
+                fontSize: 9,
+                padding: "1px 4px",
+                borderRadius: 2,
+                border: "1px solid #666",
+                background: "transparent",
+                color: "#888",
+                cursor: "pointer",
+                fontFamily: "var(--font-mono)",
+              }}
+            >
+              CLR
+            </button>
+          )}
+        </div>
+
         {/* BPM */}
         {audioBpm && (
           <div
@@ -125,11 +184,11 @@ export default function Timeline() {
 
         {/* Transport buttons */}
         <div style={{ display: "flex", gap: 2, alignItems: "center" }}>
-          <TButton icon={<SkipBack size={14} />} onClick={() => setCurrentTime(0)} title="Go to start" />
-          <TButton icon={<StepBack size={14} />} onClick={() => setCurrentTime(Math.max(0, currentTime - 1 / fps))} title="Previous frame" />
+          <TButton icon={<SkipBack size={14} />} onClick={() => setCurrentTime(inPoint ?? 0)} title="Go to in point" />
+          <TButton icon={<StepBack size={14} />} onClick={() => setCurrentTime(Math.max(inPoint ?? 0, currentTime - 1 / fps))} title="Previous frame" />
           <TButton icon={audioPlaying ? <Pause size={14} /> : <Play size={14} />} onClick={() => {}} title={audioPlaying ? "Pause" : "Play"} active />
-          <TButton icon={<StepForward size={14} />} onClick={() => setCurrentTime(Math.min(duration, currentTime + 1 / fps))} title="Next frame" />
-          <TButton icon={<SkipForward size={14} />} onClick={() => setCurrentTime(duration)} title="Go to end" />
+          <TButton icon={<StepForward size={14} />} onClick={() => setCurrentTime(Math.min(outPoint ?? duration, currentTime + 1 / fps))} title="Next frame" />
+          <TButton icon={<SkipForward size={14} />} onClick={() => setCurrentTime(outPoint ?? duration)} title="Go to out point" />
           <TButton icon={<Repeat size={14} />} onClick={() => {}} title="Loop" />
 
           {/* Speed selector */}
@@ -209,6 +268,44 @@ export default function Timeline() {
           }}
         />
 
+        {/* In point marker */}
+        {inPoint !== null && (
+          <div
+            title={`In point: ${formatTime(inPoint)}`}
+            style={{
+              position: "absolute",
+              left: `${(inPoint / duration) * 100}%`,
+              top: -2,
+              bottom: -2,
+              width: 2,
+              background: "#2ecc71",
+              boxShadow: "0 0 4px #2ecc71",
+              transform: "translateX(-50%)",
+              borderRadius: 1,
+              zIndex: 2,
+            }}
+          />
+        )}
+
+        {/* Out point marker */}
+        {outPoint !== null && (
+          <div
+            title={`Out point: ${formatTime(outPoint)}`}
+            style={{
+              position: "absolute",
+              left: `${(outPoint / duration) * 100}%`,
+              top: -2,
+              bottom: -2,
+              width: 2,
+              background: "#e74c3c",
+              boxShadow: "0 0 4px #e74c3c",
+              transform: "translateX(-50%)",
+              borderRadius: 1,
+              zIndex: 2,
+            }}
+          />
+        )}
+
         {/* Playhead */}
         <div
           style={{
@@ -221,6 +318,7 @@ export default function Timeline() {
             boxShadow: "0 0 4px #4a90d9",
             transform: "translateX(-50%)",
             borderRadius: 1,
+            zIndex: 3,
           }}
         />
 

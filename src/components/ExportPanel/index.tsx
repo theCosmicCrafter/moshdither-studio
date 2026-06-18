@@ -61,6 +61,8 @@ export default function ExportPanel() {
 
   const activeEffects = effectStack.filter((e) => e.enabled);
   const resolution = RESOLUTIONS.find((r) => r.id === resolutionId)!;
+  const inPoint = useAppStore((s) => s.inPoint);
+  const outPoint = useAppStore((s) => s.outPoint);
 
   useEffect(() => {
     return () => {
@@ -354,6 +356,15 @@ export default function ExportPanel() {
               Cancel
             </button>
           </div>
+        </div>
+      )}
+
+      {/* In/Out range */}
+      {(inPoint !== null || outPoint !== null) && (
+        <div style={{ fontSize: 10, color: "#888", fontFamily: "var(--font-mono)", display: "flex", gap: 6, alignItems: "center" }}>
+          <span style={{ color: "#2ecc71" }}>IN {inPoint ?? 0}s</span>
+          <span>→</span>
+          <span style={{ color: "#e74c3c" }}>OUT {outPoint ?? "end"}s</span>
         </div>
       )}
 
