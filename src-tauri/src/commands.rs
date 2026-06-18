@@ -1,5 +1,5 @@
 use crate::effects::{EffectCategory, EffectMeta, EffectRegistry, Frame};
-use crate::ffmpeg::decode_video;
+use crate::ffmpeg::{decode_video, encode_video};
 use crate::sam3_engine::Sam3Engine;
 use crate::utils::image_io::{load_image, load_image_from_memory, save_png};
 use image::ImageFormat;
@@ -260,6 +260,84 @@ pub fn save_media(
     Ok(path)
 }
 
+/// Export a video by decoding, applying the effect stack via `process_video`, and re-encoding.
+/// Effects that implement custom `process_video` (e.g. temporal / cross-frame effects)
+/// will work correctly; others fall back to per-frame `process_frame` inside their own
+/// `process_video` implementation.
+#[tauri::command]
+pub fn export_video(
+    state: State<'_, AppState>,
+    source_path: String,
+    output_path: String,
+    stack: Vec<EffectCall>,
+    mask_b64: Option<String>,
+    codec: Option<String>,
+    fps: Option<f64>,
+    width: Option<u32>,
+    height: Option<u32>,
+) -> std::result::Result<String, String> {
+    // Decode the full source video
+    let mut segment = decode_video(&source_path, None)
+        .map_err(|e| e.to_string())?;
+
+    // Apply resolution override if specified
+    if let (Some(w), Some(h)) = (width, height) {
+        if w != segment.frames[0].width || h != segment.frames[0].height {
+            // Resize frames to target resolution
+            for frame in &mut segment.frames {
+                if let Some(img) = image::RgbaImage::from_raw(frame.width, frame.height, frame.data.clone()) {
+                    let resized = image::imageops::resize(&img, w, h, image::imageops::FilterType::Lanczos3);
+                    frame.width = w;
+                    frame.height = h;
+                    frame.data = resized.into_raw();
+                }
+            }
+        }
+    }
+
+    let mask = decode_mask_b64(mask_b64)?;
+
+    // Apply the effect stack using `process_video` so temporal effects work
+    let registry = state.registry.lock().unwrap();
+    for call in &stack {
+        let effect = registry
+            .get(&call.effect_id)
+            .ok_or_else(|| format!("Effect '{}' not found", call.effect_id))?;
+        let previous = segment.clone();
+        segment = effect
+            .process_video(&segment, mask.as_ref(), &call.params)
+            .map_err(|e| e.to_string())?;
+
+        // Post-process mask blend for effects that don't handle masking internally
+        if !effect.handles_masking() {
+            if let Some(m) = &mask {
+                for (i, frame) in segment.frames.iter_mut().enumerate() {
+                    if m.width == frame.width && m.height == frame.height {
+                        let prev = &previous.frames[i];
+                        for px in 0..(frame.width * frame.height) as usize {
+                            let mask_val = m.data[px] as f32 / 255.0;
+                            let idx = px * 4;
+                            for c in 0..3 {
+                                let old_val = prev.data[idx + c] as f32;
+                                let new_val = frame.data[idx + c] as f32;
+                                frame.data[idx + c] = (old_val * (1.0 - mask_val) + new_val * mask_val) as u8;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    drop(registry);
+
+    // Re-encode the processed segment
+    let codec_str = codec.as_deref().unwrap_or("libx264");
+    encode_video(&segment, &output_path, codec_str, fps)
+        .map_err(|e| e.to_string())?;
+
+    Ok(output_path)
+}
+
 /// Get the current image dimensions.
 #[tauri::command]
 pub fn get_media_info(state: State<'_, AppState>) -> std::result::Result<serde_json::Value, String> {
@@ -513,4 +591,16 @@ mod integration_tests {
         let effect = Grayscale::default();
         assert!(!effect.handles_masking(), "Grayscale should not handle masking internally");
     }
+}
+
+/// Save a JSON string to a file path.
+#[tauri::command]
+pub async fn save_file(path: String, contents: String) -> std::result::Result<(), String> {
+    std::fs::write(&path, contents).map_err(|e| e.to_string())
+}
+
+/// Read a file as a string.
+#[tauri::command]
+pub async fn read_file(path: String) -> std::result::Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| e.to_string())
 }

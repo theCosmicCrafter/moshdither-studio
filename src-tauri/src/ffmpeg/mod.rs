@@ -93,7 +93,14 @@ pub fn decode_video(path: &str, max_frames: Option<usize>) -> Result<VideoSegmen
 }
 
 /// Encode a sequence of raw RGBA frames to a video file.
-pub fn encode_video(segment: &VideoSegment, path: &str) -> Result<()> {
+/// `codec`: "libx264" | "libx265" | "libvpx-vp9" | "prores_ks"
+/// `fps_override`: optional target fps (defaults to segment fps)
+pub fn encode_video(
+    segment: &VideoSegment,
+    path: &str,
+    codec: &str,
+    fps_override: Option<f64>,
+) -> Result<()> {
     if segment.frames.is_empty() {
         return Err(AppError::Ffmpeg("No frames to encode".to_string()));
     }
@@ -102,26 +109,43 @@ pub fn encode_video(segment: &VideoSegment, path: &str) -> Result<()> {
     let first = &segment.frames[0];
     let w = first.width;
     let h = first.height;
+    let fps = fps_override.unwrap_or(segment.fps);
+
+    let encoder = match codec {
+        "h264" | "libx264" => "libx264",
+        "h265" | "hevc" | "libx265" => "libx265",
+        "vp9" | "libvpx-vp9" => "libvpx-vp9",
+        "prores" | "prores_ks" => "prores_ks",
+        _ => "libx264",
+    };
+
+    let mut args: Vec<String> = vec![
+        "-f".to_string(),
+        "rawvideo".to_string(),
+        "-pix_fmt".to_string(),
+        "rgba".to_string(),
+        "-s".to_string(),
+        format!("{}x{}", w, h),
+        "-r".to_string(),
+        fps.to_string(),
+        "-i".to_string(),
+        "pipe:0".to_string(),
+        "-c:v".to_string(),
+        encoder.to_string(),
+        "-pix_fmt".to_string(),
+        "yuv420p".to_string(),
+        "-y".to_string(),
+        path.to_string(),
+    ];
+
+    // ProRes needs profile argument
+    if encoder == "prores_ks" {
+        args.insert(args.len() - 2, "-profile:v".to_string());
+        args.insert(args.len() - 2, "3".to_string()); // ProRes 422 HQ
+    }
 
     let mut child = Command::new(&ffmpeg)
-        .args([
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "rgba",
-            "-s",
-            &format!("{}x{}", w, h),
-            "-r",
-            &segment.fps.to_string(),
-            "-i",
-            "pipe:0",
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
-            "-y",
-            path,
-        ])
+        .args(&args)
         .stdin(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
