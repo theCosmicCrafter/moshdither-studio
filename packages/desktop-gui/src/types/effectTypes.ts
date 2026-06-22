@@ -8,7 +8,8 @@ export type EffectType =
   | "datamosh"
   | "epsilon-glow"
   | "crt-phosphor"
-  | "temporal-noise";
+  | "temporal-noise"
+  | "lut";
 
 export type EffectCategory = "python" | "webgl";
 
@@ -96,6 +97,11 @@ export interface TemporalNoiseParams {
   numColors: number;
 }
 
+export interface LutParams {
+  intensity: number;
+  lutUrl: string | null;
+}
+
 export type EffectParams =
   | ({ type: "dither" } & DitherParams)
   | ({ type: "halftone" } & HalftoneParams)
@@ -103,7 +109,8 @@ export type EffectParams =
   | ({ type: "datamosh" } & DatamoshParams)
   | ({ type: "epsilon-glow" } & EpsilonGlowParams)
   | ({ type: "crt-phosphor" } & CrtPhosphorParams)
-  | ({ type: "temporal-noise" } & TemporalNoiseParams);
+  | ({ type: "temporal-noise" } & TemporalNoiseParams)
+  | ({ type: "lut" } & LutParams);
 
 // ---------------------------------------------------------------------------
 // Effect Mask & Core Effect Interface
@@ -264,6 +271,12 @@ export const EFFECT_REGISTRY: Record<EffectType, EffectMeta> = {
     category: "webgl",
     defaultParams: { intensity: 0.15, noiseScale: 1.0, numColors: 0 },
   },
+  lut: {
+    name: "LUT Color Grade",
+    icon: "palette",
+    category: "webgl",
+    defaultParams: { intensity: 1.0, lutUrl: null },
+  },
 };
 
 export const ALL_EFFECT_TYPES: EffectType[] = Object.keys(
@@ -327,6 +340,11 @@ export function getEffectParams(effect: Effect): EffectParams | null {
       return {
         type: "temporal-noise",
         ...(effect.params as unknown as TemporalNoiseParams),
+      };
+    case "lut":
+      return {
+        type: "lut",
+        ...(effect.params as unknown as LutParams),
       };
     default:
       return null;

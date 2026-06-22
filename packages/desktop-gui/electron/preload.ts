@@ -5,6 +5,7 @@ import type { IpcRendererEvent } from "electron";
 const VALID_SEND_CHANNELS: string[] = [
   "dialog:openMedia",
   "dialog:openMediaMultiple",
+  "dialog:openLut",
   "dialog:selectOutputDir",
   "dialog:selectSyncFolder",
   "sync:write-project",

@@ -463,6 +463,43 @@ export const PropertiesPanel: React.FC = () => {
                 </>
               )}
 
+              {/* LUT COLOR GRADE LAYER */}
+              {activeFx.type === 'lut' && (
+                <>
+                  {renderSlider('LUT Intensity', 'intensity', 0.0, 1.0, 0.01, 1.0, 'Blend between original and LUT-graded image')}
+                  <div className="control-group" style={{ marginBottom: '12px' }}>
+                    <label className="control-label" style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-secondary)' }}>LUT File (.cube)</label>
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '6px', alignItems: 'center' }}>
+                      <input
+                        type="text"
+                        value={activeFx.params.lutUrl ? decodeURIComponent(activeFx.params.lutUrl.replace('media://', '')).split('/').pop() : 'No LUT loaded'}
+                        disabled
+                        style={{ flex: 1, padding: '6px', fontSize: '12px', background: '#1c1c1e', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', borderRadius: '4px' }}
+                      />
+                      <Button
+                        variant="glass"
+                        size="sm"
+                        style={{ padding: '6px 12px', fontSize: '11px' }}
+                        onClick={async () => {
+                          if (!window.ipcRenderer) return;
+                          const lutUrl = await window.ipcRenderer.invoke<string | null>('dialog:openLut');
+                          if (lutUrl) {
+                            updateParam('lutUrl', lutUrl);
+                          }
+                        }}
+                      >
+                        Load LUT
+                      </Button>
+                    </div>
+                    {!activeFx.params.lutUrl && (
+                      <span style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '4px', display: 'block' }}>
+                        Load a .cube LUT file to apply colour grading to the image.
+                      </span>
+                    )}
+                  </div>
+                </>
+              )}
+
               {/* DATAMOSH LAYER */}
               {activeFx.type === 'datamosh' && (
                 <>
@@ -1167,12 +1204,17 @@ export const PropertiesPanel: React.FC = () => {
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px' }}>
                         <div className="control-group" style={{ marginBottom: '8px' }}>
                           <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Waveform</label>
-                          <select aria-label="Waveform" style={{ width: '100%', padding: '4px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px' }}>
-                            <option>Sine</option>
-                            <option>Triangle</option>
-                            <option>Sawtooth</option>
-                            <option>Square</option>
-                            <option>Noise (Random)</option>
+                          <select
+                            aria-label="Waveform"
+                            value={activeFx.params.lfoWaveform || 'sine'}
+                            onChange={(e) => updateParam('lfoWaveform', e.target.value)}
+                            style={{ width: '100%', padding: '4px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px' }}
+                          >
+                            <option value="sine">Sine</option>
+                            <option value="triangle">Triangle</option>
+                            <option value="sawtooth">Sawtooth</option>
+                            <option value="square">Square</option>
+                            <option value="noise">Noise (Random)</option>
                           </select>
                         </div>
                         {renderSlider('LFO Rate (Hz)', 'lfoRate', 0.1, 10.0, 0.1, 1.0)}
@@ -1192,11 +1234,16 @@ export const PropertiesPanel: React.FC = () => {
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px' }}>
                         <div className="control-group" style={{ marginBottom: '8px' }}>
                           <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Frequency Band</label>
-                          <select aria-label="Frequency Band" style={{ width: '100%', padding: '4px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px' }}>
-                            <option>Bass (Low Frequency)</option>
-                            <option>Mids (Speech range)</option>
-                            <option>Highs (Crisp treble)</option>
-                            <option>Full Spectrum</option>
+                          <select
+                            aria-label="Frequency Band"
+                            value={activeFx.params.audioBand || 'bass'}
+                            onChange={(e) => updateParam('audioBand', e.target.value)}
+                            style={{ width: '100%', padding: '4px', background: '#1c1c1e', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px' }}
+                          >
+                            <option value="bass">Bass (Low Frequency)</option>
+                            <option value="mid">Mids (Speech range)</option>
+                            <option value="treble">Highs (Crisp treble)</option>
+                            <option value="full">Full Spectrum</option>
                           </select>
                         </div>
                         {renderSlider('Gain multiplier', 'audioGain', 0.5, 4.0, 0.1, 1.0)}
@@ -1586,4 +1633,4 @@ export const PropertiesPanel: React.FC = () => {
       )}
     </aside>
   );
-};;
+};
