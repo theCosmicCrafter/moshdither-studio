@@ -214,6 +214,9 @@ export const WebGLCanvas: React.FC = () => {
       return;
     }
 
+    // Capture ref values for use in cleanup to satisfy react-hooks/exhaustive-deps
+    const lutCache = lutCacheRef.current;
+
     // --- Resource tracking for cleanup ---
     const resources: {
       programs: WebGLProgram[];
@@ -592,17 +595,20 @@ export const WebGLCanvas: React.FC = () => {
               if (parsed) {
                 const lutTex = gl.createTexture();
                 if (lutTex) {
+                  gl.getExtension('OES_texture_float_linear');
                   gl.bindTexture(gl.TEXTURE_3D, lutTex);
                   gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
                   gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
                   gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
                   gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
                   gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+                  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
                   gl.texImage3D(
                     gl.TEXTURE_3D, 0, gl.RGBA32F,
                     parsed.size, parsed.size, parsed.size,
                     0, gl.RGBA, gl.FLOAT, parsed.data,
                   );
+                  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
                   lutEntry = { texture: lutTex, size: parsed.size };
                   lutCacheRef.current.set(lutUrl, lutEntry);
                   resources.textures.push(lutTex);
@@ -767,6 +773,7 @@ export const WebGLCanvas: React.FC = () => {
       resources.textures.forEach((t) => gl.deleteTexture(t));
       resources.buffers.forEach((b) => gl.deleteBuffer(b));
       resources.framebuffers.forEach((f) => gl.deleteFramebuffer(f));
+      lutCache.clear();
     };
   }, [activeEffects, mediaReadyRev, qualityMode, maskCanvas, audioFeaturesRef]);
 
