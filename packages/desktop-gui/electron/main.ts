@@ -821,6 +821,24 @@ app.whenReady().then(() => {
     return null;
   });
 
+  ipcMain.handle("dialog:openLut", async (event) => {
+    validateIpcSender(event);
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      properties: ["openFile"],
+      filters: [
+        {
+          name: "LUT Files",
+          extensions: ["cube", "3dl"],
+        },
+      ],
+    });
+    if (!canceled && filePaths.length > 0) {
+      const normalized = filePaths[0].replace(/\\/g, "/");
+      return `media://${normalized}`;
+    }
+    return null;
+  });
+
   ipcMain.handle("dialog:openMediaMultiple", async (event) => {
     validateIpcSender(event);
     const { canceled, filePaths } = await dialog.showOpenDialog({
@@ -1063,6 +1081,7 @@ app.whenReady().then(() => {
           "crt-phosphor",
           "epsilon-glow",
           "temporal-noise",
+          "lut",
         ]);
         const hasWebGLEffects = effects.some(
           (fx) => fx.enabled && webglTypes.has(fx.type),
@@ -1127,6 +1146,18 @@ app.whenReady().then(() => {
               seed: fx.params.seed,
               dotSize: fx.params.dotSize,
               gamma: fx.params.gamma,
+              angle: fx.params.angle,
+              dotGain: fx.params.dotGain,
+              minDotSize: fx.params.minDotSize,
+              maxDotSize: fx.params.maxDotSize,
+              shape: fx.params.shape,
+              sharpness: fx.params.sharpness,
+              wavelet: fx.params.wavelet,
+              subbandQuant: fx.params.subbandQuant,
+              varThreshold: fx.params.varThreshold,
+              windowRadius: fx.params.windowRadius,
+              lumFactor: fx.params.lumFactor,
+              colFactor: fx.params.colFactor,
             });
             reportProgress(
               `Applied dither (${fx.params.ditherMode || "atkinson"})`,
@@ -1137,6 +1168,7 @@ app.whenReady().then(() => {
               paletteSource: "kmeans",
               numColors: 16,
               dotSize: fx.params.dotSize || 8,
+              angle: fx.params.angleK || 45.0,
               angleK: fx.params.angleK || 45.0,
             });
             reportProgress("Applied halftone");

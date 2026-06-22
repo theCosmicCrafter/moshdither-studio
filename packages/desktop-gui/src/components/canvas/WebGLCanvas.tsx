@@ -21,7 +21,9 @@ import bayerDitherFrag from '../../shaders/bayer_dither.frag.glsl?raw';
 import epsilonGlowFrag from '../../shaders/epsilon_glow.frag.glsl?raw';
 import crtPhosphorFrag from '../../shaders/crt_phosphor.frag.glsl?raw';
 import temporalNoiseFrag from '../../shaders/temporal_noise.frag.glsl?raw';
+import lutApplyFrag from '../../shaders/lut_apply.frag.glsl?raw';
 import blendModesFrag from '../../shaders/blend_modes.frag.glsl?raw';
+import { parseCubeLut, type ParsedLut } from '../../utils/parseLut';
 
 // Basic passthrough fragment shader for when no effects are enabled
 const passthroughFrag = `#version 300 es
@@ -98,6 +100,10 @@ export const WebGLCanvas: React.FC = () => {
   // SAM mask texture cache: effectId -> WebGLTexture
   const samMaskTexturesRef = useRef<Map<string, WebGLTexture>>(new Map());
   const samMaskDataRef = useRef<Map<string, string>>(new Map());
+
+  // LUT 3D texture cache: lutUrl -> { texture, size }
+  const lutCacheRef = useRef<Map<string, { texture: WebGLTexture; size: number }>>(new Map());
+  const lutParsedRef = useRef<Map<string, ParsedLut>>(new Map());
   // Pre-decoded SAM mask images: effectId -> HTMLImageElement
   const samMaskImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
 
@@ -208,6 +214,9 @@ export const WebGLCanvas: React.FC = () => {
       return;
     }
 
+    // Capture ref values for use in cleanup to satisfy react-hooks/exhaustive-deps
+    const lutCache = lutCacheRef.current;
+
     // --- Resource tracking for cleanup ---
     const resources: {
       programs: WebGLProgram[];
@@ -304,6 +313,7 @@ export const WebGLCanvas: React.FC = () => {
       else if (fx.type === 'epsilon-glow') fsSource = epsilonGlowFrag;
       else if (fx.type === 'crt-phosphor') fsSource = crtPhosphorFrag;
       else if (fx.type === 'temporal-noise') fsSource = temporalNoiseFrag;
+      else if (fx.type === 'lut' && fx.params.lutUrl) fsSource = lutApplyFrag;
 
       try {
         programs[fx.id] = trackProgram(getOrCreateProgram(gl, defaultVert, fsSource));
@@ -525,6 +535,9 @@ export const WebGLCanvas: React.FC = () => {
             _setUniform1f(program, 'u_intensity', fx.params.intensity || 0.15);
             _setUniform1f(program, 'u_noiseScale', fx.params.noiseScale || 1.0);
             _setUniform1f(program, 'u_colorLevels', fx.params.numColors || 0.0);
+          } else if (fx.type === 'lut') {
+            _setUniform1f(program, 'u_intensity', fx.params.intensity ?? 1.0);
+            // LUT 3D texture is bound in the LUT-specific block below
           } else if (fx.type === 'dither') {
             if (fx.params.ditherMode === 'halftone' || fx.params.ditherMode === 'polka_dot') {
               _setUniform1f(program, 'u_dotSize', fx.params.dotSize || 8.0);
@@ -556,6 +569,57 @@ export const WebGLCanvas: React.FC = () => {
               _setUniform1f(program, 'uMatrixSize', sizeNum);
               _setUniform1f(program, 'uScale', fx.params.pixelScale || 1.0);
               _setUniform1i(program, 'uUseGamma', fx.params.useGamma ? 1 : 0);
+            }
+          }
+
+          // Bind LUT 3D texture if this is a LUT effect
+          if (fx.type === 'lut' && fx.params.lutUrl) {
+            const lutUrl = fx.params.lutUrl as string;
+            let lutEntry = lutCacheRef.current.get(lutUrl);
+            if (!lutEntry) {
+              // Try to parse and upload the LUT
+              let parsed = lutParsedRef.current.get(lutUrl);
+              if (!parsed) {
+                try {
+                  const xhr = new XMLHttpRequest();
+                  xhr.open('GET', lutUrl, false); // synchronous for render loop
+                  xhr.send();
+                  if (xhr.status === 200) {
+                    parsed = parseCubeLut(xhr.responseText);
+                    lutParsedRef.current.set(lutUrl, parsed);
+                  }
+                } catch (e) {
+                  console.error('Failed to load LUT:', e);
+                }
+              }
+              if (parsed) {
+                const lutTex = gl.createTexture();
+                if (lutTex) {
+                  gl.getExtension('OES_texture_float_linear');
+                  gl.bindTexture(gl.TEXTURE_3D, lutTex);
+                  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+                  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+                  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+                  gl.texImage3D(
+                    gl.TEXTURE_3D, 0, gl.RGBA32F,
+                    parsed.size, parsed.size, parsed.size,
+                    0, gl.RGBA, gl.FLOAT, parsed.data,
+                  );
+                  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+                  lutEntry = { texture: lutTex, size: parsed.size };
+                  lutCacheRef.current.set(lutUrl, lutEntry);
+                  resources.textures.push(lutTex);
+                }
+              }
+            }
+            if (lutEntry) {
+              gl.activeTexture(gl.TEXTURE1);
+              gl.bindTexture(gl.TEXTURE_3D, lutEntry.texture);
+              _setUniform1i(program, 'u_lut', 1);
+              _setUniform1f(program, 'u_lutSize', lutEntry.size);
             }
           }
 
@@ -685,7 +749,10 @@ export const WebGLCanvas: React.FC = () => {
       }
 
       const isVideo = textureSource && 'videoWidth' in textureSource;
-      const animatedWebglTypes = new Set<Effect['type']>(['analog-glitch', 'crt-phosphor', 'temporal-noise']);
+      const animatedWebglTypes = new Set<Effect['type']>([
+        'analog-glitch', 'crt-phosphor', 'temporal-noise',
+        'halftone', 'dither', 'epsilon-glow', 'lut',
+      ]);
       const hasAnimatedEffect = activeFxs.some((fx) => animatedWebglTypes.has(fx.type));
       const isPainting = activeEffects.some(fx => fx.enabled && fx.mask && fx.mask.type !== 'none');
 
@@ -706,6 +773,7 @@ export const WebGLCanvas: React.FC = () => {
       resources.textures.forEach((t) => gl.deleteTexture(t));
       resources.buffers.forEach((b) => gl.deleteBuffer(b));
       resources.framebuffers.forEach((f) => gl.deleteFramebuffer(f));
+      lutCache.clear();
     };
   }, [activeEffects, mediaReadyRev, qualityMode, maskCanvas, audioFeaturesRef]);
 
