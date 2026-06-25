@@ -920,8 +920,7 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
   return (
     <div
       data-testid="preview-viewport"
-      className="flex-1 h-full flex flex-col min-h-0 pixel-grid"
-      style={{ background: "transparent" }}
+      className="flex-1 h-full flex flex-col min-h-0 pixel-grid bg-transparent"
     >
       {/* Viewport Header Bar */}
       {mediaLoaded && (
@@ -989,22 +988,17 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
         {!mediaLoaded && (
           <button
             onClick={handleClickOpen}
-            className="absolute inset-0 flex flex-col items-center justify-center gap-3 w-full h-full z-10"
-            style={{ background: "transparent", border: "none", cursor: "pointer" }}
+            className="absolute inset-0 flex flex-col items-center justify-center gap-3 w-full h-full z-10 dropzone-btn"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: 40, color: "var(--text-dim)", opacity: 0.5 }}>image</span>
-            <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
+            <span className="material-symbols-outlined dropzone-icon">image</span>
+            <div className="dropzone-text">
               Drop an image or video here to begin
             </div>
-            <div style={{ color: "var(--text-dim)", fontSize: 12 }}>
+            <div className="dropzone-subtext">
               — or click to browse —
             </div>
             <div
-              className="text-[11px] px-3 py-1.5 rounded-md"
-              style={{
-                color: "var(--text-dim)",
-                border: "1px dashed var(--border-secondary)",
-              }}
+              className="text-[11px] px-3 py-1.5 rounded-md dropzone-formats"
             >
               PNG, JPG, GIF, WEBP, TIFF, BMP, MP4, MOV, MKV, AVI, WEBM
             </div>
@@ -1035,11 +1029,7 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
                   src={previewDataUrl || ""}
                   alt="Preview"
                   draggable={false}
-                  style={{
-                    maxWidth: "85vw",
-                    maxHeight: "80vh",
-                    display: "block",
-                  }}
+                  className="preview-img"
                 />
                 {/* Before (clipped) */}
                 <div
@@ -1050,58 +1040,32 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
                     src={originalDataUrl}
                     alt="Original"
                     draggable={false}
-                    style={{
-                      maxWidth: "85vw",
-                      maxHeight: "80vh",
-                      display: "block",
-                      position: "absolute",
-                      top: 0,
-                      left: 0,
-                    }}
+                    className="preview-img absolute top-0 left-0"
                   />
                 </div>
                 {/* Splitter */}
                 <div
-                  className="absolute top-0 bottom-0 w-px"
-                  style={{
-                    left: `${splitPosition}%`,
-                    background: "var(--accent)",
-                    boxShadow: "0 0 6px var(--accent)",
-                    cursor: "ew-resize",
-                  }}
+                  className="absolute top-0 bottom-0 w-px splitter-handle"
+                  style={{ left: `${splitPosition}%` }}
                   onMouseDown={(e) => {
                     e.stopPropagation();
                     setIsSplitDragging(true);
                   }}
                 >
                   <div
-                    className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-5 h-8 rounded flex items-center justify-center"
-                    style={{
-                      background: "var(--accent)",
-                      boxShadow: "0 0 8px var(--accent)",
-                    }}
+                    className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-5 h-8 rounded flex items-center justify-center splitter-knob"
                   >
-                    <span className="material-symbols-outlined" style={{ fontSize: 10, color: "#000" }}>center_focus_strong</span>
+                    <span className="material-symbols-outlined mi-sm text-black">center_focus_strong</span>
                   </div>
                 </div>
                 {/* Labels */}
                 <div
-                  className="absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded"
-                  style={{
-                    background: "rgba(0,0,0,0.7)",
-                    color: "var(--text-secondary)",
-                    fontFamily: "var(--font-mono)",
-                  }}
+                  className="absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded split-label"
                 >
                   BEFORE
                 </div>
                 <div
-                  className="absolute top-2 right-2 text-[10px] font-bold px-2 py-0.5 rounded"
-                  style={{
-                    background: "rgba(0,0,0,0.7)",
-                    color: "var(--accent)",
-                    fontFamily: "var(--font-mono)",
-                  }}
+                  className="absolute top-2 right-2 text-[10px] font-bold px-2 py-0.5 rounded split-label-after"
                 >
                   AFTER
                 </div>
@@ -1115,21 +1079,13 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
                     src={previewDataUrl || ""}
                     alt="Preview"
                     draggable={false}
-                    style={{
-                      maxWidth: "85vw",
-                      maxHeight: "80vh",
-                      display: "block",
-                    }}
+                    className="preview-img"
                   />
                 ) : (
                   /* WebGL Preview Canvas */
                   <canvas
                     ref={webglCanvasRef}
-                    style={{
-                      maxWidth: "85vw",
-                      maxHeight: "80vh",
-                      display: "block",
-                    }}
+                    className="preview-canvas"
                   />
                 )}
                 {/* Hidden img for SAM3 coord reference and fallback */}
@@ -1139,7 +1095,7 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
                     src={previewDataUrl || ""}
                     alt="Preview"
                     draggable={false}
-                    style={{ display: "none" }}
+                    className="preview-hidden"
                   />
                 )}
 
@@ -1150,10 +1106,8 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
                       src={sam3HoverMask || sam3FrameMasks[Math.floor((useAppStore.getState().currentTime || 0) * 10)] || activeMask || undefined}
                       alt="Mask"
                       draggable={false}
-                      className="absolute inset-0 pointer-events-none"
+                      className="absolute inset-0 pointer-events-none preview-img"
                       style={{
-                        maxWidth: "85vw",
-                        maxHeight: "80vh",
                         opacity: sam3HoverMask ? 0.55 : sam3OverlayOpacity,
                         mixBlendMode: "screen",
                         filter: sam3HoverMask
@@ -1167,13 +1121,7 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
                   {isSam3Interactive && mediaInfo && (
                     <canvas
                       ref={sam3CanvasRef}
-                      className="absolute inset-0"
-                      style={{
-                        width: "100%",
-                        height: "100%",
-                        pointerEvents: "auto",
-                        zIndex: 10,
-                      }}
+                      className="absolute inset-0 sam3-overlay-canvas"
                       onClick={handleCanvasClick}
                       onContextMenu={handleCanvasContextMenu}
                       onMouseDown={handleCanvasMouseDown}
@@ -1204,15 +1152,10 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
         {/* Drop target overlay */}
         {showDropOverlay && (
           <div
-            className="absolute inset-0 flex flex-col items-center justify-center gap-3 z-50"
-            style={{
-              background: "rgba(0,0,0,0.7)",
-              backdropFilter: "blur(2px)",
-              pointerEvents: "none",
-            }}
+            className="absolute inset-0 flex flex-col items-center justify-center gap-3 z-50 drop-overlay"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: 48, color: "var(--accent)" }}>file_upload</span>
-            <div className="text-sm font-semibold" style={{ color: "var(--accent)" }}>
+            <span className="material-symbols-outlined drop-overlay-icon">file_upload</span>
+            <div className="text-sm font-semibold drop-overlay-text">
               Drop file here to open
             </div>
           </div>
@@ -1222,32 +1165,19 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
       {/* Bottom Info */}
       {mediaInfo && (
         <div
-          className="flex items-center justify-between px-3 h-7 flex-shrink-0 text-[11px]"
-          style={{
-            borderTop: "1px solid var(--border-primary)",
-            color: "var(--text-muted)",
-            fontFamily: "var(--font-mono)",
-          }}
+          className="flex items-center justify-between px-3 h-7 flex-shrink-0 text-[11px] info-bar"
         >
           <div className="flex items-center gap-3">
             <span>
               {mediaInfo?.width ?? 0}
-              <span style={{ color: "var(--text-dim)" }}>x</span>
+              <span className="info-bar-dim">x</span>
               {mediaInfo?.height ?? 0}
             </span>
-            <span style={{ color: "var(--text-dim)" }}>|</span>
+            <span className="info-bar-dim">|</span>
             <span>{Math.round(zoom * 100)}%</span>
             <button
               onClick={() => useAppStore.getState().setZoom(1)}
-              className="px-1 rounded"
-              style={{
-                background: zoom === 1 ? "rgba(74, 144, 217, 0.25)" : "transparent",
-                border: "1px solid var(--border-secondary)",
-                cursor: "pointer",
-                color: zoom === 1 ? "var(--accent)" : "var(--text-muted)",
-                fontSize: 10,
-                fontFamily: "var(--font-mono)",
-              }}
+              className={`px-1 rounded ${zoom === 1 ? "info-bar-btn-active" : "info-bar-btn"}`}
               title="Pixel peep 1:1 (100%)"
             >
               1:1
@@ -1255,11 +1185,10 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
           </div>
           <button
             onClick={toggleFullscreen}
-            className="flex items-center gap-1"
-            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)" }}
+            className="flex items-center gap-1 info-bar-fullscreen"
             title="Toggle fullscreen (F11)"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: 11 }}>fullscreen</span>
+            <span className="material-symbols-outlined mi-md">fullscreen</span>
             <span>Fullscreen</span>
           </button>
         </div>

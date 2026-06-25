@@ -961,3 +961,203 @@ body.floating-resizing {
 .floating-window-titlebar {
   user-select: none;
 }
+
+/* ─── PreviewViewport & Toolbar utility classes ─── */
+
+/* Material icon size utilities */
+.mi-sm {
+  font-size: 10px;
+}
+.mi-md {
+  font-size: 12px;
+}
+.mi-lg {
+  font-size: 14px;
+}
+.mi-xl {
+  font-size: 18px;
+}
+.mi-2xl {
+  font-size: 40px;
+}
+.mi-3xl {
+  font-size: 48px;
+}
+
+/* Preview image sizing */
+.preview-img {
+  max-width: 85vw;
+  max-height: 80vh;
+  display: block;
+}
+
+/* Preview canvas sizing */
+.preview-canvas {
+  max-width: 85vw;
+  max-height: 80vh;
+  display: block;
+}
+
+/* Drop zone button */
+.dropzone-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+/* Drop zone text */
+.dropzone-icon {
+  font-size: 40px;
+  color: var(--text-dim);
+  opacity: 0.5;
+}
+.dropzone-text {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.dropzone-subtext {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.dropzone-formats {
+  color: var(--text-dim);
+  border: 1px dashed var(--border-secondary);
+}
+
+/* Split view labels */
+.split-label {
+  background: rgba(0, 0, 0, 0.7);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+.split-label-after {
+  background: rgba(0, 0, 0, 0.7);
+  color: var(--accent);
+  font-family: var(--font-mono);
+}
+
+/* Splitter handle */
+.splitter-handle {
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  cursor: ew-resize;
+}
+.splitter-knob {
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+}
+
+/* Drop overlay */
+.drop-overlay {
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+.drop-overlay-icon {
+  font-size: 48px;
+  color: var(--accent);
+}
+.drop-overlay-text {
+  color: var(--accent);
+}
+
+/* Bottom info bar */
+.info-bar {
+  border-top: 1px solid var(--border-primary);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+.info-bar-dim {
+  color: var(--text-dim);
+}
+.info-bar-btn {
+  background: transparent;
+  border: 1px solid var(--border-secondary);
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+.info-bar-btn-active {
+  background: rgba(74, 144, 217, 0.25);
+  border: 1px solid var(--border-secondary);
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+.info-bar-fullscreen {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+/* SAM3 overlay canvas */
+.sam3-overlay-canvas {
+  width: 100%;
+  height: 100%;
+  pointer-events: auto;
+  z-index: 10;
+}
+
+/* Hidden image */
+.preview-hidden {
+  display: none;
+}
+
+/* Toolbar header logo */
+.toolbar-logo {
+  font-family: var(--font-hand);
+}
+
+/* Toolbar menu icon */
+.menu-chevron {
+  font-size: 12px;
+  transition: transform 0.15s;
+}
+.menu-chevron-open {
+  transform: rotate(180deg);
+}
+
+/* Toolbar menu item icon */
+.menu-item-icon {
+  font-size: 14px;
+}
+
+/* Toolbar transport icon */
+.transport-icon {
+  font-size: 18px;
+}
+
+/* Toolbar disabled state */
+.toolbar-disabled {
+  opacity: 0.3;
+}
+.toolbar-enabled {
+  opacity: 1;
+}
+
+/* Toolbar zoom display */
+.zoom-display {
+  min-width: 40px;
+  text-align: center;
+}
+
+/* Panel checkbox icon */
+.panel-checkbox {
+  font-size: 14px;
+}
+.panel-checkbox-on {
+  font-size: 14px;
+  opacity: 1;
+}
+.panel-checkbox-off {
+  font-size: 14px;
+  opacity: 0.3;
+}
+
+/* Panel menu icon */
+.panel-menu-icon {
+  font-size: 12px;
+}

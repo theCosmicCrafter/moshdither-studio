@@ -276,8 +276,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
       {/* Left: Logo + Nav */}
       <div className="flex items-center gap-6">
         <span
-          className="font-headline-lg text-headline-lg solar-text tracking-wider filigree-header ml-6 cursor-default"
-          style={{ fontFamily: "var(--font-hand)" }}
+          className="font-headline-lg text-headline-lg solar-text tracking-wider filigree-header ml-6 cursor-default toolbar-logo"
         >
           MoshDither Studio
         </span>
@@ -289,8 +288,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
             >
               File
               <span
-                className="material-symbols-outlined"
-                style={{ fontSize: 12, transition: "transform 0.15s", transform: fileMenuOpen ? "rotate(180deg)" : "none" }}
+                className={`material-symbols-outlined menu-chevron ${fileMenuOpen ? "menu-chevron-open" : ""}`}
               >
                 expand_more
               </span>
@@ -301,35 +299,32 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   onClick={() => { handleOpen(); setFileMenuOpen(false); }}
                   className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors"
                 >
-                  <span className="material-symbols-outlined" style={{ fontSize: 14 }}>folder_open</span>
+                  <span className="material-symbols-outlined menu-item-icon">folder_open</span>
                   Open File
                 </button>
                 <div className="border-t border-outline/10 my-1" />
                 <button
                   onClick={() => { handleExport(); setFileMenuOpen(false); }}
                   disabled={!mediaLoaded}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors"
-                  style={{ opacity: mediaLoaded ? 1 : 0.4 }}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded ? "toolbar-enabled" : "toolbar-disabled"}`}
                 >
-                  <span className="material-symbols-outlined" style={{ fontSize: 14 }}>movie_export</span>
+                  <span className="material-symbols-outlined menu-item-icon">movie_export</span>
                   Export Video
                 </button>
                 <button
                   onClick={() => { handleFfglitchExport(); setFileMenuOpen(false); }}
                   disabled={!mediaLoaded}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors"
-                  style={{ opacity: mediaLoaded ? 1 : 0.4 }}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded ? "toolbar-enabled" : "toolbar-disabled"}`}
                 >
-                  <span className="material-symbols-outlined" style={{ fontSize: 14 }}>bug_report</span>
+                  <span className="material-symbols-outlined menu-item-icon">bug_report</span>
                   Export FFglitch
                 </button>
                 <button
                   onClick={() => { handleProcess(); setFileMenuOpen(false); }}
                   disabled={!mediaLoaded || stackCount === 0}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors"
-                  style={{ opacity: mediaLoaded && stackCount > 0 ? 1 : 0.4 }}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded && stackCount > 0 ? "toolbar-enabled" : "toolbar-disabled"}`}
                 >
-                  <span className="material-symbols-outlined" style={{ fontSize: 14 }}>image</span>
+                  <span className="material-symbols-outlined menu-item-icon">image</span>
                   Save Image
                 </button>
               </div>
@@ -342,8 +337,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
             >
               Edit
               <span
-                className="material-symbols-outlined"
-                style={{ fontSize: 12, transition: "transform 0.15s", transform: editMenuOpen ? "rotate(180deg)" : "none" }}
+                className={`material-symbols-outlined menu-chevron ${editMenuOpen ? "menu-chevron-open" : ""}`}
               >
                 expand_more
               </span>
@@ -353,28 +347,25 @@ export default function Toolbar({ onFileLoaded }: Props) {
                 <button
                   onClick={() => { handleUndo(); setEditMenuOpen(false); }}
                   disabled={!canUndo}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors"
-                  style={{ opacity: canUndo ? 1 : 0.4 }}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors ${canUndo ? "toolbar-enabled" : "toolbar-disabled"}`}
                 >
-                  <span className="material-symbols-outlined" style={{ fontSize: 14 }}>undo</span>
+                  <span className="material-symbols-outlined menu-item-icon">undo</span>
                   Undo
                 </button>
                 <button
                   onClick={() => { handleRedo(); setEditMenuOpen(false); }}
                   disabled={!canRedo}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors"
-                  style={{ opacity: canRedo ? 1 : 0.4 }}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors ${canRedo ? "toolbar-enabled" : "toolbar-disabled"}`}
                 >
-                  <span className="material-symbols-outlined" style={{ fontSize: 14 }}>redo</span>
+                  <span className="material-symbols-outlined menu-item-icon">redo</span>
                   Redo
                 </button>
                 <button
                   onClick={() => { handleClearAll(); setEditMenuOpen(false); }}
                   disabled={stackCount === 0}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors"
-                  style={{ opacity: stackCount > 0 ? 1 : 0.4 }}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors ${stackCount > 0 ? "toolbar-enabled" : "toolbar-disabled"}`}
                 >
-                  <span className="material-symbols-outlined" style={{ fontSize: 14 }}>delete_sweep</span>
+                  <span className="material-symbols-outlined menu-item-icon">delete_sweep</span>
                   Clear Stack
                 </button>
                 <div className="border-t border-outline/10 my-1" />
@@ -396,12 +387,11 @@ export default function Toolbar({ onFileLoaded }: Props) {
                       className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors"
                     >
                       <span className="flex items-center gap-1.5">
-                        <span className="material-symbols-outlined" style={{ fontSize: 12 }}>{p.icon}</span>
+                        <span className="material-symbols-outlined panel-menu-icon">{p.icon}</span>
                         {p.label}
                       </span>
                       <span
-                        className="material-symbols-outlined"
-                        style={{ fontSize: 14, opacity: isDocked ? 1 : 0.3 }}
+                        className={`material-symbols-outlined ${isDocked ? "panel-checkbox-on" : "panel-checkbox-off"}`}
                       >
                         {isDocked ? "check_box" : "check_box_outline_blank"}
                       </span>
@@ -442,8 +432,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
             >
               View
               <span
-                className="material-symbols-outlined"
-                style={{ fontSize: 12, transition: "transform 0.15s", transform: viewMenuOpen ? "rotate(180deg)" : "none" }}
+                className={`material-symbols-outlined menu-chevron ${viewMenuOpen ? "menu-chevron-open" : ""}`}
               >
                 expand_more
               </span>
@@ -454,14 +443,14 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   onClick={() => { setShowBeforeAfter(!showBeforeAfter); setViewMenuOpen(false); }}
                   className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors"
                 >
-                  <span className="material-symbols-outlined" style={{ fontSize: 14 }}>{showBeforeAfter ? "toggle_on" : "toggle_off"}</span>
+                  <span className="material-symbols-outlined menu-item-icon">{showBeforeAfter ? "toggle_on" : "toggle_off"}</span>
                   Before/After Split
                 </button>
                 <div className="border-t border-outline/20 my-1" />
                 <div className="px-3 py-1.5">
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-[11px] text-on-surface-variant flex items-center gap-1.5">
-                      <span className="material-symbols-outlined" style={{ fontSize: 12 }}>opacity</span>
+                      <span className="material-symbols-outlined panel-menu-icon">opacity</span>
                       Panel Opacity
                     </span>
                     <span className="text-[10px] font-mono text-on-surface-variant">{Math.round(panelOpacity * 100)}%</span>
@@ -483,7 +472,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   onClick={() => { toggleTheme(); setViewMenuOpen(false); }}
                   className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors"
                 >
-                  <span className="material-symbols-outlined" style={{ fontSize: 14 }}>{theme === "dark" ? "light_mode" : "dark_mode"}</span>
+                  <span className="material-symbols-outlined menu-item-icon">{theme === "dark" ? "light_mode" : "dark_mode"}</span>
                   {theme === "dark" ? "Light Theme" : "Dark Theme"}
                 </button>
               </div>
@@ -497,59 +486,52 @@ export default function Toolbar({ onFileLoaded }: Props) {
         <button
           onClick={handleUndo}
           disabled={!canUndo}
-          className="material-symbols-outlined text-on-surface-variant hover:text-accent-teal transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full"
+          className={`material-symbols-outlined text-on-surface-variant hover:text-accent-teal transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full transport-icon ${canUndo ? "toolbar-enabled" : "toolbar-disabled"}`}
           title="Undo"
-          style={{ opacity: canUndo ? 1 : 0.3, fontSize: 18 }}
         >
           undo
         </button>
         <button
           onClick={handleRedo}
           disabled={!canRedo}
-          className="material-symbols-outlined text-on-surface-variant hover:text-accent-teal transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full"
+          className={`material-symbols-outlined text-on-surface-variant hover:text-accent-teal transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full transport-icon ${canRedo ? "toolbar-enabled" : "toolbar-disabled"}`}
           title="Redo"
-          style={{ opacity: canRedo ? 1 : 0.3, fontSize: 18 }}
         >
           redo
         </button>
         <button
           onClick={handleClearAll}
           disabled={stackCount === 0}
-          className="material-symbols-outlined text-on-surface-variant hover:text-accent-pink transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full"
+          className={`material-symbols-outlined text-on-surface-variant hover:text-accent-pink transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full transport-icon ${stackCount > 0 ? "toolbar-enabled" : "toolbar-disabled"}`}
           title="Clear Stack"
-          style={{ opacity: stackCount > 0 ? 1 : 0.3, fontSize: 18 }}
         >
           delete_sweep
         </button>
         <div className="w-px h-5 bg-outline-variant/50 mx-1" />
         <button
           onClick={() => setZoom(zoom - 0.25)}
-          className="material-symbols-outlined text-on-surface-variant hover:text-accent-teal transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full"
+          className="material-symbols-outlined text-on-surface-variant hover:text-accent-teal transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full transport-icon"
           title="Zoom Out"
-          style={{ fontSize: 18 }}
         >
           zoom_out
         </button>
         <span
-          className="text-label-sm font-label-sm text-on-surface-variant tabular-nums"
-          style={{ minWidth: 40, textAlign: "center" }}
+          className="text-label-sm font-label-sm text-on-surface-variant tabular-nums zoom-display"
         >
           {Math.round(zoom * 100)}%
         </span>
         <button
           onClick={() => setZoom(zoom + 0.25)}
-          className="material-symbols-outlined text-on-surface-variant hover:text-accent-teal transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full"
+          className="material-symbols-outlined text-on-surface-variant hover:text-accent-teal transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full transport-icon"
           title="Zoom In"
-          style={{ fontSize: 18 }}
         >
           zoom_in
         </button>
         <div className="w-px h-5 bg-outline-variant/50 mx-1" />
         <button
           onClick={() => togglePlay()}
-          className={`material-symbols-outlined transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full ${isPlaying ? "text-accent-pink neo-pressed" : "text-on-surface-variant hover:text-accent-teal"}`}
+          className={`material-symbols-outlined transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full transport-icon ${isPlaying ? "text-accent-pink neo-pressed" : "text-on-surface-variant hover:text-accent-teal"}`}
           title={isPlaying ? "Pause" : "Play"}
-          style={{ fontSize: 18 }}
         >
           {isPlaying ? "pause" : "play_arrow"}
         </button>
