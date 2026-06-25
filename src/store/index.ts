@@ -55,7 +55,7 @@ export interface StackEntry {
   params: Record<string, unknown>;
   enabled: boolean;
   maskId: string | null; // null = no mask, "active" = global activeMask, "sam3-0" etc = SAM3 masks
-  maskB64: string | null; // snapshot of resolved mask data at assignment time
+  maskB64?: string | null; // snapshot of resolved mask data at assignment time
   maskMode: "inside" | "outside" | "alpha"; // how mask affects the effect
 }
 
