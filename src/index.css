@@ -1179,3 +1179,18 @@ body.floating-resizing {
   width: 40px;
   height: 40px;
 }
+
+/* Zoom wrapper for preview canvas */
+.zoom-wrapper {
+  transform-origin: center center;
+}
+
+/* Before-clip for split view */
+.before-clip {
+  width: 50%;
+}
+
+/* Mask overlay image */
+.mask-overlay-img {
+  mix-blend-mode: screen;
+}

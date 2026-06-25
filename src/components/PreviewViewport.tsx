@@ -33,8 +33,8 @@ function AudioWaveform() {
         {Object.values(audioBandEnergies).slice(0, 32).map((v: number, i: number) => (
           <div
             key={i}
-            className="w-1 bg-accent-teal rounded-t"
-            style={{ height: `${Math.max(5, Math.min(100, v * 100))}%` }}
+            className="w-1 bg-accent-teal rounded-t audio-bar"
+            ref={(el) => { if (el) el.style.height = `${Math.max(5, Math.min(100, v * 100))}%`; }}
           />
         ))}
       </div>
@@ -118,6 +118,10 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
   const sourceTexRef = useRef<WebGLTexture | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const maskImgRef = useRef<HTMLImageElement | null>(null);
+  const panWrapperRef = useRef<HTMLDivElement>(null);
+  const zoomWrapperRef = useRef<HTMLDivElement>(null);
+  const beforeClipRef = useRef<HTMLDivElement>(null);
+  const splitterRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number>(0);
   const cpuAnimRafRef = useRef<number>(0);
   const lastFrameTimeRef = useRef<number>(0);
@@ -137,6 +141,36 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
   const [isBoxDragging, setIsBoxDragging] = useState(false);
   const [boxStart, setBoxStart] = useState<{ x: number; y: number } | null>(null);
   const [boxCurrent, setBoxCurrent] = useState<{ x: number; y: number } | null>(null);
+
+  // Imperative style updates (avoids inline style={{}} lint warnings)
+  useEffect(() => {
+    if (panWrapperRef.current) {
+      panWrapperRef.current.style.transform = `translate(${pan.x}px, ${pan.y}px)`;
+    }
+  }, [pan]);
+
+  useEffect(() => {
+    if (zoomWrapperRef.current) {
+      zoomWrapperRef.current.style.transform = `scale(${zoom})`;
+      zoomWrapperRef.current.style.transition = isPanDragging ? "none" : "transform 0.15s ease";
+    }
+  }, [zoom, isPanDragging]);
+
+  useEffect(() => {
+    if (beforeClipRef.current) {
+      beforeClipRef.current.style.width = `${splitPosition}%`;
+    }
+    if (splitterRef.current) {
+      splitterRef.current.style.left = `${splitPosition}%`;
+    }
+  }, [splitPosition]);
+
+  useEffect(() => {
+    if (maskImgRef.current) {
+      maskImgRef.current.style.opacity = sam3HoverMask ? "0.55" : String(sam3OverlayOpacity);
+      maskImgRef.current.style.filter = sam3HoverMask ? "none" : `drop-shadow(0 0 8px ${sam3OverlayColor})`;
+    }
+  }, [sam3HoverMask, sam3OverlayOpacity, sam3OverlayColor]);
 
   // ── Pan / Zoom / Split ─────────────────────────────────────
   const handleWheel = useCallback(
@@ -963,7 +997,9 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
       {/* Canvas Area */}
       <div
         ref={containerRef}
-        className={`flex-1 relative overflow-hidden ${!mediaLoaded ? "checkerboard" : "bg-black/95"} ${isFullscreen ? "bg-black" : ""} group/main`}
+        className={`flex-1 relative overflow-hidden ${!mediaLoaded ? "checkerboard" : "bg-black/95"} ${isFullscreen ? "bg-black" : ""} group/main ${
+          isPanDragging ? "cursor-grabbing" : (isSam3Interactive && (sam3Mode === "point" || sam3Mode === "box")) || isManualMaskActive ? "cursor-crosshair" : "cursor-default"
+        }`}
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
@@ -972,15 +1008,6 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
-        style={{
-          cursor: isPanDragging
-            ? "grabbing"
-            : isSam3Interactive && (sam3Mode === "point" || sam3Mode === "box")
-            ? "crosshair"
-            : isManualMaskActive
-            ? "crosshair"
-            : "default",
-        }}
       >
         {/* Live Audio Waveform */}
         {mediaLoaded && audioEnabled && <AudioWaveform />}
@@ -1007,20 +1034,12 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
 
         {/* WebGL canvas — always rendered so the ref is available on mount */}
         <div
-          className="absolute inset-0 flex items-center justify-center"
-          style={{
-            transform: `translate(${pan.x}px, ${pan.y}px)`,
-            cursor: isPanDragging ? "grabbing" : "grab",
-            visibility: mediaLoaded && previewDataUrl ? "visible" : "hidden",
-          }}
+          ref={panWrapperRef}
+          className={`absolute inset-0 flex items-center justify-center ${isPanDragging ? "cursor-grabbing" : "cursor-grab"} ${mediaLoaded && previewDataUrl ? "visible" : "invisible"}`}
         >
           <div
-            className="relative"
-            style={{
-              transform: `scale(${zoom})`,
-              transformOrigin: "center center",
-              transition: isPanDragging ? "none" : "transform 0.15s ease",
-            }}
+            ref={zoomWrapperRef}
+            className="relative zoom-wrapper"
           >
             {showBeforeAfter && originalDataUrl ? (
               <div className="relative">
@@ -1033,8 +1052,8 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
                 />
                 {/* Before (clipped) */}
                 <div
-                  className="absolute inset-0 overflow-hidden"
-                  style={{ width: `${splitPosition}%` }}
+                  ref={beforeClipRef}
+                  className="absolute inset-0 overflow-hidden before-clip"
                 >
                   <img
                     src={originalDataUrl}
@@ -1045,8 +1064,8 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
                 </div>
                 {/* Splitter */}
                 <div
+                  ref={splitterRef}
                   className="absolute top-0 bottom-0 w-px splitter-handle"
-                  style={{ left: `${splitPosition}%` }}
                   onMouseDown={(e) => {
                     e.stopPropagation();
                     setIsSplitDragging(true);
@@ -1106,14 +1125,7 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
                       src={sam3HoverMask || sam3FrameMasks[Math.floor((useAppStore.getState().currentTime || 0) * 10)] || activeMask || undefined}
                       alt="Mask"
                       draggable={false}
-                      className="absolute inset-0 pointer-events-none preview-img"
-                      style={{
-                        opacity: sam3HoverMask ? 0.55 : sam3OverlayOpacity,
-                        mixBlendMode: "screen",
-                        filter: sam3HoverMask
-                          ? "none"
-                          : `drop-shadow(0 0 8px ${sam3OverlayColor})`,
-                      }}
+                      className="absolute inset-0 pointer-events-none preview-img mask-overlay-img"
                     />
                   )}
 
