@@ -1,5 +1,4 @@
-import { Layers, Sparkles } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect, memo, useCallback } from "react";
 import {
     getFrameData,
     sam3AutoMask,
@@ -11,36 +10,60 @@ import {
     sam3TextPrompt,
 } from "../lib/tauri";
 import { useAppStore } from "../store";
+import MaskSelector from "./MaskSelector";
+import PostProcessControls from "./PostProcessControls";
 import ManualMaskEditor from "./ManualMaskEditor";
+import FrameTimeline from "./FrameTimeline";
 
 export default function MaskPanel() {
-  const {
-    mediaLoaded,
-    activeMask,
-    maskVisible,
-    sam3Ready,
-    sam3Mode,
-    sam3Points,
-    sam3OverlayOpacity,
-    sam3OverlayColor,
-    sam3Masks,
-    sam3MaskScores,
-    sam3MaskIndex,
-    setMaskVisible,
-    setSam3Ready,
-    setSam3Mode,
-    setSam3Masks,
-    setSam3MaskIndex,
-    removeSam3Point,
-    clearSam3Points,
-    setSam3OverlayOpacity,
-    setSam3OverlayColor,
-    setStatusMessage,
-  } = useAppStore();
+  const mediaLoaded = useAppStore((s) => s.mediaLoaded);
+  const activeMask = useAppStore((s) => s.activeMask);
+  const maskVisible = useAppStore((s) => s.maskVisible);
+  const maskTab = useAppStore((s) => s.maskTab);
+  const sam3Ready = useAppStore((s) => s.sam3Ready);
+  const sam3Mode = useAppStore((s) => s.sam3Mode);
+  const sam3Points = useAppStore((s) => s.sam3Points);
+  const sam3OverlayOpacity = useAppStore((s) => s.sam3OverlayOpacity);
+  const sam3OverlayColor = useAppStore((s) => s.sam3OverlayColor);
+  const sam3Masks = useAppStore((s) => s.sam3Masks);
+  const sam3MaskScores = useAppStore((s) => s.sam3MaskScores);
+  const sam3MaskIndex = useAppStore((s) => s.sam3MaskIndex);
+  const setMaskVisible = useAppStore((s) => s.setMaskVisible);
+  const setMaskTab = useAppStore((s) => s.setMaskTab);
+  const setSam3Mode = useAppStore((s) => s.setSam3Mode);
+  const setSam3Masks = useAppStore((s) => s.setSam3Masks);
+  const setSam3MaskIndex = useAppStore((s) => s.setSam3MaskIndex);
+  const removeSam3Point = useAppStore((s) => s.removeSam3Point);
+  const clearSam3Points = useAppStore((s) => s.clearSam3Points);
+  const setSam3OverlayOpacity = useAppStore((s) => s.setSam3OverlayOpacity);
+  const setSam3OverlayColor = useAppStore((s) => s.setSam3OverlayColor);
+  const setStatusMessage = useAppStore((s) => s.setStatusMessage);
 
-  const [prompt, setPrompt] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [maskTab, setMaskTab] = useState<"sam3" | "manual">("sam3");
+  const setSam3Ready = useAppStore((s) => s.setSam3Ready);
+
+  // Ensure SAM3 is running before executing a command. Restarts if idle-shutdown occurred.
+  const ensureSam3Ready = useCallback(async (): Promise<boolean> => {
+    if (useAppStore.getState().sam3Ready) return true;
+    setIsLoading(true);
+    setStatusMessage("Starting SAM3 engine...");
+    try {
+      await sam3Init();
+      setSam3Ready(true);
+      // Load current frame into SAM3 if media is available
+      if (useAppStore.getState().mediaLoaded) {
+        const b64 = await getFrameData();
+        await sam3LoadImage(b64);
+      }
+      setStatusMessage("SAM3 ready");
+      return true;
+    } catch (e) {
+      setStatusMessage(`SAM3 start failed: ${e}`);
+      return false;
+    } finally {
+      setIsLoading(false);
+    }
+  }, [setSam3Ready, setStatusMessage]);
 
   // Post-processing params
   const [ppGrow, setPpGrow] = useState(0);
@@ -49,31 +72,22 @@ export default function MaskPanel() {
   const [ppFillHoles, setPpFillHoles] = useState(false);
   const [showPostProcess, setShowPostProcess] = useState(false);
 
-  const handleInit = async () => {
-    setIsLoading(true);
-    setStatusMessage("Starting SAM3 engine...");
-    try {
-      const msg = await sam3Init();
-      setSam3Ready(true);
-      setStatusMessage(msg);
-      
-      // Automatically load the image right after init
+  // Auto-load current frame into SAM3 when engine becomes ready (if media is already loaded)
+  useEffect(() => {
+    if (sam3Ready && mediaLoaded) {
+      setIsLoading(true);
       setStatusMessage("Loading image into SAM3...");
-      try {
-        const b64 = await getFrameData();
-        await sam3LoadImage(b64);
-        setStatusMessage("SAM3 ready and image loaded!");
-      } catch (e) {
-        setStatusMessage(`SAM3 loaded, but image load failed: ${e}`);
-      }
-    } catch (e) {
-      setStatusMessage(`SAM3 init failed: ${e}`);
+      getFrameData()
+        .then((b64) => sam3LoadImage(b64))
+        .then(() => setStatusMessage("SAM3 ready — image loaded"))
+        .catch((e) => setStatusMessage(`SAM3 auto-load failed: ${e}`))
+        .finally(() => setIsLoading(false));
     }
-    setIsLoading(false);
-  };
+  }, [sam3Ready, mediaLoaded, setStatusMessage]);
 
   const handleLoadImage = async () => {
-    if (!sam3Ready) return;
+    const ready = await ensureSam3Ready();
+    if (!ready) return;
     setIsLoading(true);
     setStatusMessage("Loading image into SAM3...");
     try {
@@ -86,12 +100,14 @@ export default function MaskPanel() {
     setIsLoading(false);
   };
 
-  const handleTextPrompt = async () => {
-    if (!prompt.trim() || !sam3Ready) return;
+  const handleTextPrompt = async (promptText: string) => {
+    if (!promptText) return;
+    const ready = await ensureSam3Ready();
+    if (!ready) return;
     setIsLoading(true);
-    setStatusMessage(`Running SAM3 text prompt: "${prompt}"...`);
+    setStatusMessage(`Running SAM3 text prompt: "${promptText}"...`);
     try {
-      const result = await sam3TextPrompt(prompt.trim());
+      const result = await sam3TextPrompt(promptText);
       if (result.count > 0) {
         setSam3Masks(result.masks, result.scores);
         setStatusMessage(`Found ${result.count} mask candidate(s)`);
@@ -139,7 +155,8 @@ export default function MaskPanel() {
   };
 
   const handleAutoMask = async () => {
-    if (!sam3Ready) return;
+    const ready = await ensureSam3Ready();
+    if (!ready) return;
     setIsLoading(true);
     setStatusMessage("Running SAM3 auto-mask grid...");
     try {
@@ -176,9 +193,16 @@ export default function MaskPanel() {
       const scores = [...useAppStore.getState().sam3MaskScores];
       if (idx >= 0 && idx < masks.length) {
         masks[idx] = processed;
-        // Scores stay the same; this is a refinement
-        setSam3Masks(masks, scores);
-        setSam3MaskIndex(idx);
+        // Update the mask array, keep the current index, and set activeMask to the processed result
+        useAppStore.setState({
+          sam3Masks: masks,
+          sam3MaskScores: scores,
+          sam3MaskIndex: idx,
+          activeMask: processed,
+        });
+      } else {
+        // No multi-mask array — just update activeMask directly
+        useAppStore.setState({ activeMask: processed });
       }
       setStatusMessage("Mask post-processed");
     } catch (e) {
@@ -196,18 +220,17 @@ export default function MaskPanel() {
   }
 
   return (
-    <div className="flex flex-col gap-3 p-4 border-t border-[var(--panel-border)]">
-      <div className="flex items-center justify-between">
-        <h3 className="text-xs font-bold uppercase tracking-wider text-[var(--accent)]">Mask</h3>
-        {activeMask && (
+    <div className="flex flex-col gap-3">
+      {activeMask && (
+        <div className="flex justify-end">
           <button
             onClick={() => setMaskVisible(!maskVisible)}
             className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-[var(--surface-2)] hover:bg-[var(--surface-3)] transition-colors"
           >
             {maskVisible ? "Hide" : "Show"}
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Tab switcher */}
       <div className="flex gap-1">
@@ -236,13 +259,45 @@ export default function MaskPanel() {
       {maskTab === "manual" ? (
         <ManualMaskEditor />
       ) : !sam3Ready ? (
-        <button
-          onClick={handleInit}
-          disabled={isLoading}
-          className="w-full py-2 px-3 rounded bg-[var(--accent)] text-black font-semibold text-xs uppercase tracking-wider hover:brightness-110 transition-all disabled:opacity-50"
-        >
-          {isLoading ? "Starting..." : "Initialize SAM3"}
-        </button>
+        <div className="flex flex-col gap-2 py-2">
+          <div className="flex items-center justify-center gap-2 text-xs text-[var(--text-muted)]">
+            <span className="inline-block w-3 h-3 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+            SAM3 idle — enter a prompt to restart
+          </div>
+          {/* Mode selector */}
+          <div className="flex gap-2">
+            <select
+              value={sam3Mode}
+              onChange={(e) => setSam3Mode(e.target.value as "text" | "point" | "box" | "auto")}
+              className="themed-select px-2 py-1.5 text-xs"
+            >
+              <option value="text">Text</option>
+              <option value="point">Point</option>
+              <option value="box">Box</option>
+              <option value="auto">Auto</option>
+            </select>
+            {sam3Mode === "text" ? (
+              <TextPromptInput onSubmit={handleTextPrompt} isLoading={isLoading} />
+            ) : sam3Mode === "point" ? (
+              <span className="flex-1 text-[11px] text-[var(--text-muted)] flex items-center">
+                Click image to add points
+              </span>
+            ) : sam3Mode === "box" ? (
+              <span className="flex-1 text-[11px] text-[var(--text-muted)] flex items-center">
+                Drag on image to draw box
+              </span>
+            ) : (
+              <button
+                onClick={handleAutoMask}
+                disabled={isLoading}
+                className="flex-1 px-3 py-1.5 rounded bg-[var(--accent)] text-black font-semibold text-xs uppercase tracking-wider hover:brightness-110 transition-all disabled:opacity-50 flex items-center justify-center gap-1"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 12 }}>auto_awesome</span>
+                {isLoading ? "Starting..." : "Start SAM3 & Auto Mask"}
+              </button>
+            )}
+          </div>
+        </div>
       ) : (
         <>
           <button
@@ -267,23 +322,7 @@ export default function MaskPanel() {
             </select>
 
             {sam3Mode === "text" ? (
-              <>
-                <input
-                  type="text"
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleTextPrompt()}
-                  placeholder="e.g. sky, person, car..."
-                  className="flex-1 min-w-0 bg-[var(--surface-1)] border border-[var(--panel-border)] rounded px-2 py-1.5 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)]"
-                />
-                <button
-                  onClick={handleTextPrompt}
-                  disabled={isLoading || !prompt.trim()}
-                  className="px-3 py-1.5 rounded bg-[var(--accent)] text-black font-semibold text-xs uppercase tracking-wider hover:brightness-110 transition-all disabled:opacity-50"
-                >
-                  {isLoading ? "..." : "Go"}
-                </button>
-              </>
+              <TextPromptInput onSubmit={handleTextPrompt} isLoading={isLoading} />
             ) : sam3Mode === "point" ? (
               <span className="flex-1 text-[11px] text-[var(--text-muted)] flex items-center">
                 Click image to add points
@@ -298,7 +337,7 @@ export default function MaskPanel() {
                 disabled={isLoading}
                 className="flex-1 px-3 py-1.5 rounded bg-[var(--accent)] text-black font-semibold text-xs uppercase tracking-wider hover:brightness-110 transition-all disabled:opacity-50 flex items-center justify-center gap-1"
               >
-                <Sparkles size={12} />
+                <span className="material-symbols-outlined" style={{ fontSize: 12 }}>auto_awesome</span>
                 {isLoading ? "Running..." : "Auto Mask"}
               </button>
             )}
@@ -384,123 +423,34 @@ export default function MaskPanel() {
 
           {/* Multi-mask selector */}
           {sam3Masks.length > 1 && (
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center gap-2">
-                <Layers size={12} className="text-[var(--accent)]" />
-                <span className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
-                  Mask Candidates ({sam3Masks.length})
-                </span>
-              </div>
-              <div className="flex gap-2">
-                {sam3Masks.map((m, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setSam3MaskIndex(i)}
-                    className={`relative flex-1 aspect-square rounded border-2 overflow-hidden transition-all ${
-                      i === sam3MaskIndex
-                        ? "border-[var(--accent)] ring-1 ring-[var(--accent)]"
-                        : "border-[var(--panel-border)] hover:border-[var(--text-muted)]"
-                    }`}
-                    title={`Mask ${i + 1} — score: ${sam3MaskScores[i]?.toFixed(3) ?? "?"}`}
-                  >
-                    <img
-                      src={m}
-                      alt={`Mask ${i + 1}`}
-                      className="w-full h-full object-contain"
-                      style={{ filter: "invert(1)" }}
-                    />
-                    <div
-                      className={`absolute bottom-0 left-0 right-0 text-[9px] text-center py-0.5 font-mono ${
-                        i === sam3MaskIndex
-                          ? "bg-[var(--accent)] text-black font-bold"
-                          : "bg-black/60 text-white"
-                      }`}
-                    >
-                      #{i + 1} · {sam3MaskScores[i]?.toFixed(2) ?? "?"}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
+            <MaskSelector
+              masks={sam3Masks}
+              scores={sam3MaskScores}
+              selectedIndex={sam3MaskIndex}
+              onSelect={setSam3MaskIndex}
+            />
           )}
 
-          {/* Post-processing controls */}
+          {/* Edge-Aware Post-Processing Controls */}
           {activeMask && (
-            <div className="flex flex-col gap-2">
-              <button
-                onClick={() => setShowPostProcess(!showPostProcess)}
-                className="w-full py-1.5 px-3 rounded border border-[var(--panel-border)] text-[var(--text-muted)] text-xs uppercase tracking-wider hover:text-[var(--text-primary)] transition-colors"
-              >
-                {showPostProcess ? "Hide" : "Show"} Post-Process
-              </button>
-
-              {showPostProcess && (
-                <div className="flex flex-col gap-2 p-2 rounded bg-[var(--surface-1)]">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] w-12">Grow</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={20}
-                      step={1}
-                      value={ppGrow}
-                      aria-label="Grow mask by pixels"
-                      title="Grow mask by pixels"
-                      onChange={(e) => setPpGrow(parseInt(e.target.value))}
-                      className="flex-1 h-1 bg-[var(--surface-2)] rounded-lg appearance-none cursor-pointer"
-                    />
-                    <span className="text-[10px] text-[var(--text-muted)] w-6 text-right">{ppGrow}px</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] w-12">Shrink</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={20}
-                      step={1}
-                      value={ppShrink}
-                      aria-label="Shrink mask by pixels"
-                      title="Shrink mask by pixels"
-                      onChange={(e) => setPpShrink(parseInt(e.target.value))}
-                      className="flex-1 h-1 bg-[var(--surface-2)] rounded-lg appearance-none cursor-pointer"
-                    />
-                    <span className="text-[10px] text-[var(--text-muted)] w-6 text-right">{ppShrink}px</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] w-12">Feather</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={20}
-                      step={1}
-                      value={ppFeather}
-                      aria-label="Feather mask edge by pixels"
-                      title="Feather mask edge by pixels"
-                      onChange={(e) => setPpFeather(parseInt(e.target.value))}
-                      className="flex-1 h-1 bg-[var(--surface-2)] rounded-lg appearance-none cursor-pointer"
-                    />
-                    <span className="text-[10px] text-[var(--text-muted)] w-6 text-right">{ppFeather}px</span>
-                  </div>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={ppFillHoles}
-                      onChange={(e) => setPpFillHoles(e.target.checked)}
-                      className="w-3 h-3 accent-[var(--accent)]"
-                    />
-                    <span className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Fill Holes</span>
-                  </label>
-                  <button
-                    onClick={handlePostprocess}
-                    disabled={isLoading || (ppGrow === 0 && ppShrink === 0 && ppFeather === 0 && !ppFillHoles)}
-                    className="w-full py-1.5 px-3 rounded bg-[var(--accent)] text-black font-semibold text-xs uppercase tracking-wider hover:brightness-110 transition-all disabled:opacity-50"
-                  >
-                    {isLoading ? "Processing..." : "Apply"}
-                  </button>
-                </div>
-              )}
-            </div>
+            <PostProcessControls
+              ppGrow={ppGrow}
+              setPpGrow={setPpGrow}
+              ppShrink={ppShrink}
+              setPpShrink={setPpShrink}
+              ppFeather={ppFeather}
+              setPpFeather={setPpFeather}
+              ppFillHoles={ppFillHoles}
+              setPpFillHoles={setPpFillHoles}
+              isLoading={isLoading}
+              handlePostprocess={handlePostprocess}
+              showPostProcess={showPostProcess}
+              setShowPostProcess={setShowPostProcess}
+            />
           )}
+
+          {/* Frame Timeline for Video */}
+          <FrameTimeline />
 
           {activeMask && (
             <button
@@ -515,3 +465,37 @@ export default function MaskPanel() {
     </div>
   );
 }
+
+const TextPromptInput = memo(function TextPromptInput({
+  onSubmit,
+  isLoading,
+}: {
+  onSubmit: (prompt: string) => void;
+  isLoading: boolean;
+}) {
+  const [prompt, setPrompt] = useState("");
+
+  const handleSubmit = useCallback(() => {
+    if (prompt.trim()) onSubmit(prompt.trim());
+  }, [prompt, onSubmit]);
+
+  return (
+    <>
+      <input
+        type="text"
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+        placeholder="e.g. sky, person, car..."
+        className="flex-1 min-w-0 bg-[var(--surface-1)] border border-[var(--panel-border)] rounded px-2 py-1.5 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)]"
+      />
+      <button
+        onClick={handleSubmit}
+        disabled={isLoading || !prompt.trim()}
+        className="px-3 py-1.5 rounded bg-[var(--accent)] text-black font-semibold text-xs uppercase tracking-wider hover:brightness-110 transition-all disabled:opacity-50"
+      >
+        {isLoading ? "..." : "Go"}
+      </button>
+    </>
+  );
+});

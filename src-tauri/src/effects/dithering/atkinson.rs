@@ -40,7 +40,15 @@ impl Effect for AtkinsonDither {
         let mut buf: Vec<f32> = input.data.iter().map(|&v| v as f32).collect();
 
         for y in 0..h {
-            for x in 0..w {
+            let reverse = y % 2 == 1;
+            let dir: isize = if reverse { -1 } else { 1 };
+            let x_range: Vec<isize> = if reverse {
+                (0..w).rev().collect()
+            } else {
+                (0..w).collect()
+            };
+
+            for x in x_range {
                 let idx = ((y * w + x) * 4) as usize;
                 let old_r = buf[idx];
                 let old_g = buf[idx + 1];
@@ -58,14 +66,10 @@ impl Effect for AtkinsonDither {
                 let err_g = (old_g - new_g) / 8.0;
                 let err_b = (old_b - new_b) / 8.0;
 
-                let offsets = [
-                    (1, 0), (2, 0),
-                    (-1, 1), (0, 1), (1, 1),
-                    (0, 2),
-                ];
+                let offsets = [(1, 0), (2, 0), (-1, 1), (0, 1), (1, 1), (0, 2)];
 
                 for (dx, dy) in offsets {
-                    let nx = x + dx;
+                    let nx = x + dx * dir;
                     let ny = y + dy;
                     if nx >= 0 && nx < w && ny >= 0 && ny < h {
                         let nidx = ((ny * w + nx) * 4) as usize;
@@ -95,7 +99,10 @@ impl Effect for AtkinsonDither {
         for frame in &input.frames {
             frames.push(self.process_frame(frame, mask, params)?);
         }
-        Ok(VideoSegment { frames, fps: input.fps })
+        Ok(VideoSegment {
+            frames,
+            fps: input.fps,
+        })
     }
 }
 
@@ -111,21 +118,31 @@ mod tests {
             data.push(gray);
             data.push(255);
         }
-        Frame { width, height, data }
+        Frame {
+            width,
+            height,
+            data,
+        }
     }
 
     #[test]
     fn test_atkinson_produces_pattern() {
         let dither = AtkinsonDither::new();
         let frame = make_gray_frame(16, 16, 128);
-        let result = dither.process_frame(&frame, None, &serde_json::Map::new()).unwrap();
+        let result = dither
+            .process_frame(&frame, None, &serde_json::Map::new())
+            .unwrap();
 
         let mut has_black = false;
         let mut has_white = false;
         for i in 0..result.data.len() / 4 {
             let r = result.data[i * 4];
-            if r == 0 { has_black = true; }
-            if r == 255 { has_white = true; }
+            if r == 0 {
+                has_black = true;
+            }
+            if r == 255 {
+                has_white = true;
+            }
         }
         assert!(has_black && has_white);
     }

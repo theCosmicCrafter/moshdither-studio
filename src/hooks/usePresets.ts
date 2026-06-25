@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useAppStore, type StackEntry } from "../store";
 import { DEFAULT_PRESETS } from "./defaultPresets";
 
@@ -57,8 +57,11 @@ function generateThumbnail(stack: StackEntry[]): string {
     artistic: "#9b59b6",
     noise: "#2ecc71",
     analog: "#e74c3c",
-    composite: "#1abc9c",
-    pixel_geo: "#f1c40f",
+    composite: "#a8a8a8",
+    pixel_geometry: "#f1c40f",
+    datamoshing: "#ff7b2e",
+    audio_reactive: "#00d4ff",
+    segmentation: "#ff6b6b",
   };
 
   const barHeight = 6;
@@ -84,9 +87,7 @@ function generateThumbnail(stack: StackEntry[]): string {
 export function usePresets() {
   const [presets, setPresets] = useState<Preset[]>(loadPresets);
   const effectStack = useAppStore((s) => s.effectStack);
-  const clearStack = useAppStore((s) => s.clearStack);
-  const addToStack = useAppStore((s) => s.addToStack);
-  const allEffects = useAppStore((s) => s.allEffects);
+  const replaceStack = useAppStore((s) => s.replaceStack);
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
 
   // Persist whenever presets change
@@ -112,24 +113,17 @@ export function usePresets() {
 
   const loadPreset = useCallback(
     (preset: Preset) => {
-      clearStack();
-      setTimeout(() => {
-        for (const entry of preset.stack) {
-          const effect = allEffects.find((e) => e.id === entry.effectId);
-          if (!effect) continue;
-          addToStack(effect);
-          const store = useAppStore.getState();
-          const last = store.effectStack[store.effectStack.length - 1];
-          if (last && last.effectId === entry.effectId) {
-            store.updateStackParams(last.id, entry.params);
-            if (!entry.enabled) store.toggleStackItem(last.id);
-            if (entry.maskId !== undefined) store.setStackItemMask(last.id, entry.maskId);
-          }
-        }
-      }, 0);
+      // Replace the stack atomically — no clear+setTimeout+add race condition.
+      // Deep clone the preset stack so edits to the loaded stack don't mutate the preset.
+      const newStack: StackEntry[] = preset.stack.map((entry) => ({
+        ...entry,
+        id: `${entry.effectId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        params: JSON.parse(JSON.stringify(entry.params)),
+      }));
+      replaceStack(newStack);
       setStatusMessage(`Preset "${preset.name}" loaded`);
     },
-    [allEffects, clearStack, addToStack, setStatusMessage]
+    [replaceStack, setStatusMessage]
   );
 
   const deletePreset = useCallback(

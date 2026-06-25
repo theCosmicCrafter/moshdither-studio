@@ -1,8 +1,8 @@
-import { EffectShader } from '../webgl2/types';
+import { EffectShader } from "../webgl2/types";
 
 export const byteZeroShader: EffectShader = {
-  id: 'byte_zero',
-  name: 'Byte Zero',
+  id: "byte_zero",
+  name: "Byte Zero",
   vertexSource: `
     attribute vec2 a_position;
     attribute vec2 a_texCoord;
@@ -16,7 +16,7 @@ export const byteZeroShader: EffectShader = {
     precision highp float;
     uniform sampler2D tDiffuse;
     uniform float amount;
-    uniform float time;
+    uniform float u_time;
     varying vec2 vUv;
 
     float rand(vec2 co) {
@@ -25,7 +25,7 @@ export const byteZeroShader: EffectShader = {
 
     void main() {
       vec4 color = texture2D(tDiffuse, vUv);
-      float r = rand(vec2(floor(vUv.y * 40.0), floor(vUv.x * 20.0) + time));
+      float r = rand(vec2(floor(vUv.y * 40.0), floor(vUv.x * 20.0) + u_time));
       if (r < amount * 0.3) {
         color.rgb = vec3(0.0);
       }
@@ -33,7 +33,7 @@ export const byteZeroShader: EffectShader = {
     }
   `,
   uniforms: [
-    { name: 'amount', type: 'float', default: 0.3 },
-    { name: 'time', type: 'float', default: 0.0 },
+    { name: "amount", type: "float", default: 0.3 },
+    { name: "u_time", type: "float", default: 0.0 },
   ],
 };

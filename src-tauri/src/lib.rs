@@ -5,6 +5,7 @@ pub mod error;
 
 pub mod dsp;
 pub mod effects;
+pub mod environment;
 pub mod ffmpeg;
 pub mod optical_flow;
 pub mod sam3_engine;
@@ -13,11 +14,14 @@ pub mod spout;
 pub mod utils;
 
 use commands::{
-    apply_effect, apply_effect_stack, export_video, get_frame_data, get_media_info, list_effects,
-    list_effects_by_category, load_media, load_media_from_base64, read_file, sam3_auto_mask,
-    sam3_box_prompt, sam3_clear, sam3_init, sam3_load_image, sam3_point_prompt,
-    sam3_postprocess_mask, sam3_shutdown, sam3_text_prompt, save_file, save_media, AppState,
+    apply_effect, apply_effect_stack, apply_ffglitch, export_video, generate_proxy_command,
+    get_frame_data, get_media_info, get_media_metadata, list_effects, list_effects_by_category,
+    load_media, load_media_from_base64, read_file, sam3_auto_mask, sam3_box_prompt, sam3_clear,
+    sam3_init, sam3_load_image, sam3_point_prompt, sam3_postprocess_mask, sam3_refine_mask,
+    sam3_shutdown, sam3_text_prompt, sam3_video_predictor, save_file, save_media, test_all_functions, verify_effects,
+    AppState,
 };
+use environment::{get_environment_status, install_local_environment};
 
 pub fn run() {
     println!("Initializing Tauri Builder...");
@@ -36,21 +40,30 @@ pub fn run() {
             list_effects_by_category,
             apply_effect,
             apply_effect_stack,
+            apply_ffglitch,
             get_frame_data,
             save_media,
             export_video,
             get_media_info,
+            get_media_metadata,
             sam3_init,
             sam3_load_image,
             sam3_text_prompt,
             sam3_point_prompt,
             sam3_box_prompt,
             sam3_auto_mask,
+            sam3_refine_mask,
             sam3_postprocess_mask,
             sam3_clear,
             sam3_shutdown,
+            sam3_video_predictor,
             save_file,
             read_file,
+            get_environment_status,
+            install_local_environment,
+            generate_proxy_command,
+            verify_effects,
+            test_all_functions,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,8 +1,8 @@
-import { EffectShader } from '../webgl2/types';
+import { EffectShader } from "../webgl2/types";
 
 export const lutShader: EffectShader = {
-  id: 'lut_color_grading',
-  name: 'LUT Color Grading',
+  id: "lut_color_grading",
+  name: "LUT Color Grading",
   vertexSource: `
     attribute vec2 a_position;
     attribute vec2 a_texCoord;
@@ -55,6 +55,7 @@ export const lutShader: EffectShader = {
     }
   `,
   uniforms: [
-    { name: 'amount', type: 'float', default: 1.0 },
+    { name: "amount", type: "float", default: 1.0 },
+    { name: "tLUT", type: "sampler2D", default: "/lut/lookup.png" },
   ],
 };

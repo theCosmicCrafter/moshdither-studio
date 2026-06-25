@@ -7,16 +7,18 @@ export class WebGLContext {
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
-    const gl = canvas.getContext('webgl2', {
+    const gl = canvas.getContext("webgl2", {
       alpha: false,
       premultipliedAlpha: false,
       preserveDrawingBuffer: true,
     });
-    if (!gl) throw new Error('WebGL2 not supported');
+    if (!gl) throw new Error("WebGL2 not supported");
     this.gl = gl;
   }
 
-  getGL(): WebGL2RenderingContext { return this.gl; }
+  getGL(): WebGL2RenderingContext {
+    return this.gl;
+  }
 
   createShader(type: number, source: string): WebGLShader {
     const gl = this.gl;
@@ -39,6 +41,9 @@ export class WebGLContext {
     const program = gl.createProgram()!;
     gl.attachShader(program, vs);
     gl.attachShader(program, fs);
+    // Bind attribute locations BEFORE linking so they match FullscreenQuad's VAO (0=pos, 1=texCoord)
+    gl.bindAttribLocation(program, 0, "a_position");
+    gl.bindAttribLocation(program, 1, "a_texCoord");
     gl.linkProgram(program);
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
       throw new Error(`Program link error: ${gl.getProgramInfoLog(program)}`);
@@ -51,7 +56,17 @@ export class WebGLContext {
     const gl = this.gl;
     const tex = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, data || null);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      width,
+      height,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      data || null
+    );
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -61,7 +76,9 @@ export class WebGLContext {
     return tex;
   }
 
-  getTexture(name: string): WebGLTexture | undefined { return this.textures.get(name); }
+  getTexture(name: string): WebGLTexture | undefined {
+    return this.textures.get(name);
+  }
 
   createFramebuffer(name: string, texture: WebGLTexture): WebGLFramebuffer {
     const gl = this.gl;
@@ -69,14 +86,16 @@ export class WebGLContext {
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
     if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
-      throw new Error('Framebuffer incomplete');
+      throw new Error("Framebuffer incomplete");
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     this.framebuffers.set(name, fb);
     return fb;
   }
 
-  getFramebuffer(name: string): WebGLFramebuffer | undefined { return this.framebuffers.get(name); }
+  getFramebuffer(name: string): WebGLFramebuffer | undefined {
+    return this.framebuffers.get(name);
+  }
 
   resize(width: number, height: number) {
     const dpr = Math.min(window.devicePixelRatio, 2);
@@ -89,9 +108,9 @@ export class WebGLContext {
 
   destroy() {
     const gl = this.gl;
-    this.programs.forEach(p => gl.deleteProgram(p));
-    this.textures.forEach(t => gl.deleteTexture(t));
-    this.framebuffers.forEach(f => gl.deleteFramebuffer(f));
+    this.programs.forEach((p) => gl.deleteProgram(p));
+    this.textures.forEach((t) => gl.deleteTexture(t));
+    this.framebuffers.forEach((f) => gl.deleteFramebuffer(f));
     this.programs.clear();
     this.textures.clear();
     this.framebuffers.clear();

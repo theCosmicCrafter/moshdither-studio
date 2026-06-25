@@ -1,4 +1,4 @@
-import { WebGLContext } from './WebGLContext';
+import { WebGLContext } from "./WebGLContext";
 
 export class FullscreenQuad {
   private gl: WebGL2RenderingContext;
@@ -11,6 +11,7 @@ export class FullscreenQuad {
     this.gl = gl;
 
     const positions = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
+    // Standard GL texCoords — image/video textures are flipped on upload via UNPACK_FLIP_Y_WEBGL
     const texCoords = new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]);
 
     this.vao = gl.createVertexArray()!;

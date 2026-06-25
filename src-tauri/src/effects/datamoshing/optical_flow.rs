@@ -81,7 +81,7 @@ impl Effect for OpticalFlow {
         // Single-frame preview: compute flow against a slightly shifted version
         // of itself to produce a visible warping effect.
         let shifted = shift_frame(input, 2, 1);
-        let (u, v) = horn_schunck(&input, &shifted, self.alpha, self.iterations);
+        let (u, v) = horn_schunck(input, &shifted, self.alpha, self.iterations);
         Ok(warp_by_flow(input, &u, &v))
     }
 

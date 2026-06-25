@@ -41,6 +41,8 @@ struct Sam3Request {
     feather: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     fill_holes: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frames: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -58,6 +60,10 @@ struct Sam3Response {
     masks: Vec<String>,
     #[serde(default)]
     scores: Vec<f64>,
+    #[serde(default)]
+    frame_masks: Vec<Vec<String>>,
+    #[serde(default)]
+    frame_scores: Vec<Vec<f64>>,
 }
 
 pub struct Sam3Engine {
@@ -143,6 +149,23 @@ impl Sam3Engine {
             .stdout
             .take()
             .ok_or_else(|| crate::error::AppError::Generic("Failed to capture stdout".into()))?;
+
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| crate::error::AppError::Generic("Failed to capture stderr".into()))?;
+
+        // Spawn a stderr reader thread so Python errors are surfaced in the Rust log
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader};
+            let reader = BufReader::new(stderr);
+            for line in reader.lines() {
+                match line {
+                    Ok(text) => eprintln!("[SAM3 Bridge stderr] {}", text),
+                    Err(_) => break,
+                }
+            }
+        });
 
         // Generate a random 32-byte token for auth handshake
         let auth_token: String = {
@@ -260,6 +283,7 @@ impl Sam3Engine {
             shrink: None,
             feather: None,
             fill_holes: None,
+            frames: None,
         })?;
         if resp.status == "ok" {
             Ok((resp.width, resp.height))
@@ -286,6 +310,7 @@ impl Sam3Engine {
             shrink: None,
             feather: None,
             fill_holes: None,
+            frames: None,
         })?;
         if resp.status == "ok" {
             let mut results = Vec::with_capacity(resp.count);
@@ -320,6 +345,7 @@ impl Sam3Engine {
             shrink: None,
             feather: None,
             fill_holes: None,
+            frames: None,
         })?;
         if resp.status == "ok" {
             let mut results = Vec::with_capacity(resp.count);
@@ -350,6 +376,7 @@ impl Sam3Engine {
             shrink: None,
             feather: None,
             fill_holes: None,
+            frames: None,
         })?;
         if resp.status == "ok" {
             let mut results = Vec::with_capacity(resp.count);
@@ -368,7 +395,7 @@ impl Sam3Engine {
         iou_threshold: f32,
         min_mask_region_area: u32,
     ) -> crate::error::Result<Vec<(String, f64)>> {
-        let resp = self.send(Sam3Request {
+        let req = Sam3Request {
             cmd: "auto_mask".into(),
             auth_token: None,
             image_b64: None,
@@ -385,6 +412,80 @@ impl Sam3Engine {
             shrink: None,
             feather: None,
             fill_holes: None,
+            frames: None,
+        };
+        let resp = self.send(req)?;
+        if resp.status == "ok" {
+            let combined = resp
+                .masks
+                .into_iter()
+                .zip(resp.scores.into_iter())
+                .collect();
+            Ok(combined)
+        } else {
+            Err(crate::error::AppError::Generic(resp.message))
+        }
+    }
+
+    pub fn video_predictor(
+        &self,
+        frames: Vec<String>,
+        prompt: Option<String>,
+    ) -> crate::error::Result<(Vec<Vec<String>>, Vec<Vec<f64>>)> {
+        let req = Sam3Request {
+            cmd: "video_predictor".into(),
+            auth_token: None,
+            image_b64: None,
+            prompt,
+            points: None,
+            labels: None,
+            boxes: None,
+            index: None,
+            grid_size: None,
+            iou_threshold: None,
+            min_mask_region_area: None,
+            mask_b64: None,
+            grow: None,
+            shrink: None,
+            feather: None,
+            fill_holes: None,
+            frames: Some(frames),
+        };
+        let resp = self.send(req)?;
+        if resp.status == "ok" {
+            Ok((resp.frame_masks, resp.frame_scores))
+        } else {
+            Err(crate::error::AppError::Generic(resp.message))
+        }
+    }
+
+    /// Refine an existing mask using additional point prompts.
+    /// The Python bridge's `cmd_refine_mask` uses the mask + points to produce
+    /// refined candidate masks sorted by IoU with the input mask.
+    pub fn refine_mask(
+        &self,
+        mask_b64: String,
+        points: Vec<[f32; 2]>,
+        labels: Option<Vec<i32>>,
+    ) -> crate::error::Result<Vec<(String, f64)>> {
+        let resp = self.send(Sam3Request {
+            cmd: "refine_mask".into(),
+            auth_token: None,
+            image_b64: None,
+            prompt: None,
+            points: Some(points),
+            labels,
+            boxes: None,
+            index: None,
+            grid_size: None,
+            iou_threshold: None,
+            min_mask_region_area: None,
+            mask_b64: Some(mask_b64),
+            grow: None,
+            shrink: None,
+            feather: None,
+            fill_holes: None,
+            frames: None,
         })?;
         if resp.status == "ok" {
             let mut results = Vec::with_capacity(resp.count);
@@ -422,6 +523,7 @@ impl Sam3Engine {
             shrink: Some(shrink),
             feather: Some(feather),
             fill_holes: Some(fill_holes),
+            frames: None,
         })?;
         if resp.status == "ok" {
             // The Python bridge returns {"mask": "data:image/png;base64,..."}
@@ -457,6 +559,7 @@ impl Sam3Engine {
             shrink: None,
             feather: None,
             fill_holes: None,
+            frames: None,
         })?;
         if resp.status == "ok" {
             Ok(())
@@ -483,6 +586,7 @@ impl Sam3Engine {
             shrink: None,
             feather: None,
             fill_holes: None,
+            frames: None,
         });
         if let Some(mut child) = self.child.lock().take() {
             let _ = child.kill();

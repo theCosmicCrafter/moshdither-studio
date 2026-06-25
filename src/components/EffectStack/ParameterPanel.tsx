@@ -1,5 +1,4 @@
 import { useAppStore, type AudioBinding } from "../../store";
-import { SlidersHorizontal, AudioLines, Diamond, Palette } from "lucide-react";
 import { PALETTE_PRESETS, fillPaletteParams } from "../../engine/palettePresets";
 
 const AUDIO_SOURCES = [
@@ -19,41 +18,121 @@ const AUDIO_SOURCES = [
   { id: "beatTreble", label: "Beat (Treble)" },
 ];
 
+function ParameterWheel({
+  value,
+  min,
+  max,
+  onChange,
+}: {
+  value: number;
+  min: number;
+  max: number;
+  onChange: (v: number) => void;
+}) {
+  const range = max - min;
+  const angle = range > 0 ? ((value - min) / range) * 270 - 135 : 0;
+
+  const handleWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    const step = range > 0 ? range / 50 : 1;
+    const dir = e.deltaY > 0 ? -1 : 1;
+    const next = Math.max(min, Math.min(max, value + step * dir));
+    onChange(next);
+  };
+
+  const handleDrag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startValue = value;
+    const handleMove = (ev: MouseEvent) => {
+      const delta = startY - ev.clientY;
+      const step = range > 0 ? range / 200 : 1;
+      const next = Math.max(min, Math.min(max, startValue + delta * step));
+      onChange(next);
+    };
+    const handleUp = () => {
+      window.removeEventListener("mousemove", handleMove);
+      window.removeEventListener("mouseup", handleUp);
+    };
+    window.addEventListener("mousemove", handleMove);
+    window.addEventListener("mouseup", handleUp);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    const step = range > 0 ? range / 50 : 1;
+    if (e.key === "ArrowUp" || e.key === "ArrowRight") {
+      e.preventDefault();
+      onChange(Math.max(min, Math.min(max, value + step)));
+    } else if (e.key === "ArrowDown" || e.key === "ArrowLeft") {
+      e.preventDefault();
+      onChange(Math.max(min, Math.min(max, value - step)));
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-3 mt-1">
+      <div
+        className="relative w-10 h-10 rounded-full neo-panel flex items-center justify-center cursor-pointer border border-accent-pink/30"
+        onWheel={handleWheel}
+        onMouseDown={handleDrag}
+        onKeyDown={handleKeyDown}
+        title="Scroll or drag to adjust"
+        role="slider"
+        aria-label="Parameter wheel"
+        aria-valuemin={Number(min)}
+        aria-valuemax={Number(max)}
+        aria-valuenow={Number(value)}
+        tabIndex={0}
+      >
+        <div
+          className="w-1 h-3 bg-accent-pink absolute top-1 left-1/2 -translate-x-1/2 rounded-full origin-[50%_18px]"
+          style={{ transform: `rotate(${angle}deg)`, boxShadow: "0 0 8px #ffade0" }}
+        />
+        <div className="w-6 h-6 rounded-full neo-pressed flex items-center justify-center">
+          <span className="text-[8px] font-code-sm text-accent-teal">{value.toFixed(0)}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 export default function ParameterPanel() {
-  const effectStack = useAppStore((s) => s.effectStack);
-  const selectedStackId = useAppStore((s) => s.selectedStackId);
-  const allEffects = useAppStore((s) => s.allEffects);
+  const entry = useAppStore((s) => s.effectStack.find((e) => e.id === s.selectedStackId));
+  const effectMeta = useAppStore((s) => s.allEffects.find((e) => e.id === entry?.effectId));
   const updateStackParams = useAppStore((s) => s.updateStackParams);
-  const audioBindings = useAppStore((s) => s.audioBindings);
+  const audioBindings = useAppStore((s) =>
+    entry?.id ? s.audioBindings[entry.id] : undefined
+  );
   const setAudioBinding = useAppStore((s) => s.setAudioBinding);
   const audioMappedValues = useAppStore((s) => s.audioMappedValues);
   const audioEnabled = useAppStore((s) => s.audioEnabled);
   const currentTime = useAppStore((s) => s.currentTime);
-  const keyframes = useAppStore((s) => s.keyframes);
+  const keyframes = useAppStore((s) =>
+    entry?.id ? s.keyframes[entry.id] : undefined
+  );
   const addKeyframe = useAppStore((s) => s.addKeyframe);
   const removeKeyframe = useAppStore((s) => s.removeKeyframe);
 
-  const entry = effectStack.find((e) => e.id === selectedStackId);
   if (!entry) {
     return (
       <div
         className="flex-1 flex flex-col items-center justify-center gap-2"
         style={{ color: "var(--text-dim)" }}
       >
-        <SlidersHorizontal size={20} opacity={0.3} />
+        <span className="material-symbols-outlined" style={{ fontSize: 20, opacity: 0.3 }}>tune</span>
         <span className="text-[11px]">Select an effect to edit parameters</span>
       </div>
     );
   }
 
-  const effectMeta = allEffects.find((e) => e.id === entry.effectId);
   if (!effectMeta) return null;
 
   return (
-    <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4">
+    <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4 custom-scrollbar">
       <div
-        className="text-[11px] font-bold tracking-widest uppercase"
-        style={{ color: "var(--text-muted)" }}
+        className="text-[13px] font-semibold filigree-header"
+        style={{ color: "var(--text-secondary)", fontFamily: "var(--font-hand)" }}
       >
         {entry.effectName} Parameters
       </div>
@@ -61,7 +140,7 @@ export default function ParameterPanel() {
       {entry.effectId === "dithering.palette" && (
         <div className="space-y-2">
           <div className="flex items-center gap-1.5">
-            <Palette size={12} style={{ color: "var(--accent)" }} />
+            <span className="material-symbols-outlined" style={{ fontSize: 12, color: "var(--accent)" }}>palette</span>
             <span className="text-[10px] font-medium" style={{ color: "var(--text-secondary)" }}>
               Palette Preset
             </span>
@@ -137,6 +216,9 @@ export default function ParameterPanel() {
                   <input
                     type="number"
                     value={Number(value)}
+                    aria-label={param.name}
+                    title={param.name}
+                    placeholder="0"
                     onChange={(e) => updateStackParams(entry.id, { [param.id]: parseFloat(e.target.value) || 0 })}
                     className="param-readout bg-transparent border-b border-[var(--border-secondary)] px-1 w-12 text-right outline-none focus:border-[var(--accent)]"
                     style={{ fontFamily: "var(--font-mono)", fontSize: "10px", color: "var(--text-primary)" }}
@@ -151,26 +233,12 @@ export default function ParameterPanel() {
               const min = param.min ?? 0;
               const max = param.max ?? 100;
               const val = Number(value);
-              const percent = max > min ? Math.min(100, Math.max(0, ((val - min) / (max - min)) * 100)) : 0;
               return (
-                <input
-                  type="range"
+                <ParameterWheel
+                  value={val}
                   min={min}
                   max={max}
-                  step={param.step ?? 1}
-                  value={val}
-                  onChange={(e) =>
-                    updateStackParams(entry.id, {
-                      [param.id]:
-                        param.step && param.step < 1
-                          ? parseFloat(e.target.value)
-                          : parseInt(e.target.value),
-                    })
-                  }
-                  className="slider-track mt-1"
-                  style={{
-                    background: `linear-gradient(to right, var(--accent) 0%, var(--accent) ${percent}%, var(--bg-input) ${percent}%, var(--bg-input) 100%)`
-                  }}
+                  onChange={(v) => updateStackParams(entry.id, { [param.id]: v })}
                 />
               );
             })()}
@@ -182,7 +250,7 @@ export default function ParameterPanel() {
                 paramId={param.id}
                 paramMin={param.min ?? 0}
                 paramMax={param.max ?? 1}
-                binding={audioBindings[entry.id]?.[param.id]}
+                binding={audioBindings?.[param.id]}
                 onSet={setAudioBinding}
                 currentValue={audioMappedValues}
               />
@@ -190,6 +258,8 @@ export default function ParameterPanel() {
 
             {String(param.type).toLowerCase() === "select" && param.options && (
               <select
+                aria-label={param.name}
+                title={param.name}
                 value={String(param.options[Number(value)] ?? value)}
                 onChange={(e) => {
                   const idx = param.options!.indexOf(e.target.value);
@@ -212,6 +282,8 @@ export default function ParameterPanel() {
 
             {String(param.type).toLowerCase() === "toggle" && (
               <button
+                aria-label={param.name}
+                title={param.name}
                 onClick={() =>
                   updateStackParams(entry.id, {
                     [param.id]: !value,
@@ -257,11 +329,11 @@ function KeyframeButton({
   paramId: string;
   currentTime: number;
   currentValue: number;
-  keyframes: Record<string, Record<string, { id: string; time: number; value: number }[]>>;
+  keyframes: Record<string, { id: string; time: number; value: number }[]> | undefined;
   addKeyframe: (stackId: string, paramId: string, keyframe: { id: string; time: number; value: number; easing: "linear" | "easeIn" | "easeOut" | "easeInOut" | "hold" }) => void;
   removeKeyframe: (stackId: string, paramId: string, keyframeId: string) => void;
 }) {
-  const track = keyframes[stackId]?.[paramId] || [];
+  const track = keyframes?.[paramId] || [];
   const existing = track.find((k) => Math.abs(k.time - currentTime) < 0.01);
 
   const handleClick = () => {
@@ -289,7 +361,7 @@ function KeyframeButton({
         color: existing ? "var(--accent)" : "#666",
       }}
     >
-      <Diamond size={10} fill={existing ? "var(--accent)" : "none"} />
+      <span className="material-symbols-outlined" style={{ fontSize: 10, color: existing ? "var(--accent)" : "#666", fontVariationSettings: existing ? "'FILL' 1" : "'FILL' 0" }}>diamond</span>
     </button>
   );
 }
@@ -358,7 +430,7 @@ function AudioBindingControl({
             color: isBound ? "#6cf" : "#888",
           }}
         >
-          <AudioLines size={10} />
+          <span className="material-symbols-outlined" style={{ fontSize: 10 }}>audio</span>
           {isBound ? "Audio Bound" : "Bind Audio"}
         </button>
         {isBound && (

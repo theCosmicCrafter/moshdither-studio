@@ -4,6 +4,8 @@
 //! and dense optical flow helpers (Horn-Schunck). All functions work on RGBA
 //! `Frame` buffers and are designed to be called from effect implementations.
 
+#![allow(clippy::too_many_arguments)]
+
 use crate::effects::types::Frame;
 
 /// A 2D motion vector.
@@ -56,8 +58,8 @@ pub fn block_match_motion_field(
 ) -> MotionField {
     let w = prev.width as usize;
     let h = prev.height as usize;
-    let bw = (w + block_size - 1) / block_size;
-    let bh = (h + block_size - 1) / block_size;
+    let bw = w.div_ceil(block_size);
+    let bh = h.div_ceil(block_size);
     let mut vectors = Vec::with_capacity(bw * bh);
 
     for by in 0..bh {
@@ -111,9 +113,9 @@ fn block_diff(
             let sy_coord = (y as i32 + sy).rem_euclid(h as i32) as usize;
             let sidx = (sy_coord * w + sx_coord) * 4;
             let didx = (y * w + x) * 4;
-            diff += (prev.data[sidx] as i32 - curr.data[didx] as i32).abs() as u64;
-            diff += (prev.data[sidx + 1] as i32 - curr.data[didx + 1] as i32).abs() as u64;
-            diff += (prev.data[sidx + 2] as i32 - curr.data[didx + 2] as i32).abs() as u64;
+            diff += (prev.data[sidx] as i32 - curr.data[didx] as i32).unsigned_abs() as u64;
+            diff += (prev.data[sidx + 1] as i32 - curr.data[didx + 1] as i32).unsigned_abs() as u64;
+            diff += (prev.data[sidx + 2] as i32 - curr.data[didx + 2] as i32).unsigned_abs() as u64;
         }
     }
     diff
@@ -197,7 +199,8 @@ pub fn horn_schunck(
     let luma_prev = to_luma(prev);
     let luma_curr = to_luma(curr);
 
-    // Spatial gradients (central differences)
+    // Spatial gradients (central differences), averaged across both frames
+    // for better accuracy per the Horn-Schunck formulation.
     let mut ex = vec![0.0f32; n];
     let mut ey = vec![0.0f32; n];
     for y in 0..h {
@@ -207,15 +210,21 @@ pub fn horn_schunck(
             let xm = x.saturating_sub(1);
             let yp = (y + 1).min(h - 1);
             let ym = y.saturating_sub(1);
-            ex[idx] = (luma_curr[yp * w + x] - luma_curr[ym * w + x]) * 0.5;
-            ey[idx] = (luma_curr[y * w + xp] - luma_curr[y * w + xm]) * 0.5;
+            // ex = ∂I/∂x (horizontal gradient)
+            ex[idx] = ((luma_curr[y * w + xp] - luma_curr[y * w + xm])
+                + (luma_prev[y * w + xp] - luma_prev[y * w + xm]))
+                * 0.25;
+            // ey = ∂I/∂y (vertical gradient)
+            ey[idx] = ((luma_curr[yp * w + x] - luma_curr[ym * w + x])
+                + (luma_prev[yp * w + x] - luma_prev[ym * w + x]))
+                * 0.25;
         }
     }
 
-    // Temporal gradient
+    // Temporal gradient (∂I/∂t)
     let mut et = vec![0.0f32; n];
     for i in 0..n {
-        et[i] = luma_curr[i] - luma_prev[i];
+        et[i] = (luma_curr[i] - luma_prev[i]) * 0.5;
     }
 
     let mut u = vec![0.0f32; n];

@@ -1,6 +1,6 @@
-import { useCallback } from "react";
-import { open, save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { useCallback } from "react";
 import { useAppStore, type StackEntry } from "../store";
 
 export interface ProjectFile {
@@ -32,26 +32,34 @@ export function useProject() {
 
   const saveProject = useCallback(async () => {
     try {
+      console.log("[SAVE] Opening save dialog...");
       const path = await save({
         filters: [{ name: "MoshDither Project", extensions: ["moshdither"] }],
         defaultPath: "project.moshdither",
       });
-      if (!path) return false;
+      console.log("[SAVE] Dialog returned path:", path);
+      if (!path) {
+        console.log("[SAVE] No path returned (user cancelled?)");
+        return false;
+      }
 
       const project: ProjectFile = {
         version: PROJECT_VERSION,
         createdAt: new Date().toISOString(),
         effectStack: JSON.parse(JSON.stringify(effectStack)),
-        keyframes,
-        audioBindings,
+        keyframes: JSON.parse(JSON.stringify(keyframes)),
+        audioBindings: JSON.parse(JSON.stringify(audioBindings)),
         mediaFilePath: filePath,
         activeMask,
       };
 
+      console.log("[SAVE] Project object built, calling save_file...");
       await invoke("save_file", { path, contents: JSON.stringify(project, null, 2) });
+      console.log("[SAVE] save_file succeeded");
       setStatusMessage(`Project saved: ${path}`);
       return true;
     } catch (err) {
+      console.error("[SAVE] Save failed:", err);
       setStatusMessage(`Save failed: ${err}`);
       return false;
     }
@@ -86,6 +94,15 @@ export function useProject() {
             if (!entry.enabled) store.toggleStackItem(last.id);
           }
         }
+        // Restore keyframes, audio bindings, and mask
+        const store = useAppStore.getState();
+        if (project.keyframes)
+          store.setKeyframes(project.keyframes as Record<string, import("../store").KeyframeTrack>);
+        if (project.audioBindings)
+          store.setAudioBindings(
+            project.audioBindings as Record<string, Record<string, import("../store").AudioBinding>>
+          );
+        if (project.activeMask !== undefined) store.setActiveMask(project.activeMask);
       }, 0);
 
       if (project.mediaFilePath) {

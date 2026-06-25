@@ -4,6 +4,7 @@ pub mod kaleidoscope;
 pub mod mirror_slices;
 pub mod pixel_sort;
 pub mod pixelate;
+pub mod slice_shift_advanced;
 pub mod wave_distort;
 
 pub use anaglyph::Anaglyph;
@@ -12,4 +13,5 @@ pub use kaleidoscope::Kaleidoscope;
 pub use mirror_slices::MirrorSlices;
 pub use pixel_sort::PixelSort;
 pub use pixelate::Pixelate;
+pub use slice_shift_advanced::SliceShiftAdvanced;
 pub use wave_distort::WaveDistort;

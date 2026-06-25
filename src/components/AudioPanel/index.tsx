@@ -2,27 +2,23 @@ import React, { useRef, useCallback } from "react";
 import { useAppStore } from "../../store";
 import { useAudioEngine } from "../../hooks/useAudioEngine";
 import { STANDARD_BANDS } from "../../engine/audio/types";
+import { detectBeats, decodeAudioFile } from "../../utils/beatDetection";
+import { generateBeatKeyframes } from "../../utils/beatKeyframeGenerator";
 
 export default function AudioPanel() {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const audioFileRef = useRef<File | null>(null);
+  const [detectedBpm, setDetectedBpm] = React.useState<number | null>(null);
+  const [beatCount, setBeatCount] = React.useState(0);
 
-  const {
-    audioEnabled,
-    audioPlaying,
-    audioVolume,
-    audioBpm,
-    audioBandEnergies,
-    audioBeatFlags,
-    audioFilePath,
-  } = useAppStore((s) => ({
-    audioEnabled: s.audioEnabled,
-    audioPlaying: s.audioPlaying,
-    audioVolume: s.audioVolume,
-    audioBpm: s.audioBpm,
-    audioBandEnergies: s.audioBandEnergies,
-    audioBeatFlags: s.audioBeatFlags,
-    audioFilePath: s.audioFilePath,
-  }));
+  const audioEnabled = useAppStore((s) => s.audioEnabled);
+  const audioPlaying = useAppStore((s) => s.audioPlaying);
+  const audioVolume = useAppStore((s) => s.audioVolume);
+  const audioBpm = useAppStore((s) => s.audioBpm);
+  const audioBeatFlags = useAppStore((s) => s.audioBeatFlags);
+  const audioFilePath = useAppStore((s) => s.audioFilePath);
+  const audioManifestProgress = useAppStore((s) => s.audioManifestProgress);
+  const audioManifestPhase = useAppStore((s) => s.audioManifestPhase);
 
   const setAudioEnabled = useAppStore((s) => s.setAudioEnabled);
   const setAudioVolume = useAppStore((s) => s.setAudioVolume);
@@ -40,6 +36,7 @@ export default function AudioPanel() {
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (!file) return;
+      audioFileRef.current = file;
       setAudioEnabled(true);
       setAudioFilePath(file.name);
       await loadAudioFile(file);
@@ -52,6 +49,7 @@ export default function AudioPanel() {
       e.preventDefault();
       const file = e.dataTransfer.files[0];
       if (!file || !file.type.startsWith("audio/")) return;
+      audioFileRef.current = file;
       setAudioEnabled(true);
       setAudioFilePath(file.name);
       await loadAudioFile(file);
@@ -59,15 +57,40 @@ export default function AudioPanel() {
     [loadAudioFile, setAudioEnabled, setAudioFilePath]
   );
 
-  const bandColors = [
-    "#ff4444",
-    "#ff8844",
-    "#ffcc44",
-    "#44ff44",
-    "#44ffcc",
-    "#4488ff",
-    "#cc44ff",
-  ];
+  const selectedStackId = useAppStore((s) => s.selectedStackId);
+  const setKeyframesForTrack = useAppStore((s) => s.setKeyframesForTrack);
+  const setStatusMessage = useAppStore((s) => s.setStatusMessage);
+
+  const handleAnalyzeBeats = useCallback(async () => {
+    const file = audioFileRef.current;
+    if (!file) {
+      setStatusMessage("No audio file loaded");
+      return;
+    }
+    try {
+      const buffer = await decodeAudioFile(file);
+      const result = detectBeats(buffer);
+      setDetectedBpm(result.bpm);
+      setBeatCount(result.beats.length);
+      if (selectedStackId) {
+        const keyframes = generateBeatKeyframes({
+          beats: result.beats,
+          paramKey: "intensity",
+          mode: "pulse",
+          minValue: 0,
+          maxValue: 1,
+          easing: "easeInOut",
+        });
+        setKeyframesForTrack(selectedStackId, "intensity", keyframes);
+        setStatusMessage(`Detected ${result.beats.length} beats (${result.bpm} BPM) → keyframes applied`);
+      } else {
+        setStatusMessage(`Detected ${result.beats.length} beats (${result.bpm} BPM) — select an effect to apply keyframes`);
+      }
+    } catch (err) {
+      console.error("Beat detection failed:", err);
+      setStatusMessage("Beat detection failed");
+    }
+  }, [selectedStackId, setKeyframesForTrack, setStatusMessage]);
 
   return (
     <div
@@ -75,30 +98,22 @@ export default function AudioPanel() {
         display: "flex",
         flexDirection: "column",
         gap: 8,
-        padding: 12,
-        background: "#1a1a1a",
-        borderRadius: 6,
-        minWidth: 220,
-        maxWidth: 280,
-        color: "#e0e0e0",
+        color: "var(--text-primary)",
         fontSize: 12,
+        fontFamily: "var(--font-body)",
       }}
     >
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ fontWeight: 600, fontSize: 13 }}>Audio Reactive</span>
-        <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
-          <input
-            type="checkbox"
-            checked={audioEnabled}
-            onChange={(e) => setAudioEnabled(e.target.checked)}
-          />
-          <span>On</span>
-        </label>
-      </div>
+      <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
+        <input
+          type="checkbox"
+          checked={audioEnabled}
+          onChange={(e) => setAudioEnabled(e.target.checked)}
+        />
+        <span>Enable audio reactive</span>
+      </label>
 
       {!audioEnabled ? (
-        <div style={{ color: "#888", textAlign: "center", padding: "12px 0" }}>
+        <div style={{ color: "var(--text-muted)", textAlign: "center", padding: "12px 0" }}>
           Enable audio reactive to start
         </div>
       ) : (
@@ -109,13 +124,13 @@ export default function AudioPanel() {
             onDragOver={(e) => e.preventDefault()}
             onClick={() => fileInputRef.current?.click()}
             style={{
-              border: "2px dashed #444",
+              border: "2px dashed var(--surface-bright)",
               borderRadius: 4,
               padding: "10px 6px",
               textAlign: "center",
               cursor: "pointer",
               fontSize: 11,
-              color: audioFilePath ? "#6cf" : "#888",
+              color: audioFilePath ? "var(--accent-teal)" : "var(--text-muted)",
             }}
           >
             {audioFilePath || "Drop audio file or click to browse"}
@@ -129,15 +144,39 @@ export default function AudioPanel() {
             onChange={handleFile}
           />
 
+          {/* Manifest analysis progress */}
+          {audioManifestProgress > 0 && audioManifestProgress < 1 && (
+            <div style={{ fontSize: 10, color: "var(--accent-teal)" }}>
+              <div style={{ marginBottom: 2 }}>{audioManifestPhase}</div>
+              <div
+                style={{
+                  height: 3,
+                  background: "var(--surface-container-low)",
+                  borderRadius: 2,
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    height: "100%",
+                    width: `${audioManifestProgress * 100}%`,
+                    background: "var(--accent-teal)",
+                    transition: "width 100ms linear",
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
           {/* Mic toggle */}
           <button
             onClick={startMicrophone}
             style={{
               padding: "4px 8px",
               fontSize: 11,
-              background: "#333",
-              border: "1px solid #555",
-              color: "#ddd",
+              background: "var(--surface-container-low)",
+              border: "1px solid var(--outline-variant)",
+              color: "var(--text-secondary)",
               borderRadius: 3,
               cursor: "pointer",
             }}
@@ -172,52 +211,48 @@ export default function AudioPanel() {
 
           {/* BPM */}
           {audioBpm && (
-            <div style={{ textAlign: "center", color: "#6cf", fontSize: 11 }}>
+            <div style={{ textAlign: "center", color: "var(--accent-teal)", fontSize: 11 }}>
               BPM: {Math.round(audioBpm)}
+            </div>
+          )}
+
+          {/* Beat detection */}
+          <button
+            onClick={handleAnalyzeBeats}
+            style={{
+              padding: "4px 8px",
+              fontSize: 11,
+              background: "var(--surface-container-low)",
+              border: "1px solid var(--outline-variant)",
+              color: "var(--text-secondary)",
+              borderRadius: 3,
+              cursor: "pointer",
+            }}
+          >
+            Analyze Beats
+          </button>
+          {detectedBpm && (
+            <div style={{ textAlign: "center", color: "var(--accent-teal)", fontSize: 11 }}>
+              Detected {beatCount} beats / {detectedBpm} BPM
             </div>
           )}
 
           {/* Beat indicators */}
           <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
-            <BeatDot label="Bass" active={audioBeatFlags.bass} color="#ff4444" />
-            <BeatDot label="Mid" active={audioBeatFlags.mid} color="#44ff44" />
-            <BeatDot label="Treble" active={audioBeatFlags.treble} color="#4488ff" />
+            <BeatDot label="Bass" active={audioBeatFlags.bass} color="var(--accent-pink)" />
+            <BeatDot label="Mid" active={audioBeatFlags.mid} color="var(--accent-gold)" />
+            <BeatDot label="Treble" active={audioBeatFlags.treble} color="var(--accent-teal)" />
           </div>
 
-          {/* Spectrum bars */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "flex-end",
-              gap: 2,
-              height: 48,
-              padding: "4px 0",
-            }}
-          >
-            {STANDARD_BANDS.map((band, i) => {
-              const val = audioBandEnergies[band.name] ?? 0;
-              return (
-                <div
-                  key={band.name}
-                  style={{
-                    flex: 1,
-                    height: `${Math.max(2, val * 100)}%`,
-                    background: bandColors[i],
-                    borderRadius: 2,
-                    transition: "height 60ms linear",
-                    opacity: 0.85,
-                  }}
-                  title={`${band.name}: ${(val * 100).toFixed(1)}%`}
-                />
-              );
-            })}
-          </div>
+          {/* Spectrum bars — isolated so they re-render on audio data without
+              re-rendering the rest of the audio panel controls */}
+          <SpectrumBars />
           <div
             style={{
               display: "flex",
               justifyContent: "space-between",
               fontSize: 9,
-              color: "#666",
+              color: "var(--text-muted)",
               padding: "0 2px",
             }}
           >
@@ -231,6 +266,48 @@ export default function AudioPanel() {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+function SpectrumBars() {
+  const audioBandEnergies = useAppStore((s) => s.audioBandEnergies);
+  const bandColors = [
+    "#ff4444",
+    "#ff8844",
+    "#ffcc44",
+    "#44ff44",
+    "#44ffcc",
+    "#4488ff",
+    "#cc44ff",
+  ];
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "flex-end",
+        gap: 2,
+        height: 48,
+        padding: "4px 0",
+      }}
+    >
+      {STANDARD_BANDS.map((band, i) => {
+        const val = audioBandEnergies[band.name] ?? 0;
+        return (
+          <div
+            key={band.name}
+            style={{
+              flex: 1,
+              height: `${Math.max(2, val * 100)}%`,
+              background: bandColors[i],
+              borderRadius: 2,
+              transition: "height 60ms linear",
+              opacity: 0.85,
+            }}
+            title={`${band.name}: ${(val * 100).toFixed(1)}%`}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -250,9 +327,9 @@ function TransportButton({
       style={{
         padding: "3px 10px",
         fontSize: 11,
-        background: active ? "#4a90d9" : "#333",
-        border: "1px solid #555",
-        color: "#fff",
+        background: active ? "var(--accent-teal)" : "var(--surface-container-low)",
+        border: "1px solid var(--outline-variant)",
+        color: active ? "var(--on-secondary)" : "var(--text-primary)",
         borderRadius: 3,
         cursor: "pointer",
         fontWeight: active ? 600 : 400,
@@ -279,12 +356,12 @@ function BeatDot({
           width: 10,
           height: 10,
           borderRadius: "50%",
-          background: active ? color : "#333",
+          background: active ? color : "var(--surface-container-low)",
           boxShadow: active ? `0 0 6px ${color}` : "none",
           transition: "all 80ms",
         }}
       />
-      <span style={{ fontSize: 9, color: "#888" }}>{label}</span>
+      <span style={{ fontSize: 9, color: "var(--text-muted)" }}>{label}</span>
     </div>
   );
 }

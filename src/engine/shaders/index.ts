@@ -196,6 +196,21 @@ export { paletteDitherShader } from "./paletteDither";
 import { liftGammaGainShader } from "./liftGammaGain";
 export { liftGammaGainShader } from "./liftGammaGain";
 
+import { pixelGridOverlayShader } from "./pixelGridOverlay";
+export { pixelGridOverlayShader } from "./pixelGridOverlay";
+
+import { safeAreaShader } from "./safeArea";
+export { safeAreaShader } from "./safeArea";
+
+import { ruleOfThirdsShader } from "./ruleOfThirds";
+export { ruleOfThirdsShader } from "./ruleOfThirds";
+
+import { crosshairsShader } from "./crosshairs";
+export { crosshairsShader } from "./crosshairs";
+
+import { maskBlendShader } from "./maskBlend";
+export { maskBlendShader } from "./maskBlend";
+
 // Register all shaders into the global registry
 shaderRegistry.register(passThroughShader);
 shaderRegistry.register(lutShader);
@@ -262,3 +277,8 @@ shaderRegistry.register(blendModesShader);
 shaderRegistry.register(curvesShader);
 shaderRegistry.register(paletteDitherShader);
 shaderRegistry.register(liftGammaGainShader);
+shaderRegistry.register(pixelGridOverlayShader);
+shaderRegistry.register(safeAreaShader);
+shaderRegistry.register(ruleOfThirdsShader);
+shaderRegistry.register(crosshairsShader);
+shaderRegistry.register(maskBlendShader);

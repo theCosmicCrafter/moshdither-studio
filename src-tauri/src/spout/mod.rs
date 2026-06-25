@@ -20,6 +20,7 @@
 use crate::error::{AppError, Result};
 
 /// Spout sender state.
+#[allow(dead_code)]
 pub struct SpoutSender {
     name: String,
     width: u32,

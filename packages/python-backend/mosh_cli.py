@@ -1,9 +1,10 @@
-import sys
-import os
 import json
+import math
+import os
 import re
-import tempfile
 import subprocess
+import sys
+import tempfile
 
 # Add current folder to python path to resolve DatamoshLib imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -26,9 +27,9 @@ ffmpeg_path = os.environ.get(
     os.path.join(BASE_DIR, "assets", "bin", "ffmpeg-master-latest-win64-gpl", "bin", "ffmpeg.exe"),
 )
 
-from DatamoshLib.Tomato import tomato
-from DatamoshLib.Original import classic, repeat, pymodes, classic_new
 from DatamoshLib.FFG_effects import basic_modes, external_script
+from DatamoshLib.Original import classic, classic_new, pymodes, repeat
+from DatamoshLib.Tomato import tomato
 
 # Override ffgac and ffedit inside imported modules
 basic_modes.ffgac = ffgac_path
@@ -52,7 +53,7 @@ def configure_js_script(effect_name, params):
     # Locate original JS file
     jscript_dir = os.path.join(os.path.dirname(__file__), "DatamoshLib", "FFG_effects", "jscripts")
     js_path = os.path.join(jscript_dir, f"{effect_name}.js")
-    
+
     # Try finding exact case-insensitive match or match replacing dashes with spaces
     if not os.path.exists(js_path):
         for f in os.listdir(jscript_dir):
@@ -61,91 +62,108 @@ def configure_js_script(effect_name, params):
             if cleaned_f == f"{cleaned_effect}.js":
                 js_path = os.path.join(jscript_dir, f)
                 break
-                
+
     if not os.path.exists(js_path):
         raise FileNotFoundError(f"JS effect file not found: {effect_name} at {js_path}")
-        
+
     with open(js_path, "r", encoding="utf-8") as f:
         content = f.read()
-        
-    # Replace variables based on params
+
+    def _sanitize_number(val, default=0):
+        """Coerce a param value to a safe numeric string for JS interpolation."""
+        try:
+            f = float(val)
+            if not (math.isfinite(f)):
+                return str(default)
+            return str(int(f)) if f == int(f) else str(f)
+        except (ValueError, TypeError):
+            return str(default)
+
+    def _sanitize_int(val, default=0):
+        """Coerce a param value to a safe integer string for JS interpolation."""
+        try:
+            return str(int(float(val)))
+        except (ValueError, TypeError):
+            return str(default)
+
+    # Replace variables based on params — all values sanitized to prevent JS injection
     if "zoom" in params:
-        content = re.sub(r"var\s+ZOOM\s*=\s*-?\d+(\.\d+)?\s*;", f"var ZOOM = {params['zoom']};", content)
+        content = re.sub(r"var\s+ZOOM\s*=\s*-?\d+(\.\d+)?\s*;", f"var ZOOM = {_sanitize_number(params['zoom'])};", content)
     if "delay" in params:
-        content = re.sub(r"var\s+delay\s*=\s*\d+\s*;", f"var delay = {params['delay']};", content)
+        content = re.sub(r"var\s+delay\s*=\s*\d+\s*;", f"var delay = {_sanitize_int(params['delay'])};", content)
     if "feedback" in params:
-        content = re.sub(r"var\s+feedback\s*=\s*\d+(\.\d+)?\s*;", f"var feedback = {params['feedback']};", content)
+        content = re.sub(r"var\s+feedback\s*=\s*\d+(\.\d+)?\s*;", f"var feedback = {_sanitize_number(params['feedback'])};", content)
     if "somePercentage" in params:
-        content = re.sub(r"var\s+SOME_PERCENTAGE\s*=\s*\d+(\.\d+)?\s*;", f"var SOME_PERCENTAGE = {params['somePercentage']};", content)
+        content = re.sub(r"var\s+SOME_PERCENTAGE\s*=\s*\d+(\.\d+)?\s*;", f"var SOME_PERCENTAGE = {_sanitize_number(params['somePercentage'])};", content)
     if "multiple" in params:
-        content = re.sub(r"var\s+MULTIPLE\s*=\s*\d+\s*;", f"var MULTIPLE = {params['multiple']};", content)
+        content = re.sub(r"var\s+MULTIPLE\s*=\s*\d+\s*;", f"var MULTIPLE = {_sanitize_int(params['multiple'])};", content)
     if "tailLength" in params:
-        content = re.sub(r"var\s+tail_length\s*=\s*\d+\s*;", f"var tail_length = {params['tailLength']};", content)
+        content = re.sub(r"var\s+tail_length\s*=\s*\d+\s*;", f"var tail_length = {_sanitize_int(params['tailLength'])};", content)
     if "threshold" in params:
-        content = re.sub(r"(let|var)\s+threshold\s*=\s*\d+(\.\d+)?\s*;", f"\\1 threshold = {params['threshold']};", content)
+        content = re.sub(r"(let|var)\s+threshold\s*=\s*\d+(\.\d+)?\s*;", f"\\1 threshold = {_sanitize_number(params['threshold'])};", content)
     if "origGravity" in params:
-        content = re.sub(r"var\s+orig_gravity\s*=\s*-?\d+\s*;", f"var orig_gravity = {params['origGravity']};", content)
+        content = re.sub(r"var\s+orig_gravity\s*=\s*-?\d+\s*;", f"var orig_gravity = {_sanitize_int(params['origGravity'])};", content)
     if "frameCount" in params:
-        content = re.sub(r"var\s+frameCount\s*=\s*\d+\s*;", f"var frameCount = {params['frameCount']};", content)
+        content = re.sub(r"var\s+frameCount\s*=\s*\d+\s*;", f"var frameCount = {_sanitize_int(params['frameCount'])};", content)
     if "nFrames" in params:
-        content = re.sub(r"var\s+nFrames\s*=\s*\d+\s*;", f"var nFrames = {params['nFrames']};", content)
+        content = re.sub(r"var\s+nFrames\s*=\s*\d+\s*;", f"var nFrames = {_sanitize_int(params['nFrames'])};", content)
     if "movementThreshold" in params:
-        content = re.sub(r"var\s+movement_threshold\s*=\s*\d+\s*;", f"var movement_threshold = {params['movementThreshold']};", content)
+        content = re.sub(r"var\s+movement_threshold\s*=\s*\d+\s*;", f"var movement_threshold = {_sanitize_int(params['movementThreshold'])};", content)
     if "randomness" in params:
-        content = re.sub(r"var\s+randomness\s*=\s*\d+\s*;", f"var randomness = {params['randomness']};", content)
+        content = re.sub(r"var\s+randomness\s*=\s*\d+\s*;", f"var randomness = {_sanitize_int(params['randomness'])};", content)
     if "magnitude" in params:
-        content = re.sub(r"var\s+MAGNITUDE\s*=\s*\d+\s*;", f"var MAGNITUDE = {params['magnitude']};", content)
-        
+        content = re.sub(r"var\s+MAGNITUDE\s*=\s*\d+\s*;", f"var MAGNITUDE = {_sanitize_int(params['magnitude'])};", content)
+
     temp_fd, temp_script_path = tempfile.mkstemp(suffix=".js", prefix="mosh_script_")
     os.close(temp_fd)
     with open(temp_script_path, "w", encoding="utf-8") as f:
         f.write(content)
-        
+
     return temp_script_path
 
 def main():
     if len(sys.argv) < 2:
         print("Usage: python mosh_cli.py <config_json_path>")
         sys.exit(1)
-        
+
     config_path = sys.argv[1]
     with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
-        
+
     input_path = config["input"]
     output_path = config["output"]
     mode = config["mode"] # e.g. classic, shuffle, tomato-bloom, zoom, delay, etc.
     params = config.get("params", {})
-    
+
     # 1. Automosh (Tomato) Modes: Bloom, Pulse, Overlap, Jiggle, Void, Reverse, Invert, Random
     tomato_modes = ["bloom", "pulse", "overlap", "jiggle", "void", "reverse", "invert", "random"]
-    
+
     # 2. Original AVI Modes: Classic, Classic2, Repeat, Glide, Sort, Echo
     original_modes = ["classic", "classic2", "repeat", "glide", "sort", "echo"]
-    
+
     # 3. FFglitch built-in Python modes: Fluid, Stretch, Motion Transfer, Shuffle (basic), Rise, Water Bloom, Combine
     basic_modes_list = ["fluid", "stretch", "motion_transfer", "shuffle_basic", "rise", "water_bloom", "combine"]
-    
+
     # 4. JS effects modes: Zoom, Delay, Buffer, Noise, Shift, Sink, Slice, Stop, Vibrate, Invert-Reverse, Mirror, Shear, Slam Zoom
     js_effects = ["zoom", "delay", "buffer", "noise", "shift", "sink", "slice", "stop", "vibrate", "invert-reverse", "mirror", "shear", "slam zoom"]
-    
+
     temp_dir = tempfile.gettempdir()
-    
+
     if mode in tomato_modes:
         temp_in = os.path.join(temp_dir, f"tomato_in_{os.path.basename(input_path)}.avi")
         temp_corrupted = os.path.join(temp_dir, f"tomato_corrupted_{os.path.basename(input_path)}.avi")
-        
+
         try:
             # Step 1: Convert to AVI using x264 with specific bitrate limit
             ffmpeg_convert(input_path, temp_in, ["-c:v", "libx264", "-preset", "medium", "-b:v", "2M", "-minrate", "2M", "-maxrate", "2M", "-bufsize", "2M"])
-            
+
             # Step 2: Mosh using Tomato
             count = params.get("count", 20)
             n_frame = params.get("frame", 1)
             kill_rate = params.get("kill", 0.7)
             keep_audio = 1 if params.get("keepAudio", True) else 0
             keep_frame = 1 if params.get("keepFrame", True) else 0
-            
+
             tomato.mosh(
                 infile=temp_in,
                 outfile=temp_corrupted,
@@ -156,7 +174,7 @@ def main():
                 f=keep_frame,
                 k=kill_rate
             )
-            
+
             # Step 3: Re-encode corrupted AVI back to target container
             ffmpeg_convert(temp_corrupted, output_path, ["-c:v", "libx264", "-pix_fmt", "yuv420p"])
         finally:
@@ -172,7 +190,7 @@ def main():
         try:
             # Step 1: Convert to AVI without B-frames
             ffmpeg_convert(input_path, temp_in, ["-bf", "0", "-b:v", "10000k"])
-            
+
             # Step 2: Apply specific mosh mode
             if mode == "classic":
                 classic.Datamosh(temp_in, temp_corrupted, s=params.get("start", 0), e=params.get("end", 10), p=params.get("p", 1), fps=30)
@@ -188,7 +206,7 @@ def main():
                 pymodes.library.avi_sort(temp_in, temp_corrupted, mode=keep_first, rev=reverse)
             elif mode == "echo":
                 pymodes.library.process_streams(temp_in, temp_corrupted, mid=params.get("mid", 0.5))
-                
+
             # Step 3: Re-encode corrupted AVI
             ffmpeg_convert(temp_corrupted, output_path, ["-c:v", "libx264", "-pix_fmt", "yuv420p"])
         finally:
@@ -200,10 +218,10 @@ def main():
     elif mode in basic_modes_list or mode in js_effects:
         temp_corrupted = os.path.join(temp_dir, f"ffg_out_{os.path.basename(input_path)}.mpg")
         temp_js = None
-        
+
         try:
             gop = params.get("gop", 1000)
-            
+
             if mode == "fluid":
                 basic_modes.library(input_path, temp_corrupted, mode=3, fluidity=params.get("fluidity", 5), gop=gop)
             elif mode == "stretch":
@@ -237,7 +255,7 @@ def main():
                 # Dynamically write custom JS script
                 temp_js = configure_js_script(mode, params)
                 external_script.mosh(input_path, temp_corrupted, mode=1, scriptfile=temp_js, gop=gop)
-                
+
             # Convert MPG to MP4
             ffmpeg_convert(temp_corrupted, output_path, ["-c:v", "libx264", "-pix_fmt", "yuv420p"])
         finally:
@@ -247,7 +265,7 @@ def main():
                 os.remove(temp_corrupted)
     else:
         raise ValueError(f"Unknown datamoshing mode: {mode}")
-        
+
     print("Mosh pipeline completed successfully!")
 
 if __name__ == "__main__":

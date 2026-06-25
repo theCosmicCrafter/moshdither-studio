@@ -6,32 +6,70 @@ The model stays loaded in memory for fast interactive use.
 
 Supported modes:
   • text_prompt   — open-vocabulary segmentation via Sam3Processor
-  • point_prompt  — interactive point-click via SAM3InteractiveImagePredictor
-  • box_prompt    — interactive box via SAM3InteractiveImagePredictor
+  • point_prompt  — interactive point-click via Sam3Image.predict_inst
+  • box_prompt    — interactive box via Sam3Image.predict_inst
 """
 
-import sys
-import json
 import base64
-import io
-import os
-import logging
-import struct
 import hmac
-import hashlib
-import secrets
+import io
+import json
+import logging
+import os
+import struct
+import sys
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
 import torch
+from PIL import Image
 
-# Add the cloned repo to path
+_ACCELERATORS = []
+
+try:
+    import torch.nn.functional as F
+    from sageattention import sageattn
+
+    _orig_sdpa = F.scaled_dot_product_attention
+
+    def _sage_sdpa(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False,
+                   scale=None, enable_gqa=False):
+        # Route to SageAttention for unmasked, non-causal attention (the common case in SAM3)
+        if attn_mask is None and not is_causal and dropout_p == 0.0:
+            try:
+                return sageattn(query, key, value, is_causal=False, sm_scale=scale)
+            except Exception:
+                pass  # Fall through to original SDPA on any error
+        return _orig_sdpa(query, key, value, attn_mask=attn_mask, dropout_p=dropout_p,
+                          is_causal=is_causal, scale=scale, enable_gqa=enable_gqa)
+
+    F.scaled_dot_product_attention = _sage_sdpa
+    _ACCELERATORS.append("SageAttention 2.2")
+    logging.info("SageAttention 2.2 patched (SDPA monkey-patch).")
+except ImportError:
+    logging.warning("SageAttention not installed — attention will use PyTorch SDPA.")
+
+try:
+    import xformers
+    import xformers.ops
+    _ACCELERATORS.append(f"xFormers {xformers.__version__}")
+    logging.info("xFormers %s imported.", xformers.__version__)
+except ImportError:
+    logging.warning("xFormers not installed.")
+
+try:
+    import triton
+    _ACCELERATORS.append(f"Triton {triton.__version__}")
+    logging.info("Triton %s available.", triton.__version__)
+except ImportError:
+    logging.warning("Triton not installed — SageAttention CUDA kernels will be unavailable.")
+# Add the cloned repo to path (append, not insert, to avoid overriding stdlib)
 SAM3_REPO = Path(__file__).parent.parent / "sam3_repo"
-sys.path.insert(0, str(SAM3_REPO))
+sys.path.append(str(SAM3_REPO))
 
-from sam3.model_builder import build_sam3_image_model
 from sam3.model.sam3_image_processor import Sam3Processor
+from sam3.model_builder import build_sam3_image_model
+from sam3.model_management import ModelManager
 
 # ── Configuration ──────────────────────────────────────────────
 _DEFAULT_CHECKPOINT = Path.home() / ".moshdither" / "models" / "sam3" / "sam3.pt"
@@ -42,7 +80,7 @@ USE_AMP = os.environ.get("SAM3_USE_AMP", "1") == "1"
 # ── Globals ────────────────────────────────────────────────────
 model = None
 processor = None         # Sam3Processor (text / box grounding)
-inter_predictor = None   # SAM3InteractiveImagePredictor (point / box interactive)
+model_manager = None     # Manages GPU/CPU offloading
 current_image = None
 orig_hw = None
 inference_state = None   # state returned by processor.set_image()
@@ -98,40 +136,62 @@ def _do_auth_handshake():
 
 def ensure_model_loaded():
     """Lazy-load SAM3 model on first use."""
-    global model, processor, inter_predictor
+    global model, processor, model_manager
     if model is not None:
+        if model_manager:
+            model_manager.touch()
         return
-    log("Loading SAM3 model from %s on %s ...", CHECKPOINT_PATH, DEVICE)
+    log("Loading SAM3 model from %s on CPU (pinned) ...", CHECKPOINT_PATH)
     if not Path(CHECKPOINT_PATH).exists():
         raise FileNotFoundError(
             f"Checkpoint not found: {CHECKPOINT_PATH}\n"
-            f"Set SAM3_CHECKPOINT env var or run scripts/setup_sam3.py to download the model."
+            "To use SAM3, either:\n"
+            "  1. Request access at https://huggingface.co/facebook/sam3, then run:\n"
+            "       python scripts/setup_sam3.py --download-hf\n"
+            "  2. Provide a direct URL: python scripts/setup_sam3.py --checkpoint-url <url>\n"
+            "  3. Set SAM3_CHECKPOINT env var to an existing sam3.pt file."
         )
+    # torch.compile can cause inaccurate results on some Windows/GPU combos.
+    # Enable only if explicitly requested via env var.
+    use_compile = DEVICE == "cuda" and os.environ.get("SAM3_ENABLE_COMPILE", "0") == "1"
+
     try:
         model = build_sam3_image_model(
             checkpoint_path=CHECKPOINT_PATH,
-            device=DEVICE,
+            device="cpu",  # Load to CPU by default, ModelManager handles GPU offload
             eval_mode=True,
             load_from_HF=False,
             enable_segmentation=True,
             enable_inst_interactivity=True,
+            compile=use_compile,
         )
     except RuntimeError as e:
         if "out of memory" in str(e).lower():
             raise RuntimeError(
-                f"CUDA out of memory while loading SAM3 model on {DEVICE}. "
-                f"Try setting SAM3_DEVICE=cpu or closing other GPU applications."
+                "Out of memory while loading SAM3 model on CPU."
             ) from e
         raise
+
     if DEVICE == "cuda":
         # Throughput knobs similar to high-performance inference stacks.
         torch.backends.cudnn.benchmark = True
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
-    processor = Sam3Processor(model, device=DEVICE, confidence_threshold=0.05)
-    if model.inst_interactive_predictor is not None:
-        inter_predictor = model.inst_interactive_predictor
-    log("SAM3 model loaded on %s.", DEVICE)
+        # Pin memory for faster CPU->GPU transfer
+        for param in model.parameters():
+            param.data = param.data.pin_memory()
+        for buf in model.buffers():
+            buf.data = buf.data.pin_memory()
+
+    processor = Sam3Processor(model, device="cpu", confidence_threshold=0.05)
+    model_manager = ModelManager(target_device=DEVICE, min_free_vram_gb=1.0, idle_timeout=30.0)
+    model_manager.register(model, processor)
+    log("SAM3 model loaded on CPU and pinned.")
+    log("Active accelerators: %s", ", ".join(_ACCELERATORS) if _ACCELERATORS else "none")
+    if use_compile:
+        log("torch.compile enabled (mode=default) for vision encoder.")
+    if DEVICE == "cuda":
+        log("TF32: enabled, cuDNN benchmark: enabled")
 
 
 def pil_from_base64(data_url: str) -> Image.Image:
@@ -170,6 +230,8 @@ def cmd_load_image(image_b64: str):
     global current_image, orig_hw, inference_state
     try:
         ensure_model_loaded()
+        if model_manager:
+            model_manager.move_to_target()
     except Exception as e:
         return {"status": "error", "message": f"Model load failed: {e}"}
 
@@ -183,22 +245,13 @@ def cmd_load_image(image_b64: str):
 
     try:
         # Set image in the text/grounding processor and capture inference state.
+        # Point/box prompts reuse the detector backbone features via model.predict_inst.
         with torch.inference_mode():
             if DEVICE == "cuda" and USE_AMP:
                 with torch.autocast(device_type="cuda", dtype=torch.float16):
                     inference_state = processor.set_image(image)
             else:
                 inference_state = processor.set_image(image)
-
-        # CRITICAL: also prime the interactive predictor so point/box prompts work.
-        # inter_predictor keeps its own internal image state separate from processor.
-        if inter_predictor is not None:
-            with torch.inference_mode():
-                if DEVICE == "cuda" and USE_AMP:
-                    with torch.autocast(device_type="cuda", dtype=torch.float16):
-                        inter_predictor.set_image(image)
-                else:
-                    inter_predictor.set_image(image)
     except RuntimeError as e:
         if "out of memory" in str(e).lower():
             return {"status": "error", "message": f"CUDA out of memory during image encoding: {e}"}
@@ -211,6 +264,9 @@ def cmd_text_prompt(prompt: str):
     global inference_state
     if inference_state is None:
         return {"status": "error", "message": "No image loaded"}
+
+    if model_manager:
+        model_manager.move_to_target()
 
     try:
         with torch.inference_mode():
@@ -243,10 +299,13 @@ def cmd_text_prompt(prompt: str):
 
 
 def cmd_point_prompt(points: list, labels: list = None):
-    if inter_predictor is None:
-        return {"status": "error", "message": "Interactive predictor not available"}
-    if current_image is None:
+    if model is None:
+        return {"status": "error", "message": "Model not loaded"}
+    if inference_state is None:
         return {"status": "error", "message": "No image loaded — call load_image first"}
+
+    if model_manager:
+        model_manager.move_to_target()
 
     points_np = np.array(points, dtype=np.float32)   # shape [N, 2]
     labels_np = np.array(labels if labels else [1] * len(points), dtype=np.int32)
@@ -255,13 +314,15 @@ def cmd_point_prompt(points: list, labels: list = None):
         with torch.inference_mode():
             if DEVICE == "cuda" and USE_AMP:
                 with torch.autocast(device_type="cuda", dtype=torch.float16):
-                    masks, scores, _ = inter_predictor.predict(
+                    masks, scores, _ = model.predict_inst(
+                        inference_state,
                         point_coords=points_np,
                         point_labels=labels_np,
                         multimask_output=True,
                     )
             else:
-                masks, scores, _ = inter_predictor.predict(
+                masks, scores, _ = model.predict_inst(
+                    inference_state,
                     point_coords=points_np,
                     point_labels=labels_np,
                     multimask_output=True,
@@ -273,7 +334,7 @@ def cmd_point_prompt(points: list, labels: list = None):
             return {"status": "error", "message": f"CUDA out of memory during point inference: {e}"}
         raise
 
-    # inter_predictor.predict() returns:
+    # predict_inst() returns:
     #   masks  — np.ndarray [num_masks, H, W]  (3 masks when multimask_output=True)
     #   scores — np.ndarray [num_masks]
     # Return all masks sorted by score (highest first) so the user can pick.
@@ -293,12 +354,70 @@ def cmd_point_prompt(points: list, labels: list = None):
         "scores": all_scores,
     }
 
+def cmd_refine_mask(mask_b64: str, points: list, labels: list = None):
+    if model is None:
+        return {"status": "error", "message": "Model not loaded"}
+    if inference_state is None:
+        return {"status": "error", "message": "No image loaded"}
+
+    if model_manager:
+        model_manager.move_to_target()
+
+    # Decode mask to boolean array
+    try:
+        mask_img = pil_from_base64(mask_b64)
+        mask_np = np.array(mask_img.convert("L"), dtype=np.uint8) > 127
+    except Exception as e:
+        return {"status": "error", "message": f"Invalid mask: {e}"}
+    points_np = np.array(points, dtype=np.float32)
+    labels_np = np.array(labels if labels else [1] * len(points), dtype=np.int32)
+    try:
+        with torch.inference_mode():
+            if DEVICE == "cuda" and USE_AMP:
+                with torch.autocast(device_type="cuda", dtype=torch.float16):
+                    masks, scores, _ = model.predict_inst(
+                        inference_state,
+                        point_coords=points_np,
+                        point_labels=labels_np,
+                        multimask_output=True,
+                    )
+            else:
+                masks, scores, _ = model.predict_inst(
+                    inference_state,
+                    point_coords=points_np,
+                    point_labels=labels_np,
+                    multimask_output=True,
+                )
+    except RuntimeError as e:
+        if "out of memory" in str(e).lower():
+            if DEVICE == "cuda":
+                torch.cuda.empty_cache()
+            return {"status": "error", "message": f"CUDA out of memory during refine: {e}"}
+        raise
+    # Compute IoU with the provided mask and sort results
+    ious = []
+    for i in range(masks.shape[0]):
+        m = masks[i]
+        ious.append(mask_iou(mask_np, m.astype(bool)))
+    sorted_idx = np.argsort(ious)[::-1]
+    sorted_masks = [masks[i] for i in sorted_idx]
+    sorted_scores = [float(scores[i]) for i in sorted_idx]
+    return {
+        "status": "ok",
+        "count": len(sorted_masks),
+        "masks": [mask_to_base64(m) for m in sorted_masks],
+        "scores": sorted_scores,
+    }
+
 
 def cmd_box_prompt(boxes: list):
-    if inter_predictor is None:
-        return {"status": "error", "message": "Interactive predictor not available"}
-    if current_image is None:
+    if model is None:
+        return {"status": "error", "message": "Model not loaded"}
+    if inference_state is None:
         return {"status": "error", "message": "No image loaded — call load_image first"}
+
+    if model_manager:
+        model_manager.move_to_target()
 
     results = []
     all_scores = []
@@ -308,12 +427,14 @@ def cmd_box_prompt(boxes: list):
             with torch.inference_mode():
                 if DEVICE == "cuda" and USE_AMP:
                     with torch.autocast(device_type="cuda", dtype=torch.float16):
-                        masks, scores, _ = inter_predictor.predict(
+                        masks, scores, _ = model.predict_inst(
+                            inference_state,
                             box=box_np,
                             multimask_output=True,
                         )
                 else:
-                    masks, scores, _ = inter_predictor.predict(
+                    masks, scores, _ = model.predict_inst(
+                        inference_state,
                         box=box_np,
                         multimask_output=True,
                     )
@@ -368,68 +489,36 @@ def deduplicate_masks(masks: list[np.ndarray], scores: list[float], iou_threshol
     return keep_masks, keep_scores, keep_indices
 
 
-def cmd_auto_mask(grid_size: int = 16, iou_threshold: float = 0.7, min_mask_region_area: int = 100):
-    """Generate masks automatically by sampling a grid of point prompts."""
-    if inter_predictor is None:
-        return {"status": "error", "message": "Interactive predictor not available"}
-    if current_image is None:
-        return {"status": "error", "message": "No image loaded — call load_image first"}
-
-    w, h = current_image.size
-    xs = np.linspace(0, w - 1, grid_size)
-    ys = np.linspace(0, h - 1, grid_size)
-
-    all_masks = []
-    all_scores = []
-
+def cmd_video_predictor(frames: list, prompt: str = None):
+    """Run video prediction over a list of base64 frames.
+    Returns masks for each frame.
+    """
+    # Ensure model is loaded
     try:
-        for y in ys:
-            for x in xs:
-                point = np.array([[x, y]], dtype=np.float32)
-                label = np.array([1], dtype=np.int32)
-                with torch.inference_mode():
-                    if DEVICE == "cuda" and USE_AMP:
-                        with torch.autocast(device_type="cuda", dtype=torch.float16):
-                            masks, scores, _ = inter_predictor.predict(
-                                point_coords=point,
-                                point_labels=label,
-                                multimask_output=True,
-                            )
-                    else:
-                        masks, scores, _ = inter_predictor.predict(
-                            point_coords=point,
-                            point_labels=label,
-                            multimask_output=True,
-                        )
-                if masks.ndim == 3:
-                    for i in range(masks.shape[0]):
-                        all_masks.append(masks[i])
-                        all_scores.append(float(scores[i]))
-                else:
-                    all_masks.append(masks[0] if masks.ndim >= 2 else masks)
-                    all_scores.append(float(scores[0]) if hasattr(scores, "__len__") else float(scores))
-    except RuntimeError as e:
-        if "out of memory" in str(e).lower():
-            if DEVICE == "cuda":
-                torch.cuda.empty_cache()
-            return {"status": "error", "message": f"CUDA out of memory during auto-mask: {e}"}
-        raise
+        ensure_model_loaded()
+        if model_manager:
+            model_manager.move_to_target()
+    except Exception as e:
+        return {"status": "error", "message": f"Model load failed: {e}"}
 
-    # Deduplicate by IoU
-    keep_masks, keep_scores, _ = deduplicate_masks(all_masks, all_scores, iou_threshold=iou_threshold)
-
-    # Filter tiny masks
-    if min_mask_region_area > 0:
-        keep_masks, keep_scores = zip(
-            *[(m, s) for m, s in zip(keep_masks, keep_scores) if m.sum() >= min_mask_region_area]
-        ) if keep_masks else ([], [])
-
-    return {
-        "status": "ok",
-        "count": len(keep_masks),
-        "masks": [mask_to_base64(m) for m in keep_masks],
-        "scores": list(keep_scores),
-    }
+    all_frame_masks = []
+    all_frame_scores = []
+    for idx, frame_b64 in enumerate(frames):
+        # Load frame as image
+        load_resp = cmd_load_image(frame_b64)
+        if load_resp.get("status") != "ok":
+            return {"status": "error", "message": f"Failed to load frame {idx}: {load_resp.get('message')}"}
+        # Apply prompt if provided
+        if prompt:
+            pred_resp = cmd_text_prompt(prompt)
+        else:
+            # fall back to auto mask for each frame
+            pred_resp = cmd_auto_mask()
+        if pred_resp.get("status") != "ok":
+            return {"status": "error", "message": f"Prediction failed on frame {idx}: {pred_resp.get('message')}"}
+        all_frame_masks.append(pred_resp.get("masks", []))
+        all_frame_scores.append(pred_resp.get("scores", []))
+    return {"status": "ok", "frame_masks": all_frame_masks, "frame_scores": all_frame_scores}
 
 
 def cmd_postprocess_mask(mask_b64: str, grow: int = 0, shrink: int = 0, feather: int = 0, fill_holes: bool = False):
@@ -439,7 +528,11 @@ def cmd_postprocess_mask(mask_b64: str, grow: int = 0, shrink: int = 0, feather:
     except ValueError as e:
         return {"status": "error", "message": str(e)}
 
-    mask_np = np.array(mask_img.convert("L"), dtype=np.uint8)
+    # Convert to grayscale preserving alpha or L channel data
+    if mask_img.mode == "RGBA":
+        mask_np = np.array(mask_img.split()[-1], dtype=np.uint8)
+    else:
+        mask_np = np.array(mask_img.convert("L"), dtype=np.uint8)
     # Threshold to boolean
     binary = mask_np > 127
 
@@ -500,6 +593,85 @@ def cmd_postprocess_mask(mask_b64: str, grow: int = 0, shrink: int = 0, feather:
     }
 
 
+def cmd_auto_mask(grid_size: int = 16, iou_threshold: float = 0.7, min_mask_region_area: int = 100):
+    """Generate automatic masks by sampling a grid of points across the image."""
+    if model is None:
+        return {"status": "error", "message": "Model not loaded"}
+    if inference_state is None:
+        return {"status": "error", "message": "No image loaded — call load_image first"}
+
+    if model_manager:
+        model_manager.move_to_target()
+
+    h, w = orig_hw[:2]
+    all_masks = []
+    all_scores = []
+
+    try:
+        with torch.inference_mode():
+            ys = np.linspace(0, h - 1, grid_size)
+            xs = np.linspace(0, w - 1, grid_size)
+            for y in ys:
+                for x in xs:
+                    points = np.array([[x, y]], dtype=np.float32)
+                    labels = np.array([1], dtype=np.int32)
+                    if DEVICE == "cuda" and USE_AMP:
+                        with torch.autocast(device_type="cuda", dtype=torch.float16):
+                            masks, scores, _ = model.predict_inst(
+                                inference_state,
+                                point_coords=points,
+                                point_labels=labels,
+                                multimask_output=True,
+                            )
+                    else:
+                        masks, scores, _ = model.predict_inst(
+                            inference_state,
+                            point_coords=points,
+                            point_labels=labels,
+                            multimask_output=True,
+                        )
+                    for i in range(masks.shape[0]):
+                        all_masks.append(masks[i])
+                        all_scores.append(float(scores[i]))
+    except RuntimeError as e:
+        if "out of memory" in str(e).lower():
+            if DEVICE == "cuda":
+                torch.cuda.empty_cache()
+            return {"status": "error", "message": f"CUDA out of memory during auto mask: {e}"}
+        raise
+
+    # Deduplicate by IoU threshold
+    unique_masks = []
+    unique_scores = []
+    for i, (m, s) in enumerate(zip(all_masks, all_scores)):
+        keep = True
+        for j, m2 in enumerate(unique_masks):
+            inter = np.logical_and(m, m2).sum()
+            union = np.logical_or(m, m2).sum()
+            if union > 0 and inter / union > iou_threshold:
+                if s > unique_scores[j]:
+                    unique_masks[j] = m
+                    unique_scores[j] = s
+                keep = False
+                break
+        if keep:
+            unique_masks.append(m)
+            unique_scores.append(s)
+
+    # Filter small regions
+    filtered = [(m, s) for m, s in zip(unique_masks, unique_scores) if m.sum() >= min_mask_region_area]
+
+    # Sort by score descending
+    filtered.sort(key=lambda x: -x[1])
+
+    return {
+        "status": "ok",
+        "count": len(filtered),
+        "masks": [mask_to_base64(m) for m, _ in filtered],
+        "scores": [s for _, s in filtered],
+    }
+
+
 def cmd_get_mask(index: int = 0):
     return {"status": "error", "message": "get_mask not implemented; masks returned with each prompt"}
 
@@ -510,13 +682,6 @@ def cmd_clear():
     current_image = None
     orig_hw = None
     inference_state = None
-
-    # Reset the interactive predictor if it has been primed.
-    if inter_predictor is not None:
-        try:
-            inter_predictor.reset_predictor()
-        except Exception:
-            pass  # safe to ignore if predictor was never set
 
     # Release unreferenced CUDA tensors so VRAM isn't silently leaked between
     # sessions. gc.collect() sweeps Python cycles first.
@@ -532,6 +697,8 @@ def cmd_clear():
 
 
 def cmd_shutdown():
+    if model_manager:
+        model_manager.shutdown()
     return {"status": "ok", "message": "shutting_down"}
 
 
@@ -574,6 +741,8 @@ def main():
                 resp = cmd_text_prompt(req["prompt"])
             elif cmd == "point_prompt":
                 resp = cmd_point_prompt(req["points"], req.get("labels"))
+            elif cmd == "refine_mask":
+                resp = cmd_refine_mask(req["mask_b64"], req["points"], req.get("labels"))
             elif cmd == "box_prompt":
                 resp = cmd_box_prompt(req["boxes"])
             elif cmd == "auto_mask":
@@ -592,8 +761,9 @@ def main():
                 )
             elif cmd == "get_mask":
                 resp = cmd_get_mask(req.get("index", 0))
-            elif cmd == "clear":
-                resp = cmd_clear()
+            elif cmd == "video_predictor":
+                resp = cmd_video_predictor(req.get("frames", []), req.get("prompt"))
+                cmd_clear()  # Free image state after video prediction, but don't overwrite resp
             elif cmd == "shutdown":
                 send_response(cmd_shutdown())
                 break

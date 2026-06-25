@@ -9,6 +9,10 @@ const CATEGORIES: { id: string; label: string; color: string }[] = [
   { id: "noise", label: "Noise", color: "var(--cat-noise)" },
   { id: "artistic", label: "Art", color: "var(--cat-artistic)" },
   { id: "datamoshing", label: "Mosh", color: "var(--cat-datamoshing)" },
+  { id: "audio_reactive", label: "Audio", color: "var(--cat-audio-reactive)" },
+  { id: "segmentation", label: "Mask", color: "var(--cat-segmentation)" },
+  { id: "composite", label: "Comp", color: "var(--cat-composite)" },
+  { id: "overlay", label: "Overlay", color: "var(--cat-overlay, var(--accent-teal))" },
 ];
 
 export default function CategoryTabs() {
@@ -17,10 +21,7 @@ export default function CategoryTabs() {
   const allEffects = useAppStore((s) => s.allEffects);
 
   return (
-    <div
-      className="flex flex-wrap gap-1 px-3 py-2"
-      style={{ borderBottom: "1px solid var(--border-primary)" }}
-    >
+    <div className="flex flex-wrap gap-1 px-3 py-2 border-b border-outline-variant/30">
       {CATEGORIES.map((cat) => {
         const count = allEffects.filter((e) => e.category === cat.id).length;
         const isActive = active === cat.id;
@@ -28,19 +29,16 @@ export default function CategoryTabs() {
           <button
             key={cat.id}
             onClick={() => setActiveCategory(cat.id)}
-            className="relative px-2.5 py-1 rounded text-[11px] font-semibold tracking-wide transition-all duration-150"
+            className={`relative px-2.5 py-1 rounded-md text-label-sm font-label-sm transition-all duration-300 ${isActive ? "neo-pressed" : "neo-btn"}`}
             style={{
-              background: isActive ? "var(--bg-active)" : "transparent",
-              color: isActive ? cat.color : "var(--text-muted)",
-              border: isActive ? `1px solid ${cat.color}40` : "1px solid transparent",
-              boxShadow: isActive ? `inset 0 0 8px ${cat.color}15` : "none",
+              color: isActive ? cat.color : undefined,
             }}
           >
-            {cat.label}
+            <span className={isActive ? "" : "text-on-surface-variant"}>{cat.label}</span>
             {count > 0 && (
               <span
-                className="ml-1 text-[9px] tabular-nums"
-                style={{ color: isActive ? cat.color : "var(--text-dim)", opacity: 0.6 }}
+                className="ml-1 text-data-micro font-data-micro tabular-nums"
+                style={{ color: isActive ? cat.color : undefined, opacity: 0.6 }}
               >
                 {count}
               </span>

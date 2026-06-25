@@ -7,10 +7,26 @@
     {
       "identifier": "core:default",
       "scope": {
-        "allow": [{ "path": "**" }]
+        "allow": [
+          { "path": "$HOME/**" },
+          { "path": "$APPDATA/**" },
+          { "path": "$APPCONFIG/**" },
+          { "path": "$DOWNLOAD/**" },
+          { "path": "$DOCUMENT/**" },
+          { "path": "$DESKTOP/**" },
+          { "path": "$PICTURE/**" },
+          { "path": "$VIDEO/**" },
+          { "path": "$TEMP/**" }
+        ]
       }
     },
-    "dialog:default",
-    "shell:default"
+    "core:window:default",
+    "core:window:allow-minimize",
+    "core:window:allow-maximize",
+    "core:window:allow-unmaximize",
+    "core:window:allow-close",
+    "core:window:allow-set-fullscreen",
+    "core:window:allow-is-fullscreen",
+    "dialog:default"
   ]
 }

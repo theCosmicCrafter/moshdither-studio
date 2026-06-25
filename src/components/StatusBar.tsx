@@ -1,5 +1,4 @@
 import { useAppStore } from "../store";
-import { Activity, BarChart3, Waves, Palette } from "lucide-react";
 
 export default function StatusBar() {
   const statusMessage = useAppStore((s) => s.statusMessage);
@@ -11,7 +10,7 @@ export default function StatusBar() {
   const setScopeMode = useAppStore((s) => s.setScopeMode);
   const setScopesVisible = useAppStore((s) => s.setScopesVisible);
 
-  const scopeButton = (mode: typeof scopeMode, icon: React.ReactNode, label: string) => (
+  const scopeButton = (mode: typeof scopeMode, icon: string, label: string) => (
     <button
       title={label}
       onClick={() => {
@@ -24,14 +23,8 @@ export default function StatusBar() {
           setScopeMode(mode);
         }
       }}
-      className="flex items-center gap-1"
-      style={{
-        background: "none",
-        border: "none",
-        cursor: "pointer",
-        color: scopesVisible && scopeMode === mode ? "var(--accent)" : "var(--text-dim)",
-        opacity: scopesVisible && scopeMode === mode ? 1 : 0.6,
-      }}
+      className={`material-symbols-outlined neo-btn p-1 rounded-full transition-colors ${scopesVisible && scopeMode === mode ? "text-accent-pink neo-pressed" : "text-on-surface-variant hover:text-accent-teal"}`}
+      style={{ fontSize: 14 }}
     >
       {icon}
     </button>
@@ -39,34 +32,27 @@ export default function StatusBar() {
 
   return (
     <div
-      className="flex items-center justify-between px-3 h-6 flex-shrink-0 text-[11px]"
-      style={{
-        borderTop: "1px solid var(--border-primary)",
-        background: "var(--bg-secondary)",
-        color: "var(--text-muted)",
-        fontFamily: "var(--font-mono)",
-      }}
+      className="flex items-center justify-between px-3 h-7 flex-shrink-0 text-code-sm font-code-sm neo-flat rounded-lg mx-1 mb-1 bg-surface/80 backdrop-blur-xl text-on-surface-variant"
     >
       <div className="flex items-center gap-2">
         {isProcessing ? (
-          <Activity size={11} className="animate-pulse" style={{ color: "var(--accent)" }} />
+          <span className="material-symbols-outlined animate-pulse text-accent-pink" style={{ fontSize: 14 }}>
+            sync
+          </span>
         ) : (
-          <div
-            className="w-1.5 h-1.5 rounded-full"
-            style={{ background: "var(--success)" }}
-          />
+          <div className="w-1.5 h-1.5 rounded-full bg-accent-teal animate-pulse-glow" />
         )}
         <span>{statusMessage}</span>
       </div>
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-1">
-          {scopeButton("histogram", <BarChart3 size={11} />, "Histogram")}
-          {scopeButton("waveform", <Waves size={11} />, "Waveform")}
-          {scopeButton("rgb_parade", <Palette size={11} />, "RGB Parade")}
+          {scopeButton("histogram", "bar_chart", "Histogram")}
+          {scopeButton("waveform", "graphic_eq", "Waveform")}
+          {scopeButton("rgb_parade", "palette", "RGB Parade")}
         </div>
-        <span style={{ color: "var(--text-dim)" }}>|</span>
+        <span className="text-outline-variant">|</span>
         <span>{allEffects.length} effects available</span>
-        <span style={{ color: "var(--text-dim)" }}>|</span>
+        <span className="text-outline-variant">|</span>
         <span>
           {effectStack.filter((e) => e.enabled).length} active in stack
         </span>

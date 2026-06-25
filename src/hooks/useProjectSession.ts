@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import { useAppStore, type StackEntry, type KeyframeTrack, type AudioBinding } from "../store";
 
 const AUTO_SAVE_KEY = "moshdither_autosave_v1";
@@ -53,20 +53,36 @@ function saveRecentProjects(projects: RecentProject[]) {
 export function useProjectSession() {
   const autoSaveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const effectStack = useAppStore((s) => s.effectStack);
-  const currentTime = useAppStore((s) => s.currentTime);
-  const filePath = useAppStore((s) => s.filePath);
-  const keyframes = useAppStore((s) => s.keyframes);
-  const audioFilePath = useAppStore((s) => s.audioFilePath);
-  const audioBindings = useAppStore((s) => s.audioBindings);
+  // Refs to hold latest state without retriggering the interval
+  const stateRef = useRef({
+    effectStack: useAppStore.getState().effectStack,
+    currentTime: useAppStore.getState().currentTime,
+    filePath: useAppStore.getState().filePath,
+    keyframes: useAppStore.getState().keyframes,
+    audioFilePath: useAppStore.getState().audioFilePath,
+    audioBindings: useAppStore.getState().audioBindings,
+  });
+
+  // Subscribe to store updates and sync into ref (single subscription)
+  useEffect(() => {
+    const unsub = useAppStore.subscribe((s) => {
+      stateRef.current.effectStack = s.effectStack;
+      stateRef.current.currentTime = s.currentTime;
+      stateRef.current.filePath = s.filePath;
+      stateRef.current.keyframes = s.keyframes;
+      stateRef.current.audioFilePath = s.audioFilePath;
+      stateRef.current.audioBindings = s.audioBindings;
+    });
+    return unsub;
+  }, []);
+
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
 
-  // Auto-save interval
+  // Auto-save interval — set up once, reads from refs
   useEffect(() => {
-    if (autoSaveTimerRef.current) {
-      clearInterval(autoSaveTimerRef.current);
-    }
     autoSaveTimerRef.current = setInterval(() => {
+      const { effectStack, currentTime, filePath, keyframes, audioFilePath, audioBindings } =
+        stateRef.current;
       const session: ProjectSession = {
         filePath,
         effectStack: JSON.parse(JSON.stringify(effectStack)),
@@ -84,12 +100,15 @@ export function useProjectSession() {
         clearInterval(autoSaveTimerRef.current);
       }
     };
-  }, [effectStack, currentTime, filePath, keyframes, audioFilePath, audioBindings]);
+  }, []);
 
   const addToRecent = useCallback((path: string, name: string) => {
     const recent = loadRecentProjects();
     const filtered = recent.filter((p) => p.path !== path);
-    const updated: RecentProject[] = [{ path, name, openedAt: new Date().toISOString() }, ...filtered];
+    const updated: RecentProject[] = [
+      { path, name, openedAt: new Date().toISOString() },
+      ...filtered,
+    ];
     saveRecentProjects(updated);
   }, []);
 
@@ -100,15 +119,16 @@ export function useProjectSession() {
         // Clear and rebuild stack
         store.clearStack();
         setTimeout(() => {
+          const s = useAppStore.getState();
           for (const entry of session.effectStack) {
-            const effect = store.allEffects.find((e) => e.id === entry.effectId);
+            const effect = s.allEffects.find((e) => e.id === entry.effectId);
             if (!effect) continue;
-            store.addToStack(effect);
-            const last = store.effectStack[store.effectStack.length - 1];
+            s.addToStack(effect);
+            const last = s.effectStack[s.effectStack.length - 1];
             if (last && last.effectId === entry.effectId) {
-              store.updateStackParams(last.id, entry.params);
-              if (!entry.enabled) store.toggleStackItem(last.id);
-              if (entry.maskId !== undefined) store.setStackItemMask(last.id, entry.maskId);
+              s.updateStackParams(last.id, entry.params);
+              if (!entry.enabled) s.toggleStackItem(last.id);
+              if (entry.maskId !== undefined) s.setStackItemMask(last.id, entry.maskId);
             }
           }
         }, 0);
@@ -116,14 +136,11 @@ export function useProjectSession() {
       if (session.currentTime !== undefined) store.setCurrentTime(session.currentTime);
       if (session.filePath !== undefined) store.setFilePath(session.filePath);
       if (session.keyframes !== undefined) {
-        // Direct mutation since keyframes is a Record, replace wholesale
-        const storeAny = store as unknown as Record<string, unknown>;
-        storeAny.keyframes = session.keyframes;
+        store.setKeyframes(session.keyframes);
       }
-      if (session.audioFilePath !== undefined) store.setFilePath(session.audioFilePath);
+      if (session.audioFilePath !== undefined) store.setAudioFilePath(session.audioFilePath);
       if (session.audioBindings !== undefined) {
-        const storeAny = store as unknown as Record<string, unknown>;
-        storeAny.audioBindings = session.audioBindings;
+        store.setAudioBindings(session.audioBindings);
       }
       setStatusMessage("Session restored");
     },
@@ -134,9 +151,12 @@ export function useProjectSession() {
     localStorage.removeItem(AUTO_SAVE_KEY);
   }, []);
 
+  const [autoSave] = useState(loadAutoSave);
+  const [recentProjects] = useState(loadRecentProjects);
+
   return {
-    autoSave: loadAutoSave(),
-    recentProjects: loadRecentProjects(),
+    autoSave,
+    recentProjects,
     addToRecent,
     restoreSession,
     clearAutoSave,

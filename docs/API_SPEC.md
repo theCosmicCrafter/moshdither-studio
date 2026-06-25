@@ -1,171 +1,219 @@
 # MoshDither Studio — API Specification
 
-**Version:** 0.1.0  
-**Date:** June 9, 2026  
-**Scope:** Electron IPC channels (renderer ↔ main) and Python RPC endpoints
+**Version:** 0.2.0  
+**Date:** June 19, 2026  
+**Scope:** Tauri v2 IPC commands (frontend ↔ Rust backend) and SAM3 Python bridge
 
 ---
 
-## 1. Electron IPC Channels
+## 1. Tauri IPC Commands
 
-All IPC communication between the renderer and main process is mediated by the preload script (`electron/preload.ts`), which enforces a strict channel whitelist.
+All communication between the React frontend and Rust backend uses Tauri v2's `invoke()` API. The frontend wrapper lives in `src/lib/tauri.ts`.
 
-### 1.1 Renderer → Main (Invoke)
+### 1.1 Media & Effects
 
-| Channel | Payload | Return | Description |
-|---------|---------|--------|-------------|
-| `dialog:openMedia` | — | `string \| null` | Open file picker for media (jpg, jpeg, png, mp4, webm). Returns `media://` URL. |
-| `dialog:selectOutputDir` | — | `string \| null` | Open directory picker for export output. |
-| `get-default-output-dir` | — | `string` | Returns the default output directory path. |
-| `get-rpc-token` | — | `string` | Returns the Python RPC auth token (256-bit hex). |
-| `render:pipeline` | `inputUrl, effects[], outputDir?, format?, fps?` | `string \| null` | Execute the full render/export pipeline. Returns result media URL. |
-| `main:save-webgl-blob` | `{ data: ArrayBuffer, ext: string }` | `string` | Save a WebGL-captured blob to temp directory. Returns file path. |
+| Command | Parameters | Return | Description |
+|---------|-----------|--------|-------------|
+| `load_media` | `path: string` | `string` | Load image/video from filesystem path. Decodes first frame for preview. |
+| `load_media_from_base64` | `dataUrl: string` | `void` | Load media from a base64 data URL (e.g. drag-drop). |
+| `list_effects` | — | `EffectMeta[]` | List all registered effects (75+ across 11 categories). |
+| `list_effects_by_category` | `category: string` | `EffectMeta[]` | Filter effects by category (dithering, analog, color, glitch, etc.). |
+| `apply_effect` | `effectId: string, params: Record, maskB64?: string` | `string` (data URL) | Apply a single effect to the current frame. Returns processed image as PNG data URL. |
+| `apply_effect_stack` | `stack: StackEntry[], maskB64?: string` | `string` (data URL) | Apply the full effect stack to the current frame. Each entry has `effect_id`, `params`, `mask_b64`, `mask_mode`. |
+| `get_frame_data` | — | `string` (data URL) | Get the current frame as a PNG data URL. |
+| `save_media` | `path: string, format: string, quality: number` | `void` | Save current frame to file (PNG/JPEG/BMP/TIFF). |
+| `export_video` | `sourcePath, outputPath, stack, maskB64?, codec?, fps?, width?, height?, audioBakeJson?, watermark?, trimStart?, trimEnd?` | `string` (output path) | Export video with effect stack applied via FFmpeg. |
+| `apply_ffglitch` | `inputPath, outputPath, mode, params` | `string` (output path) | Apply FFglitch datamoshing mode (ffgac/ffedit). |
 
-### 1.2 Main → Renderer (Events)
+### 1.2 Media Info & Proxy
 
-| Channel | Payload | Description |
-|---------|---------|-------------|
-| `main:webgl-export-request` | `{ inputUrl: string, duration: number, fps: number }` | Request renderer to capture WebGL canvas and return blob via `main:save-webgl-blob`. |
-| `render:progress` | `{ percent: number, log: string }` | Progress update during render pipeline execution. |
-| `main-process-message` | `string` | Generic heartbeat/status message from main process. |
+| Command | Parameters | Return | Description |
+|---------|-----------|--------|-------------|
+| `get_media_info` | — | `{ width: number, height: number, loaded: boolean }` | Get dimensions and load status of current media. |
+| `get_media_metadata` | `path: string` | `Record<string, unknown>` | Probe media file metadata via ffprobe (codec, duration, bitrate, etc.). |
+| `generate_proxy_command` | `sourcePath: string, maxWidth: number, crf: number` | `string` (proxy path) | Generate a low-resolution H.264 proxy video via FFmpeg for smooth preview. Returns proxy file path. |
 
-### 1.3 Security Model
+### 1.3 SAM3 Segmentation
 
-- **Preload whitelist:** Only channels listed above can be sent/received.
-- **Sender validation:** Every `ipcMain.handle()` call verifies `event.senderFrame.url` is from `file://`, `media://`, or the dev server origin.
-- **Context isolation:** Enabled. Renderer cannot access Node.js APIs directly.
+| Command | Parameters | Return | Description |
+|---------|-----------|--------|-------------|
+| `sam3_init` | — | `string` | Initialize SAM3 ONNX Runtime engine. |
+| `sam3_load_image` | `imageB64: string` | `{ width: number, height: number }` | Load an image into the SAM3 model for segmentation. |
+| `sam3_text_prompt` | `prompt: string` | `{ count, masks: string[], scores: number[] }` | Segment using natural language prompt (e.g. "the red car"). |
+| `sam3_point_prompt` | `points: [number, number][], labels?: number[]` | `{ count, masks: string[], scores: number[] }` | Segment using foreground/background click points. |
+| `sam3_box_prompt` | `boxes: [number, number, number, number][]` | `{ count, masks: string[], scores: number[] }` | Segment using bounding box coordinates. |
+| `sam3_auto_mask` | `gridSize, iouThreshold, minMaskRegionArea` | `{ count, masks: string[], scores: number[] }` | Automatic mask generation across the image. |
+| `sam3_postprocess_mask` | `maskB64, grow, shrink, feather, fillHoles` | `string` (mask data URL) | Post-process a mask: grow/shrink edges, feather, fill holes. |
+| `sam3_clear` | — | `string` | Clear SAM3 session state. |
+| `sam3_shutdown` | — | `string` | Shut down SAM3 engine and free resources. |
+
+### 1.4 Environment & File I/O
+
+| Command | Parameters | Return | Description |
+|---------|-----------|--------|-------------|
+| `get_environment_status` | — | `EnvStatus` | Check availability of Python, FFmpeg, ffprobe, FFglitch binaries. |
+| `install_local_environment` | — | `EnvStatus` | Install/repair local Python venv and dependencies. |
+| `save_file` | `path: string, content: string` | `void` | Write text content to a file path. |
+| `read_file` | `path: string` | `string` | Read text content from a file path. |
+
+### 1.5 Dialog Plugins
+
+| Function | Parameters | Return | Description |
+|----------|-----------|--------|-------------|
+| `open()` | `OpenDialogOptions` | `string \| null` | Native file picker (via `@tauri-apps/plugin-dialog`). |
+| `save()` | `SaveDialogOptions` | `string \| null` | Native save dialog (via `@tauri-apps/plugin-dialog`). |
+| `convertFileSrc()` | `path: string` | `string` (URL) | Convert a filesystem path to a WebView-servable URL. |
+
+### 1.6 Security Model
+
+- **Tauri v2 IPC:** Only commands registered in `invoke_handler!` can be called from the frontend.
+- **Context isolation:** Enabled. The frontend has no direct access to the filesystem or system APIs.
+- **Asset protocol:** `convertFileSrc()` provides controlled access to local files via Tauri's asset protocol.
+- **SAM3 bridge:** Python subprocess communicates via stdin/stdout IPC with the Rust process. No network port is opened.
 
 ---
 
-## 2. Python RPC API
+## 2. SAM3 Python Bridge
 
-The Python backend (`packages/python-backend/main.py`) exposes a JSON-RPC 1.0-like HTTP endpoint at `127.0.0.1` on an ephemeral port (default: `0`, OS-assigned).
+The SAM3 segmentation engine runs as a Python subprocess managed by the Rust backend (`src-tauri/src/sam3_engine.rs`). Communication uses stdin/stdout JSON messages (not HTTP).
 
-### 2.1 Authentication
+### 2.1 Protocol
 
-All requests must include the `X-RPC-Token` header matching the `MOSHDITHER_RPC_TOKEN` environment variable.
+1. Rust spawns `python sam3_bridge.py` as a child process
+2. Rust sends JSON commands via stdin
+3. Python responds with JSON via stdout
+4. Each message is a single line of JSON terminated by `\n`
 
-```
-POST / HTTP/1.1
-Host: 127.0.0.1:<port>
-X-RPC-Token: <256-bit-hex-token>
-Content-Type: application/json
-Content-Length: <length>
-```
-
-Requests without a valid token receive `403 Forbidden`.
-
-### 2.2 POST / — JSON-RPC Request
-
-**Request body:**
-
-```json
-{
-  "method": "neural_downscale",
-  "params": {
-    "input_path": "/path/to/input.png",
-    "scale": 0.5,
-    "output_path": "/path/to/output.png"
-  },
-  "id": 1
-}
-```
-
-**Response (success):**
-
-```json
-{
-  "jsonrpc": "2.0",
-  "result": {
-    "status": "success",
-    "message": "Neural downscale complete",
-    "params": { ... }
-  },
-  "id": 1
-}
-```
-
-**Response (error):**
-
-```json
-{
-  "jsonrpc": "2.0",
-  "error": "Method not found: unknown_method",
-  "id": 1
-}
-```
-
-### 2.3 Methods
+### 2.2 Commands
 
 | Method | Params | Description |
 |--------|--------|-------------|
-| `neural_downscale` | `input_path`, `scale`, `output_path` | Placeholder for PyTorch-based neural downscaling. |
+| `init` | `model_path?` | Load SAM3 ONNX model into memory |
+| `load_image` | `image_b64` | Decode base64 image and set as SAM3 input |
+| `text_prompt` | `prompt` | Text-based segmentation |
+| `point_prompt` | `points, labels` | Point-based segmentation (foreground/background) |
+| `box_prompt` | `boxes` | Bounding box segmentation |
+| `auto_mask` | `grid_size, iou_threshold, min_mask_region_area` | Automatic mask generation |
+| `postprocess` | `mask_b64, grow, shrink, feather, fill_holes` | Mask post-processing |
+| `clear` | — | Clear current session |
+| `shutdown` | — | Terminate Python process |
 
-### 2.4 Security Limits
+### 2.3 Response Format
 
-- Max payload: 1 MB (`Content-Length` > 1MB → `413 Payload Too Large`)
-- Allowed methods are strictly allowlisted. Unknown methods → `404`
-- Params must be an object. Unexpected keys are rejected with `400`
-
----
-
-## 3. Custom Protocol: `media://`
-
-The app registers a privileged custom protocol to serve local media files securely.
-
-```
-media://C:/Users/Alice/Pictures/photo.jpg
-```
-
-**Security features:**
-- Path traversal blocked (`../` sequences rejected)
-- Relative paths rejected (must be absolute)
-- Only file read access; no directory listing or write
-
----
-
-## 4. Data Types
-
-### 4.1 `PipelineEffect`
-
-```ts
-interface PipelineEffect {
-  enabled: boolean;
-  type: string;
-  params: Record<string, unknown>;
-  startTime?: number;
-  endTime?: number;
+```json
+{
+  "status": "ok" | "error",
+  "data": { ... },
+  "message": "optional error message"
 }
 ```
 
-### 4.2 `Effect` (Renderer State)
+---
+
+## 3. Data Types
+
+### 3.1 `EffectMeta`
 
 ```ts
-interface Effect {
+interface EffectMeta {
+  id: string;           // e.g. "dithering.bayer"
+  name: string;         // e.g. "Bayer Dither"
+  category: string;     // e.g. "dithering"
+  media_type: string;   // "image" | "video" | "both"
+  parameters: EffectParam[];
+}
+```
+
+### 3.2 `StackEntry`
+
+```ts
+interface StackEntry {
+  id: string;
+  effectId: string;
+  effectName: string;
+  params: Record<string, unknown>;
+  enabled: boolean;
+  maskId: string | null;
+  maskMode: "inside" | "outside" | "alpha";
+}
+```
+
+### 3.3 `EnvStatus`
+
+```ts
+interface EnvStatus {
+  mode: string;
+  python_ok: boolean;
+  venv_ok: boolean;
+  pip_ok: boolean;
+  ffmpeg_ok: boolean;
+  ffprobe_ok: boolean;
+  ffglitch_ok: boolean;
+  python_path?: string;
+  venv_dir?: string;
+  ffmpeg_path?: string;
+  ffprobe_path?: string;
+  ffgac_path?: string;
+  ffedit_path?: string;
+  mosh_cli_path?: string;
+}
+```
+
+### 3.4 `Track` (Multi-Track Layering)
+
+```ts
+interface Track {
   id: string;
   name: string;
-  type: EffectType;
-  enabled: boolean;
-  params: Record<string, unknown>;
-  startTime: number;
-  endTime: number;
-  mask: {
-    type: "none" | "brush";
-    invert: boolean;
-    brushData?: string; // dataURL
-  };
+  visible: boolean;
+  opacity: number;       // 0-1
+  blendMode: BlendMode;
+  effectStack: StackEntry[];
+  filePath: string | null;
+}
+
+type BlendMode = "normal" | "multiply" | "screen" | "overlay" | "darken" |
+  "lighten" | "color-dodge" | "color-burn" | "hard-light" | "soft-light" |
+  "difference" | "exclusion";
+```
+
+### 3.5 Proxy Media State
+
+```ts
+interface ProxyMediaState {
+  proxyEnabled: boolean;
+  proxyPath: string | null;
+  proxyMaxWidth: number;   // default: 1280
+  proxyCrf: number;        // default: 28
+  proxyGenerating: boolean;
 }
 ```
 
 ---
 
-## 5. Error Codes
+## 4. Error Handling
 
-| Code | Context | Meaning |
-|------|---------|---------|
-| `400` | Python RPC | Malformed request (bad JSON, invalid params) |
-| `403` | Python RPC / media | Invalid or missing auth token / path traversal blocked |
-| `404` | Python RPC | Method not found |
-| `413` | Python RPC | Payload exceeds 1MB limit |
-| `500` | Python RPC | Internal server error |
-| `500` | media protocol | Error reading file from disk |
+Tauri commands return `Result<T, String>` where the error string is displayed to the user. Common error patterns:
+
+| Error | Context | Cause |
+|-------|---------|-------|
+| `FFmpeg not found` | Export, proxy generation | FFmpeg binary not in PATH or bundled location |
+| `Failed to decode video` | `load_media` | Unsupported codec or corrupted file |
+| `SAM3 not initialized` | SAM3 commands | `sam3_init` not called before other SAM3 commands |
+| `Python bridge not started` | SAM3 commands | Python or ONNX Runtime not installed |
+| `IO error: ...` | File operations | Permission denied, disk full, path not found |
+
+---
+
+## 5. Frontend Wrapper API
+
+All Tauri commands are wrapped in `src/lib/tauri.ts` as typed async functions. Import pattern:
+
+```ts
+import { loadMediaFile, applyEffectStack, generateProxy } from "../lib/tauri";
+```
+
+The wrapper handles:
+- Type-safe `invoke()` calls with proper parameter naming (camelCase → snake_case conversion by Tauri)
+- Dialog integration (`open()` / `save()` for file pickers)
+- `convertFileSrc()` for displaying local files in `<img>` / `<video>` tags

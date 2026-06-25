@@ -1,6 +1,5 @@
 import { useState, useRef } from "react";
 import { usePresets } from "../../hooks/usePresets";
-import { Save, FolderOpen, Trash2, Bookmark, Download, Upload } from "lucide-react";
 
 export default function PresetPanel() {
   const { presets, savePreset, loadPreset, deletePreset, exportPresets, importPresets } = usePresets();
@@ -30,20 +29,11 @@ export default function PresetPanel() {
         display: "flex",
         flexDirection: "column",
         gap: 8,
-        padding: 12,
-        background: "#1a1a1a",
-        borderRadius: 6,
-        minWidth: 220,
-        maxWidth: 280,
-        color: "#e0e0e0",
+        color: "var(--text-primary)",
         fontSize: 12,
+        fontFamily: "var(--font-body)",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <Bookmark size={14} />
-        <span style={{ fontWeight: 600, fontSize: 13 }}>Presets</span>
-      </div>
-
       {/* Save new */}
       <div style={{ display: "flex", gap: 4 }}>
         <input
@@ -58,9 +48,9 @@ export default function PresetPanel() {
             padding: "4px 6px",
             fontSize: 11,
             borderRadius: 3,
-            border: "1px solid #444",
-            background: "#222",
-            color: "#ddd",
+            border: "1px solid var(--outline-variant)",
+            background: "var(--surface-container-low)",
+            color: "var(--text-secondary)",
             outline: "none",
           }}
         />
@@ -72,15 +62,15 @@ export default function PresetPanel() {
             fontSize: 11,
             borderRadius: 3,
             border: "none",
-            background: "#2a6f3c",
-            color: "#fff",
+            background: "var(--accent-pink)",
+            color: "var(--on-primary)",
             cursor: "pointer",
             display: "flex",
             alignItems: "center",
             gap: 2,
           }}
         >
-          <Save size={12} />
+          <span className="material-symbols-outlined" style={{ fontSize: 12 }}>save</span>
           Save
         </button>
       </div>
@@ -95,9 +85,9 @@ export default function PresetPanel() {
             padding: "4px 8px",
             fontSize: 11,
             borderRadius: 3,
-            border: "1px solid #444",
-            background: "#222",
-            color: "#ddd",
+            border: "1px solid var(--outline-variant)",
+            background: "var(--surface-container-low)",
+            color: "var(--text-secondary)",
             cursor: "pointer",
             display: "flex",
             alignItems: "center",
@@ -105,7 +95,7 @@ export default function PresetPanel() {
             gap: 4,
           }}
         >
-          <Download size={12} />
+          <span className="material-symbols-outlined" style={{ fontSize: 12 }}>download</span>
           Export
         </button>
         <button
@@ -116,9 +106,9 @@ export default function PresetPanel() {
             padding: "4px 8px",
             fontSize: 11,
             borderRadius: 3,
-            border: "1px solid #444",
-            background: "#222",
-            color: "#ddd",
+            border: "1px solid var(--outline-variant)",
+            background: "var(--surface-container-low)",
+            color: "var(--text-secondary)",
             cursor: "pointer",
             display: "flex",
             alignItems: "center",
@@ -126,7 +116,7 @@ export default function PresetPanel() {
             gap: 4,
           }}
         >
-          <Upload size={12} />
+          <span className="material-symbols-outlined" style={{ fontSize: 12 }}>upload</span>
           Import
         </button>
         <input
@@ -150,7 +140,7 @@ export default function PresetPanel() {
         }}
       >
         {presets.length === 0 ? (
-          <div style={{ color: "#666", textAlign: "center", padding: "8px 0", fontSize: 11 }}>
+          <div style={{ color: "var(--text-muted)", textAlign: "center", padding: "8px 0", fontSize: 11 }}>
             No saved presets
           </div>
         ) : (
@@ -163,7 +153,7 @@ export default function PresetPanel() {
                 gap: 6,
                 padding: "4px 6px",
                 borderRadius: 3,
-                background: "#222",
+                background: "var(--surface-container-low)",
                 cursor: "pointer",
               }}
               onClick={() => loadPreset(preset)}
@@ -206,11 +196,11 @@ export default function PresetPanel() {
                     borderRadius: 2,
                     border: "none",
                     background: "transparent",
-                    color: "#6cf",
+                    color: "var(--accent-teal)",
                     cursor: "pointer",
                   }}
                 >
-                  <FolderOpen size={12} />
+                  <span className="material-symbols-outlined" style={{ fontSize: 12 }}>folder_open</span>
                 </button>
                 <button
                   onClick={(e) => {
@@ -224,11 +214,11 @@ export default function PresetPanel() {
                     borderRadius: 2,
                     border: "none",
                     background: "transparent",
-                    color: "#f44",
+                    color: "var(--danger)",
                     cursor: "pointer",
                   }}
                 >
-                  <Trash2 size={12} />
+                  <span className="material-symbols-outlined" style={{ fontSize: 12 }}>delete</span>
                 </button>
               </div>
             </div>

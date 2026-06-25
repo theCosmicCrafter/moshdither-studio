@@ -1,20 +1,21 @@
 use crate::effects::types::Frame;
 use crate::error::{AppError, Result};
+use image::ImageEncoder;
 use std::path::Path;
 
 /// Load an image from disk into a Frame (RGBA).
 pub fn load_image<P: AsRef<Path>>(path: P) -> Result<Frame> {
     let bytes = std::fs::read(&path).map_err(AppError::Io)?;
-    let mut img = image::load_from_memory(&bytes).map_err(|e| AppError::Image(e.to_string()))?;
+    let img = image::load_from_memory(&bytes).map_err(|e| AppError::Image(e.to_string()))?;
 
-    // Resize down if either dimension exceeds 2048px (preserving aspect ratio)
+    // NOTE: Automatic downscale is disabled by default. If image exceeds 2048px, a warning is logged and original size is kept.
     let (w, h) = (img.width(), img.height());
     if w > 2048 || h > 2048 {
         eprintln!(
-            "[WARN] Image resized from {}x{} to fit 2048px limit. Quality may be affected. Use a smaller image to avoid this.",
+            "[WARN] Image dimensions {}x{} exceed 2048px limit. No automatic resize applied.",
             w, h
         );
-        img = img.resize(2048, 2048, image::imageops::FilterType::Lanczos3);
+        // No resize performed.
     }
 
     let rgba = img.to_rgba8();
@@ -28,16 +29,16 @@ pub fn load_image<P: AsRef<Path>>(path: P) -> Result<Frame> {
 
 /// Load an image from memory (bytes) into a Frame (RGBA).
 pub fn load_image_from_memory(bytes: &[u8]) -> Result<Frame> {
-    let mut img = image::load_from_memory(bytes).map_err(|e| AppError::Image(e.to_string()))?;
+    let img = image::load_from_memory(bytes).map_err(|e| AppError::Image(e.to_string()))?;
 
-    // Resize down if either dimension exceeds 2048px (preserving aspect ratio)
+    // NOTE: Automatic downscale is disabled by default. If image exceeds 2048px, a warning is logged and original size is kept.
     let (w, h) = (img.width(), img.height());
     if w > 2048 || h > 2048 {
         eprintln!(
-            "[WARN] Image resized from {}x{} to fit 2048px limit. Quality may be affected. Use a smaller image to avoid this.",
+            "[WARN] Image dimensions {}x{} exceed 2048px limit. No automatic resize applied.",
             w, h
         );
-        img = img.resize(2048, 2048, image::imageops::FilterType::Lanczos3);
+        // No resize performed.
     }
 
     let rgba = img.to_rgba8();
@@ -68,6 +69,69 @@ pub fn save_jpeg<P: AsRef<Path>>(frame: &Frame, path: P, quality: u8) -> Result<
         .encode_image(&rgb)
         .map_err(|e| AppError::Image(e.to_string()))?;
     Ok(())
+}
+
+/// Save a Frame to disk as BMP.
+pub fn save_bmp<P: AsRef<Path>>(frame: &Frame, path: P) -> Result<()> {
+    let img = image::RgbaImage::from_raw(frame.width, frame.height, frame.data.clone())
+        .ok_or_else(|| AppError::Image("Invalid frame dimensions".to_string()))?;
+    let mut output = std::fs::File::create(path).map_err(AppError::Io)?;
+    let encoder = image::codecs::bmp::BmpEncoder::new(&mut output);
+    encoder
+        .write_image(
+            &img,
+            img.width(),
+            img.height(),
+            image::ExtendedColorType::Rgba8,
+        )
+        .map_err(|e| AppError::Image(e.to_string()))?;
+    Ok(())
+}
+
+/// Save a Frame to disk as TIFF.
+pub fn save_tiff<P: AsRef<Path>>(frame: &Frame, path: P) -> Result<()> {
+    let img = image::RgbaImage::from_raw(frame.width, frame.height, frame.data.clone())
+        .ok_or_else(|| AppError::Image("Invalid frame dimensions".to_string()))?;
+    let mut output = std::fs::File::create(path).map_err(AppError::Io)?;
+    let encoder = image::codecs::tiff::TiffEncoder::new(&mut output);
+    encoder
+        .write_image(
+            &img,
+            img.width(),
+            img.height(),
+            image::ExtendedColorType::Rgba8,
+        )
+        .map_err(|e| AppError::Image(e.to_string()))?;
+    Ok(())
+}
+
+/// Save a Frame to disk choosing the format based on the file extension.
+/// Supported formats: png, jpg, jpeg, bmp, tiff.
+pub fn save_image<P: AsRef<Path>>(
+    frame: &Frame,
+    path: P,
+    format: Option<&str>,
+    quality: Option<u8>,
+) -> Result<()> {
+    let path = path.as_ref();
+    let format = format
+        .map(|s| s.to_lowercase())
+        .or_else(|| {
+            path.extension()
+                .and_then(|e| e.to_str())
+                .map(|s| s.to_lowercase())
+        })
+        .unwrap_or_else(|| "png".to_string());
+    match format.as_str() {
+        "png" => save_png(frame, path),
+        "jpg" | "jpeg" => save_jpeg(frame, path, quality.unwrap_or(90)),
+        "bmp" => save_bmp(frame, path),
+        "tiff" | "tif" => save_tiff(frame, path),
+        _ => Err(AppError::Image(format!(
+            "Unsupported image format: {}",
+            format
+        ))),
+    }
 }
 
 #[cfg(test)]

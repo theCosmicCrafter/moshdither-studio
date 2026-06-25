@@ -1,6 +1,8 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import type { EffectMeta } from "../store";
+import type { WatermarkSettings } from "../utils/watermark";
+import { getFallbackEffects, isTauriAvailable } from "./browserFallback";
 
 export { convertFileSrc };
 
@@ -39,10 +41,22 @@ export async function sam3AutoMask(
   minMaskRegionArea: number = 100
 ): Promise<{ count: number; masks: string[]; scores: number[] }> {
   return invoke("sam3_auto_mask", {
-    grid_size: gridSize,
-    iou_threshold: iouThreshold,
-    min_mask_region_area: minMaskRegionArea,
+    gridSize,
+    iouThreshold,
+    minMaskRegionArea,
   });
+}
+export async function sam3RefineMask(
+  maskB64: string,
+  points: [number, number][],
+  labels?: number[]
+): Promise<{
+  status: string;
+  count: number;
+  masks: string[];
+  scores: number[];
+}> {
+  return invoke("sam3_refine_mask", { maskB64, points, labels });
 }
 
 export async function sam3PostprocessMask(
@@ -53,16 +67,27 @@ export async function sam3PostprocessMask(
   fillHoles: boolean = false
 ): Promise<string> {
   return invoke("sam3_postprocess_mask", {
-    mask_b64: maskB64,
+    maskB64,
     grow,
     shrink,
     feather,
-    fill_holes: fillHoles,
+    fillHoles,
   });
 }
 
 export async function sam3Clear(): Promise<string> {
   return invoke("sam3_clear");
+}
+
+export async function sam3VideoPredictor(
+  frames: string[],
+  prompt?: string
+): Promise<{
+  status: string;
+  frame_masks: string[][];
+  frame_scores: number[][];
+}> {
+  return invoke("sam3_video_predictor", { frames, prompt });
 }
 
 export async function sam3Shutdown(): Promise<string> {
@@ -72,6 +97,30 @@ export async function sam3Shutdown(): Promise<string> {
 // ── Media / Effects ──────────────────────────────────────────
 
 export async function loadMediaFile(): Promise<string | null> {
+  if (!isTauriAvailable()) {
+    // Browser fallback: use a hidden file input
+    return new Promise((resolve) => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "image/*,video/*";
+      input.onchange = async () => {
+        const file = input.files?.[0];
+        if (!file) {
+          resolve(null);
+          return;
+        }
+        const dataUrl = await new Promise<string>((res, rej) => {
+          const reader = new FileReader();
+          reader.onload = () => res(reader.result as string);
+          reader.onerror = () => rej(reader.error);
+          reader.readAsDataURL(file);
+        });
+        await loadMediaFromBase64(dataUrl);
+        resolve(file.name);
+      };
+      input.click();
+    });
+  }
   const path = await open({
     multiple: false,
     filters: [
@@ -134,12 +183,48 @@ export async function loadMediaFromPath(path: string): Promise<void> {
   await invoke("load_media", { path });
 }
 
+// Browser-mode media cache: stores the last loaded data URL so getMediaInfo/getFrameData can return it
+let browserMedia: { dataUrl: string; width: number; height: number } | null = null;
+
 export async function loadMediaFromBase64(dataUrl: string): Promise<void> {
+  if (!isTauriAvailable()) {
+    // Load image to get dimensions
+    const img = new Image();
+    img.src = dataUrl;
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+    });
+    browserMedia = { dataUrl, width: img.naturalWidth, height: img.naturalHeight };
+    return;
+  }
   await invoke("load_media_from_base64", { dataUrl });
 }
 
+const CATEGORY_OVERRIDE: Record<string, string> = {
+  "overlay.": "overlay",
+  "composite.": "composite",
+};
+
 export async function listEffects(): Promise<EffectMeta[]> {
-  return invoke("list_effects");
+  if (!isTauriAvailable()) {
+    return getFallbackEffects();
+  }
+  const rustEffects = await invoke<EffectMeta[]>("list_effects");
+  // Fix categories for effects that Rust mis-categorizes (overlay/composite use Color in Rust enum)
+  for (const eff of rustEffects) {
+    for (const [prefix, cat] of Object.entries(CATEGORY_OVERRIDE)) {
+      if (eff.id.startsWith(prefix)) {
+        eff.category = cat;
+        break;
+      }
+    }
+  }
+  // Merge in WebGL-only fallback effects (e.g. overlay shaders) that don't have Rust implementations
+  const fallback = getFallbackEffects();
+  const rustIds = new Set(rustEffects.map((e) => e.id));
+  const webglOnly = fallback.filter((e) => !rustIds.has(e.id));
+  return [...rustEffects, ...webglOnly];
 }
 
 export async function listEffectsByCategory(category: string): Promise<EffectMeta[]> {
@@ -147,18 +232,36 @@ export async function listEffectsByCategory(category: string): Promise<EffectMet
 }
 
 export async function getMediaInfo(): Promise<{ width: number; height: number; loaded: boolean }> {
+  if (!isTauriAvailable()) {
+    if (!browserMedia) return { width: 0, height: 0, loaded: false };
+    return { width: browserMedia.width, height: browserMedia.height, loaded: true };
+  }
   return invoke("get_media_info");
 }
 
+export async function getMediaMetadata(path: string): Promise<Record<string, unknown>> {
+  return invoke("get_media_metadata", { path });
+}
+
 export async function getFrameData(): Promise<string> {
+  if (!isTauriAvailable()) {
+    if (!browserMedia) throw new Error("No media loaded");
+    return browserMedia.dataUrl;
+  }
   return invoke("get_frame_data");
 }
 
 export async function applyEffectStack(
-  stack: { effect_id: string; params: Record<string, unknown>; mask_b64?: string | null }[],
-  maskB64?: string | null
+  stack: {
+    effect_id: string;
+    params: Record<string, unknown>;
+    mask_b64?: string | null;
+    mask_mode?: string;
+  }[],
+  maskB64?: string | null,
+  previewScale?: number
 ): Promise<string> {
-  return invoke("apply_effect_stack", { stack, maskB64 });
+  return invoke("apply_effect_stack", { stack, maskB64, previewScale });
 }
 
 export async function applyEffect(
@@ -170,21 +273,29 @@ export async function applyEffect(
 }
 
 export async function saveMedia(): Promise<void> {
-  const path = await open({
-    multiple: false,
+  const path = await save({
     filters: [
       { name: "PNG", extensions: ["png"] },
       { name: "JPEG", extensions: ["jpg", "jpeg"] },
+      { name: "BMP", extensions: ["bmp"] },
+      { name: "TIFF", extensions: ["tiff", "tif"] },
     ],
   });
   if (path && typeof path === "string") {
-    await invoke("save_media", { path });
+    const ext = path.split(".").pop()?.toLowerCase() || "png";
+    const format = ["png", "jpg", "jpeg", "bmp", "tiff", "tif"].includes(ext) ? ext : "png";
+    await invoke("save_media", { path, format, quality: 90 });
   }
 }
 
 export async function exportVideo(
   sourcePath: string,
-  stack: { effect_id: string; params: Record<string, unknown>; mask_b64?: string | null }[],
+  stack: {
+    effect_id: string;
+    params: Record<string, unknown>;
+    mask_b64?: string | null;
+    mask_mode?: string;
+  }[],
   options: {
     maskB64?: string | null;
     codec?: string;
@@ -192,10 +303,15 @@ export async function exportVideo(
     width?: number;
     height?: number;
     audioBakeJson?: string | null;
+    watermark?: WatermarkSettings | null;
+    trimStart?: number;
+    trimEnd?: number;
+    format?: string;
+    quality?: string;
+    includeAudio?: boolean;
   } = {}
 ): Promise<string> {
-  const path = await open({
-    multiple: false,
+  const path = await save({
     filters: [
       { name: "MP4", extensions: ["mp4"] },
       { name: "MOV", extensions: ["mov"] },
@@ -215,5 +331,125 @@ export async function exportVideo(
     width: options.width ?? null,
     height: options.height ?? null,
     audioBakeJson: options.audioBakeJson ?? null,
+    watermark: options.watermark ?? null,
+    trimStart: options.trimStart ?? null,
+    trimEnd: options.trimEnd ?? null,
+    format: options.format ?? null,
+    quality: options.quality ?? null,
+    includeAudio: options.includeAudio ?? null,
   });
+}
+
+export async function applyFfglitch(
+  inputPath: string,
+  mode: string,
+  params: Record<string, unknown> = {}
+): Promise<string> {
+  const path = await save({
+    filters: [
+      { name: "MP4", extensions: ["mp4"] },
+      { name: "AVI", extensions: ["avi"] },
+    ],
+  });
+  if (!path || typeof path !== "string") {
+    throw new Error("Export cancelled");
+  }
+  return invoke("apply_ffglitch", {
+    inputPath,
+    outputPath: path,
+    mode,
+    params,
+  });
+}
+
+// ── Effect Verification ──────────────────────────────────────
+
+export interface VerificationChecks {
+  no_crash: boolean;
+  non_empty_output: boolean;
+  animates: boolean;
+  mask_inside_correct: boolean;
+  mask_outside_correct: boolean;
+}
+
+export interface EffectVerificationResult {
+  effect_id: string;
+  effect_name: string;
+  category: string;
+  checks: VerificationChecks;
+  overall_pass: boolean;
+  error_message: string | null;
+  duration_ms: number;
+}
+
+export interface VerificationReport {
+  total_effects: number;
+  passed: number;
+  failed: number;
+  results: EffectVerificationResult[];
+  summary: string;
+  timestamp: string;
+}
+
+export async function verifyEffects(): Promise<VerificationReport> {
+  return invoke("verify_effects");
+}
+
+// ── Functional Tests ─────────────────────────────────────────
+
+export interface FunctionTestResult {
+  test_name: string;
+  category: string;
+  passed: boolean;
+  error_message: string | null;
+  duration_ms: number;
+  details: string | null;
+}
+
+export interface FunctionTestReport {
+  total_tests: number;
+  passed: number;
+  failed: number;
+  results: FunctionTestResult[];
+  summary: string;
+  timestamp: string;
+}
+
+export async function testAllFunctions(): Promise<FunctionTestReport> {
+  return invoke("test_all_functions");
+}
+
+export interface EnvStatus {
+  mode: string;
+  python_ok: boolean;
+  venv_ok: boolean;
+  pip_ok: boolean;
+  ffmpeg_ok: boolean;
+  ffprobe_ok: boolean;
+  ffglitch_ok: boolean;
+  python_path?: string;
+  venv_dir?: string;
+  ffmpeg_path?: string;
+  ffprobe_path?: string;
+  ffgac_path?: string;
+  ffedit_path?: string;
+  mosh_cli_path?: string;
+}
+
+export async function getEnvironmentStatus(): Promise<EnvStatus> {
+  return invoke("get_environment_status");
+}
+
+export async function installLocalEnvironment(): Promise<EnvStatus> {
+  return invoke("install_local_environment");
+}
+
+// ── Proxy Media ──────────────────────────────────────────────
+
+export async function generateProxy(
+  sourcePath: string,
+  maxWidth: number = 1280,
+  crf: number = 28
+): Promise<string> {
+  return invoke("generate_proxy_command", { sourcePath, maxWidth, crf });
 }

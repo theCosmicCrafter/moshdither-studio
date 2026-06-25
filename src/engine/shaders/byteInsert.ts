@@ -1,8 +1,8 @@
-import { EffectShader } from '../webgl2/types';
+import { EffectShader } from "../webgl2/types";
 
 export const byteInsertShader: EffectShader = {
-  id: 'byte_insert',
-  name: 'Byte Insert',
+  id: "byte_insert",
+  name: "Byte Insert",
   vertexSource: `
     attribute vec2 a_position;
     attribute vec2 a_texCoord;
@@ -16,7 +16,7 @@ export const byteInsertShader: EffectShader = {
     precision highp float;
     uniform sampler2D tDiffuse;
     uniform float amount;
-    uniform float time;
+    uniform float u_time;
     varying vec2 vUv;
 
     float rand(vec2 co) {
@@ -25,9 +25,9 @@ export const byteInsertShader: EffectShader = {
 
     void main() {
       vec4 color = texture2D(tDiffuse, vUv);
-      float r = rand(vec2(floor(vUv.y * 25.0), time));
+      float r = rand(vec2(floor(vUv.y * 25.0), u_time));
       if (r < amount * 0.2) {
-        float r2 = rand(vec2(floor(vUv.y * 25.0) + 100.0, time));
+        float r2 = rand(vec2(floor(vUv.y * 25.0) + 100.0, u_time));
         vec3 insert = vec3(
           fract(r2 * 1.618),
           fract(r2 * 2.718),
@@ -39,7 +39,7 @@ export const byteInsertShader: EffectShader = {
     }
   `,
   uniforms: [
-    { name: 'amount', type: 'float', default: 0.3 },
-    { name: 'time', type: 'float', default: 0.0 },
+    { name: "amount", type: "float", default: 0.3 },
+    { name: "u_time", type: "float", default: 0.0 },
   ],
 };

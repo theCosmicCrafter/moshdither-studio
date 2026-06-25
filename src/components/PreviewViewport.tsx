@@ -1,14 +1,45 @@
-import { Crosshair, FileUp, Image, Maximize2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getFrameData, getMediaInfo, loadMediaFile, loadMediaFromBase64, sam3BoxPrompt, sam3PointPrompt } from "../lib/tauri";
+import {
+  convertFileSrc,
+  generateProxy,
+  getFrameData,
+  getMediaInfo,
+  loadMediaFile,
+  loadMediaFromBase64,
+  sam3BoxPrompt,
+  sam3PointPrompt,
+  applyEffectStack,
+} from "../lib/tauri";
 import { useAppStore } from "../store";
 import { WebGLContext, MediaUploader, EffectChain } from "../engine/webgl2";
-import { stackToRenderPasses, buildShaderMap } from "../utils/effectConverter";
+import { stackToRenderPasses, buildShaderMap, stackToRustPayload, stackHasApproximatePreview } from "../utils/effectConverter";
+import ManualMaskOverlay from "./ManualMaskOverlay";
 import ScopesOverlay from "./ScopesOverlay";
 import PlaybackOverlay from "./PlaybackOverlay";
 
 interface Props {
   isDropTarget?: boolean;
+}
+
+/** Isolated audio waveform overlay so it re-renders on audio data without
+ *  forcing the entire preview viewport to re-render. */
+function AudioWaveform() {
+  const audioBandEnergies = useAppStore((s) => s.audioBandEnergies);
+  if (Object.keys(audioBandEnergies).length === 0) return null;
+  return (
+    <div className="absolute bottom-10 left-1/2 -translate-x-1/2 w-1/2 h-20 neo-panel rounded-lg bg-surface/80 backdrop-blur-md p-3 flex flex-col justify-end z-50 border border-accent-teal/20 pointer-events-none">
+      <div className="text-[8px] font-label-sm text-accent-teal/70 absolute top-2 left-2 uppercase">Audio/Pixel Intensity</div>
+      <div className="flex items-end h-full w-full gap-[2px] opacity-80 pt-4 overflow-hidden justify-center">
+        {Object.values(audioBandEnergies).slice(0, 32).map((v: number, i: number) => (
+          <div
+            key={i}
+            className="w-1 bg-accent-teal rounded-t"
+            style={{ height: `${Math.max(5, Math.min(100, v * 100))}%` }}
+          />
+        ))}
+      </div>
+    </div>
+  );
 }
 
 /** Map a screen (client) coordinate to image pixel coords using the rendered element rect. */
@@ -39,17 +70,28 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
   const mediaInfo = useAppStore((s) => s.mediaInfo);
   const showBeforeAfter = useAppStore((s) => s.showBeforeAfter);
   const zoom = useAppStore((s) => s.zoom);
-  const effectStack = useAppStore((s) => s.effectStack);
+  // Structural signature: only changes when effects are added/removed/reordered/toggled
+  // Param value changes (e.g. from keyframes) won't trigger a render-loop rebuild
+  const stackSignature = useAppStore((s) =>
+    s.effectStack.map((e) => `${e.id}:${e.enabled}`).join("|")
+  );
+  // Full signature including params + mask + maskB64 — used to re-trigger CPU preview on param/mask changes
+  const cpuRenderSignature = useAppStore((s) =>
+    s.effectStack.map((e) => `${e.id}:${e.enabled}:${JSON.stringify(e.params)}:${e.maskId}:${e.maskMode}:${(e.maskB64 ?? "").length}`).join("|") + `|${s.activeMask ?? ""}`
+  );
+  const stackCount = useAppStore((s) => s.effectStack.length);
+  const isPlaying = useAppStore((s) => s.isPlaying);
+  const useCpuPreview = useAppStore((s) => s.useCpuPreview);
+  const isApproximatePreview = useAppStore((s) => stackHasApproximatePreview(s.effectStack));
   const audioEnabled = useAppStore((s) => s.audioEnabled);
-  const audioBandEnergies = useAppStore((s) => s.audioBandEnergies);
-  const audioBeatFlags = useAppStore((s) => s.audioBeatFlags);
-  const audioMappedValues = useAppStore((s) => s.audioMappedValues);
   const activeMask = useAppStore((s) => s.activeMask);
   const maskVisible = useAppStore((s) => s.maskVisible);
   const sam3Ready = useAppStore((s) => s.sam3Ready);
   const sam3Mode = useAppStore((s) => s.sam3Mode);
   const sam3Points = useAppStore((s) => s.sam3Points);
+  const maskTab = useAppStore((s) => s.maskTab);
   const sam3HoverMask = useAppStore((s) => s.sam3HoverMask);
+  const sam3FrameMasks = useAppStore((s) => s.sam3FrameMasks);
   const sam3OverlayOpacity = useAppStore((s) => s.sam3OverlayOpacity);
   const sam3OverlayColor = useAppStore((s) => s.sam3OverlayColor);
   const setMediaLoaded = useAppStore((s) => s.setMediaLoaded);
@@ -62,6 +104,10 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
   const clearSam3Points = useAppStore((s) => s.clearSam3Points);
   const setSam3HoverMask = useAppStore((s) => s.setSam3HoverMask);
   const setFilePath = useAppStore((s) => s.setFilePath);
+  const setProxyUrl = useAppStore((s) => s.setProxyUrl);
+  const setIsVideo = useAppStore((s) => s.setIsVideo);
+  const proxyUrl = useAppStore((s) => s.proxyUrl);
+  const isVideo = useAppStore((s) => s.isVideo);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const previewImgRef = useRef<HTMLImageElement>(null);
@@ -70,7 +116,11 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
   const uploaderRef = useRef<MediaUploader | null>(null);
   const chainRef = useRef<EffectChain | null>(null);
   const sourceTexRef = useRef<WebGLTexture | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const maskImgRef = useRef<HTMLImageElement | null>(null);
   const rafRef = useRef<number>(0);
+  const cpuAnimRafRef = useRef<number>(0);
+  const lastFrameTimeRef = useRef<number>(0);
   const sam3CanvasRef = useRef<HTMLCanvasElement>(null);
   const hoverTimeoutRef = useRef<number | null>(null);
   const isProcessingRef = useRef(false);
@@ -159,13 +209,35 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
   const refreshPreviewFromBackend = useCallback(async () => {
     const info = await getMediaInfo();
     if (!info.loaded) return false;
+    const path = useAppStore.getState().filePath;
+    const isVideoFile =
+      path && /\.(mp4|avi|mov|mkv|webm|m4v|flv|wmv|mpeg|mpg)$/i.test(path);
     setMediaLoaded(true);
     setMediaInfo({ width: info.width, height: info.height });
+    setIsVideo(!!isVideoFile);
     const frame = await getFrameData();
     setPreviewDataUrl(frame);
     setOriginalDataUrl(frame);
+    if (isVideoFile && path) {
+      try {
+        const proxy = await generateProxy(path, 1280, 28);
+        setProxyUrl(convertFileSrc(proxy));
+      } catch (err) {
+        console.warn("[Preview] Proxy generation failed:", err);
+        setProxyUrl(null);
+      }
+    } else {
+      setProxyUrl(null);
+    }
     return true;
-  }, [setMediaLoaded, setMediaInfo, setPreviewDataUrl, setOriginalDataUrl]);
+  }, [
+    setMediaLoaded,
+    setMediaInfo,
+    setPreviewDataUrl,
+    setOriginalDataUrl,
+    setIsVideo,
+    setProxyUrl,
+  ]);
 
   const handleDrop = useCallback(
     async (e: React.DragEvent) => {
@@ -215,7 +287,9 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
   // ── SAM3 Tree Masking ──────────────────────────────────────
 
   /** True when the SAM3 canvas overlay should capture pointer events. */
-  const isSam3Interactive = sam3Ready && !showBeforeAfter && (sam3Mode === "point" || sam3Mode === "box");
+  const isSam3Interactive = sam3Ready && !showBeforeAfter && maskTab === "sam3" && (sam3Mode === "point" || sam3Mode === "box");
+  /** True when the manual mask overlay should capture pointer events. */
+  const isManualMaskActive = maskTab === "manual" && mediaLoaded && !showBeforeAfter;
 
   /** Run point prediction with the full accumulated tree. */
   const runPointTree = useCallback(
@@ -453,8 +527,9 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
       glCtxRef.current = ctx;
       uploaderRef.current = new MediaUploader(ctx);
       chainRef.current = new EffectChain(ctx, 1024, 1024);
+      console.log('[Preview] WebGL2 context initialized OK');
     } catch (e) {
-      console.warn('WebGL2 not available:', e);
+      console.error('[Preview] WebGL2 not available:', e);
     }
     return () => {
       glCtxRef.current?.destroy();
@@ -469,82 +544,328 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
     sourceTexRef.current = null;
   }, [originalDataUrl]);
 
-  // WebGL real-time preview: re-render when image or effect stack changes
+  // Load proxy video when a video source is detected
   useEffect(() => {
+    if (!isVideo || !proxyUrl) return;
+    const video = document.createElement("video");
+    video.crossOrigin = "anonymous";
+    video.muted = true;
+    video.loop = true;
+    video.playsInline = true;
+    video.src = proxyUrl;
+    video.oncanplay = () => {
+      video.play().catch(() => {});
+    };
+    videoRef.current = video;
+    sourceTexRef.current = null;
+    return () => {
+      video.pause();
+      video.src = "";
+      video.oncanplay = null;
+      videoRef.current = null;
+      sourceTexRef.current = null;
+    };
+  }, [isVideo, proxyUrl]);
+
+  // Sync video play/pause
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !isVideo) return;
+    if (isPlaying) {
+      video.play().catch(() => {});
+    } else {
+      video.pause();
+    }
+  }, [isPlaying, isVideo]);
+
+  // Sync video time when timeline is scrubbed (without re-rendering the whole viewport)
+  useEffect(() => {
+    return useAppStore.subscribe((state, prevState) => {
+      if (state.currentTime === prevState.currentTime) return;
+
+      // Sync video element
+      if (isVideo && !isPlaying) {
+        const video = videoRef.current;
+        if (video) {
+          const start = state.inPoint ?? 0;
+          const target = Math.max(0, state.currentTime - start);
+          if (Number.isFinite(target) && Math.abs(video.currentTime - target) > 0.05) {
+            video.currentTime = target;
+          }
+        }
+      }
+
+      // Sync mask image
+      const maskImg = maskImgRef.current;
+      if (maskImg && !state.sam3HoverMask) {
+        const currentFrameIndex = Math.floor(state.currentTime * 10);
+        const frameMask = state.sam3FrameMasks[currentFrameIndex];
+        const src = frameMask || state.activeMask || "";
+        if (maskImg.getAttribute("src") !== src) {
+          maskImg.src = src;
+        }
+      }
+    });
+  }, [isVideo, isPlaying]);
+
+  // WebGL real-time preview: re-render when image or effect stack changes.
+  // Skipped when useCpuPreview is true (effects without accurate WebGL shaders
+  // are rendered via the Rust CPU backend instead).
+  useEffect(() => {
+    if (useCpuPreview) return;
     // Always use the original (unprocessed) image as the WebGL source texture
     if (!originalDataUrl || !glCtxRef.current || !uploaderRef.current) return;
     const uploader = uploaderRef.current;
     const chain = chainRef.current;
     if (!chain) return;
 
+    let isRendering = false;
     const render = async () => {
+      if (isRendering) return;
+      isRendering = true;
       try {
         // Resize chain to match media dimensions
         if (mediaInfo) {
           chain.resize(mediaInfo.width, mediaInfo.height);
           const canvas = webglCanvasRef.current;
-          if (canvas) {
+          const gl = glCtxRef.current?.getGL();
+          if (canvas && (canvas.width !== mediaInfo.width || canvas.height !== mediaInfo.height)) {
             canvas.width = mediaInfo.width;
             canvas.height = mediaInfo.height;
+            gl?.viewport(0, 0, canvas.width, canvas.height);
           }
         }
 
-        // Upload source image (cached per originalDataUrl)
+        // Upload source texture: video frame for video sources, image for stills
         let tex = sourceTexRef.current;
-        if (!tex) {
-          tex = await uploader.uploadImage(originalDataUrl);
-          sourceTexRef.current = tex;
+        const video = videoRef.current;
+        if (isVideo && proxyUrl && video && video.readyState >= 2) {
+          if (!tex) {
+            tex = uploader.createTextureFromImage(video);
+            sourceTexRef.current = tex;
+          } else {
+            uploader.updateVideoTexture(tex, video);
+          }
+        } else {
+          if (!tex) {
+            tex = await uploader.uploadImage(originalDataUrl);
+            sourceTexRef.current = tex;
+          }
         }
 
-        // Build render passes from active effect stack
-        const passes = stackToRenderPasses(effectStack);
+        // Build render passes from active effect stack (read from store for live params)
+        const s = useAppStore.getState();
+        const passes = stackToRenderPasses(s.effectStack, s.currentTime, s.activeMask, s.sam3Masks);
 
-        // Inject global audio uniforms into every pass
+        // Inject global audio uniforms into every pass (read from store for live values)
         const audioUniforms: Record<string, number> = {
-          u_bass: audioBandEnergies.bass ?? 0,
-          u_band0: audioBandEnergies.subBass ?? 0,
-          u_band1: audioBandEnergies.bass ?? 0,
-          u_band2: audioBandEnergies.lowMid ?? 0,
-          u_band3: audioBandEnergies.mid ?? 0,
-          u_band4: audioBandEnergies.highMid ?? 0,
-          u_band5: audioBandEnergies.presence ?? 0,
-          u_band6: audioBandEnergies.brilliance ?? 0,
-          u_centroid: audioMappedValues.centroid ?? 0,
-          u_rms: audioMappedValues.rms ?? 0,
-          u_energy: audioMappedValues.energy ?? 0,
-          u_flux: audioMappedValues.flux ?? 0,
-          u_beatBass: audioBeatFlags.bass ? 1 : 0,
-          u_beatMid: audioBeatFlags.mid ? 1 : 0,
-          u_beatTreble: audioBeatFlags.treble ? 1 : 0,
+          u_bass: s.audioBandEnergies.bass ?? 0,
+          u_band0: s.audioBandEnergies.subBass ?? 0,
+          u_band1: s.audioBandEnergies.bass ?? 0,
+          u_band2: s.audioBandEnergies.lowMid ?? 0,
+          u_band3: s.audioBandEnergies.mid ?? 0,
+          u_band4: s.audioBandEnergies.highMid ?? 0,
+          u_band5: s.audioBandEnergies.presence ?? 0,
+          u_band6: s.audioBandEnergies.brilliance ?? 0,
+          u_centroid: s.audioMappedValues.centroid ?? 0,
+          u_rms: s.audioMappedValues.rms ?? 0,
+          u_energy: s.audioMappedValues.energy ?? 0,
+          u_flux: s.audioMappedValues.flux ?? 0,
+          u_beatBass: s.audioBeatFlags.bass ? 1 : 0,
+          u_beatMid: s.audioBeatFlags.mid ? 1 : 0,
+          u_beatTreble: s.audioBeatFlags.treble ? 1 : 0,
+        };
+        // Inject time uniforms so shaders can animate over time
+        // When playing, use the timeline currentTime for keyframe sync.
+        // When not playing, use performance.now() so time-based effects still animate.
+        const animTime = s.isPlaying
+          ? s.currentTime
+          : performance.now() / 1000;
+        const timeUniforms: Record<string, number> = {
+          u_time: animTime,
+          u_frame: Math.floor(animTime * 30),
         };
         for (const pass of passes) {
-          Object.assign(pass.uniforms, audioUniforms);
+          Object.assign(pass.uniforms, audioUniforms, timeUniforms);
         }
 
         const shaderMap = buildShaderMap(passes);
 
         // Render to WebGL canvas
-        chain.render(tex, passes, shaderMap);
+        await chain.render(tex, passes, shaderMap);
+
+        // Check for WebGL errors
+        const gl = glCtxRef.current?.getGL();
+        if (gl) {
+          // Unbind all textures to prevent feedback loops on next render
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, null);
+          gl.activeTexture(gl.TEXTURE2);
+          gl.bindTexture(gl.TEXTURE_2D, null);
+          gl.activeTexture(gl.TEXTURE3);
+          gl.bindTexture(gl.TEXTURE_2D, null);
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+          const err = gl.getError();
+          if (err !== gl.NO_ERROR) {
+            console.error('[Preview] WebGL error after render:', err);
+          }
+        }
       } catch (e) {
         console.error('WebGL render failed:', e);
+      } finally {
+        isRendering = false;
       }
     };
 
     render();
 
-    // Continuous render loop when audio is active so uniforms update every frame
-    if (audioEnabled) {
+    // Continuous render loop — always run when there are effects so time-based
+    // shaders animate even without pressing play. Also runs when audio is active.
+    // Reads currentTime/audio/effectStack from getState() inside the loop.
+    const hasEffects = useAppStore.getState().effectStack.length > 0;
+    if (hasEffects || audioEnabled || isPlaying) {
       const loop = () => {
+        // Advance currentTime for image sources when playing so the time slider
+        // moves and keyframe-driven effects sync with export. Videos drive time
+        // via the <video> element instead.
+        const s = useAppStore.getState();
+        if (s.isPlaying && !isVideo) {
+          const now = performance.now();
+          const last = lastFrameTimeRef.current || now;
+          const deltaT = (now - last) / 1000 * s.playbackSpeed;
+          lastFrameTimeRef.current = now;
+          let next = s.currentTime + deltaT;
+          const dur = s.duration || 10;
+          if (next > dur) next = 0; // loop
+          s.setCurrentTime(next);
+        } else {
+          lastFrameTimeRef.current = performance.now();
+        }
         render();
         rafRef.current = requestAnimationFrame(loop);
       };
+      lastFrameTimeRef.current = performance.now();
       rafRef.current = requestAnimationFrame(loop);
     }
 
     return () => {
       cancelAnimationFrame(rafRef.current);
     };
-  }, [originalDataUrl, effectStack, mediaInfo, audioEnabled, audioBandEnergies, audioBeatFlags, audioMappedValues]);
+  }, [originalDataUrl, stackSignature, mediaInfo, audioEnabled, isPlaying, isVideo, proxyUrl, useCpuPreview]);
+
+  // CPU preview playback loop — advances currentTime when playing and useCpuPreview
+  // is true, so the CPU preview re-renders each frame during playback.
+  useEffect(() => {
+    if (!useCpuPreview || !mediaLoaded || !isPlaying) return;
+    let raf: number;
+    const loop = () => {
+      const s = useAppStore.getState();
+      if (s.isPlaying && !isVideo) {
+        const now = performance.now();
+        const last = lastFrameTimeRef.current || now;
+        const deltaT = ((now - last) / 1000) * s.playbackSpeed;
+        lastFrameTimeRef.current = now;
+        let next = s.currentTime + deltaT;
+        const dur = s.duration || 10;
+        if (next > dur) next = 0;
+        s.setCurrentTime(next);
+      } else {
+        lastFrameTimeRef.current = performance.now();
+      }
+      raf = requestAnimationFrame(loop);
+    };
+    lastFrameTimeRef.current = performance.now();
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [useCpuPreview, mediaLoaded, isPlaying, isVideo]);
+
+  // CPU preview render: when useCpuPreview is true, render via Rust backend for
+  // accurate algorithm output (error diffusion, blue noise, etc.).
+  // Only re-renders when the effect stack signature changes (params, mask, order).
+  // When playing, a throttled animation loop runs for time-based effects.
+  useEffect(() => {
+    if (!useCpuPreview || !mediaLoaded) return;
+    const state = useAppStore.getState();
+    if (state.effectStack.length === 0) return;
+
+    let cancelled = false;
+    let inFlight = false;
+    let pendingRenderScale: number | null = null;
+    let debounceTimer: number | null = null;
+
+    const doRender = async (scale: number) => {
+      if (inFlight) {
+        pendingRenderScale = scale;
+        return;
+      }
+      inFlight = true;
+      try {
+        const s = useAppStore.getState();
+        const animTime = s.isPlaying ? s.currentTime : 0;
+        const currentFrameIndex = Math.floor(animTime * 10);
+        const activeMaskForFrame = s.sam3FrameMasks[currentFrameIndex] || s.activeMask;
+        const activeStack = stackToRustPayload(s.effectStack, activeMaskForFrame, s.sam3Masks, animTime);
+        const result = await applyEffectStack(activeStack, null, scale);
+        if (!cancelled) state.setPreviewDataUrl(result);
+      } catch (e) {
+        console.error('CPU preview render failed:', e);
+      } finally {
+        inFlight = false;
+        if (pendingRenderScale !== null && !cancelled) {
+          const nextScale = pendingRenderScale;
+          pendingRenderScale = null;
+          doRender(nextScale);
+        }
+      }
+    };
+
+    // Immediately render at low-medium resolution on any parameter change (slider drag)
+    doRender(0.35);
+
+    // Debounce to high resolution after 400ms of inactivity
+    debounceTimer = window.setTimeout(() => {
+      if (!cancelled && !useAppStore.getState().isPlaying) {
+        doRender(1.0);
+      }
+    }, 400);
+
+    // Animation loop only when playing (for time-based effects)
+    if (isPlaying) {
+      let lastRenderTime = 0;
+      const MIN_RENDER_INTERVAL = 100; // ~10fps when playing
+
+      const renderCpu = async () => {
+        if (cancelled) return;
+        const now = performance.now();
+        if (now - lastRenderTime < MIN_RENDER_INTERVAL) {
+          cpuAnimRafRef.current = requestAnimationFrame(renderCpu);
+          return;
+        }
+        lastRenderTime = now;
+        try {
+          const s = useAppStore.getState();
+          const animTime = s.currentTime;
+          const currentFrameIndex = Math.floor(animTime * 10);
+          const activeMaskForFrame = s.sam3FrameMasks[currentFrameIndex] || s.activeMask;
+          const activeStack = stackToRustPayload(s.effectStack, activeMaskForFrame, s.sam3Masks, animTime);
+          const result = await applyEffectStack(activeStack, null, 0.5); // Playing uses 0.5 for performance
+          if (!cancelled) s.setPreviewDataUrl(result);
+        } catch (e) {
+          console.error('CPU preview render failed:', e);
+        }
+        if (!cancelled) cpuAnimRafRef.current = requestAnimationFrame(renderCpu);
+      };
+      lastRenderTime = 0;
+      cpuAnimRafRef.current = requestAnimationFrame(renderCpu);
+    }
+
+    return () => {
+      cancelled = true;
+      if (debounceTimer) window.clearTimeout(debounceTimer);
+      cancelAnimationFrame(cpuAnimRafRef.current);
+    };
+  }, [useCpuPreview, mediaLoaded, cpuRenderSignature, isPlaying]);
 
   // ── Cleanup hover on unmount ───────────────────────────────
   useEffect(() => {
@@ -594,15 +915,56 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
 
   const showDropOverlay = isDropTarget || isHtmlDropTarget;
 
+  const fileName = useAppStore((s) => s.filePath);
+
   return (
     <div
-      className="flex-1 flex flex-col min-h-0"
-      style={{ background: "var(--bg-secondary)" }}
+      data-testid="preview-viewport"
+      className="flex-1 h-full flex flex-col min-h-0 pixel-grid"
+      style={{ background: "transparent" }}
     >
+      {/* Viewport Header Bar */}
+      {mediaLoaded && (
+        <div className="h-10 flex items-center justify-between px-4 flex-shrink-0 border-b border-outline-variant/20 bg-surface/80 backdrop-blur-xl">
+          <div className="flex items-center gap-4">
+            <span className="text-label-sm font-label-sm text-on-surface-variant flex items-center gap-2 neo-flat px-3 py-1 rounded-full cursor-default" title={isApproximatePreview && !useCpuPreview ? "WebGL preview is approximate — export will use accurate CPU rendering" : undefined}>
+              <span className={`w-2 h-2 rounded-full ${useCpuPreview ? "bg-accent-teal" : isApproximatePreview ? "bg-amber-400" : stackCount > 0 ? "bg-accent-pink animate-pulse-glow" : "solar-bg animate-pulse-glow"}`} />
+              {useCpuPreview ? "CPU ACCURATE" : isApproximatePreview ? "APPROXIMATE" : stackCount > 0 ? "ANIMATING" : "LIVE PREVIEW"}
+            </span>
+            {fileName && (
+              <span className="text-label-sm font-label-sm text-accent-teal/90 cursor-default hover:text-accent-teal transition-colors bg-surface/60 px-2 rounded">
+                {fileName.split(/[\\/]/).pop()?.toUpperCase() || "CLIP"}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            {mediaInfo && (
+              <span className="text-label-sm font-label-sm text-accent-teal neo-flat px-3 py-1 rounded-full cursor-default hover:border-accent-teal/30 transition-colors">
+                {mediaInfo.width} x {mediaInfo.height}
+              </span>
+            )}
+            <button
+              className="material-symbols-outlined text-sm text-on-surface-variant neo-btn p-1.5 rounded-full hover:text-primary transition-colors"
+              title="Aspect ratio"
+              onClick={() => useAppStore.getState().setZoom(1)}
+            >
+              aspect_ratio
+            </button>
+            <button
+              className="material-symbols-outlined text-sm text-on-surface-variant neo-btn p-1.5 rounded-full hover:text-primary transition-colors"
+              title="More options"
+              onClick={toggleFullscreen}
+            >
+              more_vert
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Canvas Area */}
       <div
         ref={containerRef}
-        className={`flex-1 relative overflow-hidden ${!mediaLoaded ? "checkerboard" : ""} ${isFullscreen ? "bg-black" : ""}`}
+        className={`flex-1 relative overflow-hidden ${!mediaLoaded ? "checkerboard" : "bg-black/95"} ${isFullscreen ? "bg-black" : ""} group/main`}
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
@@ -614,20 +976,23 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
         style={{
           cursor: isPanDragging
             ? "grabbing"
-            : isSam3Interactive && sam3Mode === "point"
+            : isSam3Interactive && (sam3Mode === "point" || sam3Mode === "box")
             ? "crosshair"
-            : isSam3Interactive && sam3Mode === "box"
+            : isManualMaskActive
             ? "crosshair"
             : "default",
         }}
       >
+        {/* Live Audio Waveform */}
+        {mediaLoaded && audioEnabled && <AudioWaveform />}
+
         {!mediaLoaded && (
           <button
             onClick={handleClickOpen}
-            className="absolute inset-0 flex flex-col items-center justify-center gap-3 w-full h-full"
+            className="absolute inset-0 flex flex-col items-center justify-center gap-3 w-full h-full z-10"
             style={{ background: "transparent", border: "none", cursor: "pointer" }}
           >
-            <Image size={40} style={{ color: "var(--text-dim)", opacity: 0.5 }} />
+            <span className="material-symbols-outlined" style={{ fontSize: 40, color: "var(--text-dim)", opacity: 0.5 }}>image</span>
             <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
               Drop an image or video here to begin
             </div>
@@ -646,44 +1011,108 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
           </button>
         )}
 
-        {/* Drop target overlay */}
-        {showDropOverlay && (
+        {/* WebGL canvas — always rendered so the ref is available on mount */}
+        <div
+          className="absolute inset-0 flex items-center justify-center"
+          style={{
+            transform: `translate(${pan.x}px, ${pan.y}px)`,
+            cursor: isPanDragging ? "grabbing" : "grab",
+            visibility: mediaLoaded && previewDataUrl ? "visible" : "hidden",
+          }}
+        >
           <div
-            className="absolute inset-0 flex flex-col items-center justify-center gap-3 z-50"
+            className="relative"
             style={{
-              background: "rgba(0,0,0,0.7)",
-              backdropFilter: "blur(2px)",
-              pointerEvents: "none",
+              transform: `scale(${zoom})`,
+              transformOrigin: "center center",
+              transition: isPanDragging ? "none" : "transform 0.15s ease",
             }}
           >
-            <FileUp size={48} style={{ color: "var(--accent)" }} />
-            <div className="text-sm font-semibold" style={{ color: "var(--accent)" }}>
-              Drop file here to open
-            </div>
-          </div>
-        )}
-
-        {mediaLoaded && previewDataUrl && (
-          <div
-            className="absolute inset-0 flex items-center justify-center"
-            style={{
-              transform: `translate(${pan.x}px, ${pan.y}px)`,
-              cursor: isPanDragging ? "grabbing" : "grab",
-            }}
-          >
-            <div
-              className="relative"
-              style={{
-                transform: `scale(${zoom})`,
-                transformOrigin: "center center",
-                transition: isPanDragging ? "none" : "transform 0.15s ease",
-              }}
-            >
-              {showBeforeAfter && originalDataUrl ? (
-                <div className="relative">
-                  {/* After (full) */}
+            {showBeforeAfter && originalDataUrl ? (
+              <div className="relative">
+                {/* After (full) */}
+                <img
+                  src={previewDataUrl || ""}
+                  alt="Preview"
+                  draggable={false}
+                  style={{
+                    maxWidth: "85vw",
+                    maxHeight: "80vh",
+                    display: "block",
+                  }}
+                />
+                {/* Before (clipped) */}
+                <div
+                  className="absolute inset-0 overflow-hidden"
+                  style={{ width: `${splitPosition}%` }}
+                >
                   <img
-                    src={previewDataUrl}
+                    src={originalDataUrl}
+                    alt="Original"
+                    draggable={false}
+                    style={{
+                      maxWidth: "85vw",
+                      maxHeight: "80vh",
+                      display: "block",
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                    }}
+                  />
+                </div>
+                {/* Splitter */}
+                <div
+                  className="absolute top-0 bottom-0 w-px"
+                  style={{
+                    left: `${splitPosition}%`,
+                    background: "var(--accent)",
+                    boxShadow: "0 0 6px var(--accent)",
+                    cursor: "ew-resize",
+                  }}
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                    setIsSplitDragging(true);
+                  }}
+                >
+                  <div
+                    className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-5 h-8 rounded flex items-center justify-center"
+                    style={{
+                      background: "var(--accent)",
+                      boxShadow: "0 0 8px var(--accent)",
+                    }}
+                  >
+                    <span className="material-symbols-outlined" style={{ fontSize: 10, color: "#000" }}>center_focus_strong</span>
+                  </div>
+                </div>
+                {/* Labels */}
+                <div
+                  className="absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded"
+                  style={{
+                    background: "rgba(0,0,0,0.7)",
+                    color: "var(--text-secondary)",
+                    fontFamily: "var(--font-mono)",
+                  }}
+                >
+                  BEFORE
+                </div>
+                <div
+                  className="absolute top-2 right-2 text-[10px] font-bold px-2 py-0.5 rounded"
+                  style={{
+                    background: "rgba(0,0,0,0.7)",
+                    color: "var(--accent)",
+                    fontFamily: "var(--font-mono)",
+                  }}
+                >
+                  AFTER
+                </div>
+              </div>
+            ) : (
+              <div className="relative">
+                {useCpuPreview ? (
+                  /* CPU-processed preview image (accurate algorithms via Rust backend) */
+                  <img
+                    ref={previewImgRef}
+                    src={previewDataUrl || ""}
                     alt="Preview"
                     draggable={false}
                     style={{
@@ -692,74 +1121,8 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
                       display: "block",
                     }}
                   />
-                  {/* Before (clipped) */}
-                  <div
-                    className="absolute inset-0 overflow-hidden"
-                    style={{ width: `${splitPosition}%` }}
-                  >
-                    <img
-                      src={originalDataUrl}
-                      alt="Original"
-                      draggable={false}
-                      style={{
-                        maxWidth: "85vw",
-                        maxHeight: "80vh",
-                        display: "block",
-                        position: "absolute",
-                        top: 0,
-                        left: 0,
-                      }}
-                    />
-                  </div>
-                  {/* Splitter */}
-                  <div
-                    className="absolute top-0 bottom-0 w-px"
-                    style={{
-                      left: `${splitPosition}%`,
-                      background: "var(--accent)",
-                      boxShadow: "0 0 6px var(--accent)",
-                      cursor: "ew-resize",
-                    }}
-                    onMouseDown={(e) => {
-                      e.stopPropagation();
-                      setIsSplitDragging(true);
-                    }}
-                  >
-                    <div
-                      className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-5 h-8 rounded flex items-center justify-center"
-                      style={{
-                        background: "var(--accent)",
-                        boxShadow: "0 0 8px var(--accent)",
-                      }}
-                    >
-                      <Crosshair size={10} style={{ color: "#000" }} />
-                    </div>
-                  </div>
-                  {/* Labels */}
-                  <div
-                    className="absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded"
-                    style={{
-                      background: "rgba(0,0,0,0.7)",
-                      color: "var(--text-secondary)",
-                      fontFamily: "var(--font-mono)",
-                    }}
-                  >
-                    BEFORE
-                  </div>
-                  <div
-                    className="absolute top-2 right-2 text-[10px] font-bold px-2 py-0.5 rounded"
-                    style={{
-                      background: "rgba(0,0,0,0.7)",
-                      color: "var(--accent)",
-                      fontFamily: "var(--font-mono)",
-                    }}
-                  >
-                    AFTER
-                  </div>
-                </div>
-              ) : (
-                <div className="relative">
-                  {/* WebGL Preview Canvas */}
+                ) : (
+                  /* WebGL Preview Canvas */
                   <canvas
                     ref={webglCanvasRef}
                     style={{
@@ -768,19 +1131,23 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
                       display: "block",
                     }}
                   />
-                  {/* Hidden img for SAM3 coord reference and fallback */}
+                )}
+                {/* Hidden img for SAM3 coord reference and fallback */}
+                {!useCpuPreview && (
                   <img
                     ref={previewImgRef}
-                    src={previewDataUrl}
+                    src={previewDataUrl || ""}
                     alt="Preview"
                     draggable={false}
                     style={{ display: "none" }}
                   />
+                )}
 
-                  {/* Mask overlay — hover mask takes precedence */}
-                  {(activeMask || sam3HoverMask) && maskVisible && (
+                  {/* Mask overlay — hover mask takes precedence; hide when manual mask canvas is active */}
+                  {(Object.keys(sam3FrameMasks).length > 0 || activeMask || sam3HoverMask) && maskVisible && !isManualMaskActive && (
                     <img
-                      src={sam3HoverMask || activeMask || undefined}
+                      ref={maskImgRef}
+                      src={sam3HoverMask || sam3FrameMasks[Math.floor((useAppStore.getState().currentTime || 0) * 10)] || activeMask || undefined}
                       alt="Mask"
                       draggable={false}
                       className="absolute inset-0 pointer-events-none"
@@ -816,6 +1183,9 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
                     />
                   )}
 
+                  {/* Manual mask overlay — draws directly on the preview canvas */}
+                  {isManualMaskActive && <ManualMaskOverlay />}
+
                   {/* Scopes overlay */}
                   {mediaInfo && (
                     <ScopesOverlay
@@ -828,6 +1198,22 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
                   {mediaInfo && <PlaybackOverlay />}
                 </div>
               )}
+            </div>
+          </div>
+
+        {/* Drop target overlay */}
+        {showDropOverlay && (
+          <div
+            className="absolute inset-0 flex flex-col items-center justify-center gap-3 z-50"
+            style={{
+              background: "rgba(0,0,0,0.7)",
+              backdropFilter: "blur(2px)",
+              pointerEvents: "none",
+            }}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 48, color: "var(--accent)" }}>file_upload</span>
+            <div className="text-sm font-semibold" style={{ color: "var(--accent)" }}>
+              Drop file here to open
             </div>
           </div>
         )}
@@ -845,9 +1231,9 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
         >
           <div className="flex items-center gap-3">
             <span>
-              {mediaInfo.width}
+              {mediaInfo?.width ?? 0}
               <span style={{ color: "var(--text-dim)" }}>x</span>
-              {mediaInfo.height}
+              {mediaInfo?.height ?? 0}
             </span>
             <span style={{ color: "var(--text-dim)" }}>|</span>
             <span>{Math.round(zoom * 100)}%</span>
@@ -873,7 +1259,7 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
             style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)" }}
             title="Toggle fullscreen (F11)"
           >
-            <Maximize2 size={11} />
+            <span className="material-symbols-outlined" style={{ fontSize: 11 }}>fullscreen</span>
             <span>Fullscreen</span>
           </button>
         </div>

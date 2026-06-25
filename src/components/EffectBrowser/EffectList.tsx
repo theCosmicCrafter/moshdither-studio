@@ -1,6 +1,5 @@
 import { useMemo } from "react";
 import { useAppStore } from "../../store";
-import { Plus, Layers } from "lucide-react";
 
 const CAT_COLORS: Record<string, string> = {
   dithering: "var(--cat-dithering)",
@@ -11,6 +10,10 @@ const CAT_COLORS: Record<string, string> = {
   noise: "var(--cat-noise)",
   artistic: "var(--cat-artistic)",
   datamoshing: "var(--cat-datamoshing)",
+  audio_reactive: "var(--cat-audio-reactive)",
+  segmentation: "var(--cat-segmentation)",
+  composite: "var(--cat-composite)",
+  overlay: "var(--cat-overlay, var(--accent-teal))",
 };
 
 export default function EffectList() {
@@ -36,13 +39,12 @@ export default function EffectList() {
   }, [allEffects, activeCategory, searchQuery]);
 
   return (
-    <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
+    <div className="flex-1 overflow-y-auto custom-scrollbar px-2 py-2 space-y-1.5">
       {effects.length === 0 && (
-        <div
-          className="text-center py-8 text-xs"
-          style={{ color: "var(--text-dim)" }}
-        >
-          <Layers size={20} className="mx-auto mb-2 opacity-30" />
+        <div className="text-center py-8 text-label-sm font-label-sm text-on-surface-variant opacity-50">
+          <span className="material-symbols-outlined mx-auto mb-2 opacity-30 block" style={{ fontSize: 24 }}>
+            layers
+          </span>
           No effects found
         </div>
       )}
@@ -53,19 +55,7 @@ export default function EffectList() {
           <button
             key={effect.id}
             onClick={() => addToStack(effect)}
-            className="group w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-md transition-all duration-150"
-            style={{
-              background: "transparent",
-              border: "1px solid transparent",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = "var(--bg-hover)";
-              e.currentTarget.style.borderColor = `${color}30`;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "transparent";
-              e.currentTarget.style.borderColor = "transparent";
-            }}
+            className="group w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-lg transition-all duration-300 neo-flat filigree-corner hover:border-accent-pink"
           >
             {/* Category indicator line */}
             <div
@@ -73,30 +63,23 @@ export default function EffectList() {
               style={{ background: color, opacity: 0.7 }}
             />
             <div className="flex-1 min-w-0">
-              <div
-                className="text-[12px] font-medium truncate"
-                style={{ color: "var(--text-primary)" }}
-              >
+              <div className="text-label-md font-label-md text-on-surface group-hover:text-accent-pink transition-colors truncate">
                 {effect.name}
               </div>
-              <div
-                className="text-[10px] truncate"
-                style={{ color: "var(--text-muted)" }}
-              >
+              <div className="text-label-sm font-label-sm text-on-surface-variant opacity-70 truncate">
                 {effect.parameters.length} parameter
                 {effect.parameters.length !== 1 ? "s" : ""}
                 {isInStack && (
-                  <span style={{ color: "var(--accent)" }} className="ml-1">
-                    • in stack
-                  </span>
+                  <span className="text-accent-pink ml-1">• in stack</span>
                 )}
               </div>
             </div>
-            <Plus
-              size={14}
-              className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
-              style={{ color: "var(--accent)" }}
-            />
+            <span
+              className="material-symbols-outlined flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-accent-pink"
+              style={{ fontSize: 16 }}
+            >
+              add_circle
+            </span>
           </button>
         );
       })}

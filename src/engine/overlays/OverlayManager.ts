@@ -43,6 +43,7 @@ export class OverlayManager {
 
     const tex = this.gl.createTexture()!;
     this.gl.bindTexture(this.gl.TEXTURE_2D, tex);
+    this.gl.pixelStorei(this.gl.UNPACK_FLIP_Y_WEBGL, true);
     this.gl.texImage2D(
       this.gl.TEXTURE_2D,
       0,
@@ -51,6 +52,7 @@ export class OverlayManager {
       this.gl.UNSIGNED_BYTE,
       video
     );
+    this.gl.pixelStorei(this.gl.UNPACK_FLIP_Y_WEBGL, false);
     this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.LINEAR);
     this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.LINEAR);
     this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
@@ -67,7 +69,9 @@ export class OverlayManager {
       const tex = this.textures.get(url);
       if (!tex) return;
       gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
       gl.bindTexture(gl.TEXTURE_2D, null);
     });
   }

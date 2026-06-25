@@ -32,11 +32,16 @@ impl EffectRegistry {
         self.register(super::dithering::StuckiDither);
         self.register(super::dithering::BurkesDither);
         self.register(super::dithering::SierraDither);
+        self.register(super::dithering::ErrorDiffusionDither);
         self.register(super::dithering::RandomNoiseDither);
         self.register(super::dithering::ThresholdDither::default());
         self.register(super::dithering::RiemersmaDither);
         self.register(super::dithering::HalftoneDither::default());
         self.register(super::dithering::AutoPaletteDither);
+        self.register(super::dithering::KMeansDither);
+        self.register(super::dithering::CustomMatrixDither);
+        self.register(super::dithering::OrderedDitherVariants);
+        self.register(super::dithering::LineScreen);
 
         // Analog
         self.register(super::analog::Scanlines::default());
@@ -50,6 +55,8 @@ impl EffectRegistry {
 
         // Color
         self.register(super::color::RgbShift::default());
+        self.register(super::color::BrightnessContrast);
+        self.register(super::color::HistoricalPalettes);
         self.register(super::color::ChannelSwap::default());
         self.register(super::color::Invert::default());
         self.register(super::color::LiftGammaGain);
@@ -57,6 +64,12 @@ impl EffectRegistry {
 
         // Composite
         self.register(super::composite::Overlay::default());
+
+        // Overlay (HUD-style guides)
+        self.register(super::overlay::PixelGridOverlay);
+        self.register(super::overlay::SafeArea);
+        self.register(super::overlay::RuleOfThirds);
+        self.register(super::overlay::Crosshairs);
 
         // Pixel Geometry
         self.register(super::pixel_geo::PixelSort::default());
@@ -66,6 +79,7 @@ impl EffectRegistry {
         self.register(super::pixel_geo::Anaglyph::default());
         self.register(super::pixel_geo::BlockShift::default());
         self.register(super::pixel_geo::MirrorSlices::default());
+        self.register(super::pixel_geo::SliceShiftAdvanced::default());
 
         // Glitch
         self.register(super::glitch::JpegQuantize::default());
@@ -77,6 +91,9 @@ impl EffectRegistry {
         self.register(super::glitch::ByteZero::default());
         self.register(super::glitch::PngChunkGlitch);
         self.register(super::glitch::CrcMismatchGlitch);
+        self.register(super::glitch::SortingGlitch::default());
+        self.register(super::glitch::MacroblockGlitch::default());
+        self.register(super::glitch::EdgeStretch);
 
         // Noise
         self.register(super::noise::SaltPepperNoise::default());
@@ -92,9 +109,13 @@ impl EffectRegistry {
 
         // Datamoshing
         self.register(super::datamoshing::IFrameRemoval::default());
+        self.register(super::datamoshing::IFrameRemovalAdvanced);
         self.register(super::datamoshing::ClassicDatamosh::default());
         self.register(super::datamoshing::RiseDatamosh::default());
         self.register(super::datamoshing::ShuffleDatamosh::default());
+        self.register(super::datamoshing::FrameReverse);
+        self.register(super::datamoshing::FrameSortByDataSize);
+        self.register(super::datamoshing::FrameHold);
         self.register(super::datamoshing::BloomDatamosh::default());
         self.register(super::datamoshing::RepeatDatamosh::default());
         self.register(super::datamoshing::CombineDatamosh::default());
@@ -107,9 +128,21 @@ impl EffectRegistry {
         self.register(super::datamoshing::DelayGlitch);
         self.register(super::datamoshing::MirrorGlitch);
         self.register(super::datamoshing::OpticalFlow::default());
+        self.register(super::datamoshing::CrossVideoDatamosh);
+        self.register(super::datamoshing::GlitchProfile);
+        self.register(super::datamoshing::BloomProfile);
+        self.register(super::datamoshing::SmearProfile);
+        self.register(super::datamoshing::ExtremeProfile);
+        self.register(super::datamoshing::RainbowProfile);
 
         // Segmentation
         self.register(super::segmentation::MaskIsolate);
+
+        // Audio-Reactive
+        self.register(super::audio_reactive::BassPulse);
+        self.register(super::audio_reactive::BeatGlitch);
+        self.register(super::audio_reactive::SpectralShift);
+        self.register(super::audio_reactive::AudioDither);
     }
 
     pub fn get(&self, id: &str) -> Option<&dyn Effect> {

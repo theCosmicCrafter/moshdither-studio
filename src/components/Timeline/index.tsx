@@ -1,20 +1,15 @@
 import React, { useRef, useCallback } from "react";
 import { useAppStore } from "../../store";
-import {
-  Play,
-  Pause,
-  SkipBack,
-  SkipForward,
-  StepBack,
-  StepForward,
-  Repeat,
-  Gauge,
-} from "lucide-react";
 
 export default function Timeline() {
   const currentTime = useAppStore((s) => s.currentTime);
   const setCurrentTime = useAppStore((s) => s.setCurrentTime);
-  const audioPlaying = useAppStore((s) => s.audioPlaying);
+  const isPlaying = useAppStore((s) => s.isPlaying);
+  const togglePlay = useAppStore((s) => s.togglePlay);
+  const loopMode = useAppStore((s) => s.loopMode);
+  const setLoopMode = useAppStore((s) => s.setLoopMode);
+  const duration = useAppStore((s) => s.duration);
+  const setDuration = useAppStore((s) => s.setDuration);
   const audioFilePath = useAppStore((s) => s.audioFilePath);
   const audioBpm = useAppStore((s) => s.audioBpm);
   const playbackSpeed = useAppStore((s) => s.playbackSpeed);
@@ -28,7 +23,6 @@ export default function Timeline() {
   const scrubberRef = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
 
-  const duration = 300; // Placeholder: 5 minutes max; will be replaced with actual media duration
   const fps = 30;
   const currentFrame = Math.floor(currentTime * fps);
 
@@ -72,59 +66,33 @@ export default function Timeline() {
 
   return (
     <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: 4,
-        padding: "6px 10px",
-        background: "#151515",
-        borderTop: "1px solid #333",
-        userSelect: "none",
-      }}
+      className="neo-flat rounded-lg mx-1 mb-1 bg-surface/80 backdrop-blur-xl flex flex-col gap-1 select-none"
+      style={{ padding: "6px 10px" }}
     >
       {/* Transport row */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div className="flex items-center gap-2">
         {/* Time display */}
-        <div
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: 12,
-            color: "#ccc",
-            minWidth: 90,
-            textAlign: "center",
-          }}
-        >
-          <span style={{ color: "#6cf" }}>{formatTime(currentTime)}</span>
-          <span style={{ color: "#666", margin: "0 4px" }}>/</span>
-          <span style={{ color: "#888" }}>{formatTime(duration)}</span>
+        <div className="font-code-sm text-code-sm text-on-surface min-w-[90px] text-center">
+          <span className="text-accent-teal">{formatTime(currentTime)}</span>
+          <span className="text-outline-variant mx-1">/</span>
+          <span className="text-on-surface-variant">{formatTime(duration)}</span>
         </div>
 
         {/* Frame counter */}
-        <div
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: 10,
-            color: "#888",
-            minWidth: 70,
-          }}
-        >
+        <div className="font-data-micro text-data-micro text-on-surface-variant min-w-[70px]">
           F:{currentFrame.toString().padStart(5, "0")}
         </div>
 
         {/* In/Out buttons */}
-        <div style={{ display: "flex", gap: 2, alignItems: "center" }}>
+        <div className="flex gap-1 items-center">
           <button
             onClick={() => setInPoint(Math.round(currentTime))}
             title="Set in point (I)"
+            className="font-data-micro text-data-micro rounded px-1 cursor-pointer transition-all"
             style={{
-              fontSize: 9,
-              padding: "1px 4px",
-              borderRadius: 2,
-              border: "1px solid #2ecc71",
-              background: inPoint !== null ? "rgba(46, 204, 113, 0.2)" : "transparent",
-              color: "#2ecc71",
-              cursor: "pointer",
-              fontFamily: "var(--font-mono)",
+              border: "1px solid var(--cat-analog)",
+              background: inPoint !== null ? "rgba(255, 215, 0, 0.15)" : "transparent",
+              color: "var(--cat-analog)",
             }}
           >
             IN
@@ -132,15 +100,11 @@ export default function Timeline() {
           <button
             onClick={() => setOutPoint(Math.round(currentTime))}
             title="Set out point (O)"
+            className="font-data-micro text-data-micro rounded px-1 cursor-pointer transition-all"
             style={{
-              fontSize: 9,
-              padding: "1px 4px",
-              borderRadius: 2,
-              border: "1px solid #e74c3c",
-              background: outPoint !== null ? "rgba(231, 76, 60, 0.2)" : "transparent",
-              color: "#e74c3c",
-              cursor: "pointer",
-              fontFamily: "var(--font-mono)",
+              border: "1px solid var(--accent-pink)",
+              background: outPoint !== null ? "rgba(255, 173, 224, 0.15)" : "transparent",
+              color: "var(--accent-pink)",
             }}
           >
             OUT
@@ -149,16 +113,8 @@ export default function Timeline() {
             <button
               onClick={() => clearInOut()}
               title="Clear in/out (X)"
-              style={{
-                fontSize: 9,
-                padding: "1px 4px",
-                borderRadius: 2,
-                border: "1px solid #666",
-                background: "transparent",
-                color: "#888",
-                cursor: "pointer",
-                fontFamily: "var(--font-mono)",
-              }}
+              className="font-data-micro text-data-micro rounded px-1 cursor-pointer text-on-surface-variant hover:text-accent-pink transition-colors"
+              style={{ border: "1px solid var(--outline-variant)", background: "transparent" }}
             >
               CLR
             </button>
@@ -167,48 +123,34 @@ export default function Timeline() {
 
         {/* BPM */}
         {audioBpm && (
-          <div
-            style={{
-              fontFamily: "var(--font-mono)",
-              fontSize: 10,
-              color: "#6cf",
-              minWidth: 50,
-            }}
-          >
+          <div className="font-data-micro text-data-micro text-accent-teal min-w-[50px]">
             {Math.round(audioBpm)} BPM
           </div>
         )}
 
         {/* Spacer */}
-        <div style={{ flex: 1 }} />
+        <div className="flex-1" />
 
         {/* Transport buttons */}
-        <div style={{ display: "flex", gap: 2, alignItems: "center" }}>
-          <TButton icon={<SkipBack size={14} />} onClick={() => setCurrentTime(inPoint ?? 0)} title="Go to in point" />
-          <TButton icon={<StepBack size={14} />} onClick={() => setCurrentTime(Math.max(inPoint ?? 0, currentTime - 1 / fps))} title="Previous frame" />
-          <TButton icon={audioPlaying ? <Pause size={14} /> : <Play size={14} />} onClick={() => {}} title={audioPlaying ? "Pause" : "Play"} active />
-          <TButton icon={<StepForward size={14} />} onClick={() => setCurrentTime(Math.min(outPoint ?? duration, currentTime + 1 / fps))} title="Next frame" />
-          <TButton icon={<SkipForward size={14} />} onClick={() => setCurrentTime(outPoint ?? duration)} title="Go to out point" />
-          <TButton icon={<Repeat size={14} />} onClick={() => {}} title="Loop" />
+        <div className="flex gap-1 items-center">
+          <TButton icon="skip_previous" onClick={() => setCurrentTime(inPoint ?? 0)} title="Go to in point" />
+          <TButton icon="chevron_left" onClick={() => setCurrentTime(Math.max(inPoint ?? 0, currentTime - 1 / fps))} title="Previous frame" />
+          <TButton icon={isPlaying ? "pause" : "play_arrow"} onClick={togglePlay} title={isPlaying ? "Pause" : "Play"} active />
+          <TButton icon="chevron_right" onClick={() => setCurrentTime(Math.min(outPoint ?? duration, currentTime + 1 / fps))} title="Next frame" />
+          <TButton icon="skip_next" onClick={() => setCurrentTime(outPoint ?? duration)} title="Go to out point" />
+          <TButton icon="repeat" onClick={() => setLoopMode(loopMode === "off" ? "loop" : loopMode === "loop" ? "pingpong" : "off")} title={`Loop: ${loopMode}`} active={loopMode !== "off"} />
 
           {/* Speed selector */}
-          <div style={{ display: "flex", alignItems: "center", gap: 2, marginLeft: 4 }}>
-            <Gauge size={10} style={{ color: "#888" }} />
+          <div className="flex items-center gap-1 ml-1">
+            <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: 12 }}>
+              speed
+            </span>
             <select
               aria-label="Playback speed"
               title="Playback speed"
               value={playbackSpeed}
               onChange={(e) => setPlaybackSpeed(parseFloat(e.target.value))}
-              style={{
-                fontSize: 10,
-                padding: "1px 4px",
-                borderRadius: 3,
-                border: "1px solid #333",
-                background: "#222",
-                color: "#ccc",
-                cursor: "pointer",
-                fontFamily: "var(--font-mono)",
-              }}
+              className="themed-select font-data-micro text-data-micro cursor-pointer"
             >
               <option value={0.25}>0.25x</option>
               <option value={0.5}>0.5x</option>
@@ -218,20 +160,32 @@ export default function Timeline() {
               <option value={4}>4x</option>
             </select>
           </div>
+
+          {/* Clip length input */}
+          <div className="flex items-center gap-1 ml-1">
+            <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: 12 }}>
+              timer
+            </span>
+            <input
+              type="number"
+              min={0.1}
+              step={0.5}
+              value={duration}
+              onChange={(e) => {
+                const val = parseFloat(e.target.value);
+                setDuration(isNaN(val) ? 1 : Math.max(0.1, val));
+              }}
+              className="themed-select font-data-micro text-data-micro w-[60px] text-center"
+              title="Clip length (seconds)"
+            />
+            <span className="font-data-micro text-data-micro text-on-surface-variant">s</span>
+          </div>
         </div>
 
         {/* Audio file name */}
         {audioFilePath && (
           <div
-            style={{
-              fontSize: 10,
-              color: "#6cf",
-              maxWidth: 120,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              marginLeft: 8,
-            }}
+            className="font-data-micro text-data-micro text-accent-teal max-w-[120px] overflow-hidden text-ellipsis whitespace-nowrap ml-2"
             title={audioFilePath}
           >
             {audioFilePath}
@@ -246,25 +200,15 @@ export default function Timeline() {
         onMouseMove={onMouseMove}
         onMouseUp={onMouseUp}
         onMouseLeave={onMouseUp}
-        style={{
-          height: 16,
-          background: "#222",
-          borderRadius: 3,
-          position: "relative",
-          cursor: "pointer",
-        }}
+        className="neo-flat rounded relative cursor-pointer"
+        style={{ height: 16 }}
       >
         {/* Progress fill */}
         <div
+          className="absolute left-0 top-0 bottom-0 rounded opacity-60"
           style={{
-            position: "absolute",
-            left: 0,
-            top: 0,
-            bottom: 0,
             width: `${(currentTime / duration) * 100}%`,
-            background: "linear-gradient(90deg, #2a5a8a, #4a90d9)",
-            borderRadius: 3,
-            opacity: 0.6,
+            background: "linear-gradient(90deg, var(--accent-pink), var(--accent-gold))",
           }}
         />
 
@@ -272,17 +216,13 @@ export default function Timeline() {
         {inPoint !== null && (
           <div
             title={`In point: ${formatTime(inPoint)}`}
+            className="absolute top-[-2px] bottom-[-2px] rounded z-[2]"
             style={{
-              position: "absolute",
               left: `${(inPoint / duration) * 100}%`,
-              top: -2,
-              bottom: -2,
               width: 2,
-              background: "#2ecc71",
-              boxShadow: "0 0 4px #2ecc71",
+              background: "var(--cat-analog)",
+              boxShadow: "0 0 4px var(--cat-analog)",
               transform: "translateX(-50%)",
-              borderRadius: 1,
-              zIndex: 2,
             }}
           />
         )}
@@ -291,34 +231,26 @@ export default function Timeline() {
         {outPoint !== null && (
           <div
             title={`Out point: ${formatTime(outPoint)}`}
+            className="absolute top-[-2px] bottom-[-2px] rounded z-[2]"
             style={{
-              position: "absolute",
               left: `${(outPoint / duration) * 100}%`,
-              top: -2,
-              bottom: -2,
               width: 2,
-              background: "#e74c3c",
-              boxShadow: "0 0 4px #e74c3c",
+              background: "var(--accent-pink)",
+              boxShadow: "0 0 4px var(--accent-pink)",
               transform: "translateX(-50%)",
-              borderRadius: 1,
-              zIndex: 2,
             }}
           />
         )}
 
         {/* Playhead */}
         <div
+          className="absolute top-[-2px] bottom-[-2px] rounded z-[3]"
           style={{
-            position: "absolute",
             left: `${(currentTime / duration) * 100}%`,
-            top: -2,
-            bottom: -2,
             width: 2,
-            background: "#fff",
-            boxShadow: "0 0 4px #4a90d9",
+            background: "var(--on-surface)",
+            boxShadow: "0 0 4px var(--accent-pink)",
             transform: "translateX(-50%)",
-            borderRadius: 1,
-            zIndex: 3,
           }}
         />
 
@@ -326,13 +258,11 @@ export default function Timeline() {
         {Array.from({ length: Math.floor(duration) }).map((_, i) => (
           <div
             key={i}
+            className="absolute top-0 bottom-0"
             style={{
-              position: "absolute",
               left: `${(i / duration) * 100}%`,
-              top: 0,
-              bottom: 0,
               width: 1,
-              background: i % 10 === 0 ? "#555" : "#333",
+              background: i % 10 === 0 ? "var(--outline-variant)" : "var(--outline)",
             }}
           />
         ))}
@@ -347,7 +277,7 @@ function TButton({
   title,
   active,
 }: {
-  icon: React.ReactNode;
+  icon: string;
   onClick: () => void;
   title: string;
   active?: boolean;
@@ -356,18 +286,8 @@ function TButton({
     <button
       onClick={onClick}
       title={title}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        width: 24,
-        height: 24,
-        borderRadius: 3,
-        border: "none",
-        background: active ? "rgba(74, 144, 217, 0.25)" : "transparent",
-        color: active ? "#6cf" : "#aaa",
-        cursor: "pointer",
-      }}
+      className={`material-symbols-outlined neo-btn rounded flex items-center justify-center transition-colors overflow-hidden ${active ? "neo-pressed text-accent-pink" : "text-on-surface-variant hover:text-accent-teal"}`}
+      style={{ width: 28, height: 28, fontSize: 16, lineHeight: 1 }}
     >
       {icon}
     </button>

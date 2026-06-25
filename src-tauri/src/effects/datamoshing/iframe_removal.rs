@@ -4,7 +4,9 @@ use crate::error::Result;
 use rand::Rng;
 use serde_json::json;
 
-/// Simulated I-frame removal by dropping every Nth frame.
+/// Frame Drop + Noise — drops every Nth frame and adds noise/grain to remaining frames.
+/// This simulates the visual effect of I-frame removal but operates on decoded pixels,
+/// not at the codec level.
 pub struct IFrameRemoval {
     interval: u32,
 }
@@ -27,7 +29,7 @@ impl Effect for IFrameRemoval {
     fn meta(&self) -> EffectMeta {
         EffectMeta {
             id: "datamoshing.iframe_removal".to_string(),
-            name: "I-Frame Removal".to_string(),
+            name: "Frame Drop + Noise".to_string(),
             category: EffectCategory::Datamoshing,
             media_type: MediaType::Video,
             parameters: vec![ParameterDef {

@@ -1,8 +1,8 @@
-import { EffectShader } from '../webgl2/types';
+import { EffectShader } from "../webgl2/types";
 
 export const byteReverseShader: EffectShader = {
-  id: 'byte_reverse',
-  name: 'Byte Reverse',
+  id: "byte_reverse",
+  name: "Byte Reverse",
   vertexSource: `
     attribute vec2 a_position;
     attribute vec2 a_texCoord;
@@ -16,7 +16,7 @@ export const byteReverseShader: EffectShader = {
     precision highp float;
     uniform sampler2D tDiffuse;
     uniform float amount;
-    uniform float time;
+    uniform float u_time;
     varying vec2 vUv;
 
     float rand(vec2 co) {
@@ -24,10 +24,10 @@ export const byteReverseShader: EffectShader = {
     }
 
     void main() {
-      float r = rand(vec2(floor(vUv.y * 30.0), time));
+      float r = rand(vec2(floor(vUv.y * 30.0), u_time));
       vec2 uv = vUv;
       if (r < amount * 0.4) {
-        float segWidth = 0.05 + rand(vec2(floor(vUv.y * 30.0), time + 1.0)) * 0.15;
+        float segWidth = 0.05 + rand(vec2(floor(vUv.y * 30.0), u_time + 1.0)) * 0.15;
         float segStart = floor(vUv.x / segWidth) * segWidth;
         float segEnd = segStart + segWidth;
         uv.x = segEnd - (vUv.x - segStart);
@@ -36,7 +36,7 @@ export const byteReverseShader: EffectShader = {
     }
   `,
   uniforms: [
-    { name: 'amount', type: 'float', default: 0.3 },
-    { name: 'time', type: 'float', default: 0.0 },
+    { name: "amount", type: "float", default: 0.3 },
+    { name: "u_time", type: "float", default: 0.0 },
   ],
 };

@@ -24,6 +24,10 @@ import sys
 import urllib.request
 from pathlib import Path
 
+# Make the vendored SAM3 repo importable so we can reuse its HF download helper.
+SAM3_REPO = Path(__file__).parent.parent / "packages" / "python-backend" / "sam3_repo"
+sys.path.insert(0, str(SAM3_REPO))
+
 
 def check_python():
     """Ensure Python version is 3.10 or newer."""
@@ -105,9 +109,37 @@ def verify_checkpoint(path: Path):
         print(f"[WARN] Could not verify checkpoint: {e}")
 
 
+def download_from_hf(dest: Path, version: str = "sam3"):
+    """Download the checkpoint from the SAM3 HuggingFace repo and copy it to dest."""
+    try:
+        from sam3.model_builder import download_ckpt_from_hf
+    except ImportError as e:
+        print(f"[ERROR] Could not import SAM3 download helper: {e}")
+        print("        Make sure the sam3 package is installed from packages/python-backend/sam3_repo")
+        sys.exit(1)
+
+    print(f"[INFO] Downloading SAM3 checkpoint from HuggingFace (version={version})...")
+    print("       This requires a HuggingFace account with accepted access to facebook/sam3")
+    print("       and an authenticated login (hf auth login or HF_TOKEN env var).")
+    try:
+        cached_path = Path(download_ckpt_from_hf(version=version))
+    except Exception as e:
+        print(f"[ERROR] HuggingFace download failed: {e}")
+        print("        Visit https://huggingface.co/facebook/sam3 to request access.")
+        print("        Then run:  hf auth login")
+        sys.exit(1)
+
+    print(f"[INFO] Copying checkpoint to {dest}")
+    import shutil
+    shutil.copy2(cached_path, dest)
+    print(f"[OK] Checkpoint copied to {dest}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Bootstrap SAM3 for MoshDither Studio")
     parser.add_argument("--checkpoint-url", help="URL to download the SAM3 checkpoint", default=None)
+    parser.add_argument("--download-hf", action="store_true", help="Download checkpoint from HuggingFace (requires access)")
+    parser.add_argument("--version", choices=["sam3", "sam3.1"], default="sam3", help="SAM3 version to download")
     parser.add_argument("--skip-verify", action="store_true", help="Skip checkpoint integrity check")
     args = parser.parse_args()
 
@@ -133,10 +165,19 @@ def main():
             download_file(args.checkpoint_url, checkpoint_path)
             if not args.skip_verify:
                 verify_checkpoint(checkpoint_path)
+        elif args.download_hf:
+            download_from_hf(checkpoint_path, version=args.version)
+            if not args.skip_verify:
+                verify_checkpoint(checkpoint_path)
         else:
-            print("[INFO] Place your SAM3 checkpoint at the above path, or rerun with --checkpoint-url.")
-            print("       Example:")
-            print(f"       python scripts/setup_sam3.py --checkpoint-url https://example.com/sam3.pt")
+            print("[INFO] Options to obtain the checkpoint:")
+            print("       1. Request access at https://huggingface.co/facebook/sam3")
+            print("       2. Authenticate:  hf auth login")
+            print("       3. Run:  python scripts/setup_sam3.py --download-hf")
+            print("       4. Or provide a direct URL:  python scripts/setup_sam3.py --checkpoint-url <url>")
+            print("       5. Or mirror an existing checkpoint from another drive:")
+            print("            python scripts/mirror_sam3_model.py D:\\models\\sam3")
+            print("       6. Or manually place sam3.pt at the path above.")
             sys.exit(1)
 
     print("=" * 60)

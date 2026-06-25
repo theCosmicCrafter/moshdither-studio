@@ -67,8 +67,8 @@ impl Effect for ZoomGlitch {
         let cx = w as f32 / 2.0;
         let cy = h as f32 / 2.0;
         let block_size = 16usize;
-        let bw = (w + block_size - 1) / block_size;
-        let bh = (h + block_size - 1) / block_size;
+        let bw = w.div_ceil(block_size);
+        let bh = h.div_ceil(block_size);
         let mut vectors = Vec::with_capacity(bw * bh);
         for by in 0..bh {
             for bx in 0..bw {
@@ -159,8 +159,8 @@ impl Effect for ShearGlitch {
         let cx = w as f32 / 2.0;
         let cy = h as f32 / 2.0;
         let block_size = 16usize;
-        let bw = (w + block_size - 1) / block_size;
-        let bh = (h + block_size - 1) / block_size;
+        let bw = w.div_ceil(block_size);
+        let bh = h.div_ceil(block_size);
         let mut vectors = Vec::with_capacity(bw * bh);
         for by in 0..bh {
             for bx in 0..bw {
@@ -251,8 +251,8 @@ impl Effect for VibrateGlitch {
         let w = input.width as usize;
         let h = input.height as usize;
         let block_size = 16usize;
-        let bw = (w + block_size - 1) / block_size;
-        let bh = (h + block_size - 1) / block_size;
+        let bw = w.div_ceil(block_size);
+        let bh = h.div_ceil(block_size);
         let mut vectors = Vec::with_capacity(bw * bh);
         for _ in 0..(bw * bh) {
             vectors.push(MotionVector {
@@ -458,8 +458,8 @@ impl Effect for BufferGlitch {
         let w = input.width as usize;
         let h = input.height as usize;
         let block_size = 16usize;
-        let bw = (w + block_size - 1) / block_size;
-        let bh = (h + block_size - 1) / block_size;
+        let bw = w.div_ceil(block_size);
+        let bh = h.div_ceil(block_size);
         let vectors = vec![MotionVector { x: 4, y: 0 }; bw * bh];
         let field = MotionField {
             width: bw,
@@ -500,10 +500,9 @@ impl Effect for BufferGlitch {
             let curr = &input.frames[i];
             let current_field = block_match_motion_field(prev, curr, 16, SHIFT_OPTIONS);
 
-            // Blend with buffered fields using feedback
+            // Blend with the oldest buffered field for delay-style feedback
             if !mv_buffer.is_empty() {
-                let buf_idx = (i - 1) % mv_buffer.len();
-                let blended = blend_motion_fields(&current_field, &mv_buffer[buf_idx], feedback);
+                let blended = blend_motion_fields(&current_field, &mv_buffer[0], feedback);
                 let warped = warp_by_motion_field(curr, &blended);
                 frames.push(warped);
             } else {
@@ -587,8 +586,8 @@ impl Effect for DelayGlitch {
         let w = input.width as usize;
         let h = input.height as usize;
         let block_size = 16usize;
-        let bw = (w + block_size - 1) / block_size;
-        let bh = (h + block_size - 1) / block_size;
+        let bw = w.div_ceil(block_size);
+        let bh = h.div_ceil(block_size);
         let vectors = vec![MotionVector { x: 0, y: 3 }; bw * bh];
         let field = MotionField {
             width: bw,
@@ -678,8 +677,8 @@ impl Effect for MirrorGlitch {
         let w = input.width as usize;
         let h = input.height as usize;
         let block_size = 16usize;
-        let bw = (w + block_size - 1) / block_size;
-        let bh = (h + block_size - 1) / block_size;
+        let bw = w.div_ceil(block_size);
+        let bh = h.div_ceil(block_size);
         let mut vectors = Vec::with_capacity(bw * bh);
         for _ in 0..(bw * bh) {
             // Mirror: x vector is negated

@@ -25,8 +25,6 @@ export function useBatchQueue() {
 
   const filePath = useAppStore((s) => s.filePath);
   const mediaInfo = useAppStore((s) => s.mediaInfo);
-  const effectStack = useAppStore((s) => s.effectStack);
-  const activeMask = useAppStore((s) => s.activeMask);
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
   const setExportProgress = useAppStore((s) => s.setExportProgress);
   const setExportIsRunning = useAppStore((s) => s.setExportIsRunning);
@@ -78,15 +76,17 @@ export function useBatchQueue() {
 
       try {
         const state = useAppStore.getState();
-        const activeEffects = effectStack.filter((e) => e.enabled);
+        const activeEffects = state.effectStack.filter((e) => e.enabled);
         const stack = stackToRustPayload(activeEffects, state.activeMask, state.sam3Masks);
 
         const outputPath = await exportVideo(filePath, stack, {
-          maskB64: activeMask,
+          maskB64: null,
           codec: job.codec,
           fps: job.fps,
           width: job.resolutionW,
           height: job.resolutionH,
+          format: job.format,
+          quality: job.quality,
         });
 
         if (abortRef.current) break;
@@ -116,8 +116,6 @@ export function useBatchQueue() {
     isProcessing,
     mediaInfo,
     filePath,
-    effectStack,
-    activeMask,
     setStatusMessage,
     setExportProgress,
     setExportIsRunning,

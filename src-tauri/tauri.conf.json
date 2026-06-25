@@ -10,7 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "withGlobalTauri": true,
+    "withGlobalTauri": false,
     "windows": [
       {
         "label": "main",
@@ -23,11 +23,12 @@
         "center": true,
         "decorations": true,
         "transparent": false,
+        "maximized": true,
         "dragDropEnabled": true
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src * data: blob: asset:; style-src 'self' 'unsafe-inline'",
+      "csp": "default-src 'self'; img-src 'self' data: blob: asset: tauri:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com",
       "capabilities": ["default"]
     }
   },
@@ -41,6 +42,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["bin/ffmpeg", "bin/ffprobe"]
+    "externalBin": ["bin/ffmpeg", "bin/ffprobe", "bin/ffgac", "bin/ffedit"],
+    "resources": {
+      "../packages/python-backend": "packages/python-backend"
+    }
   }
 }

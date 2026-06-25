@@ -1,20 +1,10 @@
 import { useState, useEffect, useRef } from "react";
 import { useAppStore } from "../../store";
-import { exportVideo } from "../../lib/tauri";
+import { exportVideo, applyFfglitch } from "../../lib/tauri";
 import { stackToRustPayload } from "../../utils/effectConverter";
 import { useBatchQueue } from "../../hooks/useBatchQueue";
-import {
-  Film,
-  ArrowDownToLine,
-  X,
-  Monitor,
-  Video,
-  HardDrive,
-  Plus,
-  Play,
-  Trash,
-  List,
-} from "lucide-react";
+import type { WatermarkSettings } from "../../utils/watermark";
+import { listen } from "@tauri-apps/api/event";
 
 const CODECS = [
   { id: "h264", label: "H.264", desc: "Best compatibility" },
@@ -31,6 +21,22 @@ const RESOLUTIONS = [
   { id: "480p", label: "480p", w: 854, h: 480 },
 ];
 
+const FFGITCH_MODES = [
+  { id: "classic", label: "Classic" },
+  { id: "classic2", label: "Classic 2" },
+  { id: "bloom", label: "Bloom" },
+  { id: "pulse", label: "Pulse" },
+  { id: "void", label: "Void" },
+  { id: "fluid", label: "Fluid" },
+  { id: "stretch", label: "Stretch" },
+  { id: "shuffle_basic", label: "Shuffle" },
+  { id: "rise", label: "Rise" },
+  { id: "water_bloom", label: "Water Bloom" },
+  { id: "zoom", label: "Zoom" },
+  { id: "delay", label: "Delay" },
+  { id: "buffer", label: "Buffer" },
+];
+
 export default function ExportPanel() {
   const effectStack = useAppStore((s) => s.effectStack);
   const mediaInfo = useAppStore((s) => s.mediaInfo);
@@ -38,7 +44,6 @@ export default function ExportPanel() {
   const audioFilePath = useAppStore((s) => s.audioFilePath);
   const audioBakeData = useAppStore((s) => s.audioBakeData);
   const filePath = useAppStore((s) => s.filePath);
-  const activeMask = useAppStore((s) => s.activeMask);
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
   const exportProgress = useAppStore((s) => s.exportProgress);
   const exportIsRunning = useAppStore((s) => s.exportIsRunning);
@@ -46,6 +51,12 @@ export default function ExportPanel() {
   const setExportProgress = useAppStore((s) => s.setExportProgress);
   const resetExport = useAppStore((s) => s.resetExport);
   const requestExportCancel = useAppStore((s) => s.requestExportCancel);
+  const watermark = useAppStore((s) => s.watermark);
+  const setWatermark = useAppStore((s) => s.setWatermark);
+  const aspectRatioLock = useAppStore((s) => s.aspectRatioLock);
+  const setAspectRatioLock = useAppStore((s) => s.setAspectRatioLock);
+  const aspectRatio = useAppStore((s) => s.aspectRatio);
+  const setAspectRatio = useAppStore((s) => s.setAspectRatio);
 
   const { queue, isProcessing, currentJobId, addJob, removeJob, clearQueue, processQueue } =
     useBatchQueue();
@@ -57,8 +68,13 @@ export default function ExportPanel() {
   const [quality, setQuality] = useState<"draft" | "good" | "best">("good");
   const [fps, setFps] = useState(30);
   const [includeAudio, setIncludeAudio] = useState(true);
+  const [ffglitchMode, setFfglitchMode] = useState("classic");
 
   const progressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const exportTriggerId = useAppStore((s) => s.exportTriggerId);
+  const lastTriggerId = useRef(0);
+  const handleExportRef = useRef<() => void>(() => {});
 
   const activeEffects = effectStack.filter((e) => e.enabled);
   const resolution = RESOLUTIONS.find((r) => r.id === resolutionId)!;
@@ -80,19 +96,35 @@ export default function ExportPanel() {
     }
     if (activeEffects.length === 0) {
       setStatusMessage("No effects enabled — export would be a copy");
+      return;
     }
 
     setExportIsRunning(true);
     setExportProgress(0);
     setStatusMessage("Export started...");
 
-    // Simulate progress while Rust works (backend doesn't stream progress yet)
-    let progress = 0;
-    progressTimerRef.current = setInterval(() => {
-      progress += Math.random() * 3 + 0.5;
-      if (progress >= 95) progress = 95;
-      setExportProgress(progress);
-    }, 300);
+    // Listen for real progress events from backend
+    const unlistenPromise = listen<{ stage: string; progress: number; message?: string }>(
+      "export-progress",
+      (event) => {
+        const { stage, progress, message } = event.payload;
+        if (stage === "error") {
+          if (progressTimerRef.current) {
+            clearInterval(progressTimerRef.current);
+            progressTimerRef.current = null;
+          }
+          setExportIsRunning(false);
+          setExportProgress(0);
+          setStatusMessage(`Export failed: ${message ?? "unknown error"}`);
+        } else {
+          setExportProgress(progress);
+          if (stage === "decoding") setStatusMessage("Decoding video...");
+          else if (stage === "effects") setStatusMessage("Applying effects...");
+          else if (stage === "encoding") setStatusMessage("Encoding video...");
+          else if (stage === "done") setStatusMessage("Export complete!");
+        }
+      }
+    );
 
     const state = useAppStore.getState();
     const stack = stackToRustPayload(
@@ -106,16 +138,27 @@ export default function ExportPanel() {
 
     const audioBakeJson = audioBakeData ? JSON.stringify(audioBakeData) : null;
 
+    // Use outPoint if set, otherwise use the user-set duration as the clip length
+    const trimEnd = typeof outPoint === "number" ? outPoint : state.duration;
+
     try {
       const outputPath = await exportVideo(filePath, stack, {
-        maskB64: activeMask,
+        maskB64: state.activeMask ?? null,
         codec,
         fps,
         width,
         height,
-        audioBakeJson,
+        audioBakeJson: includeAudio ? audioBakeJson : null,
+        watermark: watermark.enabled ? watermark : null,
+        trimStart: typeof inPoint === "number" ? inPoint : undefined,
+        trimEnd,
+        format,
+        quality,
+        includeAudio,
       });
 
+      const unlisten = await unlistenPromise;
+      unlisten();
       if (progressTimerRef.current) {
         clearInterval(progressTimerRef.current);
         progressTimerRef.current = null;
@@ -127,6 +170,8 @@ export default function ExportPanel() {
         setStatusMessage("Ready");
       }, 3000);
     } catch (err) {
+      const unlisten = await unlistenPromise;
+      unlisten();
       if (progressTimerRef.current) {
         clearInterval(progressTimerRef.current);
         progressTimerRef.current = null;
@@ -136,6 +181,15 @@ export default function ExportPanel() {
       setStatusMessage(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
+
+  handleExportRef.current = handleExport;
+
+  useEffect(() => {
+    if (exportTriggerId > 0 && exportTriggerId !== lastTriggerId.current) {
+      lastTriggerId.current = exportTriggerId;
+      handleExportRef.current();
+    }
+  }, [exportTriggerId]);
 
   const handleCancel = () => {
     requestExportCancel();
@@ -148,29 +202,39 @@ export default function ExportPanel() {
     setStatusMessage("Export cancelled");
   };
 
+  const handleFfglitchExport = async () => {
+    if (!mediaInfo || !filePath) {
+      setStatusMessage("Load media before exporting");
+      return;
+    }
+    setExportIsRunning(true);
+    setExportProgress(0);
+    setStatusMessage("FFglitch export started...");
+    try {
+      const outputPath = await applyFfglitch(filePath, ffglitchMode, {});
+      setExportProgress(100);
+      setStatusMessage(`FFglitch exported: ${outputPath}`);
+    } catch (err) {
+      setStatusMessage(`FFglitch export failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setExportIsRunning(false);
+    }
+  };
+
   return (
     <div
       style={{
         display: "flex",
         flexDirection: "column",
         gap: 8,
-        padding: 12,
-        background: "#1a1a1a",
-        borderRadius: 6,
-        minWidth: 220,
-        maxWidth: 280,
-        color: "#e0e0e0",
+        color: "var(--text-primary)",
         fontSize: 12,
+        fontFamily: "var(--font-body)",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <Film size={14} />
-        <span style={{ fontWeight: 600, fontSize: 13 }}>Export</span>
-      </div>
-
       {/* Format */}
       <div className="space-y-1">
-        <label style={{ fontSize: 10, color: "#888" }}>Format</label>
+        <label style={{ fontSize: 10, color: "var(--text-muted)" }}>Format</label>
         <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
           {(["mp4", "webm", "gif", "png_seq"] as const).map((f) => (
             <button
@@ -182,8 +246,8 @@ export default function ExportPanel() {
                 borderRadius: 3,
                 border: "none",
                 cursor: "pointer",
-                background: format === f ? "rgba(74, 144, 217, 0.25)" : "#333",
-                color: format === f ? "#6cf" : "#aaa",
+                background: format === f ? "rgba(255, 173, 224, 0.25)" : "var(--surface-container-low)",
+                color: format === f ? "var(--accent-pink)" : "var(--text-muted)",
               }}
             >
               {f.toUpperCase().replace("_", "-")}
@@ -194,7 +258,7 @@ export default function ExportPanel() {
 
       {/* Quality */}
       <div className="space-y-1">
-        <label style={{ fontSize: 10, color: "#888" }}>Quality</label>
+        <label style={{ fontSize: 10, color: "var(--text-muted)" }}>Quality</label>
         <div style={{ display: "flex", gap: 2 }}>
           {(["draft", "good", "best"] as const).map((q) => (
             <button
@@ -207,8 +271,8 @@ export default function ExportPanel() {
                 borderRadius: 3,
                 border: "none",
                 cursor: "pointer",
-                background: quality === q ? "rgba(74, 144, 217, 0.25)" : "#333",
-                color: quality === q ? "#6cf" : "#aaa",
+                background: quality === q ? "rgba(184, 211, 0, 0.25)" : "var(--surface-container-low)",
+                color: quality === q ? "var(--accent-gold)" : "var(--text-muted)",
                 textTransform: "capitalize",
               }}
             >
@@ -220,7 +284,7 @@ export default function ExportPanel() {
 
       {/* FPS */}
       <div className="space-y-1">
-        <label style={{ fontSize: 10, color: "#888" }}>Frame Rate</label>
+        <label style={{ fontSize: 10, color: "var(--text-muted)" }}>Frame Rate</label>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <input
             aria-label="FPS"
@@ -232,7 +296,7 @@ export default function ExportPanel() {
             onChange={(e) => setFps(parseInt(e.target.value))}
             style={{ flex: 1 }}
           />
-          <span style={{ minWidth: 28, textAlign: "right", fontFamily: "var(--font-mono)" }}>
+          <span style={{ minWidth: 28, textAlign: "right", fontFamily: "var(--font-mono)", color: "var(--text-primary)" }}>
             {fps}
           </span>
         </div>
@@ -252,8 +316,8 @@ export default function ExportPanel() {
 
       {/* Audio bake status */}
       {audioEnabled && audioFilePath && (
-        <div style={{ fontSize: 10, color: audioBakeData ? "#4caf50" : "#888", display: "flex", alignItems: "center", gap: 4 }}>
-          <HardDrive size={10} />
+        <div style={{ fontSize: 10, color: audioBakeData ? "var(--success)" : "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
+          <span className="material-symbols-outlined" style={{ fontSize: 10 }}>hard_drive</span>
           {audioBakeData
             ? `Audio baked: ${audioBakeData.totalFrames} frames`
             : "Audio not baked (effects will be static)"}
@@ -263,8 +327,8 @@ export default function ExportPanel() {
       {/* Active effects count */}
       {/* Resolution */}
       <div className="space-y-1">
-        <label style={{ fontSize: 10, color: "#888", display: "flex", alignItems: "center", gap: 4 }}>
-          <Monitor size={10} />
+        <label style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
+          <span className="material-symbols-outlined" style={{ fontSize: 10 }}>monitor</span>
           Resolution
         </label>
         <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
@@ -279,8 +343,8 @@ export default function ExportPanel() {
                 borderRadius: 3,
                 border: "none",
                 cursor: "pointer",
-                background: resolutionId === r.id ? "rgba(74, 144, 217, 0.25)" : "#333",
-                color: resolutionId === r.id ? "#6cf" : "#aaa",
+                background: resolutionId === r.id ? "rgba(0, 244, 254, 0.25)" : "var(--surface-container-low)",
+                color: resolutionId === r.id ? "var(--accent-teal)" : "var(--text-muted)",
               }}
             >
               {r.label}
@@ -289,10 +353,52 @@ export default function ExportPanel() {
         </div>
       </div>
 
+      {/* Aspect Ratio Lock */}
+      <div className="space-y-1">
+        <label style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
+          <input
+            type="checkbox"
+            checked={aspectRatioLock}
+            onChange={(e) => setAspectRatioLock(e.target.checked)}
+            style={{ margin: 0 }}
+          />
+          <span className="material-symbols-outlined" style={{ fontSize: 10 }}>aspect_ratio</span>
+          Lock Aspect Ratio
+        </label>
+        {aspectRatioLock && (
+          <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
+            {[
+              { label: "16:9", value: 16 / 9 },
+              { label: "4:3", value: 4 / 3 },
+              { label: "1:1", value: 1 },
+              { label: "9:16", value: 9 / 16 },
+              { label: "21:9", value: 21 / 9 },
+              { label: "3:2", value: 3 / 2 },
+            ].map((r) => (
+              <button
+                key={r.label}
+                onClick={() => setAspectRatio(r.value)}
+                style={{
+                  padding: "2px 6px",
+                  fontSize: 10,
+                  borderRadius: 3,
+                  border: "none",
+                  cursor: "pointer",
+                  background: aspectRatio === r.value ? "rgba(0, 244, 254, 0.25)" : "var(--surface-container-low)",
+                  color: aspectRatio === r.value ? "var(--accent-teal)" : "var(--text-muted)",
+                }}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Codec */}
       <div className="space-y-1">
-        <label style={{ fontSize: 10, color: "#888", display: "flex", alignItems: "center", gap: 4 }}>
-          <Video size={10} />
+        <label style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
+          <span className="material-symbols-outlined" style={{ fontSize: 10 }}>videocam</span>
           Codec
         </label>
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -309,8 +415,8 @@ export default function ExportPanel() {
                 borderRadius: 3,
                 border: "none",
                 cursor: "pointer",
-                background: codec === c.id ? "rgba(74, 144, 217, 0.25)" : "#333",
-                color: codec === c.id ? "#6cf" : "#aaa",
+                background: codec === c.id ? "rgba(255, 173, 224, 0.25)" : "var(--surface-container-low)",
+                color: codec === c.id ? "var(--accent-pink)" : "var(--text-muted)",
               }}
             >
               <span>{c.label}</span>
@@ -321,8 +427,8 @@ export default function ExportPanel() {
       </div>
 
       {/* Active effects count */}
-      <div style={{ fontSize: 10, color: "#888", display: "flex", alignItems: "center", gap: 4 }}>
-        <HardDrive size={10} />
+      <div style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
+        <span className="material-symbols-outlined" style={{ fontSize: 10 }}>hard_drive</span>
         {activeEffects.length} effect{activeEffects.length !== 1 ? "s" : ""} queued
       </div>
 
@@ -332,7 +438,7 @@ export default function ExportPanel() {
           <div
             style={{
               height: 4,
-              background: "#333",
+              background: "var(--surface-container-low)",
               borderRadius: 2,
               overflow: "hidden",
             }}
@@ -341,14 +447,14 @@ export default function ExportPanel() {
               style={{
                 width: `${exportProgress}%`,
                 height: "100%",
-                background: "linear-gradient(90deg, #4a90d9, #6cf)",
+                background: "linear-gradient(90deg, var(--accent-pink), var(--accent-teal))",
                 borderRadius: 2,
                 transition: "width 0.2s ease",
               }}
             />
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: 10, color: "#888" }}>
+            <span style={{ fontSize: 10, color: "var(--text-muted)" }}>
               {Math.round(exportProgress)}%
             </span>
             <button
@@ -362,23 +468,208 @@ export default function ExportPanel() {
                 borderRadius: 3,
                 border: "none",
                 cursor: "pointer",
-                background: "#522",
-                color: "#faa",
+                background: "rgba(255, 180, 171, 0.15)",
+                color: "var(--danger)",
               }}
             >
-              <X size={10} />
+              <span className="material-symbols-outlined" style={{ fontSize: 10 }}>close</span>
               Cancel
             </button>
           </div>
         </div>
       )}
 
+      {/* FFglitch export */}
+      <div className="space-y-1" style={{ borderTop: "1px solid var(--outline-variant)", paddingTop: 8 }}>
+        <label
+          htmlFor="ffglitch-mode"
+          style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 10 }}>bolt</span>
+          FFglitch Export
+        </label>
+        <select
+          id="ffglitch-mode"
+          value={ffglitchMode}
+          onChange={(e) => setFfglitchMode(e.target.value)}
+          style={{
+            width: "100%",
+            padding: "4px 6px",
+            fontSize: 11,
+            borderRadius: 3,
+            border: "1px solid var(--outline-variant)",
+            background: "var(--surface-container-low)",
+            color: "var(--text-primary)",
+          }}
+        >
+          {FFGITCH_MODES.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label}
+            </option>
+          ))}
+        </select>
+        <button
+          onClick={handleFfglitchExport}
+          disabled={exportIsRunning || !mediaInfo || !filePath}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+            padding: "6px 0",
+            fontSize: 11,
+            fontWeight: 600,
+            borderRadius: 3,
+            border: "none",
+            cursor: "pointer",
+            background: "var(--accent-gold)",
+            color: "var(--on-tertiary)",
+            opacity: exportIsRunning || !mediaInfo || !filePath ? 0.5 : 1,
+          }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 12 }}>auto_fix_high</span>
+          Export FFglitch ({ffglitchMode})
+        </button>
+      </div>
+
+      {/* Watermark */}
+      <div className="space-y-1" style={{ borderTop: "1px solid var(--outline-variant)", paddingTop: 8 }}>
+        <label
+          htmlFor="watermark-enabled"
+          style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}
+        >
+          <input
+            id="watermark-enabled"
+            type="checkbox"
+            checked={watermark.enabled}
+            onChange={(e) => setWatermark({ enabled: e.target.checked })}
+            style={{ margin: 0 }}
+          />
+          <span className="material-symbols-outlined" style={{ fontSize: 10 }}>branding_watermark</span>
+          Watermark
+        </label>
+        {watermark.enabled && (
+          <div className="space-y-1" style={{ paddingLeft: 16 }}>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                type="button"
+                onClick={() => setWatermark({ type: "text" })}
+                style={{
+                  flex: 1,
+                  fontSize: 10,
+                  padding: "3px 0",
+                  border: "1px solid var(--outline-variant)",
+                  borderRadius: 3,
+                  background: watermark.type === "text" ? "var(--accent-teal)" : "var(--surface-container-low)",
+                  color: watermark.type === "text" ? "var(--on-primary)" : "var(--text-primary)",
+                  cursor: "pointer",
+                }}
+              >
+                Text
+              </button>
+              <button
+                type="button"
+                onClick={() => setWatermark({ type: "image" })}
+                style={{
+                  flex: 1,
+                  fontSize: 10,
+                  padding: "3px 0",
+                  border: "1px solid var(--outline-variant)",
+                  borderRadius: 3,
+                  background: watermark.type === "image" ? "var(--accent-teal)" : "var(--surface-container-low)",
+                  color: watermark.type === "image" ? "var(--on-primary)" : "var(--text-primary)",
+                  cursor: "pointer",
+                }}
+              >
+                Image
+              </button>
+            </div>
+            {watermark.type === "text" && (
+              <input
+                type="text"
+                value={watermark.text}
+                onChange={(e) => setWatermark({ text: e.target.value })}
+                placeholder="Watermark text"
+                style={{
+                  width: "100%",
+                  padding: "4px 6px",
+                  fontSize: 11,
+                  borderRadius: 3,
+                  border: "1px solid var(--outline-variant)",
+                  background: "var(--surface-container-low)",
+                  color: "var(--text-primary)",
+                }}
+              />
+            )}
+            {watermark.type === "image" && (
+              <input
+                type="text"
+                value={watermark.imagePath ?? ""}
+                onChange={(e) => setWatermark({ imagePath: e.target.value || null })}
+                placeholder="Image path"
+                style={{
+                  width: "100%",
+                  padding: "4px 6px",
+                  fontSize: 11,
+                  borderRadius: 3,
+                  border: "1px solid var(--outline-variant)",
+                  background: "var(--surface-container-low)",
+                  color: "var(--text-primary)",
+                }}
+              />
+            )}
+            <label style={{ fontSize: 10, color: "var(--text-muted)", display: "block" }}>
+              Position
+              <select
+                value={watermark.position}
+                onChange={(e) => setWatermark({ position: e.target.value as WatermarkSettings["position"] })}
+                style={{
+                  width: "100%",
+                  padding: "4px 6px",
+                  fontSize: 11,
+                  borderRadius: 3,
+                  border: "1px solid var(--outline-variant)",
+                  background: "var(--surface-container-low)",
+                  color: "var(--text-primary)",
+                  display: "block",
+                  marginTop: 2,
+                }}
+              >
+                <option value="top-left">Top Left</option>
+                <option value="top-right">Top Right</option>
+                <option value="bottom-left">Bottom Left</option>
+                <option value="bottom-right">Bottom Right</option>
+                <option value="center">Center</option>
+              </select>
+            </label>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <label style={{ fontSize: 10, color: "var(--text-muted)", minWidth: 42 }} htmlFor="wm-opacity">
+                Opacity
+              </label>
+              <input
+                id="wm-opacity"
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={watermark.opacity}
+                onChange={(e) => setWatermark({ opacity: Number.parseFloat(e.target.value) })}
+                style={{ flex: 1 }}
+              />
+              <span style={{ fontSize: 10, color: "var(--text-muted)", minWidth: 32 }}>
+                {Math.round(watermark.opacity * 100)}%
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* In/Out range */}
       {(inPoint !== null || outPoint !== null) && (
-        <div style={{ fontSize: 10, color: "#888", fontFamily: "var(--font-mono)", display: "flex", gap: 6, alignItems: "center" }}>
-          <span style={{ color: "#2ecc71" }}>IN {inPoint ?? 0}s</span>
+        <div style={{ fontSize: 10, color: "var(--text-muted)", fontFamily: "var(--font-mono)", display: "flex", gap: 6, alignItems: "center" }}>
+          <span style={{ color: "var(--success)" }}>IN {inPoint ?? 0}s</span>
           <span>→</span>
-          <span style={{ color: "#e74c3c" }}>OUT {outPoint ?? "end"}s</span>
+          <span style={{ color: "var(--danger)" }}>OUT {outPoint ?? "end"}s</span>
         </div>
       )}
 
@@ -398,11 +689,11 @@ export default function ExportPanel() {
             borderRadius: 4,
             border: "none",
             cursor: "pointer",
-            background: "#2a6f3c",
-            color: "#fff",
+            background: "var(--accent-pink)",
+            color: "var(--on-primary)",
           }}
         >
-          <ArrowDownToLine size={14} />
+          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>download_for_offline</span>
           Export Video
         </button>
       )}
@@ -432,13 +723,13 @@ export default function ExportPanel() {
             padding: "4px 0",
             fontSize: 11,
             borderRadius: 3,
-            border: "1px solid #444",
-            background: "#222",
-            color: "#ddd",
+            border: "1px solid var(--outline-variant)",
+            background: "var(--surface-container-low)",
+            color: "var(--text-secondary)",
             cursor: "pointer",
           }}
         >
-          <Plus size={11} />
+          <span className="material-symbols-outlined" style={{ fontSize: 11 }}>add</span>
           Add to Queue
         </button>
         <button
@@ -451,13 +742,13 @@ export default function ExportPanel() {
             padding: "4px 8px",
             fontSize: 11,
             borderRadius: 3,
-            border: "1px solid #444",
-            background: "#222",
-            color: "#ddd",
+            border: "1px solid var(--outline-variant)",
+            background: "var(--surface-container-low)",
+            color: "var(--text-secondary)",
             cursor: "pointer",
           }}
         >
-          <List size={11} />
+          <span className="material-symbols-outlined" style={{ fontSize: 11 }}>list</span>
           {queue.length}
         </button>
       </div>
@@ -484,7 +775,7 @@ export default function ExportPanel() {
                   justifyContent: "space-between",
                   padding: "3px 6px",
                   borderRadius: 3,
-                  background: currentJobId === job.id ? "#2a3f2a" : "#1f1f1f",
+                  background: currentJobId === job.id ? "rgba(184, 211, 0, 0.15)" : "var(--surface-container-low)",
                   fontSize: 11,
                 }}
               >
@@ -496,12 +787,12 @@ export default function ExportPanel() {
                     fontSize: 10,
                     color:
                       job.status === "completed"
-                        ? "#4caf50"
+                        ? "var(--success)"
                         : job.status === "failed"
-                        ? "#f44336"
+                        ? "var(--danger)"
                         : job.status === "running"
-                        ? "#ff9800"
-                        : "#888",
+                        ? "var(--accent-gold)"
+                        : "var(--text-muted)",
                     marginRight: 4,
                   }}
                 >
@@ -514,12 +805,12 @@ export default function ExportPanel() {
                     style={{
                       background: "none",
                       border: "none",
-                      color: "#f44",
+                      color: "var(--danger)",
                       cursor: "pointer",
                       padding: 0,
                     }}
                   >
-                    <Trash size={11} />
+                    <span className="material-symbols-outlined" style={{ fontSize: 11 }}>delete</span>
                   </button>
                 )}
               </div>
@@ -537,12 +828,12 @@ export default function ExportPanel() {
                 fontSize: 11,
                 borderRadius: 3,
                 border: "none",
-                background: "#2a6f3c",
-                color: "#fff",
+                background: "var(--accent-gold)",
+                color: "var(--on-tertiary)",
                 cursor: "pointer",
               }}
             >
-              <Play size={11} />
+              <span className="material-symbols-outlined" style={{ fontSize: 11 }}>play_arrow</span>
               Process Queue
             </button>
           )}
@@ -557,13 +848,13 @@ export default function ExportPanel() {
                 padding: "4px 0",
                 fontSize: 11,
                 borderRadius: 3,
-                border: "1px solid #444",
+                border: "1px solid var(--outline-variant)",
                 background: "transparent",
-                color: "#f44",
+                color: "var(--danger)",
                 cursor: "pointer",
               }}
             >
-              <Trash size={11} />
+              <span className="material-symbols-outlined" style={{ fontSize: 11 }}>delete</span>
               Clear Queue
             </button>
           )}

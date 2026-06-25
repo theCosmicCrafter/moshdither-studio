@@ -1,49 +1,128 @@
 //! FFmpeg orchestration — decode, encode, probe, and sidecar management.
 
+#![allow(clippy::too_many_arguments)]
+
+use crate::commands::WatermarkSettings;
 use crate::effects::types::{Frame, VideoSegment};
 use crate::error::{AppError, Result};
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 
-/// Locate the FFmpeg binary. Tries bundled sidecar first, then PATH.
-pub fn ffmpeg_binary() -> Result<String> {
+/// Locate a binary by name. Tries bundled sidecar first, then dev path, then PATH.
+fn locate_binary(base: &str) -> Result<String> {
     // Check bundled binary next to executable (production — Tauri strips suffix)
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let bundled = dir.join("ffmpeg.exe");
+            let bundled = dir.join(format!("{}.exe", base));
             if bundled.exists() {
                 return Ok(bundled.to_string_lossy().to_string());
             }
         }
     }
     // Check development path (src-tauri/bin) with target triple suffix
-    for name in ["ffmpeg-x86_64-pc-windows-msvc.exe", "ffmpeg.exe"] {
-        let dev = Path::new("bin").join(name);
+    for name in [
+        format!("{}-x86_64-pc-windows-msvc.exe", base),
+        format!("{}.exe", base),
+    ] {
+        let dev = Path::new("bin").join(&name);
         if dev.exists() {
             return Ok(dev.to_string_lossy().to_string());
         }
     }
     // Fallback to PATH
-    Ok("ffmpeg".to_string())
+    Ok(base.to_string())
+}
+
+/// Locate the FFmpeg binary. Tries bundled sidecar first, then PATH.
+pub fn ffmpeg_binary() -> Result<String> {
+    locate_binary("ffmpeg")
 }
 
 /// Locate the FFprobe binary. Tries bundled sidecar first, then PATH.
 pub fn ffprobe_binary() -> Result<String> {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let bundled = dir.join("ffprobe.exe");
-            if bundled.exists() {
-                return Ok(bundled.to_string_lossy().to_string());
-            }
-        }
+    locate_binary("ffprobe")
+}
+
+/// Generate a low-resolution proxy video for smooth preview editing.
+/// Returns the path to the generated proxy file in the system temp directory.
+pub fn generate_proxy(source_path: &str, max_width: u32, crf: u32) -> Result<String> {
+    let ffmpeg = ffmpeg_binary()?;
+
+    let (orig_width, orig_height, _fps) = probe_video(source_path)?;
+
+    // Skip proxy if already small enough
+    if orig_width <= max_width {
+        return Ok(source_path.to_string());
     }
-    for name in ["ffprobe-x86_64-pc-windows-msvc.exe", "ffprobe.exe"] {
-        let dev = Path::new("bin").join(name);
-        if dev.exists() {
-            return Ok(dev.to_string_lossy().to_string());
-        }
+
+    let scale_height = (orig_height as f64 * (max_width as f64 / orig_width as f64)).round() as u32;
+    // Ensure even dimensions (required by some codecs)
+    let scale_height = if scale_height % 2 != 0 {
+        scale_height + 1
+    } else {
+        scale_height
+    };
+
+    let proxy_dir = std::env::temp_dir().join("moshdither-proxy");
+    std::fs::create_dir_all(&proxy_dir).map_err(AppError::Io)?;
+
+    let source_name = Path::new(source_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("proxy");
+    let proxy_path = proxy_dir.join(format!("{}_proxy_{}p.mp4", source_name, max_width));
+
+    let output = Command::new(&ffmpeg)
+        .args([
+            "-i",
+            source_path,
+            "-vf",
+            &format!("scale={}:{}", max_width, scale_height),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            &crf.to_string(),
+            "-an",
+            "-y",
+            proxy_path.to_string_lossy().as_ref(),
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(AppError::Io)?;
+
+    if !output.status.success() {
+        return Err(AppError::Ffmpeg(format!(
+            "Proxy generation failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
     }
-    Ok("ffprobe".to_string())
+
+    Ok(proxy_path.to_string_lossy().to_string())
+}
+
+/// Locate the FFgac binary (FFglitch encoder). Tries bundled sidecar first, then PATH.
+pub fn ffgac_binary() -> Result<String> {
+    locate_binary("ffgac")
+}
+
+/// Locate the FFedit binary (FFglitch editor). Tries bundled sidecar first, then PATH.
+pub fn ffedit_binary() -> Result<String> {
+    locate_binary("ffedit")
+}
+
+/// Check whether FFglitch binaries (ffgac + ffedit) are available.
+pub fn ffglitch_available() -> bool {
+    ffgac_binary()
+        .map(|p| Path::new(&p).exists())
+        .unwrap_or(false)
+        && ffedit_binary()
+            .map(|p| Path::new(&p).exists())
+            .unwrap_or(false)
 }
 
 /// Decode a video file to a sequence of raw RGBA frames.
@@ -62,13 +141,15 @@ pub fn decode_video(path: &str, max_frames: Option<usize>) -> Result<VideoSegmen
         "pipe:1",
     ])
     .stdout(Stdio::piped())
-    .stderr(Stdio::null());
+    .stderr(Stdio::piped());
 
     let output = cmd.output().map_err(AppError::Io)?;
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(AppError::Ffmpeg(format!(
-            "FFmpeg decode failed: {}",
-            String::from_utf8_lossy(&output.stderr)
+            "FFmpeg decode failed (exit {}): {}",
+            output.status.code().unwrap_or(-1),
+            stderr.chars().take(2000).collect::<String>()
         )));
     }
 
@@ -95,11 +176,214 @@ pub fn decode_video(path: &str, max_frames: Option<usize>) -> Result<VideoSegmen
 /// Encode a sequence of raw RGBA frames to a video file.
 /// `codec`: "libx264" | "libx265" | "libvpx-vp9" | "prores_ks"
 /// `fps_override`: optional target fps (defaults to segment fps)
+fn apply_watermark_args(mut args: Vec<String>, wm: &WatermarkSettings) -> Vec<String> {
+    if !wm.enabled {
+        return args;
+    }
+
+    fn escape_drawtext(text: &str) -> String {
+        text.replace('\\', "\\\\")
+            .replace('\'', "\\'")
+            .replace(':', "\\:")
+            .replace('{', "\\{")
+            .replace('}', "\\}")
+            .replace('(', "\\(")
+            .replace(')', "\\)")
+            .replace(';', "\\;")
+            .replace('|', "\\|")
+            .replace('%', "\\%")
+            .replace(['\n', '\r'], " ")
+    }
+
+    fn escape_path(path: &str) -> String {
+        path.replace('\'', "\\'").replace(':', "\\:")
+    }
+
+    fn to_drawtext_color(color: &str) -> &str {
+        match color.to_lowercase().as_str() {
+            "black" => "black",
+            "red" => "red",
+            "green" => "green",
+            "blue" => "blue",
+            "yellow" => "yellow",
+            "cyan" => "cyan",
+            "magenta" => "magenta",
+            _ => "white",
+        }
+    }
+
+    fn text_position_coords(position: &str) -> (&str, &str) {
+        match position {
+            "top-left" => ("10", "10"),
+            "top-right" => ("w-text_w-10", "10"),
+            "bottom-left" => ("10", "h-text_h-10"),
+            "center" => ("(w-text_w)/2", "(h-text_h)/2"),
+            _ => ("w-text_w-10", "h-text_h-10"), // bottom-right
+        }
+    }
+
+    fn image_position_coords(position: &str) -> (&str, &str) {
+        match position {
+            "top-left" => ("10", "10"),
+            "top-right" => ("W-w-10", "10"),
+            "bottom-left" => ("10", "H-h-10"),
+            "center" => ("(W-w)/2", "(H-h)/2"),
+            _ => ("W-w-10", "H-h-10"), // bottom-right
+        }
+    }
+
+    if wm.watermark_type == "text" && !wm.text.is_empty() {
+        let (x, y) = text_position_coords(&wm.position);
+        let alpha = ((wm.opacity * 255.0).round() as u32).clamp(0, 255);
+        let alpha_hex = format!("{:02x}", alpha);
+        let color = to_drawtext_color(&wm.color);
+        let mut drawtext = format!(
+            "drawtext=text='{}':x={}:y={}:fontsize={}:fontcolor={}@{}",
+            escape_drawtext(&wm.text),
+            x,
+            y,
+            wm.font_size.clamp(1, 999),
+            color,
+            alpha_hex
+        );
+        if let Some(font_path) = &wm.font_path {
+            drawtext.push_str(&format!(":fontfile={}", escape_path(font_path)));
+        }
+
+        let vf_index = args
+            .iter()
+            .position(|a| a == "-vf" || a == "-filter_complex");
+        if let Some(idx) = vf_index {
+            if idx + 1 < args.len() {
+                args[idx + 1] = format!("{},{}", args[idx + 1], drawtext);
+            }
+        } else {
+            let insert_index = args
+                .iter()
+                .position(|a| a.ends_with(".mp4") || a.ends_with(".mov") || a.ends_with(".mkv"));
+            if let Some(idx) = insert_index {
+                args.insert(idx, "-vf".to_string());
+                args.insert(idx + 1, drawtext);
+            } else {
+                args.push("-vf".to_string());
+                args.push(drawtext);
+            }
+        }
+        return args;
+    }
+
+    if wm.watermark_type == "image" {
+        if let Some(image_path) = &wm.image_path {
+            let (x, y) = image_position_coords(&wm.position);
+            let alpha = wm.opacity.clamp(0.0, 1.0);
+            let scale = if wm.scale > 0 {
+                format!("scale=-1:{}*ih/100", wm.scale.clamp(1, 100))
+            } else {
+                "".to_string()
+            };
+            let opacity_expr = if alpha < 1.0 {
+                format!("format=rgba,colorchannelmixer=aa={:.2}", alpha)
+            } else {
+                "".to_string()
+            };
+
+            let filter = if !scale.is_empty() {
+                if !opacity_expr.is_empty() {
+                    format!(
+                        "[1:v]{}[wm];[wm]{}[wm2];[0:v][wm2]overlay={}:{}",
+                        scale, opacity_expr, x, y
+                    )
+                } else {
+                    format!("[1:v]{}[wm];[0:v][wm]overlay={}:{}", scale, x, y)
+                }
+            } else if !opacity_expr.is_empty() {
+                format!("[1:v]{}[wm];[0:v][wm]overlay={}:{}", opacity_expr, x, y)
+            } else {
+                format!("[0:v][1:v]overlay={}:{}", x, y)
+            };
+
+            // Insert image input right after first -i
+            if let Some(first_input) = args.iter().position(|a| a == "-i") {
+                args.insert(first_input + 2, "-i".to_string());
+                args.insert(first_input + 3, image_path.clone());
+            }
+
+            let fc_index = args
+                .iter()
+                .position(|a| a == "-filter_complex" || a == "-vf");
+            if let Some(idx) = fc_index {
+                let existing = args[idx + 1].clone();
+                if args[idx] == "-vf" {
+                    args[idx] = "-filter_complex".to_string();
+                    args[idx + 1] =
+                        format!("[0:v]{}[v0];{}[v1];[v1]{}[out]", existing, filter, existing);
+                } else {
+                    args[idx + 1] = format!("{};{}", existing, filter);
+                }
+            } else {
+                let insert_index = args.iter().position(|a| {
+                    a.ends_with(".mp4") || a.ends_with(".mov") || a.ends_with(".mkv")
+                });
+                if let Some(idx) = insert_index {
+                    args.insert(idx, "-filter_complex".to_string());
+                    args.insert(idx + 1, filter);
+                } else {
+                    args.push("-filter_complex".to_string());
+                    args.push(filter);
+                }
+            }
+
+            if !args.iter().any(|a| a == "-map") {
+                let output_index = args.iter().position(|a| {
+                    a.ends_with(".mp4") || a.ends_with(".mov") || a.ends_with(".mkv")
+                });
+                if let Some(idx) = output_index {
+                    args.insert(idx, "-map".to_string());
+                    args.insert(idx + 1, "[out]".to_string());
+                }
+            }
+        }
+    }
+
+    args
+}
+
+fn add_metadata_args(mut args: Vec<String>, source_path: &str) -> Vec<String> {
+    if args.iter().any(|a| a == "-metadata") {
+        return args;
+    }
+    if let Ok(meta) = probe_metadata(source_path) {
+        if let Some(artist) = meta.artist {
+            args.push("-metadata".to_string());
+            args.push(format!("artist={}", artist));
+        }
+        if let Some(title) = meta.title {
+            args.push("-metadata".to_string());
+            args.push(format!("title={}", title));
+        }
+        if let Some(comment) = meta.comment {
+            args.push("-metadata".to_string());
+            args.push(format!("comment={}", comment));
+        }
+        args.push("-metadata".to_string());
+        args.push("encoder=MoshDither Studio".to_string());
+    }
+    args
+}
+
 pub fn encode_video(
     segment: &VideoSegment,
     path: &str,
     codec: &str,
     fps_override: Option<f64>,
+    watermark: Option<&WatermarkSettings>,
+    source_path: Option<&str>,
+    quality: Option<&str>,
+    include_audio: Option<bool>,
+    trim_start: Option<f64>,
+    trim_end: Option<f64>,
+    output_width: Option<u32>,
+    output_height: Option<u32>,
 ) -> Result<()> {
     if segment.frames.is_empty() {
         return Err(AppError::Ffmpeg("No frames to encode".to_string()));
@@ -130,46 +414,244 @@ pub fn encode_video(
         fps.to_string(),
         "-i".to_string(),
         "pipe:0".to_string(),
-        "-c:v".to_string(),
-        encoder.to_string(),
-        "-pix_fmt".to_string(),
-        "yuv420p".to_string(),
-        "-y".to_string(),
-        path.to_string(),
     ];
+
+    // Add source as second input for audio (if requested)
+    let audio_input_idx = if include_audio.unwrap_or(false) {
+        if let Some(src) = source_path {
+            // Trim audio to match video trim range
+            if let Some(ts) = trim_start {
+                args.push("-ss".to_string());
+                args.push(ts.to_string());
+            }
+            if let Some(te) = trim_end {
+                args.push("-t".to_string());
+                args.push((te - trim_start.unwrap_or(0.0)).to_string());
+            }
+            args.push("-i".to_string());
+            args.push(src.to_string());
+            Some(1u32) // second input index
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Video encoder
+    args.push("-c:v".to_string());
+    args.push(encoder.to_string());
+
+    // Quality → CRF (lower = better quality)
+    // VP9 uses a different CRF scale (0-63, lower = better)
+    let crf = match quality {
+        Some("draft") => {
+            if encoder == "libvpx-vp9" {
+                35
+            } else {
+                28
+            }
+        }
+        Some("best") => {
+            if encoder == "libvpx-vp9" {
+                24
+            } else {
+                18
+            }
+        }
+        _ => {
+            if encoder == "libvpx-vp9" {
+                30
+            } else {
+                23
+            }
+        } // "good" or default
+    };
+    args.push("-crf".to_string());
+    args.push(crf.to_string());
+
+    // VP9 needs -b:v 0 for CRF mode to work properly
+    if encoder == "libvpx-vp9" {
+        args.push("-b:v".to_string());
+        args.push("0".to_string());
+    }
+
+    args.push("-pix_fmt".to_string());
+    args.push("yuv420p".to_string());
 
     // ProRes needs profile argument
     if encoder == "prores_ks" {
-        args.insert(args.len() - 2, "-profile:v".to_string());
-        args.insert(args.len() - 2, "3".to_string()); // ProRes 422 HQ
+        args.push("-profile:v".to_string());
+        args.push("3".to_string()); // ProRes 422 HQ
     }
+
+    // Audio: encode from second input if present
+    if audio_input_idx.is_some() {
+        args.push("-c:a".to_string());
+        args.push("aac".to_string());
+        args.push("-shortest".to_string());
+    }
+
+    args.push("-y".to_string());
+    args.push(path.to_string());
+
+    // Apply watermark if enabled
+    if let Some(wm) = watermark {
+        if wm.enabled {
+            args = apply_watermark_args(args, wm);
+        }
+    }
+
+    // Fix audio stream mapping when filter_complex is used (watermark image case).
+    // The watermark code may insert an extra -i (image), shifting the audio input index.
+    // We need to explicitly map both video ([out]) and audio (correct input index).
+    if audio_input_idx.is_some() {
+        let has_filter_complex = args.iter().any(|a| a == "-filter_complex");
+        let has_map = args.iter().any(|a| a == "-map");
+
+        if has_filter_complex && has_map {
+            // Count total -i inputs to find the audio source index
+            let input_count = args.iter().filter(|a| *a == "-i").count();
+            // Audio source is the last input (pipe:0 is input 0, watermark image may be input 1, audio is last)
+            let audio_idx = (input_count - 1) as u32;
+            // Find the output path (last arg ending with video extension)
+            let output_pos = args.iter().rposition(|a| {
+                a.ends_with(".mp4")
+                    || a.ends_with(".mov")
+                    || a.ends_with(".mkv")
+                    || a.ends_with(".webm")
+            });
+            if let Some(pos) = output_pos {
+                args.insert(pos, "-map".to_string());
+                args.insert(pos + 1, format!("{}:a", audio_idx));
+            }
+        }
+    }
+
+    // Preserve source metadata when available
+    if let Some(src) = source_path {
+        args = add_metadata_args(args, src);
+    }
+
+    // Apply resolution scale via FFmpeg filter (replaces CPU-based per-frame resize)
+    if let (Some(ow), Some(oh)) = (output_width, output_height) {
+        if ow != w || oh != h {
+            let scale_filter = format!("scale={}:{}", ow, oh);
+            let vf_pos = args.iter().position(|a| a == "-vf");
+            let fc_pos = args.iter().position(|a| a == "-filter_complex");
+            if let Some(pos) = vf_pos {
+                // Prepend scale to existing -vf chain
+                let existing = &args[pos + 1];
+                args[pos + 1] = format!("{},{}", scale_filter, existing);
+            } else if let Some(pos) = fc_pos {
+                // Inject scale into filter_complex: [0:v]scale=W:H[bg];[bg]...
+                let existing = &args[pos + 1];
+                if let Some(rest) = existing.strip_prefix("[0:v]") {
+                    args[pos + 1] = format!("[0:v]{}[bg];[bg]{}", scale_filter, rest);
+                } else {
+                    args[pos + 1] = format!("{};{}", scale_filter, existing);
+                }
+            } else {
+                // No existing video filter — add -vf scale before output
+                let out_pos = args.iter().rposition(|a| {
+                    a.ends_with(".mp4")
+                        || a.ends_with(".mov")
+                        || a.ends_with(".mkv")
+                        || a.ends_with(".webm")
+                });
+                if let Some(pos) = out_pos {
+                    args.insert(pos, scale_filter.clone());
+                    args.insert(pos, "-vf".to_string());
+                }
+            }
+            eprintln!("[export] Applied FFmpeg scale filter: {}", scale_filter);
+        }
+    }
+
+    // yuv420p requires even dimensions. Append a pad filter as the final step
+    // so the encoded output has even width/height without changing the source
+    // frame dimensions when they are already even.
+    if w % 2 != 0 || h % 2 != 0 {
+        let pad_filter = "pad=ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2:black".to_string();
+        eprintln!("[export] DEBUG: ensuring even dimensions for {}x{}", w, h);
+        if let Some(vf_pos) = args.iter().position(|a| a == "-vf") {
+            args[vf_pos + 1] = format!("{}, {}", args[vf_pos + 1], pad_filter);
+        } else if let Some(fc_pos) = args.iter().position(|a| a == "-filter_complex") {
+            let existing = args[fc_pos + 1].clone();
+            args[fc_pos + 1] = format!("{};[out]{}[out]", existing, pad_filter);
+        } else {
+            let out_pos = args.iter().rposition(|a| {
+                a.ends_with(".mp4")
+                    || a.ends_with(".mov")
+                    || a.ends_with(".mkv")
+                    || a.ends_with(".webm")
+            });
+            if let Some(pos) = out_pos {
+                args.insert(pos, pad_filter);
+                args.insert(pos, "-vf".to_string());
+            }
+        }
+    }
+
+    eprintln!(
+        "[export] FFmpeg encode: {} frames, {}x{}, fps={}, codec={}",
+        segment.frames.len(),
+        w,
+        h,
+        fps,
+        encoder
+    );
+    eprintln!("[export] FFmpeg args: {}", args.join(" "));
 
     let mut child = Command::new(&ffmpeg)
         .args(&args)
         .stdin(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
-        .map_err(AppError::Io)?;
+        .map_err(|e| AppError::Ffmpeg(format!("Failed to spawn FFmpeg: {}", e)))?;
 
     {
-        let stdin = child
+        let mut stdin = child
             .stdin
-            .as_mut()
+            .take()
             .ok_or_else(|| AppError::Ffmpeg("Failed to open FFmpeg stdin".to_string()))?;
-        for frame in &segment.frames {
-            std::io::Write::write_all(stdin, &frame.data).map_err(AppError::Io)?;
+        let total = segment.frames.len();
+        for (i, frame) in segment.frames.iter().enumerate() {
+            if i % 50 == 0 || i == total - 1 {
+                eprintln!("[export] Writing frame {}/{} to FFmpeg stdin", i + 1, total);
+            }
+            std::io::Write::write_all(&mut stdin, &frame.data).map_err(AppError::Io)?;
         }
+        // Close stdin so FFmpeg sees EOF and can finish encoding the final frames.
+        drop(stdin);
+        eprintln!("[export] FFmpeg stdin closed (EOF sent), waiting for encode to finish...");
     }
 
-    let status = child.wait().map_err(AppError::Io)?;
-    if !status.success() {
-        return Err(AppError::Ffmpeg("FFmpeg encode failed".to_string()));
+    let output = child.wait_with_output().map_err(AppError::Io)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprintln!("[export] FFmpeg FAILED. stderr:\n{}", stderr);
+        return Err(AppError::Ffmpeg(format!(
+            "FFmpeg encode failed (exit {}): {}",
+            output.status.code().unwrap_or(-1),
+            stderr.chars().take(2000).collect::<String>()
+        )));
     }
+    eprintln!("[export] FFmpeg encode completed successfully");
     Ok(())
 }
 
+type ProbeCache = Mutex<HashMap<String, (u32, u32, f64)>>;
+
 /// Probe video file for width, height, and fps.
+/// Results are cached in-memory to avoid repeated ffprobe calls for the same file.
 pub fn probe_video(path: &str) -> Result<(u32, u32, f64)> {
+    static CACHE: OnceLock<ProbeCache> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(entry) = cache.lock().unwrap().get(path) {
+        return Ok(*entry);
+    }
+
     let bin = ffprobe_binary()?;
 
     let output = Command::new(&bin)
@@ -217,5 +699,112 @@ pub fn probe_video(path: &str) -> Result<(u32, u32, f64)> {
         ));
     }
 
-    Ok((width, height, fps))
+    let result = (width, height, fps);
+    cache.lock().unwrap().insert(path.to_string(), result);
+    Ok(result)
+}
+
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaMetadata {
+    pub creation_time: Option<String>,
+    pub artist: Option<String>,
+    pub title: Option<String>,
+    pub comment: Option<String>,
+    pub encoder: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub duration: Option<f64>,
+    pub fps: Option<f64>,
+    pub bitrate: Option<u32>,
+    pub codec: Option<String>,
+    pub tags: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+pub fn probe_metadata(path: &str) -> Result<MediaMetadata> {
+    let bin = ffprobe_binary()?;
+    let output = Command::new(&bin)
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=tags,duration,bit_rate:stream=width,height,codec_name,r_frame_rate",
+            "-of",
+            "json",
+            path,
+        ])
+        .output()
+        .map_err(AppError::Io)?;
+    if !output.status.success() {
+        return Err(AppError::Ffmpeg(format!(
+            "FFprobe metadata failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    let raw: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|e| AppError::Ffmpeg(format!("Invalid ffprobe JSON: {e}")))?;
+    let mut meta = MediaMetadata::default();
+    if let Some(format) = raw.get("format").and_then(|v| v.as_object()) {
+        if let Some(tags) = format.get("tags").and_then(|v| v.as_object()) {
+            meta.tags = Some(tags.clone());
+            meta.artist = tags
+                .get("artist")
+                .or_else(|| tags.get("ARTIST"))
+                .and_then(|v| v.as_str().map(String::from));
+            meta.title = tags
+                .get("title")
+                .or_else(|| tags.get("TITLE"))
+                .and_then(|v| v.as_str().map(String::from));
+            meta.comment = tags
+                .get("comment")
+                .or_else(|| tags.get("COMMENT"))
+                .or_else(|| tags.get("description"))
+                .and_then(|v| v.as_str().map(String::from));
+            meta.encoder = tags
+                .get("encoder")
+                .or_else(|| tags.get("Encoder"))
+                .or_else(|| tags.get("Software"))
+                .and_then(|v| v.as_str().map(String::from));
+            meta.creation_time = tags
+                .get("creation_time")
+                .or_else(|| tags.get("date"))
+                .or_else(|| tags.get("DateTimeOriginal"))
+                .and_then(|v| v.as_str().map(String::from));
+        }
+        if let Some(d) = format.get("duration").and_then(|v| v.as_str()) {
+            meta.duration = d.parse().ok();
+        }
+        if let Some(b) = format.get("bit_rate").and_then(|v| v.as_str()) {
+            meta.bitrate = b.parse().ok();
+        }
+    }
+    if let Some(streams) = raw.get("streams").and_then(|v| v.as_array()) {
+        if let Some(video) = streams.iter().find(|s| {
+            s.get("width").and_then(|v| v.as_u64()).is_some()
+                && s.get("height").and_then(|v| v.as_u64()).is_some()
+        }) {
+            meta.width = video
+                .get("width")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
+            meta.height = video
+                .get("height")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
+            meta.codec = video
+                .get("codec_name")
+                .and_then(|v| v.as_str().map(String::from));
+            if let Some(rate) = video.get("r_frame_rate").and_then(|v| v.as_str()) {
+                let parts: Vec<&str> = rate.split('/').collect();
+                if parts.len() == 2 {
+                    let num: f64 = parts[0].parse().unwrap_or(0.0);
+                    let den: f64 = parts[1].parse().unwrap_or(1.0);
+                    if den != 0.0 {
+                        meta.fps = Some(num / den);
+                    }
+                }
+            }
+        }
+    }
+    Ok(meta)
 }

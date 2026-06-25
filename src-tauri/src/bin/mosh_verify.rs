@@ -1,0 +1,1265 @@
+//! mosh-verify: Standalone CLI for effect verification.
+//!
+//! Runs outside the Tauri runtime. Useful for CI, automated testing,
+//! and agent-driven verification.
+//!
+//! Usage:
+//!   mosh-verify verify-all [--format json|text] [--filter <substring>]
+//!   mosh-verify verify-effect <effect_id>
+//!   mosh-verify list-effects [--category <category>]
+//!   mosh-verify status
+
+use std::env;
+use std::process::ExitCode;
+
+use moshdither_studio::effects::types::{Frame, Mask, MediaType, ParameterDef, VideoSegment};
+use moshdither_studio::effects::{functional_tests, verification, EffectRegistry};
+use moshdither_studio::ffmpeg;
+use moshdither_studio::utils::image_io;
+
+fn print_usage() {
+    eprintln!("mosh-verify — MoshDither Studio effect verification CLI");
+    eprintln!();
+    eprintln!("USAGE:");
+    eprintln!("  mosh-verify <command> [options]");
+    eprintln!();
+    eprintln!("COMMANDS:");
+    eprintln!("  verify-all              Run verification on all registered effects");
+    eprintln!("    --format <json|text>   Output format (default: text)");
+    eprintln!("    --filter <substring>   Only verify effects whose ID contains substring");
+    eprintln!(
+        "    --check <name>         Only run specific check: no_crash, non_empty, animates, mask"
+    );
+    eprintln!();
+    eprintln!("  verify-effect <id>      Run verification on a single effect by ID");
+    eprintln!();
+    eprintln!("  list-effects            List all registered effects");
+    eprintln!("    --category <cat>       Filter by category (dithering, glitch, analog, etc.)");
+    eprintln!();
+    eprintln!("  status                  Show environment status (binary paths, effect count)");
+    eprintln!();
+    eprintln!("  test-all                Run full functional test suite (all pipeline functions)");
+    eprintln!("    --format <json|text>   Output format (default: text)");
+    eprintln!("    --category <cat>       Only show results from a specific category");
+    eprintln!();
+    eprintln!(
+        "  render-all              Render every effect on a test image + video, save outputs"
+    );
+    eprintln!("    --image <path>         Path to test image (required)");
+    eprintln!("    --video <path>         Path to test video (required for video effects)");
+    eprintln!("    --output <dir>         Output directory (default: ./test-outputs)");
+    eprintln!("    --filter <substring>   Only render effects whose ID contains substring");
+    eprintln!("    --duration <secs>      Clip duration in seconds (default: 5)");
+    eprintln!();
+    eprintln!("  animate-all              Animate a still image through every effect (time 0→1)");
+    eprintln!("    --image <path>         Path to still image (required)");
+    eprintln!("    --output <dir>         Output directory (default: ./test-outputs/animated)");
+    eprintln!("    --filter <substring>   Only animate effects whose ID contains substring");
+    eprintln!("    --duration <secs>      Clip duration in seconds (default: 5)");
+    eprintln!("    --fps <n>              Frames per second (default: 24)");
+    eprintln!();
+    eprintln!("EXAMPLES:");
+    eprintln!("  mosh-verify verify-all --format json > report.json");
+    eprintln!("  mosh-verify verify-all --filter glitch");
+    eprintln!("  mosh-verify verify-effect color.invert");
+    eprintln!("  mosh-verify list-effects --category dithering");
+    eprintln!("  mosh-verify test-all --format json");
+    eprintln!(
+        "  mosh-verify render-all --image photo.png --video clip.mp4 --output ./test-outputs"
+    );
+    eprintln!("  mosh-verify status");
+}
+
+fn cmd_verify_all(args: &[String]) -> ExitCode {
+    let mut format = "text";
+    let mut filter: Option<&str> = None;
+    let mut _check_filter: Option<&str> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--format" => {
+                i += 1;
+                if i < args.len() {
+                    format = &args[i];
+                }
+            }
+            "--filter" => {
+                i += 1;
+                if i < args.len() {
+                    filter = Some(&args[i]);
+                }
+            }
+            "--check" => {
+                i += 1;
+                if i < args.len() {
+                    _check_filter = Some(&args[i]);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let registry = EffectRegistry::new();
+
+    let report = if let Some(f) = filter {
+        // Filter to matching effects only
+        let metas: Vec<_> = registry
+            .list()
+            .into_iter()
+            .filter(|m| m.id.contains(f))
+            .collect();
+        let mut results = Vec::with_capacity(metas.len());
+        for meta in &metas {
+            results.push(verification::verify_effect(&meta.id, &registry));
+        }
+        let passed = results.iter().filter(|r| r.overall_pass).count();
+        let total = results.len();
+        let failed = total - passed;
+        verification::VerificationReport {
+            total_effects: total,
+            passed,
+            failed,
+            results,
+            summary: format!(
+                "{}/{} effects passed verification ({} failed)",
+                passed, total, failed
+            ),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs().to_string())
+                .unwrap_or_else(|_| "unknown".to_string()),
+        }
+    } else {
+        verification::verify_all_effects(&registry)
+    };
+
+    match format {
+        "json" => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).unwrap_or_default()
+            );
+        }
+        _ => {
+            // Text format
+            println!("=== MoshDither Studio Verification Report ===");
+            println!(
+                "Total: {} | Passed: {} | Failed: {}",
+                report.total_effects, report.passed, report.failed
+            );
+            println!();
+            for r in &report.results {
+                let status = if r.overall_pass { "PASS" } else { "FAIL" };
+                println!(
+                    "  {} {} — {} [crash:{} output:{} anim:{} mask_in:{} mask_out:{}] {}ms",
+                    status,
+                    r.effect_id,
+                    r.effect_name,
+                    r.checks.no_crash as u8,
+                    r.checks.non_empty_output as u8,
+                    r.checks.animates as u8,
+                    r.checks.mask_inside_correct as u8,
+                    r.checks.mask_outside_correct as u8,
+                    r.duration_ms,
+                );
+                if let Some(e) = &r.error_message {
+                    println!("       error: {}", e);
+                }
+            }
+            println!();
+            println!("Summary: {}", report.summary);
+        }
+    }
+
+    if report.failed > 0 {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+fn cmd_verify_effect(args: &[String]) -> ExitCode {
+    if args.is_empty() {
+        eprintln!("Error: effect ID required");
+        eprintln!("Usage: mosh-verify verify-effect <effect_id>");
+        return ExitCode::from(2);
+    }
+    let effect_id = &args[0];
+    let registry = EffectRegistry::new();
+    let result = verification::verify_effect(effect_id, &registry);
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&result).unwrap_or_default()
+    );
+
+    if result.overall_pass {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
+fn cmd_list_effects(args: &[String]) -> ExitCode {
+    let mut category_filter: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--category" {
+            i += 1;
+            if i < args.len() {
+                category_filter = Some(args[i].clone());
+            }
+        }
+        i += 1;
+    }
+
+    let registry = EffectRegistry::new();
+    let metas = registry.list();
+
+    let filtered: Vec<_> = if let Some(cat) = category_filter {
+        metas
+            .into_iter()
+            .filter(|m| {
+                format!("{:?}", m.category)
+                    .to_lowercase()
+                    .contains(&cat.to_lowercase())
+            })
+            .collect()
+    } else {
+        metas
+    };
+
+    println!("{:<40} {:<20} Name", "ID", "Category");
+    println!("{:-<80}", "");
+    for m in &filtered {
+        println!(
+            "{:<40} {:<20} {}",
+            m.id,
+            format!("{:?}", m.category),
+            m.name
+        );
+    }
+    println!();
+    println!("Total: {} effects", filtered.len());
+    ExitCode::SUCCESS
+}
+
+fn cmd_status() -> ExitCode {
+    let registry = EffectRegistry::new();
+    let metas = registry.list();
+
+    // Count by category
+    let mut categories: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for m in &metas {
+        let cat = format!("{:?}", m.category);
+        *categories.entry(cat).or_insert(0) += 1;
+    }
+
+    println!("=== MoshDither Studio Status ===");
+    println!();
+    println!("Effects registered: {}", metas.len());
+    println!();
+    println!("By category:");
+    let mut cats: Vec<_> = categories.into_iter().collect();
+    cats.sort();
+    for (cat, count) in &cats {
+        println!("  {:<25} {} effects", cat, count);
+    }
+    println!();
+    println!("Rust version: {}", env!("CARGO_PKG_VERSION"));
+    println!(
+        "Build profile: {}",
+        if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        }
+    );
+
+    ExitCode::SUCCESS
+}
+
+// ── render-all: render every effect on real image + video ──────────────────
+
+/// Build default params from an effect's ParameterDef list.
+/// `effect_id` lets us apply effect-specific strong defaults so every effect is
+/// immediately noticeable in the test outputs.
+fn build_default_params(
+    effect_id: &str,
+    params: &[ParameterDef],
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut map = serde_json::Map::new();
+    for p in params {
+        // Use the default value, but override zero-amount/zero-lift effects
+        // and clamp audio-reactive audio params to neutral so they are animated by
+        // the animate-all command rather than left silent.
+        let val = match (effect_id, p.id.as_str()) {
+            // Audio-reactive: inject fake audio data so effects activate
+            (_, "_audio_bass") => serde_json::json!(0.8),
+            (_, "_audio_beat_bass") => serde_json::json!(1.0),
+            (_, "_audio_beat_energy") => serde_json::json!(0.7),
+            (_, "_audio_centroid") => serde_json::json!(2000.0),
+            (_, "_audio_flux") => serde_json::json!(50.0),
+            // Lift/Gamma/Gain: use non-zero defaults so output is visible
+            (_, "lift_r") | (_, "lift_g") | (_, "lift_b") => serde_json::json!(0.1),
+            (_, "gamma_r") | (_, "gamma_g") | (_, "gamma_b") => serde_json::json!(1.2),
+            (_, "gain_r") | (_, "gain_g") | (_, "gain_b") => serde_json::json!(0.3),
+            // Fractal noise: default amount is strong (must come before wildcard)
+            ("noise.fractal", "amount") => serde_json::json!(5.0),
+            // Default amount/intensity should be strong, not subtle
+            (_, "amount") => serde_json::json!(1.0),
+            (_, "intensity") => serde_json::json!(1.0),
+            (_, "strength") => serde_json::json!(1.0),
+            // Sorting glitch: lower threshold so it activates on more images
+            (_, "u_threshold") => serde_json::json!(0.3),
+            // Noise: strong defaults so grain is obvious
+            (_, "range") => serde_json::json!(64),
+            (_, "density") => serde_json::json!(0.2),
+            (_, "std_dev") => serde_json::json!(48.0),
+            (_, "sigma") => serde_json::json!(16.0),
+            // Glitch: large shifts so scanline corruption is obvious
+            (_, "shift_amount") => serde_json::json!(64),
+            (_, "scanline_interval") => serde_json::json!(4),
+            (_, "u_intensity") => serde_json::json!(5.0),
+            (_, "threshold") => serde_json::json!(0.3),
+            // Overlays: thick, high-opacity lines so they are visible
+            (_, "size") => serde_json::json!(20.0),
+            (_, "line_width") => serde_json::json!(4.0),
+            (_, "opacity") => serde_json::json!(0.9),
+            (_, "grid_size") => serde_json::json!(32.0),
+            // Brightness/contrast: non-neutral defaults
+            (_, "brightness") => serde_json::json!(0.2),
+            (_, "contrast") => serde_json::json!(0.3),
+            (_, "saturation") => serde_json::json!(1.3),
+            (_, "gamma") => serde_json::json!(1.1),
+            // Use the declared default for everything else
+            _ => p.default.clone(),
+        };
+        map.insert(p.id.clone(), val);
+    }
+    map
+}
+
+/// Sanitize an effect ID into a filesystem-safe filename.
+fn sanitize_filename(id: &str) -> String {
+    id.replace(['.', '/', '\\'], "_")
+}
+
+/// Create a circular gradient mask for testing mask-dependent effects.
+fn make_test_mask(w: u32, h: u32) -> Mask {
+    let mut data = vec![0u8; (w * h) as usize];
+    let cx = w as f32 / 2.0;
+    let cy = h as f32 / 2.0;
+    let radius = w.min(h) as f32 * 0.35;
+    for y in 0..h {
+        for x in 0..w {
+            let dx = x as f32 - cx;
+            let dy = y as f32 - cy;
+            let dist = (dx * dx + dy * dy).sqrt();
+            let val = if dist < radius { 255 } else { 0 };
+            data[(y * w + x) as usize] = val;
+        }
+    }
+    Mask {
+        width: w,
+        height: h,
+        data,
+    }
+}
+
+struct RenderStats {
+    total: usize,
+    image_ok: usize,
+    video_ok: usize,
+    skipped: usize,
+    errors: usize,
+}
+
+fn cmd_render_all(args: &[String]) -> ExitCode {
+    let mut image_path: Option<&str> = None;
+    let mut video_path: Option<&str> = None;
+    let mut output_dir = "./test-outputs".to_string();
+    let mut filter: Option<&str> = None;
+    let mut duration_secs = 5.0f64;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--image" => {
+                i += 1;
+                if i < args.len() {
+                    image_path = Some(&args[i]);
+                }
+            }
+            "--video" => {
+                i += 1;
+                if i < args.len() {
+                    video_path = Some(&args[i]);
+                }
+            }
+            "--output" => {
+                i += 1;
+                if i < args.len() {
+                    output_dir = args[i].clone();
+                }
+            }
+            "--filter" => {
+                i += 1;
+                if i < args.len() {
+                    filter = Some(&args[i]);
+                }
+            }
+            "--duration" => {
+                i += 1;
+                if i < args.len() {
+                    duration_secs = args[i].parse().unwrap_or(5.0);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let image_path = match image_path {
+        Some(p) => p,
+        None => {
+            eprintln!("Error: --image <path> is required");
+            return ExitCode::from(2);
+        }
+    };
+
+    // Create output directory structure
+    let images_dir = format!("{}/images", output_dir);
+    let videos_dir = format!("{}/videos", output_dir);
+    let _ = std::fs::create_dir_all(&images_dir);
+    let _ = std::fs::create_dir_all(&videos_dir);
+
+    // Load test image
+    eprintln!("Loading image: {}", image_path);
+    let test_image = match image_io::load_image(image_path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Error loading image: {}", e);
+            return ExitCode::from(1);
+        }
+    };
+    eprintln!("  Image: {}x{}", test_image.width, test_image.height);
+
+    // Load test video (if provided)
+    let test_video: Option<VideoSegment> = if let Some(vp) = video_path {
+        eprintln!("Loading video: {}", vp);
+        let max_frames = (duration_secs * 24.0).ceil() as usize; // assume ~24fps
+        match ffmpeg::decode_video(vp, Some(max_frames)) {
+            Ok(seg) => {
+                eprintln!(
+                    "  Video: {}x{}, {} frames, {} fps",
+                    seg.frames.first().map(|f| f.width).unwrap_or(0),
+                    seg.frames.first().map(|f| f.height).unwrap_or(0),
+                    seg.frames.len(),
+                    seg.fps
+                );
+                Some(seg)
+            }
+            Err(e) => {
+                eprintln!("Warning: could not load video: {}", e);
+                None
+            }
+        }
+    } else {
+        eprintln!("No --video provided, skipping video effects");
+        None
+    };
+
+    // Create test mask for mask-dependent effects
+    let test_mask = make_test_mask(test_image.width, test_image.height);
+
+    let registry = EffectRegistry::new();
+    let metas: Vec<_> = if let Some(f) = filter {
+        registry
+            .list()
+            .into_iter()
+            .filter(|m| m.id.contains(f))
+            .collect()
+    } else {
+        registry.list()
+    };
+
+    eprintln!("\nRendering {} effects...\n", metas.len());
+
+    let mut stats = RenderStats {
+        total: metas.len(),
+        image_ok: 0,
+        video_ok: 0,
+        skipped: 0,
+        errors: 0,
+    };
+    let mut report_lines: Vec<String> = Vec::new();
+
+    for meta in &metas {
+        let effect = match registry.get(&meta.id) {
+            Some(e) => e,
+            None => {
+                eprintln!("  SKIP {} — not found in registry", meta.id);
+                stats.skipped += 1;
+                report_lines.push(format!("SKIP|{}|not found", meta.id));
+                continue;
+            }
+        };
+
+        let safe_name = sanitize_filename(&meta.id);
+        let params = build_default_params(&meta.id, &meta.parameters);
+
+        // ── Render image output ──────────────────────────────
+        let img_out_path = format!("{}/images/{}.png", output_dir, safe_name);
+        let mask_ref = if effect.handles_masking() || meta.id == "mask_isolate" {
+            Some(&test_mask)
+        } else {
+            None
+        };
+
+        match effect.process_frame(&test_image, mask_ref, &params) {
+            Ok(output) => {
+                if let Err(e) = image_io::save_image(&output, &img_out_path, Some("png"), None) {
+                    eprintln!("  ERR  {} — save failed: {}", meta.id, e);
+                    stats.errors += 1;
+                    report_lines.push(format!("ERR|{}|save failed: {}", meta.id, e));
+                } else {
+                    eprintln!("  OK   {} → images/{}.png", meta.id, safe_name);
+                    stats.image_ok += 1;
+                    report_lines.push(format!("OK|{}|images/{}.png", meta.id, safe_name));
+                }
+            }
+            Err(e) => {
+                eprintln!("  ERR  {} — process_frame failed: {}", meta.id, e);
+                stats.errors += 1;
+                report_lines.push(format!("ERR|{}|process_frame: {}", meta.id, e));
+            }
+        }
+
+        // ── Render video output (for video-capable effects) ──
+        if let Some(ref video) = test_video {
+            if meta.media_type == MediaType::Video || meta.media_type == MediaType::Both {
+                let vid_out_path = format!("{}/videos/{}.mp4", output_dir, safe_name);
+                let vid_mask = if effect.handles_masking() || meta.id == "mask_isolate" {
+                    Some(make_test_mask(
+                        video.frames[0].width,
+                        video.frames[0].height,
+                    ))
+                } else {
+                    None
+                };
+
+                let result = if effect.is_temporal() {
+                    effect.process_video(video, vid_mask.as_ref(), &params)
+                } else {
+                    // Non-temporal: process each frame individually
+                    let mut frames = Vec::with_capacity(video.frames.len());
+                    for frame in &video.frames {
+                        match effect.process_frame(frame, vid_mask.as_ref(), &params) {
+                            Ok(f) => frames.push(f),
+                            Err(e) => {
+                                eprintln!("  ERR  {} — video frame failed: {}", meta.id, e);
+                                stats.errors += 1;
+                                report_lines.push(format!("ERR|{}|video frame: {}", meta.id, e));
+                                break;
+                            }
+                        }
+                    }
+                    if frames.len() == video.frames.len() {
+                        Ok(VideoSegment {
+                            frames,
+                            fps: video.fps,
+                        })
+                    } else {
+                        continue; // error already reported
+                    }
+                };
+
+                match result {
+                    Ok(segment) => {
+                        if segment.frames.is_empty() {
+                            eprintln!("  SKIP {} — video output empty", meta.id);
+                            stats.skipped += 1;
+                            report_lines.push(format!("SKIP|{}|empty video", meta.id));
+                        } else {
+                            match ffmpeg::encode_video(
+                                &segment,
+                                &vid_out_path,
+                                "h264",
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                            ) {
+                                Ok(()) => {
+                                    eprintln!(
+                                        "  OK   {} → videos/{}.mp4 ({} frames)",
+                                        meta.id,
+                                        safe_name,
+                                        segment.frames.len()
+                                    );
+                                    stats.video_ok += 1;
+                                    report_lines.push(format!(
+                                        "OK|{}|videos/{}.mp4|{} frames",
+                                        meta.id,
+                                        safe_name,
+                                        segment.frames.len()
+                                    ));
+                                }
+                                Err(e) => {
+                                    eprintln!("  ERR  {} — encode failed: {}", meta.id, e);
+                                    stats.errors += 1;
+                                    report_lines.push(format!("ERR|{}|encode: {}", meta.id, e));
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("  ERR  {} — process_video failed: {}", meta.id, e);
+                        stats.errors += 1;
+                        report_lines.push(format!("ERR|{}|process_video: {}", meta.id, e));
+                    }
+                }
+            }
+        }
+    }
+
+    // Write summary report
+    let report_path = format!("{}/render-report.csv", output_dir);
+    let report_content = format!("status|effect_id|output|notes\n{}", report_lines.join("\n"));
+    let _ = std::fs::write(&report_path, report_content);
+
+    eprintln!("\n=== Render Summary ===");
+    eprintln!("Total effects: {}", stats.total);
+    eprintln!("Image outputs: {}", stats.image_ok);
+    eprintln!("Video outputs: {}", stats.video_ok);
+    eprintln!("Skipped: {}", stats.skipped);
+    eprintln!("Errors: {}", stats.errors);
+    eprintln!("\nReport: {}", report_path);
+    eprintln!("Images: {}/images/", output_dir);
+    eprintln!("Videos: {}/videos/", output_dir);
+
+    if stats.errors > 0 {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+// ── animate-all: animate a still image through every effect ────────────────
+
+/// Check if two frames have any pixel differences.
+fn frames_differ(a: &Frame, b: &Frame) -> bool {
+    if a.data.len() != b.data.len() {
+        return true;
+    }
+    // Sample every 64th byte for speed (full compare is too slow on 1080p)
+    a.data
+        .iter()
+        .step_by(64)
+        .zip(b.data.iter().step_by(64))
+        .any(|(x, y)| x != y)
+}
+
+/// Count how many sampled pixels differ between two frames.
+fn count_differing_pixels(a: &Frame, b: &Frame) -> usize {
+    if a.data.len() != b.data.len() {
+        return a.data.len().max(b.data.len());
+    }
+    let step = 4; // compare every pixel's R channel
+    a.data
+        .iter()
+        .step_by(step)
+        .zip(b.data.iter().step_by(step))
+        .filter(|(x, y)| x != y)
+        .count()
+}
+
+/// Animate the primary driving parameter for an effect based on normalized time.
+/// `time` is 0.0 at the start and 1.0 at the end of the clip.
+/// We always animate from 0 → max so the effect ramps in, regardless of the
+/// default value used for static rendering.
+fn animate_effect_params(
+    effect_id: &str,
+    base_params: &serde_json::Map<String, serde_json::Value>,
+    time: f64,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut params = base_params.clone();
+    params.insert("time".to_string(), serde_json::Value::from(time * 5.0)); // seconds-ish
+
+    let set_if_exists =
+        |params: &mut serde_json::Map<String, serde_json::Value>, key: &str, val: f64| {
+            if params.contains_key(key) {
+                params.insert(key.to_string(), serde_json::json!(val));
+            }
+        };
+
+    match effect_id {
+        // Effects driven by amount/intensity
+        "glitch.edge_stretch"
+        | "glitch.databend"
+        | "glitch.byte_insert"
+        | "glitch.byte_zero"
+        | "glitch.byte_flip"
+        | "glitch.png_chunk"
+        | "glitch.macroblock_glitch"
+        | "analog.ghosting"
+        | "analog.scanlines"
+        | "color.brightness_contrast"
+        | "pixel_geo.block_shift"
+        | "pixel_geo.slice_shift_advanced"
+        | "pixel_geo.wave_distort"
+        | "pixel_geo.mirror_slices"
+        | "pixel_geo.kaleidoscope"
+        | "audio_reactive.audio_dither" => {
+            set_if_exists(&mut params, "amount", time);
+            set_if_exists(&mut params, "intensity", time);
+        }
+        // Effects that read shift as integer: use integer steps
+        "analog.chromatic_aberration" | "pixel_geo.anaglyph" => {
+            set_if_exists(&mut params, "amount", time);
+            if params.contains_key("shift") {
+                params.insert("shift".to_string(), serde_json::json!((time * 32.0) as u64));
+            }
+        }
+        // CRC mismatch: animate shift_amount and scanline_interval.
+        // Must be integer JSON values because the effect reads them via as_u64().
+        "glitch.crc_mismatch" => {
+            if params.contains_key("shift_amount") {
+                params.insert(
+                    "shift_amount".to_string(),
+                    serde_json::json!(1 + (time * 64.0) as u64),
+                );
+            }
+            if params.contains_key("scanline_interval") {
+                params.insert(
+                    "scanline_interval".to_string(),
+                    serde_json::json!(8 + (time * 24.0) as u64),
+                );
+            }
+        }
+        // Byte reverse: animate chunk_size
+        "glitch.byte_reverse" => {
+            if params.contains_key("chunk_size") {
+                params.insert(
+                    "chunk_size".to_string(),
+                    serde_json::json!(2 + (time * 62.0) as u64),
+                );
+            }
+        }
+        // Sorting glitch: lower threshold over time so more pixels sort
+        "glitch.sorting_glitch" | "pixel_geo.pixel_sort" => {
+            if params.contains_key("u_threshold") {
+                params.insert(
+                    "u_threshold".to_string(),
+                    serde_json::json!(0.5 - time * 0.45),
+                );
+            } else if params.contains_key("threshold") {
+                params.insert(
+                    "threshold".to_string(),
+                    serde_json::json!(128.0 - time * 120.0),
+                );
+            }
+        }
+        // Audio-reactive: pulse audio params
+        id if id.starts_with("audio_reactive") => {
+            let pulse = 0.5 + 0.5 * (time * 2.0 * std::f64::consts::PI).sin();
+            params.insert("_audio_bass".to_string(), serde_json::json!(pulse));
+            params.insert(
+                "_audio_beat_bass".to_string(),
+                serde_json::json!(if pulse > 0.7 { 1.0 } else { 0.0 }),
+            );
+            params.insert(
+                "_audio_beat_energy".to_string(),
+                serde_json::json!(pulse * 0.8),
+            );
+            params.insert(
+                "_audio_centroid".to_string(),
+                serde_json::json!(1000.0 + 2000.0 * pulse),
+            );
+            params.insert(
+                "_audio_flux".to_string(),
+                serde_json::json!(30.0 + 40.0 * pulse),
+            );
+        }
+        // Dithering: animate amount/intensity if present
+        id if id.starts_with("dithering") => {
+            set_if_exists(&mut params, "amount", time);
+            set_if_exists(&mut params, "intensity", time);
+        }
+        // Datamoshing profiles and temporal: handled via process_video + synthetic drift
+        _ => {}
+    }
+
+    params
+}
+
+/// Apply a small horizontal drift to a frame so purely-deterministic effects
+/// still produce visible motion when animated.
+fn drift_frame(still: &Frame, frame_idx: usize, total_frames: usize) -> Frame {
+    let w = still.width as usize;
+    let h = still.height as usize;
+    // Total drift of ~2% of the image width over the clip
+    let max_drift = (w as f64 * 0.02).max(1.0) as usize;
+    let t = frame_idx as f64 / total_frames.max(1) as f64;
+    let shift = ((t * max_drift as f64) as usize) % w.max(1);
+    if shift == 0 {
+        return still.clone();
+    }
+    let mut data = vec![0u8; still.data.len()];
+    for y in 0..h {
+        for x in 0..w {
+            let src_x = (x + shift) % w;
+            let src_idx = (y * w + src_x) * 4;
+            let dst_idx = (y * w + x) * 4;
+            data[dst_idx..dst_idx + 4].copy_from_slice(&still.data[src_idx..src_idx + 4]);
+        }
+    }
+    Frame {
+        width: still.width,
+        height: still.height,
+        data,
+    }
+}
+
+/// Create a synthetic drifting video sequence from a still image.
+/// This gives temporal effects cross-frame variation to work with.
+fn make_synthetic_video(still: &Frame, total_frames: usize, fps: f64) -> VideoSegment {
+    let w = still.width as usize;
+    let h = still.height as usize;
+    let drift_pixels = (w.max(h) as f64 / 10.0).max(8.0) as usize;
+
+    let mut frames = Vec::with_capacity(total_frames);
+    for frame_idx in 0..total_frames {
+        let t = frame_idx as f64 / total_frames.max(1) as f64;
+        // Subtle horizontal drift: shift by t * drift_pixels
+        let shift = ((t * drift_pixels as f64) as usize) % w;
+        let mut data = vec![0u8; still.data.len()];
+        for y in 0..h {
+            for x in 0..w {
+                let src_x = (x + shift) % w;
+                let src_idx = (y * w + src_x) * 4;
+                let dst_idx = (y * w + x) * 4;
+                data[dst_idx..dst_idx + 4].copy_from_slice(&still.data[src_idx..src_idx + 4]);
+            }
+        }
+        frames.push(Frame {
+            width: still.width,
+            height: still.height,
+            data,
+        });
+    }
+    VideoSegment { frames, fps }
+}
+
+/// Effects whose output is intentionally static (e.g., freeze-frame).
+/// These are treated as successful verifications, not failures.
+const INTENDED_STATIC_EFFECTS: &[&str] = &["datamoshing.frame_hold"];
+
+fn cmd_animate_all(args: &[String]) -> ExitCode {
+    let mut image_path: Option<&str> = None;
+    let mut output_dir = "./test-outputs/animated".to_string();
+    let mut filter: Option<&str> = None;
+    let mut duration_secs = 5.0f64;
+    let mut fps = 24.0f64;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--image" => {
+                i += 1;
+                if i < args.len() {
+                    image_path = Some(&args[i]);
+                }
+            }
+            "--output" => {
+                i += 1;
+                if i < args.len() {
+                    output_dir = args[i].clone();
+                }
+            }
+            "--filter" => {
+                i += 1;
+                if i < args.len() {
+                    filter = Some(&args[i]);
+                }
+            }
+            "--duration" => {
+                i += 1;
+                if i < args.len() {
+                    duration_secs = args[i].parse().unwrap_or(5.0);
+                }
+            }
+            "--fps" => {
+                i += 1;
+                if i < args.len() {
+                    fps = args[i].parse().unwrap_or(24.0);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let image_path = match image_path {
+        Some(p) => p,
+        None => {
+            eprintln!("Error: --image <path> is required");
+            return ExitCode::from(2);
+        }
+    };
+
+    let _ = std::fs::create_dir_all(&output_dir);
+
+    // Load still image
+    eprintln!("Loading image: {}", image_path);
+    let still = match image_io::load_image(image_path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Error loading image: {}", e);
+            return ExitCode::from(1);
+        }
+    };
+    eprintln!("  Image: {}x{}", still.width, still.height);
+
+    let total_frames = (duration_secs * fps).round() as usize;
+    eprintln!(
+        "  Duration: {}s, FPS: {}, Total frames: {}",
+        duration_secs, fps, total_frames
+    );
+
+    // Create test mask for mask-dependent effects
+    let test_mask = make_test_mask(still.width, still.height);
+
+    let registry = EffectRegistry::new();
+    let metas: Vec<_> = if let Some(f) = filter {
+        registry
+            .list()
+            .into_iter()
+            .filter(|m| m.id.contains(f))
+            .collect()
+    } else {
+        registry.list()
+    };
+
+    eprintln!("\nAnimating {} effects...\n", metas.len());
+
+    let mut animated_count = 0;
+    let mut static_count = 0;
+    let mut intended_static_count = 0;
+    let mut error_count = 0;
+    let mut skip_count = 0;
+    let mut report_lines: Vec<String> = Vec::new();
+
+    for meta in &metas {
+        let effect = match registry.get(&meta.id) {
+            Some(e) => e,
+            None => {
+                eprintln!("  SKIP {} — not in registry", meta.id);
+                skip_count += 1;
+                report_lines.push(format!("SKIP|{}|not in registry", meta.id));
+                continue;
+            }
+        };
+
+        let safe_name = sanitize_filename(&meta.id);
+        let base_params = build_default_params(&meta.id, &meta.parameters);
+        let mask_ref = if effect.handles_masking() || meta.id == "mask_isolate" {
+            Some(&test_mask)
+        } else {
+            None
+        };
+
+        // Generate frames: temporal effects get a synthetic drifting video + process_video,
+        // non-temporal effects get per-frame process_frame with animated params.
+        let mut frames: Vec<Frame> = Vec::with_capacity(total_frames);
+        let mut process_error: Option<String> = None;
+
+        if effect.is_temporal() {
+            // Build a synthetic video sequence so temporal effects have cross-frame variation
+            let synthetic = make_synthetic_video(&still, total_frames, fps);
+            let vid_mask = if effect.handles_masking() || meta.id == "mask_isolate" {
+                Some(make_test_mask(still.width, still.height))
+            } else {
+                None
+            };
+            // For temporal effects, use a fixed time param or animate their specific params
+            let mut params = animate_effect_params(&meta.id, &base_params, 0.5);
+            // For datamoshing.stop, vary the random threshold to make trigger probability change
+            if meta.id == "datamoshing.stop" {
+                params.insert("threshold".to_string(), serde_json::json!(50.0));
+                params.insert("n_frames".to_string(), serde_json::json!(5));
+            }
+            match effect.process_video(&synthetic, vid_mask.as_ref(), &params) {
+                Ok(seg) => frames = seg.frames,
+                Err(e) => process_error = Some(format!("process_video: {}", e)),
+            }
+        } else {
+            // First pass: generate frames with animated parameters
+            for frame_idx in 0..total_frames {
+                let time = frame_idx as f64 / total_frames.max(1) as f64;
+                let frame_params = animate_effect_params(&meta.id, &base_params, time);
+
+                match effect.process_frame(&still, mask_ref, &frame_params) {
+                    Ok(f) => frames.push(f),
+                    Err(e) => {
+                        process_error = Some(format!("frame {}: {}", frame_idx, e));
+                        break;
+                    }
+                }
+            }
+
+            // Second pass: if the effect is deterministic/static, apply a tiny
+            // per-frame drift to the input so the video still shows motion.
+            if process_error.is_none()
+                && frames.len() == total_frames
+                && !frames_differ(&frames[0], &frames[frames.len() / 2])
+                && !frames_differ(&frames[0], &frames[frames.len() - 1])
+            {
+                eprintln!("    {} first pass static, applying input drift", meta.id);
+                frames.clear();
+                for frame_idx in 0..total_frames {
+                    let time = frame_idx as f64 / total_frames.max(1) as f64;
+                    let frame_params = animate_effect_params(&meta.id, &base_params, time);
+                    let drifted = drift_frame(&still, frame_idx, total_frames);
+
+                    match effect.process_frame(&drifted, mask_ref, &frame_params) {
+                        Ok(f) => frames.push(f),
+                        Err(e) => {
+                            process_error = Some(format!("drift frame {}: {}", frame_idx, e));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(e) = process_error {
+            eprintln!("  ERR  {} — {}", meta.id, e);
+            error_count += 1;
+            report_lines.push(format!("ERR|{}|{}", meta.id, e));
+            continue;
+        }
+
+        if frames.is_empty() {
+            eprintln!("  SKIP {} — no frames generated", meta.id);
+            skip_count += 1;
+            report_lines.push(format!("SKIP|{}|no frames", meta.id));
+            continue;
+        }
+
+        // Check if the effect actually animated (frame 0 vs frame mid differ)
+        let mid = frames.len() / 2;
+        let last = frames.len() - 1;
+        let animates =
+            frames_differ(&frames[0], &frames[mid]) || frames_differ(&frames[0], &frames[last]);
+        let diff_pixels = count_differing_pixels(&frames[0], &frames[last]);
+
+        // Encode video
+        let vid_out_path = format!("{}/{}.mp4", output_dir, safe_name);
+        let segment = VideoSegment { frames, fps };
+
+        match ffmpeg::encode_video(
+            &segment,
+            &vid_out_path,
+            "h264",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ) {
+            Ok(()) => {
+                let is_intended_static =
+                    !animates && INTENDED_STATIC_EFFECTS.contains(&meta.id.as_str());
+                let status = if animates {
+                    "ANIMATED"
+                } else if is_intended_static {
+                    "INTENDED_STATIC"
+                } else {
+                    "STATIC"
+                };
+                if animates {
+                    animated_count += 1;
+                    eprintln!(
+                        "  ANIM {} {} → {}.mp4 ({} differing pixels)",
+                        meta.id, status, safe_name, diff_pixels
+                    );
+                } else if is_intended_static {
+                    intended_static_count += 1;
+                    eprintln!(
+                        "  HOLD {} {} → {}.mp4 ({} differing pixels)",
+                        meta.id, status, safe_name, diff_pixels
+                    );
+                } else {
+                    static_count += 1;
+                    eprintln!(
+                        "  STAT {} {} → {}.mp4 ({} differing pixels)",
+                        meta.id, status, safe_name, diff_pixels
+                    );
+                }
+                report_lines.push(format!(
+                    "{}|{}|{}.mp4|{} differing pixels",
+                    status, meta.id, safe_name, diff_pixels
+                ));
+            }
+            Err(e) => {
+                eprintln!("  ERR  {} — encode failed: {}", meta.id, e);
+                error_count += 1;
+                report_lines.push(format!("ERR|{}|encode: {}", meta.id, e));
+            }
+        }
+    }
+
+    // Write report
+    let report_path = format!("{}/animate-report.csv", output_dir);
+    let report_content = format!("status|effect_id|output|notes\n{}", report_lines.join("\n"));
+    let _ = std::fs::write(&report_path, report_content);
+
+    eprintln!("\n=== Animation Summary ===");
+    eprintln!("Total effects: {}", metas.len());
+    eprintln!("Animated (motion detected): {}", animated_count);
+    eprintln!("Intended static (by design): {}", intended_static_count);
+    eprintln!("Static (no motion): {}", static_count);
+    eprintln!("Skipped: {}", skip_count);
+    eprintln!("Errors: {}", error_count);
+    eprintln!("\nReport: {}", report_path);
+    eprintln!("Videos: {}/", output_dir);
+
+    if error_count > 0 || static_count > 0 {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+fn cmd_test_all(args: &[String]) -> ExitCode {
+    let mut format = "text";
+    let mut category_filter: Option<&str> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--format" => {
+                i += 1;
+                if i < args.len() {
+                    format = &args[i];
+                }
+            }
+            "--category" => {
+                i += 1;
+                if i < args.len() {
+                    category_filter = Some(&args[i]);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let report = functional_tests::run_all_function_tests();
+
+    let results: Vec<_> = if let Some(cat) = category_filter {
+        report
+            .results
+            .iter()
+            .filter(|r| r.category.contains(cat))
+            .cloned()
+            .collect()
+    } else {
+        report.results.clone()
+    };
+
+    match format {
+        "json" => {
+            let json_report = serde_json::json!({
+                "total_tests": report.total_tests,
+                "passed": report.passed,
+                "failed": report.failed,
+                "summary": report.summary,
+                "timestamp": report.timestamp,
+                "results": results,
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json_report).unwrap_or_default()
+            );
+        }
+        _ => {
+            println!("=== MoshDither Studio Functional Test Report ===");
+            println!(
+                "Total: {} | Passed: {} | Failed: {}",
+                report.total_tests, report.passed, report.failed
+            );
+            println!();
+
+            // Group by category
+            let mut current_cat = String::new();
+            for r in &results {
+                if r.category != current_cat {
+                    current_cat = r.category.clone();
+                    println!("\n[{}]", current_cat);
+                }
+                let status = if r.passed { "PASS" } else { "FAIL" };
+                println!(
+                    "  {} {} — {} ({}ms)",
+                    status,
+                    r.test_name,
+                    r.details
+                        .as_deref()
+                        .or(r.error_message.as_deref())
+                        .unwrap_or(""),
+                    r.duration_ms
+                );
+            }
+            println!();
+            println!("Summary: {}", report.summary);
+        }
+    }
+
+    if report.failed > 0 {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+fn main() -> ExitCode {
+    let args: Vec<String> = env::args().skip(1).collect();
+
+    if args.is_empty() {
+        print_usage();
+        return ExitCode::from(2);
+    }
+
+    match args[0].as_str() {
+        "verify-all" => cmd_verify_all(&args[1..]),
+        "verify-effect" => cmd_verify_effect(&args[1..]),
+        "list-effects" => cmd_list_effects(&args[1..]),
+        "test-all" => cmd_test_all(&args[1..]),
+        "render-all" => cmd_render_all(&args[1..]),
+        "animate-all" => cmd_animate_all(&args[1..]),
+        "status" => cmd_status(),
+        "--help" | "-h" | "help" => {
+            print_usage();
+            ExitCode::SUCCESS
+        }
+        _ => {
+            eprintln!("Unknown command: {}", args[0]);
+            eprintln!();
+            print_usage();
+            ExitCode::from(2)
+        }
+    }
+}

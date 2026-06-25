@@ -16,7 +16,7 @@ export const databendShader: EffectShader = {
     precision highp float;
     uniform sampler2D tDiffuse;
     uniform float amount;
-    uniform float time;
+    uniform float u_time;
     uniform float seed;
     uniform float blockSize;
     varying vec2 vUv;
@@ -27,9 +27,9 @@ export const databendShader: EffectShader = {
 
     void main() {
       float freq = 50.0 / max(blockSize, 0.1);
-      float r = rand(vec2(floor(vUv.y * freq), time + seed));
+      float r = rand(vec2(floor(vUv.y * freq), u_time + seed));
       float shift = (r - 0.5) * amount * 0.1;
-      float r2 = rand(vec2(floor(vUv.y * freq * 0.4), time + seed + 1.0));
+      float r2 = rand(vec2(floor(vUv.y * freq * 0.4), u_time + seed + 1.0));
       float rgbShift = r2 * amount * 0.05;
       float rChan = texture2D(tDiffuse, vUv + vec2(shift + rgbShift, 0.0)).r;
       float gChan = texture2D(tDiffuse, vUv + vec2(shift, 0.0)).g;
@@ -40,7 +40,7 @@ export const databendShader: EffectShader = {
   `,
   uniforms: [
     { name: "amount", type: "float", default: 0.5 },
-    { name: "time", type: "float", default: 0.0 },
+    { name: "u_time", type: "float", default: 0.0 },
     { name: "seed", type: "float", default: 1.0 },
     { name: "blockSize", type: "float", default: 1.0 },
   ],

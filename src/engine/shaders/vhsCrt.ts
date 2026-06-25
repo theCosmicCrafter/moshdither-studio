@@ -1,8 +1,8 @@
-import { EffectShader } from '../webgl2/types';
+import { EffectShader } from "../webgl2/types";
 
 export const vhsCrtShader: EffectShader = {
-  id: 'vhs_crt',
-  name: 'VHS / CRT',
+  id: "vhs_crt",
+  name: "VHS / CRT",
   vertexSource: `
     attribute vec2 a_position;
     attribute vec2 a_texCoord;
@@ -15,7 +15,7 @@ export const vhsCrtShader: EffectShader = {
   fragmentSource: `
     precision highp float;
     uniform sampler2D tDiffuse;
-    uniform float time;
+    uniform float u_time;
     uniform float bars;
     uniform float amount;
     varying vec2 vUv;
@@ -27,7 +27,7 @@ export const vhsCrtShader: EffectShader = {
     void main() {
       vec2 sam = vUv;
       float barCount = bars;
-      float barPhase = time * 0.5;
+      float barPhase = u_time * 0.5;
       float stretch = sin(sam.y * barCount * 3.14159 + barPhase) * 0.02;
       sam.x += stretch;
 
@@ -38,15 +38,15 @@ export const vhsCrtShader: EffectShader = {
       base.rgb *= mix(1.0, scan, amount * 0.3);
 
       // Subtle noise
-      float n = random1d(vUv.x * 100.0 + vUv.y * 200.0 + time) - 0.5;
+      float n = random1d(vUv.x * 100.0 + vUv.y * 200.0 + u_time) - 0.5;
       base.rgb += n * amount * 0.05;
 
       gl_FragColor = base;
     }
   `,
   uniforms: [
-    { name: 'time', type: 'float', default: 0.0 },
-    { name: 'bars', type: 'float', default: 3.0 },
-    { name: 'amount', type: 'float', default: 1.0 },
+    { name: "u_time", type: "float", default: 0.0 },
+    { name: "bars", type: "float", default: 3.0 },
+    { name: "amount", type: "float", default: 1.0 },
   ],
 };

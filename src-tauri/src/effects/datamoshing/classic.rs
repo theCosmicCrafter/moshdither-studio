@@ -3,7 +3,9 @@ use crate::effects::Effect;
 use crate::error::Result;
 use serde_json::json;
 
-/// Classic datamosh — repeat random frame chunks to create smearing.
+/// Frame Stutter — repeats frame chunks to create temporal stutter/smearing.
+/// This is a pixel-level simulation of datamosh-style frame repetition,
+/// not true codec-level I-frame removal.
 pub struct ClassicDatamosh {
     chunk_size: u32,
     repeats: u32,
@@ -28,7 +30,7 @@ impl Effect for ClassicDatamosh {
     fn meta(&self) -> EffectMeta {
         EffectMeta {
             id: "datamoshing.classic".to_string(),
-            name: "Classic".to_string(),
+            name: "Frame Stutter".to_string(),
             category: EffectCategory::Datamoshing,
             media_type: MediaType::Video,
             parameters: vec![

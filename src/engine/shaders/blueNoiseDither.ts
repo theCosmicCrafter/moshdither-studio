@@ -1,8 +1,8 @@
-import { EffectShader } from '../webgl2/types';
+import { EffectShader } from "../webgl2/types";
 
 export const blueNoiseDitherShader: EffectShader = {
-  id: 'blue_noise_dither',
-  name: 'Blue Noise Dither',
+  id: "blue_noise_dither",
+  name: "Blue Noise Dither",
   vertexSource: `
     attribute vec2 a_position;
     attribute vec2 a_texCoord;
@@ -18,22 +18,28 @@ export const blueNoiseDitherShader: EffectShader = {
     uniform float amount;
     varying vec2 vUv;
 
-    float bayer(vec2 uv) {
-      ivec2 p = ivec2(mod(floor(uv * 64.0), 8.0));
-      int a = p.x ^ p.y;
-      int b = p.x & p.y;
-      return float(((a & 1) << 2) | ((b & 1) << 1) | ((a >> 1) & 1)) / 8.0;
+    float bayer2(float x, float y) {
+      float ix = mod(x, 2.0);
+      float iy = mod(y, 2.0);
+      if (ix < 1.0) { if (iy < 1.0) return 0.0; return 3.0; }
+      if (iy < 1.0) return 2.0; return 1.0;
+    }
+    float bayer4(float x, float y) {
+      return 4.0 * bayer2(mod(x, 2.0), mod(y, 2.0)) + bayer2(floor(x / 2.0), floor(y / 2.0));
+    }
+    float bayer8(float x, float y) {
+      return 4.0 * bayer4(mod(x, 4.0), mod(y, 4.0)) + bayer2(floor(x / 4.0), floor(y / 4.0));
     }
 
     void main() {
       vec4 color = texture2D(tDiffuse, vUv);
       float lum = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-      float noise = (bayer(vUv) - 0.5) * amount;
+      float px = mod(floor(vUv.x * 64.0), 8.0);
+      float py = mod(floor(vUv.y * 64.0), 8.0);
+      float noise = (bayer8(px, py) / 64.0 - 0.5) * amount;
       float t = step(0.5 - noise, lum);
       gl_FragColor = vec4(vec3(t), color.a);
     }
   `,
-  uniforms: [
-    { name: 'amount', type: 'float', default: 0.5 },
-  ],
+  uniforms: [{ name: "amount", type: "float", default: 0.5 }],
 };

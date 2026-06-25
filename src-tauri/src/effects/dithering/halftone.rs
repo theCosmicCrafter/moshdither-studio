@@ -11,7 +11,7 @@ pub struct HalftoneDither {
 impl HalftoneDither {
     pub fn new(dot_size: u32) -> Self {
         Self {
-            dot_size: dot_size.max(1).min(32),
+            dot_size: dot_size.clamp(1, 32),
         }
     }
 }
@@ -29,18 +29,16 @@ impl Effect for HalftoneDither {
             name: "Halftone".to_string(),
             category: EffectCategory::Dithering,
             media_type: MediaType::Both,
-            parameters: vec![
-                ParameterDef {
-                    id: "dot_size".to_string(),
-                    name: "Dot Size".to_string(),
-                    param_type: ParamType::Slider,
-                    default: json!(8),
-                    min: Some(2.0),
-                    max: Some(32.0),
-                    step: Some(1.0),
-                    options: None,
-                },
-            ],
+            parameters: vec![ParameterDef {
+                id: "dot_size".to_string(),
+                name: "Dot Size".to_string(),
+                param_type: ParamType::Slider,
+                default: json!(8),
+                min: Some(2.0),
+                max: Some(32.0),
+                step: Some(1.0),
+                options: None,
+            }],
         }
     }
 

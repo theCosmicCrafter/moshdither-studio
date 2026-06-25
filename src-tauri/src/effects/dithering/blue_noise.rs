@@ -18,8 +18,8 @@ impl BlueNoiseDither {
         let mut noise = vec![0u8; size * size];
         // Phase 1: initial white noise
         let mut rng = rand::thread_rng();
-        for i in 0..noise.len() {
-            noise[i] = rng.gen();
+        for pixel in &mut noise {
+            *pixel = rng.gen();
         }
         // Phase 2: simple smoothing pass to reduce clustering
         for _ in 0..3 {

@@ -1,8 +1,8 @@
-import { EffectShader } from '../webgl2/types';
+import { EffectShader } from "../webgl2/types";
 
 export const sierraDitherShader: EffectShader = {
-  id: 'sierra_dither',
-  name: 'Sierra Dither',
+  id: "sierra_dither",
+  name: "Sierra Dither",
   vertexSource: `
     attribute vec2 a_position;
     attribute vec2 a_texCoord;
@@ -18,21 +18,24 @@ export const sierraDitherShader: EffectShader = {
     uniform float amount;
     varying vec2 vUv;
 
-    float bayer(vec2 uv) {
-      ivec2 p = ivec2(mod(floor(uv * 64.0), 4.0));
-      int a = (p.x ^ p.y) & 1;
-      int b = p.x & 1;
-      return float((b << 1) | a) / 4.0;
+    float bayer2(float x, float y) {
+      float ix = mod(x, 2.0);
+      float iy = mod(y, 2.0);
+      if (ix < 1.0) { if (iy < 1.0) return 0.0; return 3.0; }
+      if (iy < 1.0) return 2.0; return 1.0;
+    }
+    float bayer4(float x, float y) {
+      return 4.0 * bayer2(mod(x, 2.0), mod(y, 2.0)) + bayer2(floor(x / 2.0), floor(y / 2.0));
     }
 
     void main() {
       vec4 color = texture2D(tDiffuse, vUv);
       float lum = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-      float t = step(1.0 - bayer(vUv) * amount, lum);
+      float px = mod(floor(vUv.x * 64.0), 4.0);
+      float py = mod(floor(vUv.y * 64.0), 4.0);
+      float t = step(1.0 - (bayer4(px, py) / 16.0) * amount, lum);
       gl_FragColor = vec4(vec3(t), color.a);
     }
   `,
-  uniforms: [
-    { name: 'amount', type: 'float', default: 0.5 },
-  ],
+  uniforms: [{ name: "amount", type: "float", default: 0.5 }],
 };

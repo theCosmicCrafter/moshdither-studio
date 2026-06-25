@@ -1,14 +1,20 @@
-import { RenderPass, EffectShader } from "../engine/webgl2/types";
 import { shaderRegistry } from "../engine/shaders";
+import { EffectShader, RenderPass } from "../engine/webgl2/types";
 import { StackEntry } from "../store";
 
 /** Maps a Rust effect ID to its WebGL shader preview equivalent. */
-interface WebGLMapping {
+export interface WebGLMapping {
   shaderId: string;
   /** Maps Rust parameter names to WebGL uniform names. */
   paramMap: Record<string, string>;
   /** Optional value transforms: (rustParamName, value) => webglValue */
   transform?: (rustParam: string, value: unknown) => number | number[] | boolean;
+  /**
+   * If false, the WebGL shader is an approximation of the Rust algorithm and
+   * the preview should fall back to CPU rendering for accuracy.
+   * Defaults to true (shader accurately represents the Rust effect).
+   */
+  accurate?: boolean;
 }
 
 /**
@@ -16,7 +22,7 @@ interface WebGLMapping {
  * Parameter names differ between the Rust CPU backend and WebGL shaders,
  * so we map them here for preview-export parity where possible.
  */
-const rustToWebGL: Record<string, WebGLMapping> = {
+export const rustToWebGL: Record<string, WebGLMapping> = {
   // Pixel Geometry
   "pixel_geo.pixelate": {
     shaderId: "pixelate",
@@ -29,6 +35,11 @@ const rustToWebGL: Record<string, WebGLMapping> = {
   "pixel_geo.wave_distort": {
     shaderId: "wave_distort",
     paramMap: { amount: "amount", frequency: "frequency" },
+  },
+  "pixel_geo.slice_shift_advanced": {
+    shaderId: "slice_shift",
+    paramMap: { min_slice_size: "sliceHeight", max_slice_size: "sliceHeight", amount: "amount" },
+    transform: (_k, v) => (typeof v === "number" ? v : 8),
   },
   "pixel_geo.mirror_slices": {
     shaderId: "mirror",
@@ -58,7 +69,8 @@ const rustToWebGL: Record<string, WebGLMapping> = {
   },
   "analog.chromatic_aberration": {
     shaderId: "chromatic_aberration",
-    paramMap: { amount: "amount" },
+    paramMap: { shift: "amount" },
+    transform: (_k, v) => (typeof v === "number" ? v / 10 : 1),
   },
   "analog.vhs": {
     shaderId: "vhs_crt",
@@ -93,6 +105,26 @@ const rustToWebGL: Record<string, WebGLMapping> = {
   "color.invert": {
     shaderId: "invert",
     paramMap: { intensity: "amount" },
+  },
+  "color.brightness_contrast": {
+    shaderId: "colorGrade",
+    paramMap: {
+      brightness: "u_brightness",
+      contrast: "u_contrast",
+      saturation: "u_saturation",
+    },
+    transform: (k, v) => {
+      const n = typeof v === "number" ? v : 0;
+      // Rust contrast is [-1, 1] where 0 = no change; shader expects multiplier where 1 = no change
+      if (k === "contrast") return n + 1.0;
+      // brightness and saturation map directly
+      return n;
+    },
+  },
+  "color.historical_palettes": {
+    shaderId: "pass_through",
+    paramMap: {},
+    accurate: false,
   },
   "color.lut_grading": {
     shaderId: "lut_color_grading",
@@ -152,19 +184,19 @@ const rustToWebGL: Record<string, WebGLMapping> = {
   },
 
   // Noise
-  "noise.uniform_noise": {
+  "noise.uniform": {
     shaderId: "noise_grain",
     paramMap: { amount: "amount" },
   },
-  "noise.gaussian_noise": {
+  "noise.gaussian": {
     shaderId: "noise_grain",
     paramMap: { amount: "amount" },
   },
-  "noise.salt_pepper_noise": {
+  "noise.salt_pepper": {
     shaderId: "noise_grain",
     paramMap: { density: "amount" },
   },
-  "noise.fractal_noise": {
+  "noise.fractal": {
     shaderId: "fractal_noise",
     paramMap: { amount: "amount", scale: "scale", octaves: "octaves" },
     transform: (_k, v) => {
@@ -176,15 +208,38 @@ const rustToWebGL: Record<string, WebGLMapping> = {
   // Dithering
   "dithering.halftone": {
     shaderId: "dither_halftone",
-    paramMap: { dot_size: "scale" },
+    paramMap: {
+      dot_size: "scale",
+      col_light: "colLight",
+      col_dark: "colDark",
+      col_white: "colWhite",
+      amount: "amount",
+    },
     transform: (_k, v) => {
+      if (_k === "colLight" || _k === "colDark" || _k === "colWhite") {
+        // Rust stores colors as hex strings; shader expects [r,g,b] 0-1
+        if (typeof v === "string") {
+          const hex = v.replace("#", "");
+          const r = parseInt(hex.substring(0, 2), 16) / 255;
+          const g = parseInt(hex.substring(2, 4), 16) / 255;
+          const b = parseInt(hex.substring(4, 6), 16) / 255;
+          return [r, g, b];
+        }
+        return [1, 1, 1];
+      }
       const dot = typeof v === "number" ? v : 8.0;
       return Math.max(2.0, Math.min(32.0, dot));
     },
   },
-  "dithering.bayer_dither": {
+  "dithering.bayer": {
     shaderId: "bayer_dither",
-    paramMap: { scale: "scale" },
+    paramMap: { matrix_size: "scale" },
+    // Rust param is an index (0-3) into [2,4,8,16]; shader uses scale as block size
+    transform: (_k, v) => {
+      const idx = typeof v === "number" ? Math.floor(v) : 1;
+      const sizes = [2, 4, 8, 16];
+      return sizes[Math.max(0, Math.min(3, idx))];
+    },
   },
   "dithering.palette": {
     shaderId: "palette_dither",
@@ -205,38 +260,86 @@ const rustToWebGL: Record<string, WebGLMapping> = {
   },
   "dithering.blue_noise": {
     shaderId: "blue_noise_dither",
-    paramMap: { amount: "amount" },
+    paramMap: { strength: "amount" },
+    // Shader uses Bayer 8x8, not real blue noise texture. Approximate.
+    accurate: false,
   },
+  // Error diffusion algorithms — cannot be done in parallel pixel shaders.
+  // All marked accurate: false to use CPU fallback for correct results.
   "dithering.atkinson": {
     shaderId: "atkinson_dither",
     paramMap: { amount: "amount" },
+    accurate: false,
   },
   "dithering.burkes": {
     shaderId: "burkes_dither",
     paramMap: { amount: "amount" },
+    accurate: false,
   },
   "dithering.floyd_steinberg": {
     shaderId: "floyd_steinberg_dither",
     paramMap: { amount: "amount" },
+    accurate: false,
   },
   "dithering.jarvis_judice_ninke": {
     shaderId: "jarvis_dither",
     paramMap: { amount: "amount" },
+    accurate: false,
   },
   "dithering.sierra": {
     shaderId: "sierra_dither",
     paramMap: { amount: "amount" },
+    accurate: false,
   },
   "dithering.stucki": {
     shaderId: "stucki_dither",
     paramMap: { amount: "amount" },
+    accurate: false,
   },
   "dithering.riemersma": {
     shaderId: "riemersma_dither",
     paramMap: { amount: "amount" },
+    accurate: false,
+  },
+  // Error diffusion variants — Rust-only, no WebGL shader can do error diffusion
+  "dithering.error_diffusion_variants": {
+    shaderId: "pass_through",
+    paramMap: { algorithm: "amount", levels: "amount" },
+    accurate: false,
+  },
+  // Ordered dither variants — Rust-only (various ordered matrices)
+  "dithering.ordered_variants": {
+    shaderId: "pass_through",
+    paramMap: {},
+    accurate: false,
+  },
+  // Line screen — Rust-only (spiral halftone screen)
+  "dithering.line_screen": {
+    shaderId: "pass_through",
+    paramMap: {},
+    accurate: false,
+  },
+  // Custom matrix — Rust-only (user-defined dithering matrix)
+  "dithering.custom_matrix": {
+    shaderId: "pass_through",
+    paramMap: {},
+    accurate: false,
+  },
+  // K-means quantization — Rust-only (clustering-based color reduction)
+  "dithering.kmeans": {
+    shaderId: "pass_through",
+    paramMap: {},
+    accurate: false,
+  },
+  // Auto palette — Rust-only (MMCQ color quantization)
+  "dithering.auto_palette": {
+    shaderId: "pass_through",
+    paramMap: {},
+    accurate: false,
   },
 
-  // Glitch
+  // Glitch — byte-level effects operate on decoded RGBA pixels, not encoded
+  // file bytes. The WebGL shaders are visual approximations, not real corruption.
   "glitch.slice_shift": {
     shaderId: "slice_shift",
     paramMap: { slice_height: "sliceHeight", amount: "amount" },
@@ -244,26 +347,333 @@ const rustToWebGL: Record<string, WebGLMapping> = {
   "glitch.databend": {
     shaderId: "databend",
     paramMap: { amount: "amount" },
+    // Rust does byte-level corruption; shader does row shift. Fake.
+    accurate: false,
   },
   "glitch.jpeg_quantize": {
     shaderId: "jpeg_quantize",
     paramMap: { quality: "quality" },
+    transform: (_k, v) => {
+      const q = typeof v === "number" ? v : 50;
+      return q / 100;
+    },
+    // Shader approximates JPEG quantization, not real DCT. Approximate.
+    accurate: false,
   },
   "glitch.byte_flip": {
     shaderId: "byte_flip",
     paramMap: { amount: "amount" },
+    // Rust XORs random bytes; shader does row-based color inversion. Fake.
+    accurate: false,
   },
   "glitch.byte_zero": {
     shaderId: "byte_zero",
     paramMap: { amount: "amount" },
+    accurate: false,
   },
   "glitch.byte_insert": {
     shaderId: "byte_insert",
     paramMap: { amount: "amount" },
+    accurate: false,
   },
   "glitch.byte_reverse": {
     shaderId: "byte_reverse",
     paramMap: { amount: "amount" },
+    accurate: false,
+  },
+  "glitch.sorting_glitch": {
+    shaderId: "sortingGlitch",
+    paramMap: {
+      u_threshold: "u_threshold",
+      u_intensity: "u_intensity",
+      u_direction: "u_direction",
+    },
+  },
+  "glitch.macroblock_glitch": {
+    shaderId: "macroblockGlitch",
+    paramMap: {
+      u_intensity: "u_intensity",
+      u_blockSize: "u_blockSize",
+      u_seed: "u_seed",
+    },
+  },
+  "glitch.crc_mismatch": {
+    shaderId: "slice_shift",
+    paramMap: { scanline_interval: "sliceHeight", shift_amount: "amount" },
+    transform: (_k, v) => (typeof v === "number" ? v / 100 : 0.2),
+    // Mapped to slice_shift shader — completely different algorithm. Fake.
+    accurate: false,
+  },
+  "glitch.png_chunk": {
+    shaderId: "databend",
+    paramMap: { corruption: "amount" },
+    transform: (_k, v) => (typeof v === "number" ? v / 100 : 0.3),
+    // Rust simulates PNG chunk corruption on decoded pixels. Fake.
+    accurate: false,
+  },
+  "glitch.edge_stretch": {
+    shaderId: "pass_through",
+    paramMap: {},
+    accurate: false,
+  },
+
+  // Audio-Reactive
+  "audio_reactive.bass_pulse": {
+    shaderId: "audioBassPulse",
+    paramMap: { sensitivity: "u_intensity" },
+    transform: (_k, v) => (typeof v === "number" ? v / 100 : 1),
+  },
+  "audio_reactive.beat_glitch": {
+    shaderId: "audioGlitchBeat",
+    paramMap: { corruption: "u_intensity", trigger_threshold: "u_sliceHeight" },
+    transform: (_k, v) => (typeof v === "number" ? v / 100 : 0.5),
+  },
+  "audio_reactive.spectral_shift": {
+    shaderId: "audioSpectralShift",
+    paramMap: { shift_amount: "u_intensity" },
+    transform: (_k, v) => (typeof v === "number" ? v / 100 : 0.5),
+  },
+  "audio_reactive.audio_dither": {
+    shaderId: "audioReactiveDither",
+    paramMap: { base_threshold: "u_intensity", modulation: "u_levels" },
+    transform: (_k, v) => {
+      if (_k === "u_levels") return typeof v === "number" ? v : 4;
+      return typeof v === "number" ? v / 100 : 0.5;
+    },
+  },
+
+  // Datamoshing — ALL effects are pixel-level simulations, not real codec-level
+  // datamoshing (I-frame removal, P-frame duplication, motion vector manipulation).
+  // The Rust effects operate on decoded RGBA frames, not on the video bitstream.
+  // Real datamoshing requires FFglitch/FFedit or custom codec parsing. All marked
+  // accurate: false so the preview uses the Rust CPU backend for best results.
+  "datamoshing.classic": {
+    shaderId: "temporalDatamoshing",
+    paramMap: { chunk_size: "u_blockSize", repeats: "u_intensity" },
+    transform: (_k, v) => {
+      if (_k === "u_blockSize") return typeof v === "number" ? v : 16;
+      return typeof v === "number" ? v / 10 : 0.2;
+    },
+    accurate: false,
+  },
+  "datamoshing.bloom": {
+    shaderId: "temporalDatamoshing",
+    paramMap: { bloom_size: "u_blockSize" },
+    transform: (_k, v) => {
+      if (_k === "u_blockSize") return typeof v === "number" ? v : 32;
+      return 0.3;
+    },
+    accurate: false,
+  },
+  "datamoshing.buffer": {
+    shaderId: "temporalDatamoshing",
+    paramMap: { buffer_size: "u_blockSize", feedback: "u_intensity" },
+    transform: (_k, v) => {
+      if (_k === "u_blockSize") return typeof v === "number" ? v : 16;
+      return typeof v === "number" ? v / 100 : 0.3;
+    },
+    accurate: false,
+  },
+  "datamoshing.stop": {
+    shaderId: "temporalDatamoshing",
+    paramMap: { threshold: "u_intensity", n_frames: "u_blockSize" },
+    transform: (_k, v) => {
+      if (_k === "u_blockSize") return typeof v === "number" ? v * 4 : 16;
+      return typeof v === "number" ? v / 100 : 0.2;
+    },
+    accurate: false,
+  },
+  "datamoshing.repeat": {
+    shaderId: "temporalDatamoshing",
+    paramMap: { repeat_count: "u_intensity", series_size: "u_blockSize" },
+    transform: (_k, v) => {
+      if (_k === "u_blockSize") return typeof v === "number" ? v * 4 : 16;
+      return typeof v === "number" ? v / 10 : 0.3;
+    },
+    accurate: false,
+  },
+  "datamoshing.shuffle": {
+    shaderId: "temporalDatamoshing",
+    paramMap: { chunk_size: "u_blockSize" },
+    transform: (_k, v) => {
+      if (_k === "u_blockSize") return typeof v === "number" ? v : 16;
+      return 0.4;
+    },
+    accurate: false,
+  },
+  "datamoshing.delay": {
+    shaderId: "temporalDatamoshing",
+    paramMap: { delay_frames: "u_blockSize" },
+    transform: (_k, v) => {
+      if (_k === "u_blockSize") return typeof v === "number" ? v * 4 : 16;
+      return 0.3;
+    },
+    accurate: false,
+  },
+  "datamoshing.mirror": {
+    shaderId: "mirror",
+    paramMap: {},
+    transform: () => 2,
+    accurate: false,
+  },
+  "datamoshing.zoom": {
+    shaderId: "transform",
+    paramMap: { intensity: "u_scaleX" },
+    transform: (_k, v) => {
+      const i = typeof v === "number" ? v : 1;
+      return 1.0 + i / 10;
+    },
+    accurate: false,
+  },
+  "datamoshing.shear": {
+    shaderId: "transform",
+    paramMap: { intensity: "u_rotation" },
+    transform: (_k, v) => (typeof v === "number" ? v / 10 : 0.1),
+    accurate: false,
+  },
+  "datamoshing.vibrate": {
+    shaderId: "motionVectorGlitch",
+    paramMap: { randomness: "u_intensity" },
+    transform: (_k, v) => (typeof v === "number" ? v / 100 : 0.2),
+    accurate: false,
+  },
+  "datamoshing.iframe_removal": {
+    shaderId: "iframeRemoval",
+    paramMap: { interval: "u_intensity" },
+    transform: (_k, v) => (typeof v === "number" ? v / 10 : 0.3),
+    accurate: false,
+  },
+  "datamoshing.iframe_removal_advanced": {
+    shaderId: "iframeRemoval",
+    paramMap: { threshold: "u_intensity", rate: "u_blockSize" },
+    transform: (_k, v) => {
+      if (_k === "u_blockSize") return typeof v === "number" ? v * 4 : 16;
+      return typeof v === "number" ? v / 100 : 0.3;
+    },
+    accurate: false,
+  },
+  "datamoshing.rise": {
+    shaderId: "temporalDatamoshing",
+    paramMap: { start_drop: "u_intensity" },
+    transform: (_k, v) => (typeof v === "number" ? v / 100 : 0.2),
+    accurate: false,
+  },
+  "datamoshing.motion_transfer": {
+    shaderId: "motionVectorGlitch",
+    paramMap: { strength: "u_intensity", block_size: "u_scale" },
+    transform: (_k, v) => {
+      if (_k === "u_scale") return typeof v === "number" ? v / 10 : 1;
+      return typeof v === "number" ? v / 100 : 0.3;
+    },
+    accurate: false,
+  },
+  "datamoshing.optical_flow": {
+    shaderId: "motionVectorGlitch",
+    paramMap: { warp_strength: "u_intensity", alpha: "u_scale" },
+    transform: (_k, v) => {
+      if (_k === "u_scale") return typeof v === "number" ? v : 1;
+      return typeof v === "number" ? v / 10 : 0.2;
+    },
+    accurate: false,
+  },
+  "datamoshing.profile_glitch": {
+    shaderId: "temporalDatamoshing",
+    paramMap: { intensity: "u_intensity", drop_interval: "u_blockSize" },
+    transform: (_k, v) => {
+      if (_k === "u_blockSize") return typeof v === "number" ? v * 4 : 16;
+      return typeof v === "number" ? v / 100 : 0.4;
+    },
+    accurate: false,
+  },
+  "datamoshing.profile_bloom": {
+    shaderId: "temporalDatamoshing",
+    paramMap: { bloom_size: "u_blockSize", repeat_count: "u_intensity" },
+    transform: (_k, v) => {
+      if (_k === "u_blockSize") return typeof v === "number" ? v : 32;
+      return typeof v === "number" ? v / 10 : 0.3;
+    },
+    accurate: false,
+  },
+  "datamoshing.profile_smear": {
+    shaderId: "temporalDatamoshing",
+    paramMap: { strength: "u_intensity", drop_interval: "u_blockSize" },
+    transform: (_k, v) => {
+      if (_k === "u_blockSize") return typeof v === "number" ? v * 4 : 16;
+      return typeof v === "number" ? v / 100 : 0.5;
+    },
+    accurate: false,
+  },
+  "datamoshing.profile_extreme": {
+    shaderId: "temporalDatamoshing",
+    paramMap: { aggression: "u_intensity" },
+    transform: (_k, v) => (typeof v === "number" ? v / 100 : 0.8),
+    accurate: false,
+  },
+  "datamoshing.profile_rainbow": {
+    shaderId: "temporalDatamoshing",
+    paramMap: { hue_shift: "u_intensity", drop_interval: "u_blockSize" },
+    transform: (_k, v) => {
+      if (_k === "u_blockSize") return typeof v === "number" ? v * 4 : 16;
+      return typeof v === "number" ? v / 360 : 0.3;
+    },
+    accurate: false,
+  },
+
+  // Segmentation
+  mask_isolate: {
+    shaderId: "pass_through",
+    paramMap: {},
+  },
+
+  // Composite (Rust-only, requires external overlay image — pass-through for preview)
+  "composite.overlay": {
+    shaderId: "pass_through",
+    paramMap: {},
+  },
+
+  // Datamoshing — temporal/video-only effects with no meaningful single-frame preview
+  "datamoshing.frame_reverse": {
+    shaderId: "pass_through",
+    paramMap: {},
+    accurate: false,
+  },
+  "datamoshing.frame_sort_by_size": {
+    shaderId: "pass_through",
+    paramMap: {},
+    accurate: false,
+  },
+  "datamoshing.frame_hold": {
+    shaderId: "pass_through",
+    paramMap: {},
+    accurate: false,
+  },
+  "datamoshing.combine": {
+    shaderId: "pass_through",
+    paramMap: {},
+    accurate: false,
+  },
+  "datamoshing.cross_video": {
+    shaderId: "pass_through",
+    paramMap: {},
+    accurate: false,
+  },
+
+  // Overlay / HUD add-on effects
+  "overlay.pixel_grid": {
+    shaderId: "pixel_grid_overlay",
+    paramMap: { grid_size: "gridSize", line_width: "lineWidth", opacity: "opacity" },
+  },
+  "overlay.safe_area": {
+    shaderId: "safe_area",
+    paramMap: { margin: "margin", line_width: "lineWidth", opacity: "opacity" },
+  },
+  "overlay.rule_of_thirds": {
+    shaderId: "rule_of_thirds",
+    paramMap: { line_width: "lineWidth", opacity: "opacity" },
+  },
+  "overlay.crosshairs": {
+    shaderId: "crosshairs",
+    paramMap: { size: "size", line_width: "lineWidth", opacity: "opacity" },
   },
 };
 
@@ -271,7 +681,12 @@ const rustToWebGL: Record<string, WebGLMapping> = {
  * Convert the zustand effect stack into WebGL render passes for real-time preview.
  * Skips disabled effects and effects without a WebGL equivalent.
  */
-export function stackToRenderPasses(stack: StackEntry[]): RenderPass[] {
+export function stackToRenderPasses(
+  stack: StackEntry[],
+  time?: number,
+  activeMask?: string | null,
+  sam3Masks?: string[]
+): RenderPass[] {
   const passes: RenderPass[] = [];
 
   for (const entry of stack) {
@@ -282,6 +697,10 @@ export function stackToRenderPasses(stack: StackEntry[]): RenderPass[] {
 
     if (!shaderRegistry.has(mapping.shaderId)) continue;
 
+    // Resolve mask for this effect — prefer snapshotted maskB64
+    const maskB64 =
+      entry.maskB64 ?? resolveMaskId(entry.maskId, activeMask ?? null, sam3Masks ?? []);
+
     const uniformGroups: Record<string, { rustParam: string; value: unknown }[]> = {};
     for (const [rustParam, webglUniform] of Object.entries(mapping.paramMap)) {
       const rawValue = entry.params[rustParam];
@@ -290,7 +709,7 @@ export function stackToRenderPasses(stack: StackEntry[]): RenderPass[] {
       uniformGroups[webglUniform].push({ rustParam, value: rawValue });
     }
 
-    const uniforms: Record<string, number | number[] | boolean> = {};
+    const uniforms: Record<string, number | number[] | boolean | string> = {};
     for (const [webglUniform, group] of Object.entries(uniformGroups)) {
       if (group.length === 1) {
         const { rustParam, value } = group[0];
@@ -320,24 +739,46 @@ export function stackToRenderPasses(stack: StackEntry[]): RenderPass[] {
       }
     }
 
+    // Provide default values for sampler2D uniforms not set by param mapping
+    const shader = shaderRegistry.get(mapping.shaderId);
+    if (shader) {
+      for (const u of shader.uniforms) {
+        if (u.type === "sampler2D" && uniforms[u.name] === undefined) {
+          uniforms[u.name] = u.default as string;
+        }
+      }
+      // Inject u_time for animated shaders
+      if (shader.uniforms.some((u) => u.name === "u_time") && uniforms["u_time"] === undefined) {
+        uniforms["u_time"] = time ?? 0;
+      }
+    }
+
     passes.push({
       shaderId: mapping.shaderId,
       inputTexture: passes.length === 0 ? "source" : `pass_${passes.length - 1}`,
       outputFramebuffer: `pass_${passes.length}`,
       uniforms,
+      maskB64: maskB64 ?? undefined,
+      maskMode: entry.maskMode ?? "inside",
     });
   }
 
   return passes;
 }
 
-/** Build a Map of shaders needed for the given passes. */
+/** Build a Map of shaders needed for the given passes, including maskBlend if any pass has a mask. */
 export function buildShaderMap(passes: RenderPass[]): Map<string, EffectShader> {
   const map = new Map<string, EffectShader>();
   for (const pass of passes) {
     const shader = shaderRegistry.get(pass.shaderId);
     if (shader && !map.has(pass.shaderId)) {
       map.set(pass.shaderId, shader);
+    }
+    // EffectChain.render() dynamically inserts maskBlend passes after any pass with a mask.
+    // Pre-register the maskBlend shader so it's available when those expanded passes run.
+    if (pass.maskB64 && !map.has("maskBlend")) {
+      const maskShader = shaderRegistry.get("maskBlend");
+      if (maskShader) map.set("maskBlend", maskShader);
     }
   }
   return map;
@@ -347,6 +788,34 @@ export function buildShaderMap(passes: RenderPass[]): Map<string, EffectShader> 
 export function hasWebGLPreview(rustEffectId: string): boolean {
   const mapping = rustToWebGL[rustEffectId];
   return !!mapping && shaderRegistry.has(mapping.shaderId);
+}
+
+/**
+ * Check if any enabled effect in the stack requires CPU preview rendering.
+ * Returns true if:
+ * - An effect has NO WebGL mapping at all (Rust-only effect with no shader)
+ * In that case, the preview must use the Rust CPU backend.
+ * Effects marked accurate: false still use WebGL for preview (approximate but instant).
+ * The accurate CPU backend is only used for final export.
+ */
+export function stackRequiresCpuPreview(stack: StackEntry[]): boolean {
+  return stack.some((e) => {
+    if (!e.enabled) return false;
+    const mapping = rustToWebGL[e.effectId];
+    if (!mapping) return true; // No WebGL mapping → CPU only
+    return false; // Has WebGL mapping → use GPU preview even if approximate
+  });
+}
+
+/** Check if any effect in the stack has an approximate WebGL shader (accurate: false).
+ *  Used to show a "preview approximate" badge to the user. */
+export function stackHasApproximatePreview(stack: StackEntry[]): boolean {
+  return stack.some((e) => {
+    if (!e.enabled) return false;
+    const mapping = rustToWebGL[e.effectId];
+    if (!mapping) return false;
+    return mapping.accurate === false;
+  });
 }
 
 /** List all Rust effect IDs that have WebGL preview support. */
@@ -384,12 +853,15 @@ export function stackToRustPayload(
   effect_id: string;
   params: Record<string, unknown>;
   mask_b64: string | null;
+  mask_mode?: string;
 }> {
   return stack
     .filter((e) => e.enabled)
     .map((e) => ({
       effect_id: e.effectId,
       params: { ...e.params, ...(time !== undefined ? { time } : {}) },
-      mask_b64: resolveMaskId(e.maskId, activeMask, sam3Masks),
+      // Use snapshotted maskB64 if available; fall back to live resolution
+      mask_b64: e.maskB64 ?? resolveMaskId(e.maskId, activeMask, sam3Masks),
+      mask_mode: e.maskMode ?? "inside",
     }));
 }

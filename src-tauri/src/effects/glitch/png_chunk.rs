@@ -77,25 +77,29 @@ impl Effect for PngChunkGlitch {
         let mut rng = rand::thread_rng();
         let len = data.len();
 
-        // Simulate PNG chunk boundary corruption
+        // Simulate PNG chunk boundary corruption.
+        // Skip alpha bytes (every 4th byte) to preserve transparency.
         let mut offset = chunk_interval;
         while offset < len {
             let corrupt_len = (chunk_interval as f32 * corruption) as usize;
             let end = (offset + corrupt_len).min(len);
-            for i in offset..end {
+            for (i, byte) in data.iter_mut().enumerate().take(end).skip(offset) {
+                if i % 4 == 3 {
+                    continue; // Preserve alpha channel
+                }
                 let op = rng.gen_range(0..6u8);
                 match op {
-                    0 => data[i] = data[i].wrapping_add(rng.gen_range(1..50)),
-                    1 => data[i] = data[i].rotate_left(rng.gen_range(1..7u32)),
-                    2 => data[i] = !data[i],
+                    0 => *byte = byte.wrapping_add(rng.gen_range(1..50)),
+                    1 => *byte = byte.rotate_left(rng.gen_range(1..7u32)),
+                    2 => *byte = !*byte,
                     3 => {
                         let v: u8 = rng.gen();
-                        data[i] = v;
+                        *byte = v;
                     }
-                    4 => data[i] = data[i].wrapping_mul(rng.gen_range(2..5u8)),
+                    4 => *byte = byte.wrapping_mul(rng.gen_range(2..5u8)),
                     _ => {
                         let v: u8 = rng.gen();
-                        data[i] = data[i] ^ v;
+                        *byte ^= v;
                     }
                 }
             }
@@ -191,22 +195,26 @@ impl Effect for CrcMismatchGlitch {
         let h = input.height as usize;
         let mut data = input.data.clone();
 
-        // Every Nth scanline, shift pixels horizontally (simulating CRC-corrupted
-        // scanline filter bytes in PNG IDAT data)
+        // Every Nth scanline, shift pixels horizontally in alternating directions
+        // (simulating CRC-corrupted scanline filter bytes in PNG IDAT data)
+        let mut dir = 1i32;
         for y in (0..h).step_by(scanline_interval) {
             let row_start = y * w * 4;
             let row_end = ((y + 1) * w * 4).min(data.len());
-            let row = &data[row_start..row_end].to_vec();
+            let row = data[row_start..row_end].to_vec();
             for x in 0..w {
-                let src_x = (x + shift_amount) % w;
+                let src_x = ((x as i32 + dir * shift_amount as i32).rem_euclid(w as i32)) as usize;
                 let dst_idx = row_start + x * 4;
-                let src_idx = row_start + src_x * 4;
-                if dst_idx + 3 < data.len() && src_idx + 3 < data.len() {
-                    data[dst_idx] = row[src_idx - row_start];
-                    data[dst_idx + 1] = row[src_idx - row_start + 1];
-                    data[dst_idx + 2] = row[src_idx - row_start + 2];
+                let src_off = src_x * 4;
+                if dst_idx + 3 < data.len() && src_off + 2 < row.len() {
+                    data[dst_idx] = row[src_off];
+                    data[dst_idx + 1] = row[src_off + 1];
+                    data[dst_idx + 2] = row[src_off + 2];
+                    // Alpha is preserved from original (already in data)
                 }
             }
+            // Alternate direction for more authentic CRC mismatch look
+            dir *= -1;
         }
 
         Ok(Frame {

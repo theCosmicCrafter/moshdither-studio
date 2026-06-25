@@ -1,24 +1,25 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useAppStore } from "../store";
-import { listEffects, getFrameData, getMediaInfo, loadMediaFromPath } from "../lib/tauri";
+import { listEffects, getFrameData, getMediaInfo, loadMediaFromPath, sam3Init } from "../lib/tauri";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { useKeyframePlayback } from "../hooks/useKeyframePlayback";
+import { usePlaybackEngine } from "../hooks/usePlaybackEngine";
 import { useProjectSession } from "../hooks/useProjectSession";
-import EffectBrowser from "./EffectBrowser";
-import PreviewViewport from "./PreviewViewport";
-import EffectStack from "./EffectStack";
-import MaskPanel from "./MaskPanel";
-import AudioPanel from "./AudioPanel";
-import ExportPanel from "./ExportPanel";
-import PresetPanel from "./PresetPanel";
-import Timeline from "./Timeline";
+import { useSoundManager } from "../hooks/useSoundManager";
+import { useSam3IdleShutdown } from "../hooks/useSam3IdleShutdown";
+import DockLayout from "./DockSystem/DockLayout";
 import Toolbar from "./Toolbar";
 import StatusBar from "./StatusBar";
+import CommandPalette from "./CommandPalette";
+import OnboardingModal from "./OnboardingModal";
 
 export default function AppLayout() {
   useKeyboardShortcuts();
   useKeyframePlayback();
+  usePlaybackEngine();
+  useSam3IdleShutdown();
+  const { attachSounds } = useSoundManager();
   const { autoSave, recentProjects, restoreSession, clearAutoSave } = useProjectSession();
   const [showRecovery, setShowRecovery] = useState(!!autoSave);
   const setAllEffects = useAppStore((s) => s.setAllEffects);
@@ -28,8 +29,22 @@ export default function AppLayout() {
   const setMediaInfo = useAppStore((s) => s.setMediaInfo);
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
   const setFilePath = useAppStore((s) => s.setFilePath);
+  const workspaceRef = useRef<HTMLDivElement>(null);
   const [isDropTarget, setIsDropTarget] = useState(false);
 
+  // Apply theme to document root
+  const theme = useAppStore((s) => s.theme);
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
+
+  // Attach analog click sounds to interactive elements
+  useEffect(() => {
+    const cleanup = attachSounds();
+    return cleanup;
+  }, [attachSounds]);
+
+  // Load effects on mount
   useEffect(() => {
     listEffects()
       .then((effects) => {
@@ -38,6 +53,25 @@ export default function AppLayout() {
       })
       .catch((err) => setStatusMessage(`Error: ${err}`));
   }, [setAllEffects, setStatusMessage]);
+
+  // Auto-initialize SAM3 engine on app startup (non-blocking, runs in background)
+  const setSam3Ready = useAppStore((s) => s.setSam3Ready);
+  useEffect(() => {
+    let cancelled = false;
+    sam3Init()
+      .then(() => {
+        if (!cancelled) {
+          setSam3Ready(true);
+          console.log("[SAM3] Auto-initialized on startup");
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.warn("[SAM3] Auto-init failed:", err);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [setSam3Ready]);
 
   // Refresh preview on demand (called after file load / effect apply).
   // NOT polled — polling every 500 ms held the Rust frame mutex continuously
@@ -70,11 +104,15 @@ export default function AppLayout() {
 
     const setupDragDrop = async () => {
       try {
+        // Guard: Tauri APIs are only available inside the desktop app
+        if (typeof globalThis !== "undefined" && !(globalThis as Record<string, unknown>).__TAURI_INTERNALS__) {
+          console.log("[drag-drop] Running outside Tauri, skipping webview drag-drop");
+          return;
+        }
         const webview = getCurrentWebview();
         console.log("[drag-drop] Webview obtained:", webview);
 
         unlisten = await webview.onDragDropEvent((event) => {
-          console.log("[drag-drop] Event:", event);
           const payload = event.payload;
           if (payload.type === "enter" || payload.type === "over") {
             setIsDropTarget(true);
@@ -118,50 +156,16 @@ export default function AppLayout() {
 
   return (
     <div
-      className="flex flex-col h-full w-full select-none"
-      style={{
-        background: "var(--bg-primary)",
-        color: "var(--text-primary)",
-      }}
+      data-testid="app-layout"
+      className="flex flex-col h-full w-full select-none pixel-grid text-on-surface relative"
+      style={{ background: "transparent" }}
     >
       {/* Top Toolbar */}
       <Toolbar onFileLoaded={refreshPreview} />
 
-      {/* Main Workspace */}
-      <div className="flex-1 flex min-h-0 overflow-hidden">
-        {/* Left: Effect Browser */}
-        <aside
-          className="flex flex-col flex-shrink-0 border-r"
-          style={{
-            width: 260,
-            borderColor: "var(--border-primary)",
-          }}
-        >
-          <EffectBrowser />
-        </aside>
-
-        {/* Center: Preview + Timeline */}
-        <main className="flex-1 flex flex-col min-w-0">
-          <PreviewViewport isDropTarget={isDropTarget} />
-          <Timeline />
-        </main>
-
-        {/* Right: Effect Stack + Mask Panel */}
-        <aside
-          className="flex flex-col flex-shrink-0 border-l overflow-hidden"
-          style={{
-            width: 320,
-            borderColor: "var(--border-primary)",
-          }}
-        >
-          <div className="flex-1 overflow-y-auto min-h-0">
-            <EffectStack />
-          </div>
-          <AudioPanel />
-          <ExportPanel />
-          <PresetPanel />
-          <MaskPanel />
-        </aside>
+      {/* Main Workspace — Dock Layout */}
+      <div ref={workspaceRef} className="flex-1 relative min-h-0 overflow-hidden">
+        <DockLayout isDropTarget={isDropTarget} />
       </div>
 
       {/* Bottom Status */}
@@ -169,32 +173,12 @@ export default function AppLayout() {
 
       {/* Auto-save Recovery Dialog */}
       {showRecovery && autoSave && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.6)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 100,
-          }}
-        >
-          <div
-            style={{
-              background: "var(--bg-secondary, #1a1a1a)",
-              border: "1px solid var(--border-primary, #333)",
-              borderRadius: 8,
-              padding: 20,
-              minWidth: 320,
-              maxWidth: 420,
-              color: "var(--text-primary, #e0e0e0)",
-            }}
-          >
-            <h3 style={{ margin: "0 0 8px", fontSize: 15, fontWeight: 600 }}>
+        <div className="fixed inset-0 flex items-center justify-center z-[100] bg-black/60 backdrop-blur-sm">
+          <div className="neo-flat rounded-lg p-5 min-w-[320px] max-w-[420px] bg-surface/60 backdrop-blur-md text-on-surface">
+            <h3 className="font-headline-md text-headline-md solar-text filigree-header mb-2">
               Recover Session?
             </h3>
-            <p style={{ margin: "0 0 16px", fontSize: 12, color: "var(--text-muted, #999)" }}>
+            <p className="font-label-sm text-label-sm text-on-surface-variant mb-4">
               An unsaved session was found from{" "}
               {new Date(autoSave.savedAt).toLocaleString()}
               {autoSave.filePath && (
@@ -206,21 +190,13 @@ export default function AppLayout() {
               <br />
               Effects: {autoSave.effectStack.length} in stack
             </p>
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <div className="flex gap-2 justify-end">
               <button
                 onClick={() => {
                   clearAutoSave();
                   setShowRecovery(false);
                 }}
-                style={{
-                  padding: "6px 12px",
-                  fontSize: 12,
-                  borderRadius: 4,
-                  border: "1px solid #444",
-                  background: "transparent",
-                  color: "#ddd",
-                  cursor: "pointer",
-                }}
+                className="neo-btn rounded px-3 py-1.5 font-label-sm text-label-sm text-on-surface-variant hover:text-accent-pink transition-colors"
               >
                 Discard
               </button>
@@ -229,15 +205,7 @@ export default function AppLayout() {
                   restoreSession(autoSave);
                   setShowRecovery(false);
                 }}
-                style={{
-                  padding: "6px 12px",
-                  fontSize: 12,
-                  borderRadius: 4,
-                  border: "none",
-                  background: "var(--accent, #2a6f3c)",
-                  color: "#fff",
-                  cursor: "pointer",
-                }}
+                className="neo-btn rounded px-3 py-1.5 font-label-sm text-label-sm text-on-surface bg-accent-pink/20 hover:bg-accent-pink/30 transition-colors"
               >
                 Restore Session
               </button>
@@ -248,38 +216,13 @@ export default function AppLayout() {
 
       {/* Recent Projects */}
       {recentProjects.length > 0 && (
-        <div
-          style={{
-            position: "fixed",
-            bottom: 28,
-            left: 8,
-            zIndex: 50,
-          }}
-        >
-          <div
-            style={{
-              background: "rgba(20,20,20,0.85)",
-              backdropFilter: "blur(6px)",
-              border: "1px solid #333",
-              borderRadius: 6,
-              padding: "6px 8px",
-              fontSize: 11,
-              color: "#aaa",
-              fontFamily: "var(--font-mono, monospace)",
-            }}
-          >
-            <div style={{ fontWeight: 600, marginBottom: 4, color: "#ddd" }}>Recent</div>
+        <div className="fixed bottom-7 left-2 z-50">
+          <div className="neo-flat rounded-md p-2 font-data-micro text-data-micro text-on-surface-variant bg-surface/40 backdrop-blur-md">
+            <div className="font-label-sm text-label-sm text-on-surface mb-1">Recent</div>
             {recentProjects.slice(0, 5).map((p) => (
               <div
                 key={p.path}
-                style={{
-                  cursor: "pointer",
-                  padding: "2px 0",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  maxWidth: 240,
-                }}
+                className="cursor-pointer py-0.5 overflow-hidden text-ellipsis whitespace-nowrap max-w-[240px] hover:text-accent-teal transition-colors"
                 title={p.path}
                 onClick={() => {
                   setFilePath(p.path);
@@ -302,6 +245,8 @@ export default function AppLayout() {
           </div>
         </div>
       )}
+      <CommandPalette />
+      <OnboardingModal />
     </div>
   );
 }

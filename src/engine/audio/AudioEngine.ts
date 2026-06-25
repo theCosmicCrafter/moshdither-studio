@@ -174,7 +174,7 @@ export class AudioEngine {
       spectralFlatness: (f.spectralFlatness as number) ?? 0,
       spectralRolloff: this.normalizeRolloff(f.spectralRolloff as number),
       spectralFlux: flux,
-      zcr: Math.min((f.zcr as number) ?? 0 / 1000, 1),
+      zcr: Math.min(((f.zcr as number) ?? 0) / 1000, 1),
       volume: (f.rms as number) ?? 0,
       ...bandEnergies,
       beatBass: beatInfo.bass,

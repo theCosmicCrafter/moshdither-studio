@@ -23,9 +23,9 @@ fn apply_lift_gamma_gain(
     let mut cb = bf * (1.0 + gain[2]);
 
     // Apply lift (add)
-    cr = cr + lift[0];
-    cg = cg + lift[1];
-    cb = cb + lift[2];
+    cr += lift[0];
+    cg += lift[1];
+    cb += lift[2];
 
     // Apply gamma (power curve)
     let safe_gamma = |v: f32| (v + 1.0).max(0.01);

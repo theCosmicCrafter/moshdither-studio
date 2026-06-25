@@ -7,6 +7,7 @@ license = "MIT"
 repository = ""
 edition = "2021"
 rust-version = "1.75"
+default-run = "moshdither-studio"
 
 [build-dependencies]
 tauri-build = { version = "2.0.0", features = [] }
@@ -15,7 +16,7 @@ tauri-build = { version = "2.0.0", features = [] }
 tauri = { version = "2.0.0", features = [] }
 tauri-plugin-dialog = "2.0.0"
 tauri-plugin-shell = "2.0.0"
-
+ort = "2.0.0-rc.12"
 image = "0.25"
 rayon = "1.8"
 serde = { version = "1.0", features = ["derive"] }
@@ -30,3 +31,12 @@ sha2 = "0.10"
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+
+# Standalone CLI for running effect verification without the Tauri runtime.
+# Usage: cargo run --bin mosh-verify -- [options]
+#        mosh-verify verify-all [--format json|text]
+#        mosh-verify verify-effect <effect_id>
+#        mosh-verify list-effects [--category <cat>]
+[[bin]]
+name = "mosh-verify"
+path = "src/bin/mosh_verify.rs"

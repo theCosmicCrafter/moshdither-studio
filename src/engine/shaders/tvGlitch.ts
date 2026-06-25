@@ -17,7 +17,8 @@ export const tvGlitchShader: EffectShader = {
     uniform sampler2D tDiffuse;
     uniform vec2 resolution;
     uniform float amount;
-    uniform float time;
+    uniform float u_time;
+    uniform float u_speed;
     uniform float seed;
     varying vec2 vUv;
 
@@ -29,19 +30,20 @@ export const tvGlitchShader: EffectShader = {
       vec2 uv = vUv;
       float intensity = amount;
       float s = seed;
+      float t = u_time * u_speed;
 
       // Scanline distortion
-      float scanline = sin(uv.y * 800.0 * rand(vec2(time + s, 1.0))) * 0.04 * intensity;
+      float scanline = sin(uv.y * 800.0 * rand(vec2(t + s, 1.0))) * 0.04 * intensity;
       uv.x += scanline;
 
       // Horizontal tearing
-      if (rand(vec2(time + s, floor(uv.y * 20.0))) > 0.95 * (1.0 - intensity)) {
-        uv.x += rand(vec2(time + s, uv.y)) * 0.2 * intensity;
+      if (rand(vec2(t + s, floor(uv.y * 20.0))) > 0.95 * (1.0 - intensity)) {
+        uv.x += rand(vec2(t + s, uv.y)) * 0.2 * intensity;
       }
 
       // Chromatic aberration
-      float rOffset = intensity * 0.05 * rand(vec2(time + s, uv.y));
-      float bOffset = -intensity * 0.05 * rand(vec2(time + s, uv.y));
+      float rOffset = intensity * 0.05 * rand(vec2(t + s, uv.y));
+      float bOffset = -intensity * 0.05 * rand(vec2(t + s, uv.y));
 
       float r = texture2D(tDiffuse, vec2(uv.x + rOffset, uv.y)).r;
       float g = texture2D(tDiffuse, uv).g;
@@ -53,7 +55,8 @@ export const tvGlitchShader: EffectShader = {
   `,
   uniforms: [
     { name: "amount", type: "float", default: 0.5 },
-    { name: "time", type: "float", default: 0.0 },
+    { name: "u_time", type: "float", default: 0.0 },
+    { name: "u_speed", type: "float", default: 1.0 },
     { name: "seed", type: "float", default: 1.0 },
   ],
 };

@@ -19,7 +19,36 @@ Thumbs.db
 /tests/fixtures/output
 /coverage
 
+# Ignore .git files/worktrees to prevent Tauri build scanner issues
+**/.git
+**/.git.bak
+
 # FFmpeg sidecars (downloaded at build time)
 /src-tauri/binaries/*.exe
 /src-tauri/binaries/ffmpeg*
 /src-tauri/binaries/ffprobe*
+
+# Python venvs
+/audit_venv
+/sam3_env
+/packages/python-backend/venv
+
+# Reference/legacy projects (not part of the app, kept for algorithm reference only)
+/references
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Playwright test artifacts
+/playwright-report/
+/test-results/
+/.playwright-mcp/
+
+# Temp/test output files
+test_*.txt
+*.pyc
+
+# IDE/docs artifacts
+/recycling/
+/desktop.png

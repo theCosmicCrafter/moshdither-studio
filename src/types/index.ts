@@ -5,11 +5,13 @@ export type EffectCategory =
   | "dithering"
   | "glitch"
   | "analog"
+  | "color"
   | "pixel_geometry"
-  | "optical_flow"
+  | "noise"
   | "audio_reactive"
   | "segmentation"
-  | "artistic";
+  | "artistic"
+  | "composite";
 
 export interface ParameterDef {
   id: string;

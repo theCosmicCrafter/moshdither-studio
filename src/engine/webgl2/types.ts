@@ -8,15 +8,17 @@ export interface EffectShader {
 
 export interface UniformDef {
   name: string;
-  type: 'float' | 'vec2' | 'vec3' | 'vec4' | 'sampler2D' | 'int' | 'bool';
-  default: number | number[] | boolean;
+  type: "float" | "vec2" | "vec3" | "vec4" | "sampler2D" | "int" | "bool";
+  default: number | number[] | boolean | string;
 }
 
 export interface RenderPass {
   shaderId: string;
   inputTexture: string;
   outputFramebuffer: string;
-  uniforms: Record<string, number | number[] | boolean>;
+  uniforms: Record<string, number | number[] | boolean | string>;
+  maskB64?: string | null;
+  maskMode?: "inside" | "outside" | "alpha";
 }
 
 export const FULLSCREEN_QUAD_VERT = `

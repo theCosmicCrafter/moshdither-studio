@@ -16,7 +16,7 @@ export const byteFlipShader: EffectShader = {
     precision highp float;
     uniform sampler2D tDiffuse;
     uniform float amount;
-    uniform float time;
+    uniform float u_time;
     uniform float seed;
     uniform float blockSize;
     varying vec2 vUv;
@@ -27,7 +27,7 @@ export const byteFlipShader: EffectShader = {
 
     void main() {
       vec4 color = texture2D(tDiffuse, vUv);
-      float r = rand(vec2(floor(vUv.y * (30.0 / blockSize)), time + seed));
+      float r = rand(vec2(floor(vUv.y * (30.0 / blockSize)), u_time + seed));
       if (r < amount * 0.3) {
         color.rgb = 1.0 - color.rgb;
       }
@@ -36,7 +36,7 @@ export const byteFlipShader: EffectShader = {
   `,
   uniforms: [
     { name: "amount", type: "float", default: 0.3 },
-    { name: "time", type: "float", default: 0.0 },
+    { name: "u_time", type: "float", default: 0.0 },
     { name: "seed", type: "float", default: 1.0 },
     { name: "blockSize", type: "float", default: 1.0 },
   ],

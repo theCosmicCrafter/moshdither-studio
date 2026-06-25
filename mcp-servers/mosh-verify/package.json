@@ -1,0 +1,13 @@
+{
+  "name": "@moshdither/mcp-verify",
+  "version": "0.1.0",
+  "description": "MCP server exposing MoshDither Studio effect verification tools",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "mosh-verify-mcp": "./index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}

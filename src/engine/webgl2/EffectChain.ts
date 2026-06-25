@@ -1,6 +1,13 @@
 import { WebGLContext } from "./WebGLContext";
 import { FullscreenQuad } from "./FullscreenQuad";
 import { EffectShader, RenderPass } from "./types";
+import { LUTLoader } from "../lut/loader";
+
+const MASK_MODE_MAP: Record<string, number> = {
+  inside: 0,
+  outside: 1,
+  alpha: 2,
+};
 
 export class EffectChain {
   private ctx: WebGLContext;
@@ -9,25 +16,59 @@ export class EffectChain {
   private width: number;
   private height: number;
   private initialized = false;
+  private lutLoader: LUTLoader;
+  private maskTextureCache = new Map<string, WebGLTexture>();
 
   constructor(ctx: WebGLContext, width: number, height: number) {
     this.ctx = ctx;
     this.gl = ctx.getGL();
     this.quad = new FullscreenQuad(ctx);
+    this.lutLoader = new LUTLoader(ctx);
     this.width = width;
     this.height = height;
+  }
+
+  private async getMaskTexture(maskB64: string): Promise<WebGLTexture> {
+    const cached = this.maskTextureCache.get(maskB64);
+    if (cached) return cached;
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = reject;
+      img.src = maskB64;
+    });
+    const gl = this.gl;
+    const tex = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    this.maskTextureCache.set(maskB64, tex);
+    return tex;
   }
 
   private ensurePingPongTextures(w: number, h: number) {
     if (this.initialized) return;
     this.ctx.createTexture("fbo_a", w, h);
     this.ctx.createTexture("fbo_b", w, h);
+    this.ctx.createTexture("fbo_c", w, h);
     this.ctx.createFramebuffer("fb_a", this.ctx.getTexture("fbo_a")!);
     this.ctx.createFramebuffer("fb_b", this.ctx.getTexture("fbo_b")!);
+    this.ctx.createFramebuffer("fb_c", this.ctx.getTexture("fbo_c")!);
     this.initialized = true;
   }
 
-  render(sourceTexture: WebGLTexture, passes: RenderPass[], shaders: Map<string, EffectShader>) {
+  async render(
+    sourceTexture: WebGLTexture,
+    passes: RenderPass[],
+    shaders: Map<string, EffectShader>
+  ) {
     if (passes.length === 0) {
       // No effects, just blit source to screen
       this.blit(sourceTexture);
@@ -38,11 +79,65 @@ export class EffectChain {
     const gl = this.gl;
     let inputTex = sourceTexture;
     let outputFB = "fb_a";
+    let nextTextureUnit = 1;
+    let renderedAnyPass = false;
 
-    for (let i = 0; i < passes.length; i++) {
-      const pass = passes[i];
+    // Expand passes: after each pass with a mask, insert a maskBlend pass
+    const expandedPasses: RenderPass[] = [];
+    for (const pass of passes) {
+      expandedPasses.push(pass);
+      if (pass.maskB64) {
+        expandedPasses.push({
+          shaderId: "maskBlend",
+          inputTexture: pass.outputFramebuffer,
+          outputFramebuffer: `mask_${expandedPasses.length}`,
+          uniforms: { u_mode: MASK_MODE_MAP[pass.maskMode ?? "inside"] ?? 0 },
+          maskB64: null, // prevent recursion
+          maskMode: undefined,
+        });
+      }
+    }
+
+    // Pre-compute the index of the last renderable pass so that skipped passes
+    // (missing shaders) don't cause the last rendered pass to go to a framebuffer
+    // instead of the screen.
+    let lastRenderableIdx = -1;
+    for (let i = expandedPasses.length - 1; i >= 0; i--) {
+      if (shaders.has(expandedPasses[i].shaderId)) {
+        lastRenderableIdx = i;
+        break;
+      }
+    }
+
+    for (let i = 0; i < expandedPasses.length; i++) {
+      const pass = expandedPasses[i];
       const shader = shaders.get(pass.shaderId);
-      if (!shader) continue;
+      if (!shader) {
+        console.warn(`[EffectChain] Pass ${i}: shader "${pass.shaderId}" not found — skipping`);
+        continue;
+      }
+
+      // For maskBlend passes, we need the pre-effect texture (saved before the effect pass)
+      const isMaskBlend = pass.shaderId === "maskBlend";
+      let previousTex: WebGLTexture | null = null;
+      let maskTex: WebGLTexture | null = null;
+
+      if (isMaskBlend) {
+        // inputTex is the effect output; we need the pre-effect frame and mask
+        // The pre-effect texture was saved before the effect pass
+        previousTex = this.savedPreviousTex;
+        const origPass = expandedPasses[i - 1];
+        if (origPass?.maskB64) {
+          maskTex = await this.getMaskTexture(origPass.maskB64);
+        }
+        if (!previousTex || !maskTex) {
+          // Can't do mask blend without both textures — skip
+          continue;
+        }
+      } else if (pass.maskB64) {
+        // Save the pre-effect input texture for the upcoming maskBlend pass
+        this.savedPreviousTex = inputTex;
+      }
 
       const program = this.ctx.getOrCreateProgram(
         pass.shaderId,
@@ -58,14 +153,42 @@ export class EffectChain {
       const samplerLoc = gl.getUniformLocation(program, "tDiffuse");
       if (samplerLoc !== null) gl.uniform1i(samplerLoc, 0);
 
-      // Set uniforms
+      // For maskBlend: bind tPrevious to unit 2 and tMask to unit 3
+      if (isMaskBlend && previousTex && maskTex) {
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_2D, previousTex);
+        const prevLoc = gl.getUniformLocation(program, "tPrevious");
+        if (prevLoc !== null) gl.uniform1i(prevLoc, 2);
+
+        gl.activeTexture(gl.TEXTURE3);
+        gl.bindTexture(gl.TEXTURE_2D, maskTex);
+        const maskLoc = gl.getUniformLocation(program, "tMask");
+        if (maskLoc !== null) gl.uniform1i(maskLoc, 3);
+      } else if (!isMaskBlend) {
+        // Clean up stale texture bindings from previous maskBlend pass
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+        gl.activeTexture(gl.TEXTURE3);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+        gl.activeTexture(gl.TEXTURE0);
+      }
+
+      // Set uniforms from pass
       for (const [name, value] of Object.entries(pass.uniforms)) {
         const loc = gl.getUniformLocation(program, name);
         if (loc === null) continue;
         // Determine declared type from shader definition
         const udef = shader.uniforms.find((u) => u.name === name);
         const type = udef?.type;
-        if (typeof value === "number") {
+        if (typeof value === "string") {
+          if (type === "sampler2D") {
+            const tex = await this.lutLoader.loadLUT(value);
+            const unit = nextTextureUnit++;
+            gl.activeTexture(gl.TEXTURE0 + unit);
+            gl.bindTexture(gl.TEXTURE_2D, tex);
+            gl.uniform1i(loc, unit);
+          }
+        } else if (typeof value === "number") {
           if (type === "int") {
             gl.uniform1i(loc, Math.floor(value));
           } else {
@@ -80,30 +203,86 @@ export class EffectChain {
         }
       }
 
+      // Set default uniform values from shader definition for uniforms not already set
+      for (const u of shader.uniforms) {
+        if (pass.uniforms[u.name] !== undefined) continue;
+        const loc = gl.getUniformLocation(program, u.name);
+        if (loc === null) continue;
+        if (u.type === "float" && typeof u.default === "number") {
+          gl.uniform1f(loc, u.default);
+        } else if (u.type === "int" && typeof u.default === "number") {
+          gl.uniform1i(loc, Math.floor(u.default));
+        } else if (u.type === "vec3" && Array.isArray(u.default) && u.default.length === 3) {
+          gl.uniform3f(loc, u.default[0], u.default[1], u.default[2]);
+        } else if (u.type === "vec2" && Array.isArray(u.default) && u.default.length === 2) {
+          gl.uniform2f(loc, u.default[0], u.default[1]);
+        } else if (u.type === "vec4" && Array.isArray(u.default) && u.default.length === 4) {
+          gl.uniform4f(loc, u.default[0], u.default[1], u.default[2], u.default[3]);
+        } else if (u.type === "bool" && typeof u.default === "boolean") {
+          gl.uniform1i(loc, u.default ? 1 : 0);
+        }
+      }
+
       // Set resolution uniform
       const resLoc = gl.getUniformLocation(program, "resolution");
       if (resLoc !== null) gl.uniform2f(resLoc, this.width, this.height);
 
+      // Set viewport to match render target
+      gl.viewport(0, 0, this.width, this.height);
+
+      // For maskBlend passes: check if previousTex (bound as sampler on TEXTURE2)
+      // or inputTex (bound on TEXTURE0) is the same texture attached to the
+      // current outputFB. If so, swap output to the other framebuffer to prevent
+      // a WebGL feedback loop.
+      const isLastPass = i === lastRenderableIdx;
+      if (isMaskBlend && !isLastPass) {
+        // Check all three framebuffers to find one that doesn't conflict
+        // with either previousTex (TEXTURE2) or inputTex (TEXTURE0)
+        const fbOptions = ["fb_a", "fb_b", "fb_c"];
+        const texFor = (fb: string) =>
+          fb === "fb_a"
+            ? this.ctx.getTexture("fbo_a")
+            : fb === "fb_b"
+              ? this.ctx.getTexture("fbo_b")
+              : this.ctx.getTexture("fbo_c");
+        const safe = fbOptions.find((fb) => texFor(fb) !== previousTex && texFor(fb) !== inputTex);
+        if (safe) outputFB = safe;
+      }
+
       // Render to framebuffer or screen
-      const isLastPass = i === passes.length - 1;
       if (!isLastPass) {
         const fbName = outputFB;
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.ctx.getFramebuffer(fbName)!);
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
         this.quad.draw();
-        inputTex = this.ctx.getTexture(fbName === "fb_a" ? "fbo_a" : "fbo_b")!;
-        outputFB = outputFB === "fb_a" ? "fb_b" : "fb_a";
+        inputTex = this.ctx.getTexture(
+          fbName === "fb_a" ? "fbo_a" : fbName === "fb_b" ? "fbo_b" : "fbo_c"
+        )!;
+        // Next output: pick a framebuffer that isn't the one we just wrote to
+        outputFB = fbName === "fb_a" ? "fb_b" : "fb_a";
       } else {
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.clearColor(0, 0, 0, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
         this.quad.draw();
       }
+      renderedAnyPass = true;
+    }
+
+    // If no pass was rendered (all shaders missing), fall back to blit
+    if (!renderedAnyPass) {
+      console.warn("[EffectChain] No passes were rendered — falling back to blit");
+      this.blit(sourceTexture);
     }
   }
 
   private blit(sourceTexture: WebGLTexture) {
     const gl = this.gl;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, this.width, this.height);
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, sourceTexture);
 
@@ -132,18 +311,42 @@ export class EffectChain {
   }
 
   resize(width: number, height: number) {
+    if (this.width === width && this.height === height) return;
     this.width = width;
     this.height = height;
     if (this.initialized) {
+      // Delete old FBO textures and framebuffers before creating new ones
+      const gl = this.gl;
+      const oldTexA = this.ctx.getTexture("fbo_a");
+      const oldTexB = this.ctx.getTexture("fbo_b");
+      const oldTexC = this.ctx.getTexture("fbo_c");
+      const oldFbA = this.ctx.getFramebuffer("fb_a");
+      const oldFbB = this.ctx.getFramebuffer("fb_b");
+      const oldFbC = this.ctx.getFramebuffer("fb_c");
+      if (oldTexA) gl.deleteTexture(oldTexA);
+      if (oldTexB) gl.deleteTexture(oldTexB);
+      if (oldTexC) gl.deleteTexture(oldTexC);
+      if (oldFbA) gl.deleteFramebuffer(oldFbA);
+      if (oldFbB) gl.deleteFramebuffer(oldFbB);
+      if (oldFbC) gl.deleteFramebuffer(oldFbC);
       // Recreate FBO textures at new size
       this.ctx.createTexture("fbo_a", width, height);
       this.ctx.createTexture("fbo_b", width, height);
+      this.ctx.createTexture("fbo_c", width, height);
       this.ctx.createFramebuffer("fb_a", this.ctx.getTexture("fbo_a")!);
       this.ctx.createFramebuffer("fb_b", this.ctx.getTexture("fbo_b")!);
+      this.ctx.createFramebuffer("fb_c", this.ctx.getTexture("fbo_c")!);
     }
   }
 
   destroy() {
     this.quad.destroy();
+    // Clean up cached mask textures
+    for (const tex of this.maskTextureCache.values()) {
+      this.gl.deleteTexture(tex);
+    }
+    this.maskTextureCache.clear();
   }
+
+  private savedPreviousTex: WebGLTexture | null = null;
 }

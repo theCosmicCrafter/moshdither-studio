@@ -14,13 +14,13 @@ export interface FrequencyBand {
 
 /** The standard frequency bands used throughout the app. */
 export const STANDARD_BANDS: FrequencyBand[] = [
-  { name: 'subBass', minHz: 20, maxHz: 60 },
-  { name: 'bass', minHz: 60, maxHz: 250 },
-  { name: 'lowMid', minHz: 250, maxHz: 500 },
-  { name: 'mid', minHz: 500, maxHz: 2000 },
-  { name: 'highMid', minHz: 2000, maxHz: 4000 },
-  { name: 'presence', minHz: 4000, maxHz: 6000 },
-  { name: 'brilliance', minHz: 6000, maxHz: 20000 },
+  { name: "subBass", minHz: 20, maxHz: 60 },
+  { name: "bass", minHz: 60, maxHz: 250 },
+  { name: "lowMid", minHz: 250, maxHz: 500 },
+  { name: "mid", minHz: 500, maxHz: 2000 },
+  { name: "highMid", minHz: 2000, maxHz: 4000 },
+  { name: "presence", minHz: 4000, maxHz: 6000 },
+  { name: "brilliance", minHz: 6000, maxHz: 20000 },
 ];
 
 /** Per-frame audio features extracted by Meyda + custom band energy. */
@@ -126,3 +126,83 @@ export interface AudioParameterState {
   /** Timestamp of last update. */
   lastUpdate: number;
 }
+
+// ─── Manifest Engine Types ───────────────────────────────────────────────
+
+/** Schema version for forward compatibility. */
+export const MANIFEST_SCHEMA_VERSION = "1.0";
+
+/**
+ * A single frame in the audio manifest. Contains all extracted features
+ * plus pre-computed high-level primitives that effects can consume directly.
+ *
+ * Renderers/effects should ONLY read from this manifest — no DSP logic
+ * in the renderer. This guarantees preview/export parity.
+ */
+export interface ManifestFrame {
+  frame: number;
+  time: number;
+
+  // --- Energy ---
+  rms: number;
+  energy: number;
+  volume: number;
+
+  // --- Per-band energy (0-1, from real FFT) ---
+  subBass: number;
+  bass: number;
+  lowMid: number;
+  mid: number;
+  highMid: number;
+  presence: number;
+  brilliance: number;
+
+  // --- Spectral features (from Meyda, real FFT) ---
+  spectralCentroid: number;
+  spectralFlatness: number;
+  spectralRolloff: number;
+  spectralFlux: number;
+  spectralBandwidth: number;
+  zcr: number;
+
+  // --- Beat / Onset ---
+  beatBass: boolean;
+  beatMid: boolean;
+  beatTreble: boolean;
+  beatEnergy: number;
+  isOnset: boolean;
+  onsetType: "transient" | "percussive" | "harmonic" | null;
+
+  // --- High-level primitives (pre-computed [0,1] controls) ---
+  /** How hard/impactful the current frame is (percussive energy). */
+  impact: number;
+  /** How smooth/sustained the sound is (harmonic energy). */
+  fluidity: number;
+  /** How bright/airy vs dark/heavy. */
+  brightness: number;
+  /** How much transient content is present. */
+  sharpness: number;
+  /** How noisy/granular vs clean. */
+  texture: number;
+}
+
+/**
+ * The audio manifest — a versioned, renderer-agnostic, per-frame JSON
+ * document that is the single source of truth for audio-reactive effects.
+ *
+ * One analysis pass produces this; both real-time preview and export
+ * consume it by frame index. Cached by content hash.
+ */
+export interface AudioManifest {
+  schemaVersion: string;
+  contentHash: string;
+  fps: number;
+  totalFrames: number;
+  duration: number;
+  sampleRate: number;
+  bpm: number | null;
+  frames: ManifestFrame[];
+}
+
+/** Progress callback during manifest analysis. */
+export type ManifestProgressCallback = (progress: number, phase: string) => void;

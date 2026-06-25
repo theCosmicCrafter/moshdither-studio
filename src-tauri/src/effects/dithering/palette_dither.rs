@@ -50,8 +50,8 @@ impl Effect for PaletteDither {
                     name: "Angle".to_string(),
                     param_type: ParamType::Slider,
                     default: json!(0.0),
-                    min: Some(-3.14159),
-                    max: Some(3.14159),
+                    min: Some(-std::f64::consts::PI),
+                    max: Some(std::f64::consts::PI),
                     step: Some(0.1),
                     options: None,
                 },
@@ -91,7 +91,10 @@ impl Effect for PaletteDither {
 
         let scale = params.get("scale").and_then(|v| v.as_f64()).unwrap_or(4.0) as f32;
         let angle = params.get("angle").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-        let palette_size = params.get("palette_size").and_then(|v| v.as_f64()).unwrap_or(4.0) as usize;
+        let palette_size = params
+            .get("palette_size")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(4.0) as usize;
         let amount = params.get("amount").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
 
         // Default palette (same as shader defaults)
@@ -131,8 +134,8 @@ impl Effect for PaletteDither {
                 let mut second_idx = 1usize;
                 let mut second_dist = u32::MAX;
 
-                for i in 0..psize {
-                    let d = dist_sq(px, palette[i]);
+                for (i, &color) in palette.iter().enumerate().take(psize) {
+                    let d = dist_sq(px, color);
                     if d < best_dist {
                         second_dist = best_dist;
                         second_idx = best_idx;
