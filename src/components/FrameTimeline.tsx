@@ -105,13 +105,12 @@ export default function FrameTimeline() {
           frames.map((frame, i) => (
             <div
               key={i}
-              className={`relative flex-shrink-0 cursor-pointer border-2 ${
+              className={`relative flex-shrink-0 cursor-pointer border-2 frame-thumb ${
                 i === currentFrameIndex ? "border-[var(--accent-teal)]" : "border-transparent"
               }`}
-              style={{ width: 40, height: 40 }}
               onClick={() => setCurrentTime(i / 10)}
             >
-              <img src={`data:image/jpeg;base64,${frame}`} className="w-full h-full object-cover" />
+              <img src={`data:image/jpeg;base64,${frame}`} alt={`Frame ${i + 1}`} className="w-full h-full object-cover" />
               {sam3FrameMasks[i] && (
                 <div className="absolute inset-0 bg-green-500/30" />
               )}

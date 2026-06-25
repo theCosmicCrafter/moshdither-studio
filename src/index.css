@@ -1173,3 +1173,9 @@ body.floating-resizing {
 .panel-menu-icon {
   font-size: 12px;
 }
+
+/* Frame timeline thumbnail */
+.frame-thumb {
+  width: 40px;
+  height: 40px;
+}
