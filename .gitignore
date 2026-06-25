@@ -27,6 +27,8 @@ Thumbs.db
 /src-tauri/binaries/*.exe
 /src-tauri/binaries/ffmpeg*
 /src-tauri/binaries/ffprobe*
+/src-tauri/bin/*.exe
+/assets/bin/
 
 # Python venvs
 /audit_venv
