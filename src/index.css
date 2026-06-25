@@ -833,11 +833,6 @@
   overflow: hidden;
 }
 
-.dock-tab-bar {
-  scrollbar-width: thin;
-  scrollbar-color: var(--outline-variant) transparent;
-}
-
 .dock-tab-bar::-webkit-scrollbar {
   height: 3px;
 }
