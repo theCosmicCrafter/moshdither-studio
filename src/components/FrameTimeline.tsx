@@ -66,8 +66,8 @@ export default function FrameTimeline() {
         setSam3FrameMasks(maskMap);
         setStatusMessage("Video prediction complete.");
       }
-    } catch (e: any) {
-      setStatusMessage(`Video prediction failed: ${e.message}`);
+    } catch (e: unknown) {
+      setStatusMessage(`Video prediction failed: ${e instanceof Error ? e.message : String(e)}`);
     }
 
     setIsProcessing(false);

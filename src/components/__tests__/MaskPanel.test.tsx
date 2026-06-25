@@ -83,10 +83,10 @@ describe("MaskPanel", () => {
     expect(screen.getByText("Manual")).toBeInTheDocument();
   });
 
-  it("shows Starting SAM3 engine when sam3 not ready", () => {
+  it("shows SAM3 idle message when sam3 is not ready", () => {
     useAppStore.getState().setMediaLoaded(true);
     render(<MaskPanel />);
-    expect(screen.getByText("Starting SAM3 engine...")).toBeInTheDocument();
+    expect(screen.getByText(/SAM3 idle/i)).toBeInTheDocument();
   });
 
   it("shows Load Current Image button when sam3 is ready", () => {

@@ -1,12 +1,77 @@
 # Handoff Notes — MoshDither Studio
 
-**Session Date:** 2025-01-30 (evening)
+**Session Date:** 2026-06-24
+**Phase:** Subagent system creation, lint fixes, test fixes, CSS vendor prefixes
+**Status:** All tests passing, lint clean, 15 subagents created
+
+---
+
+## Summary of Changes This Session
+
+### 1. Subagent System (`.devin/agents/`)
+
+15 custom subagent profiles created covering all project domains:
+
+- **sindri** — Rust effect engine (75+ effects, registry, rayon)
+- **brokkr** — WebGL2/GLSL shaders (73 files, preview pipeline)
+- **mimir** — Documentation & research (ADRs, API specs, handoffs)
+- **vidar** — Security (SAST, secret scanning, vuln triage)
+- **heimdall** — CI/CD & test gatekeeper (build verification, lint)
+- **frontend-smith** — React/TS/Zustand UI (52 components, dock system)
+- **bridge-keeper** — Tauri IPC bridge (commands.rs ↔ tauri.ts)
+- **sam3-seer** — SAM3/Python ML (ONNX, masks, idle shutdown)
+- **video-forge** — FFmpeg/FFglitch export pipeline
+- **perf-tuner** — Performance profiling (render pipeline, memory)
+- **asset-keeper** — LUT/palette/icon asset management
+- **audio-weaver** — Audio/MIDI reactive engine
+- **code-reviewer** — PR review (bugs, style, cross-layer issues)
+- **devops-builder** — Tauri packaging, CI/CD, release builds
+- **effect-designer** — Effect design & prototyping (specs, params)
+
+### 2. CSS Vendor Prefix Fixes (`src/index.css`)
+
+- Added `-webkit-backdrop-filter` before all 7 `backdrop-filter` declarations
+- Added `-webkit-user-select` before all 4 `user-select` declarations
+- Fixed `appearance` property ordering (webkit/moz/standard) in 2 places
+- Added standard `background-clip: text` alongside `-webkit-background-clip`
+- Fixed invalid `tabular-nums: 1` → `font-variant-numeric: tabular-nums`
+
+### 3. Lint Fixes
+
+- `src/components/FrameTimeline.tsx` — Replaced `catch (e: any)` with `catch (e: unknown)` + type guard
+- `tests/e2e/run-parity.spec.ts` — Replaced `@ts-ignore` with `@ts-expect-error`
+
+### 4. Test Fix
+
+- `src/components/__tests__/MaskPanel.test.tsx` — Updated test to match current UI ("SAM3 idle" instead of "Starting SAM3 engine...")
+
+### 5. HANDOFF.md Markdown Formatting
+
+- Added blank lines between all headings and lists to fix MD022/MD032 warnings
+
+---
+
+## Build & Test Status
+
+| Check                         | Status            |
+| ----------------------------- | ----------------- |
+| TypeScript (`tsc --noEmit`)   | PASS              |
+| ESLint (`npm run lint`)       | PASS (0 warnings) |
+| Frontend tests (`vitest run`) | 1015/1015 PASS    |
+| Rust (`cargo check --lib`)    | PASS              |
+| Backend functional tests      | 49/49 PASS        |
+| Effect verification           | 98/98 PASS        |
+
+---
+
+## Previous Session Notes (2025-01-30)
+
 **Phase:** Troubleshooting / bug fixing
 **Status:** Multiple fixes applied, app running, some issues still being verified
 
 ---
 
-## Summary of Changes This Session
+## Previous Session Changes (2025-01-30)
 
 ### 1. Mask Selector UI Rewrite (`src/components/MaskSelector.tsx`)
 
