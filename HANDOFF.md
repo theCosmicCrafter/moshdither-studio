@@ -9,11 +9,13 @@
 ## Summary of Changes This Session
 
 ### 1. Mask Selector UI Rewrite (`src/components/MaskSelector.tsx`)
+
 - **Was:** All mask thumbnails in a single horizontal flex row (`flex-1 aspect-square`), making each thumbnail ~4px with 25 masks
 - **Now:** Collapsible accordion with a scrollable vertical list (max 280px), 48x48px thumbnails, mask number + score + check icon on selected
 - Tests updated in `src/components/__tests__/components.test.tsx`
 
 ### 2. Preview Downsampling (`src-tauri/src/commands.rs`, `src/lib/tauri.ts`)
+
 - Added `preview_scale` parameter to `apply_effect_stack` command
 - Frontend passes `0.5` to downscale to 50% for preview processing (4x fewer pixels)
 - `downscale_frame` helper used for the working frame
@@ -21,14 +23,17 @@
 - A `downscale_mask` function was added then removed — it was corrupting mask data. Do NOT re-add it.
 
 ### 3. Stale Render Cancellation (`src/components/Toolbar.tsx`)
+
 - Added `renderIdRef` counter — if a newer render request comes in while an older one is processing, the older result is discarded
 - Prevents stale previews from overwriting newer renders when dragging sliders quickly
 
 ### 4. Debounce Increase (`src/components/Toolbar.tsx`)
+
 - Increased from 200ms to 350ms for smoother slider dragging
 - The debounce effect is at line ~248-254, keyed on `processSignature`
 
 ### 5. CPU Preview Loop Fix (`src/components/PreviewViewport.tsx`) — MAJOR
+
 - **Was:** Continuous `requestAnimationFrame` loop running at ~12fps, calling `applyEffectStack` every 80ms even when nothing changed. This was the main cause of the app freezing/lagging.
 - **Now:**
   - Static mode (not playing): Renders once, then only re-renders when `cpuRenderSignature` changes (params, mask, effect order, enable/disable)
@@ -38,14 +43,17 @@
 - The `stackSignature` (structural only, line ~75) is still used by the WebGL path
 
 ### 6. Mask Post-Processing Fix (`src/components/MaskPanel.tsx`)
+
 - **Was:** After grow/shrink/feather post-processing, `setSam3Masks` always reset `sam3MaskIndex` to 0 and `activeMask` to `masks[0]`, so the processed mask wasn't displayed if it wasn't first
 - **Fix:** Directly update the mask array and `activeMask` while preserving the current `sam3MaskIndex`
 
 ### 7. Docking Icon Fix (`src/components/DockSystem/FloatingWindow.tsx`)
+
 - "Dock to right" icon was showing `dock_to_right` (same as left)
 - Fixed by mirroring with CSS `scaleX(-1)` to show arrow pointing right
 
 ### 8. Preset Loading Race Condition Fix (`src/hooks/usePresets.ts`, `src/store/index.ts`) — MAJOR
+
 - **Was:** `loadPreset` used `clearStack()` + `setTimeout(() => { addToStack... }, 0)`, causing a race condition:
   1. `clearStack()` empties stack → triggers 350ms debounce
   2. `setTimeout` adds effects immediately
@@ -56,6 +64,7 @@
 - Removed unused `clearStack`, `addToStack`, `allEffects` references from `usePresets.ts`
 
 ### 9. Dock System Resizing + Group Dragging (from earlier in session)
+
 - `setDockGroupSizes` action in store adjusts both adjacent groups in opposite directions
 - `tearOffGroupToFloat` action for dragging entire tab groups
 - Drag grip handle (⋮⋮ icon) in `TabGroup.tsx`
@@ -66,6 +75,7 @@
 ## Architecture Notes
 
 ### GPU vs CPU Preview Split
+
 The app uses a hybrid rendering approach (like Mosh-Pro but with CPU fallback):
 
 - **WebGL/GPU path:** Effects with accurate WebGL shaders run entirely on GPU via FBO ping-pong. No Rust roundtrip. Fast (~60fps).
@@ -74,6 +84,7 @@ The app uses a hybrid rendering approach (like Mosh-Pro but with CPU fallback):
 - **Export always uses CPU/Rust** — the GPU shaders are for preview only. The preview matches export because `accurate: false` effects use CPU for both preview AND export.
 
 ### Mosh-Pro Reference
+
 - Located at `C:\Users\richk\CascadeProjects\Mosh-Pro-1.3.5-win\extracted\app\resources\app_unpacked\`
 - Electron + Vue + Three.js, 100% WebGL rendering
 - No CPU roundtrip for preview — all effects are GLSL shader passes
@@ -102,21 +113,21 @@ The app uses a hybrid rendering approach (like Mosh-Pro but with CPU fallback):
 
 ## Files Modified This Session
 
-| File | Changes |
-|------|---------|
-| `src/components/MaskSelector.tsx` | Rewritten to scrollable list UI |
-| `src/components/MaskPanel.tsx` | Mask post-processing preserves sam3MaskIndex |
-| `src/components/PreviewViewport.tsx` | CPU preview loop fix, preview_scale param, cpuRenderSignature |
-| `src/components/Toolbar.tsx` | Stale render cancellation, 350ms debounce |
-| `src/components/DockSystem/FloatingWindow.tsx` | Dock-to-right icon mirror |
-| `src/components/DockSystem/DockZone.tsx` | Group resizing both adjacent groups |
-| `src/components/DockSystem/TabGroup.tsx` | Group drag grip handle |
-| `src/hooks/usePresets.ts` | Atomic replaceStack for preset loading |
-| `src/store/index.ts` | Added replaceStack, setDockGroupSizes, tearOffGroupToFloat actions |
-| `src/utils/effectConverter.ts` | (Reference only — GPU/CPU mapping table) |
-| `src/lib/tauri.ts` | Added preview_scale param to applyEffectStack |
-| `src-tauri/src/commands.rs` | Preview downsampling, removed downscale_mask |
-| `src/components/__tests__/components.test.tsx` | Updated MaskSelector tests |
+| File                                           | Changes                                                            |
+| ---------------------------------------------- | ------------------------------------------------------------------ |
+| `src/components/MaskSelector.tsx`              | Rewritten to scrollable list UI                                    |
+| `src/components/MaskPanel.tsx`                 | Mask post-processing preserves sam3MaskIndex                       |
+| `src/components/PreviewViewport.tsx`           | CPU preview loop fix, preview_scale param, cpuRenderSignature      |
+| `src/components/Toolbar.tsx`                   | Stale render cancellation, 350ms debounce                          |
+| `src/components/DockSystem/FloatingWindow.tsx` | Dock-to-right icon mirror                                          |
+| `src/components/DockSystem/DockZone.tsx`       | Group resizing both adjacent groups                                |
+| `src/components/DockSystem/TabGroup.tsx`       | Group drag grip handle                                             |
+| `src/hooks/usePresets.ts`                      | Atomic replaceStack for preset loading                             |
+| `src/store/index.ts`                           | Added replaceStack, setDockGroupSizes, tearOffGroupToFloat actions |
+| `src/utils/effectConverter.ts`                 | (Reference only — GPU/CPU mapping table)                           |
+| `src/lib/tauri.ts`                             | Added preview_scale param to applyEffectStack                      |
+| `src-tauri/src/commands.rs`                    | Preview downsampling, removed downscale_mask                       |
+| `src/components/__tests__/components.test.tsx` | Updated MaskSelector tests                                         |
 
 ---
 
@@ -140,6 +151,7 @@ cd src-tauri && cargo check
 ```
 
 ## Test Status
+
 - All 49 backend functional tests PASS (mask blending, effects, animation, I/O)
 - All 85 frontend tests PASS
 - TypeScript compiles clean
