@@ -53,8 +53,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Zustand store extended with theme, overlay, aspect ratio, proxy media, and multi-track state
 - Preview viewport HUD with toggleable overlays (crosshairs, scanlines, pixel grid, histograms, OSD stats, safe area, grid)
 
+### Security
+
+- Hardened the Tauri command surface against panics: all 29 `.lock().unwrap()`
+  calls in `src-tauri/src/commands.rs` and both in `src-tauri/src/ffmpeg/mod.rs`
+  now map a poisoned mutex to a `Result::Err(String)` (e.g. `"registry lock poisoned: .."`)
+  instead of panicking. A panic while holding a lock no longer crashes the app or
+  wedges shared state on subsequent commands.
+- Purple-team regression tests added for malformed/non-image base64, unknown effect
+  IDs, out-of-range effect parameters, mismatched-dimension masks, and poisoned-lock
+  recovery.
+
 ### Fixed
 
+- `list_effects` and `list_effects_by_category` now return `Result<Vec<EffectMeta>, String>`
+  and surface a registry-lock error instead of panicking.
+- `downscale_frame`/`upscale_frame` now return an error when the frame buffer is
+  inconsistent with its declared dimensions, instead of silently substituting a
+  1x1 black frame.
+- Removed hot-path debug logging: the five `[MASK DEBUG]` and the `[SAVE DEBUG]`
+  `eprintln!` calls were deleted. Meaningful `[export]` progress logs are retained.
+- Clippy is now clean under `-D warnings`: fixed `unnecessary_sort_by` in
+  `frame_manipulation.rs`, `useless_conversion` and `type_complexity` in `sam3_engine.rs`.
+- Frontend `no-explicit-any` cleanup: `MIDIController.ts` now uses `@types/webmidi`
+  (`WebMidi.MIDIAccess`, `WebMidi.MIDIMessageEvent`) and drops the file-wide
+  `eslint-disable`.
+- Replaced the hardcoded Windows-only image path in the `commands.rs` test module
+  with a generated in-memory PNG so the test runs cross-platform.
 - SpoutSender unused fields warning suppressed with `#[allow(dead_code)]`
 - Historical palette accuracy for dithering effects
 - Missing brightness/contrast/gamma/saturation effects

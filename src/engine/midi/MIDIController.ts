@@ -1,7 +1,5 @@
 import { MIDIMapping, MIDIState } from "./types";
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
 type MIDIMessageHandler = (ccNumber: number, value: number) => void;
 type ConnectionHandler = (connected: boolean, deviceName: string | null) => void;
 
@@ -20,7 +18,7 @@ export const DEFAULT_MAPPINGS: MIDIMapping[] = [
 const STORAGE_KEY = "moshdither_midi_mappings";
 
 export class MIDIController {
-  private access: any = null;
+  private access: WebMidi.MIDIAccess | null = null;
   private state: MIDIState;
   private onMessage: MIDIMessageHandler[] = [];
   private onConnection: ConnectionHandler[] = [];
@@ -43,8 +41,7 @@ export class MIDIController {
     }
 
     try {
-      const nav = navigator as any;
-      this.access = await nav.requestMIDIAccess({ sysex: false });
+      this.access = await navigator.requestMIDIAccess({ sysex: false, software: false });
       this.setupInputs();
       this.access.addEventListener("statechange", () => this.setupInputs());
       return this.state.connected;
@@ -113,12 +110,12 @@ export class MIDIController {
     let anyConnected = false;
     let deviceName: string | null = null;
 
-    this.access.inputs.forEach((input: any) => {
+    this.access.inputs.forEach((input) => {
       if (input.state === "connected") {
         anyConnected = true;
         deviceName = input.name || `Port ${input.id}`;
 
-        const handler = (event: { data: Uint8Array }) => {
+        const handler = (event: WebMidi.MIDIMessageEvent) => {
           const [status, data1, data2] = event.data;
           if ((status & 0xf0) === 0xb0) {
             const ccNumber = data1;
@@ -128,8 +125,8 @@ export class MIDIController {
           }
         };
 
-        input.addEventListener("midimessage", handler as any);
-        this.listeners.push(() => input.removeEventListener("midimessage", handler as any));
+        input.addEventListener("midimessage", handler);
+        this.listeners.push(() => input.removeEventListener("midimessage", handler));
       }
     });
 

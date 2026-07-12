@@ -91,7 +91,7 @@ impl Effect for FrameSortByDataSize {
     ) -> Result<VideoSegment> {
         let mut frames_with_sizes: Vec<(usize, &Frame)> =
             input.frames.iter().map(|f| (f.data.len(), f)).collect();
-        frames_with_sizes.sort_by(|a, b| a.0.cmp(&b.0));
+        frames_with_sizes.sort_by_key(|a| a.0);
         let frames = frames_with_sizes
             .into_iter()
             .map(|(_, f)| f.clone())

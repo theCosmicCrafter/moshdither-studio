@@ -648,7 +648,11 @@ type ProbeCache = Mutex<HashMap<String, (u32, u32, f64)>>;
 pub fn probe_video(path: &str) -> Result<(u32, u32, f64)> {
     static CACHE: OnceLock<ProbeCache> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(entry) = cache.lock().unwrap().get(path) {
+    if let Some(entry) = cache
+        .lock()
+        .map_err(|e| AppError::Generic(format!("probe cache lock poisoned: {e}")))?
+        .get(path)
+    {
         return Ok(*entry);
     }
 
@@ -700,7 +704,10 @@ pub fn probe_video(path: &str) -> Result<(u32, u32, f64)> {
     }
 
     let result = (width, height, fps);
-    cache.lock().unwrap().insert(path.to_string(), result);
+    cache
+        .lock()
+        .map_err(|e| AppError::Generic(format!("probe cache lock poisoned: {e}")))?
+        .insert(path.to_string(), result);
     Ok(result)
 }
 

@@ -1,8 +1,63 @@
 # Handoff Notes — MoshDither Studio
 
-**Session Date:** 2026-06-24
-**Phase:** Subagent system creation, lint fixes, test fixes, CSS vendor prefixes
-**Status:** All tests passing, lint clean, 15 subagents created
+**Session Date:** 2026-07-12
+**Phase:** Production audit — Rust panic hardening, debug-log cleanup, frontend `any` cleanup, adversarial tests
+**Status:** clippy clean (`-D warnings`), lint clean (0 warnings), tsc clean, cargo 408/408, vitest 1015/1015, effect verification 98/98
+
+---
+
+## Production Audit Session (2026-07-12)
+
+### Verification results (Step 1 / Step 7 catalog)
+
+| Check                                                    | Status                 |
+| -------------------------------------------------------- | ---------------------- |
+| `cargo clippy --all-targets --all-features -- -D warnings` | PASS (clean)           |
+| `cargo test`                                             | 408/408 PASS           |
+| `cargo run --bin mosh-verify -- verify-all`              | 98/98 effects PASS     |
+| `npm run lint` (`--max-warnings 0`)                      | PASS (0 warnings)      |
+| `npx tsc --noEmit`                                       | PASS                   |
+| `npx vitest run`                                         | 1015/1015 PASS         |
+
+### Changes
+
+1. **Rust panic hardening (Step 2).** Replaced all 29 `.lock().unwrap()` in
+   `commands.rs` and both in `ffmpeg/mod.rs` with `.lock().map_err(|e| ..)?`,
+   mapping a poisoned mutex to a command error string. `list_effects` and
+   `list_effects_by_category` now return `Result<Vec<EffectMeta>, String>`
+   (frontend callers already `await` + `.catch()`; Tauri auto-unwraps `Ok`/rejects
+   `Err`, so no frontend change was required and tsc/lint stay green).
+   `downscale_frame`/`upscale_frame` return an error on an inconsistent buffer
+   instead of silently substituting a 1x1 black frame.
+
+2. **Debug-log cleanup (Step 3).** Deleted the five `[MASK DEBUG]` `eprintln!`
+   calls in `apply_effect_stack` and the `[SAVE DEBUG]` calls in `save_file`.
+   `[export]` progress logs are retained.
+
+3. **Frontend `any` cleanup (Step 4).** Added `@types/webmidi` (2.1.0) to
+   devDependencies; `MIDIController.ts` is typed with `WebMidi.MIDIAccess` /
+   `WebMidi.MIDIMessageEvent` and the file-wide `eslint-disable no-explicit-any`
+   is gone. `PreviewViewport.tsx` had no actual `any` (only the English word in a
+   comment) — left untouched, as was `useProject.ts`.
+
+4. **Tests (Step 5 / Step 6).** Cross-platform `test_load_and_convert_media`
+   (generated in-memory PNG). New tests: resize-helper valid/invalid-buffer,
+   poisoned-lock recovery for frame/registry/sam3 mutexes, and adversarial cases
+   (unknown effect id, non-PNG mask base64, garbage image bytes, mismatched-dimension
+   mask, extreme out-of-range params) — all confirm errors, not panics.
+
+5. **Pre-existing clippy fixes (Step 7).** `unnecessary_sort_by`
+   (`frame_manipulation.rs`), `useless_conversion` + `type_complexity`
+   (`sam3_engine.rs`, via a `VideoPredictorResult` type alias).
+
+### Security / capability review (Step 6)
+
+- `SECURITY.md` is comprehensive (pre-commit + CI SAST stack, secret scanning).
+- **Finding — broad FS scope (Medium):** `src-tauri/capabilities/default.json`
+  grants `core:default` a filesystem scope of `$HOME/**` plus every user directory.
+  This is wider than needed; consider narrowing to the specific media/project
+  directories the app actually touches. Not changed here to avoid breaking legitimate
+  file I/O — flagged for a follow-up scoping pass.
 
 ---
 
