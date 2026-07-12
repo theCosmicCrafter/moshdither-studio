@@ -102,8 +102,8 @@ pub async fn load_media(
     .await
     .map_err(|e| format!("Task failed: {}", e))??;
 
-    *state.current_frame.lock().unwrap() = Some(frame);
-    *state.frame_cache.lock().unwrap() = EffectCache::default();
+    *state.current_frame.lock().map_err(|e| format!("frame lock poisoned: {e}"))? = Some(frame);
+    *state.frame_cache.lock().map_err(|e| format!("cache lock poisoned: {e}"))? = EffectCache::default();
     Ok(path)
 }
 
@@ -140,16 +140,21 @@ pub async fn load_media_from_base64(
     .await
     .map_err(|e| format!("Task failed: {}", e))??;
 
-    *state.current_frame.lock().unwrap() = Some(frame);
-    *state.frame_cache.lock().unwrap() = EffectCache::default();
+    *state.current_frame.lock().map_err(|e| format!("frame lock poisoned: {e}"))? = Some(frame);
+    *state.frame_cache.lock().map_err(|e| format!("cache lock poisoned: {e}"))? = EffectCache::default();
     Ok("loaded".to_string())
 }
 
 /// Get metadata for all available effects.
 #[tauri::command]
-pub fn list_effects(state: State<'_, AppState>) -> Vec<EffectMeta> {
-    let registry = state.registry.lock().unwrap();
-    registry.list()
+pub fn list_effects(
+    state: State<'_, AppState>,
+) -> std::result::Result<Vec<EffectMeta>, String> {
+    let registry = state
+        .registry
+        .lock()
+        .map_err(|e| format!("registry lock poisoned: {e}"))?;
+    Ok(registry.list())
 }
 
 /// Get effects filtered by category.
@@ -157,9 +162,12 @@ pub fn list_effects(state: State<'_, AppState>) -> Vec<EffectMeta> {
 pub fn list_effects_by_category(
     state: State<'_, AppState>,
     category: EffectCategory,
-) -> Vec<EffectMeta> {
-    let registry = state.registry.lock().unwrap();
-    registry.list_by_category(category)
+) -> std::result::Result<Vec<EffectMeta>, String> {
+    let registry = state
+        .registry
+        .lock()
+        .map_err(|e| format!("registry lock poisoned: {e}"))?;
+    Ok(registry.list_by_category(category))
 }
 
 /// Run the full effect verification suite.
@@ -170,7 +178,10 @@ pub fn list_effects_by_category(
 pub fn verify_effects(
     state: State<'_, AppState>,
 ) -> std::result::Result<crate::effects::verification::VerificationReport, String> {
-    let registry = state.registry.lock().unwrap();
+    let registry = state
+        .registry
+        .lock()
+        .map_err(|e| format!("registry lock poisoned: {e}"))?;
     Ok(verify_all_effects(&registry))
 }
 
@@ -211,13 +222,16 @@ pub fn apply_effect(
     params: serde_json::Map<String, serde_json::Value>,
     mask_b64: Option<String>,
 ) -> std::result::Result<String, String> {
-    let frame_lock = state.current_frame.lock().unwrap();
+    let frame_lock = state.current_frame.lock().map_err(|e| format!("frame lock poisoned: {e}"))?;
     let mut working = frame_lock.as_ref().ok_or("No media loaded")?.clone();
     drop(frame_lock);
 
     let mask = decode_mask_b64(mask_b64)?;
 
-    let registry = state.registry.lock().unwrap();
+    let registry = state
+        .registry
+        .lock()
+        .map_err(|e| format!("registry lock poisoned: {e}"))?;
     let effect = registry
         .get(&effect_id)
         .ok_or_else(|| format!("Effect '{}' not found", effect_id))?;
@@ -266,7 +280,7 @@ pub fn apply_effect_stack(
     mask_b64: Option<String>,
     preview_scale: Option<f32>,
 ) -> std::result::Result<String, String> {
-    let frame_lock = state.current_frame.lock().unwrap();
+    let frame_lock = state.current_frame.lock().map_err(|e| format!("frame lock poisoned: {e}"))?;
     let original = frame_lock.as_ref().ok_or("No media loaded")?.clone();
     drop(frame_lock);
 
@@ -278,7 +292,7 @@ pub fn apply_effect_stack(
         false
     };
     let mut working = if scaled {
-        downscale_frame(&original, preview_scale.unwrap())
+        downscale_frame(&original, preview_scale.unwrap())?
     } else {
         original.clone()
     };
@@ -287,13 +301,16 @@ pub fn apply_effect_stack(
     // already handle dimension mismatches via nearest-neighbor sampling.
     let global_mask = decode_mask_b64(mask_b64.clone())?;
 
-    let registry = state.registry.lock().unwrap();
+    let registry = state
+        .registry
+        .lock()
+        .map_err(|e| format!("registry lock poisoned: {e}"))?;
     let mut use_cache = true;
     let mut new_cache = Vec::new();
 
     // Check if scale or global mask changed
     {
-        let cache_lock = state.frame_cache.lock().unwrap();
+        let cache_lock = state.frame_cache.lock().map_err(|e| format!("cache lock poisoned: {e}"))?;
         if cache_lock.scale != preview_scale || cache_lock.global_mask_b64 != mask_b64 {
             use_cache = false;
         }
@@ -301,7 +318,7 @@ pub fn apply_effect_stack(
 
     for (i, call) in stack.into_iter().enumerate() {
         if use_cache {
-            let cache_lock = state.frame_cache.lock().unwrap();
+            let cache_lock = state.frame_cache.lock().map_err(|e| format!("cache lock poisoned: {e}"))?;
             if i < cache_lock.entries.len() {
                 let entry = &cache_lock.entries[i];
                 if entry.effect_id == call.effect_id
@@ -332,17 +349,8 @@ pub fn apply_effect_stack(
 
         // Per-effect mask overrides global mask
         let per_effect_mask = if let Some(ref b64) = call.mask_b64 {
-            eprintln!(
-                "[MASK DEBUG] Effect {}: mask_b64 present, len={}",
-                call.effect_id,
-                b64.len()
-            );
             decode_mask_b64(Some(b64.clone()))?
         } else {
-            eprintln!(
-                "[MASK DEBUG] Effect {}: no per-effect mask_b64",
-                call.effect_id
-            );
             None
         };
         let active_mask = per_effect_mask.as_ref().or(global_mask.as_ref());
@@ -355,22 +363,8 @@ pub fn apply_effect_stack(
         if !effect_handles_mask {
             if let Some(m) = active_mask {
                 let mode = call.mask_mode.as_deref().unwrap_or("inside");
-                eprintln!(
-                    "[MASK DEBUG] Effect {}: blend_mask called, mode={}, mask {}x{}",
-                    call.effect_id, mode, m.width, m.height
-                );
                 blend_mask(&mut working, &previous, m, mode);
-            } else {
-                eprintln!(
-                    "[MASK DEBUG] Effect {}: no active mask, skipping blend",
-                    call.effect_id
-                );
             }
-        } else {
-            eprintln!(
-                "[MASK DEBUG] Effect {}: effect handles masking internally",
-                call.effect_id
-            );
         }
 
         new_cache.push(CacheEntry {
@@ -384,7 +378,7 @@ pub fn apply_effect_stack(
 
     // Update cache
     {
-        let mut cache_lock = state.frame_cache.lock().unwrap();
+        let mut cache_lock = state.frame_cache.lock().map_err(|e| format!("cache lock poisoned: {e}"))?;
         cache_lock.scale = preview_scale;
         cache_lock.global_mask_b64 = mask_b64;
         cache_lock.entries = new_cache;
@@ -392,7 +386,7 @@ pub fn apply_effect_stack(
 
     // Upscale back to original resolution if we downscaled
     if working.width != orig_w || working.height != orig_h {
-        working = upscale_frame(&working, orig_w, orig_h);
+        working = upscale_frame(&working, orig_w, orig_h)?;
     }
 
     let img = image::RgbaImage::from_raw(working.width, working.height, working.data)
@@ -406,45 +400,65 @@ pub fn apply_effect_stack(
 }
 
 /// Downscale a Frame by a factor using simple box averaging (no external deps).
-fn downscale_frame(frame: &Frame, scale: f32) -> Frame {
+/// Returns an error if the frame's raw buffer does not match its declared dimensions.
+fn downscale_frame(frame: &Frame, scale: f32) -> std::result::Result<Frame, String> {
     let new_w = ((frame.width as f32 * scale) as u32).max(1);
     let new_h = ((frame.height as f32 * scale) as u32).max(1);
     let img = image::RgbaImage::from_raw(frame.width, frame.height, frame.data.clone())
-        .unwrap_or_else(|| image::RgbaImage::from_raw(1, 1, vec![0, 0, 0, 255]).unwrap());
+        .ok_or_else(|| {
+            format!(
+                "downscale_frame: invalid frame buffer ({} bytes) for {}x{}",
+                frame.data.len(),
+                frame.width,
+                frame.height
+            )
+        })?;
     let resized = image::imageops::resize(
         &img,
         new_w,
         new_h,
         image::imageops::FilterType::Triangle, // bilinear — fast and good enough for preview
     );
-    Frame {
+    Ok(Frame {
         width: new_w,
         height: new_h,
         data: resized.into_raw(),
-    }
+    })
 }
 
 /// Upscale a Frame back to the target dimensions.
-fn upscale_frame(frame: &Frame, target_w: u32, target_h: u32) -> Frame {
+/// Returns an error if the frame's raw buffer does not match its declared dimensions.
+fn upscale_frame(
+    frame: &Frame,
+    target_w: u32,
+    target_h: u32,
+) -> std::result::Result<Frame, String> {
     let img = image::RgbaImage::from_raw(frame.width, frame.height, frame.data.clone())
-        .unwrap_or_else(|| image::RgbaImage::from_raw(1, 1, vec![0, 0, 0, 255]).unwrap());
+        .ok_or_else(|| {
+            format!(
+                "upscale_frame: invalid frame buffer ({} bytes) for {}x{}",
+                frame.data.len(),
+                frame.width,
+                frame.height
+            )
+        })?;
     let resized = image::imageops::resize(
         &img,
         target_w,
         target_h,
         image::imageops::FilterType::Lanczos3, // higher quality for final display
     );
-    Frame {
+    Ok(Frame {
         width: target_w,
         height: target_h,
         data: resized.into_raw(),
-    }
+    })
 }
 
 /// Get the current frame as base64 PNG.
 #[tauri::command]
 pub fn get_frame_data(state: State<'_, AppState>) -> std::result::Result<String, String> {
-    let frame_lock = state.current_frame.lock().unwrap();
+    let frame_lock = state.current_frame.lock().map_err(|e| format!("frame lock poisoned: {e}"))?;
     let frame = frame_lock.as_ref().ok_or("No media loaded")?;
     let img = image::RgbaImage::from_raw(frame.width, frame.height, frame.data.clone())
         .ok_or("Invalid frame data.")?;
@@ -465,7 +479,7 @@ pub fn save_media(
     format: Option<String>,
     quality: Option<u8>,
 ) -> std::result::Result<String, String> {
-    let frame_lock = state.current_frame.lock().unwrap();
+    let frame_lock = state.current_frame.lock().map_err(|e| format!("frame lock poisoned: {e}"))?;
     let frame = frame_lock.as_ref().ok_or("No media loaded")?;
     save_image(frame, &path, format.as_deref(), quality).map_err(|e| e.to_string())?;
     Ok(path)
@@ -655,7 +669,9 @@ fn export_video_blocking(
         "export-progress",
         serde_json::json!({"stage": "effects", "progress": 5, "total": stack.len(), "current": 0}),
     );
-    let registry = registry.lock().unwrap();
+    let registry = registry
+        .lock()
+        .map_err(|e| format!("registry lock poisoned: {e}"))?;
     for (effect_idx, call) in stack.iter().enumerate() {
         let effect = registry
             .get(&call.effect_id)
@@ -810,7 +826,7 @@ pub fn get_media_metadata(path: String) -> std::result::Result<serde_json::Value
 pub fn get_media_info(
     state: State<'_, AppState>,
 ) -> std::result::Result<serde_json::Value, String> {
-    let frame_lock = state.current_frame.lock().unwrap();
+    let frame_lock = state.current_frame.lock().map_err(|e| format!("frame lock poisoned: {e}"))?;
     match frame_lock.as_ref() {
         Some(frame) => Ok(json!({
             "width": frame.width,
@@ -824,7 +840,7 @@ pub fn get_media_info(
 /// ── SAM3 Segmentation Commands ─────────────────────────────
 #[tauri::command]
 pub fn sam3_init(state: State<'_, AppState>) -> std::result::Result<String, String> {
-    let mut sam3_lock = state.sam3.lock().unwrap();
+    let mut sam3_lock = state.sam3.lock().map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
     if sam3_lock.is_none() {
         match Sam3Engine::new() {
             Ok(engine) => {
@@ -844,7 +860,7 @@ pub fn sam3_load_image(
     state: State<'_, AppState>,
     image_b64: String,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state.sam3.lock().unwrap();
+    let sam3_lock = state.sam3.lock().map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
     let engine = sam3_lock
         .as_ref()
         .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
@@ -858,7 +874,7 @@ pub fn sam3_text_prompt(
     state: State<'_, AppState>,
     prompt: String,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state.sam3.lock().unwrap();
+    let sam3_lock = state.sam3.lock().map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
     let engine = sam3_lock
         .as_ref()
         .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
@@ -879,7 +895,7 @@ pub fn sam3_point_prompt(
     points: Vec<[f64; 2]>,
     labels: Option<Vec<i32>>,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state.sam3.lock().unwrap();
+    let sam3_lock = state.sam3.lock().map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
     let engine = sam3_lock
         .as_ref()
         .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
@@ -905,7 +921,7 @@ pub fn sam3_box_prompt(
     state: State<'_, AppState>,
     boxes: Vec<[f64; 4]>,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state.sam3.lock().unwrap();
+    let sam3_lock = state.sam3.lock().map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
     let engine = sam3_lock
         .as_ref()
         .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
@@ -931,7 +947,7 @@ pub fn sam3_auto_mask(
     iou_threshold: f32,
     min_mask_region_area: u32,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state.sam3.lock().unwrap();
+    let sam3_lock = state.sam3.lock().map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
     let engine = sam3_lock
         .as_ref()
         .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
@@ -954,7 +970,7 @@ pub fn sam3_video_predictor(
     frames: Vec<String>,
     prompt: Option<String>,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state.sam3.lock().unwrap();
+    let sam3_lock = state.sam3.lock().map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
     let engine = sam3_lock
         .as_ref()
         .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
@@ -978,7 +994,7 @@ pub fn sam3_refine_mask(
     points: Vec<[f64; 2]>,
     labels: Option<Vec<i32>>,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state.sam3.lock().unwrap();
+    let sam3_lock = state.sam3.lock().map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
     let engine = sam3_lock
         .as_ref()
         .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
@@ -1009,7 +1025,7 @@ pub fn sam3_postprocess_mask(
     feather: i32,
     fill_holes: bool,
 ) -> std::result::Result<String, String> {
-    let sam3_lock = state.sam3.lock().unwrap();
+    let sam3_lock = state.sam3.lock().map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
     let engine = sam3_lock
         .as_ref()
         .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
@@ -1021,7 +1037,7 @@ pub fn sam3_postprocess_mask(
 /// Clear SAM3 state (image + masks).
 #[tauri::command]
 pub fn sam3_clear(state: State<'_, AppState>) -> std::result::Result<String, String> {
-    let sam3_lock = state.sam3.lock().unwrap();
+    let sam3_lock = state.sam3.lock().map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
     if let Some(engine) = sam3_lock.as_ref() {
         engine.clear().map_err(|e| e.to_string())?;
     }
@@ -1031,7 +1047,7 @@ pub fn sam3_clear(state: State<'_, AppState>) -> std::result::Result<String, Str
 /// Shutdown the SAM3 bridge process.
 #[tauri::command]
 pub fn sam3_shutdown(state: State<'_, AppState>) -> std::result::Result<String, String> {
-    let mut sam3_lock = state.sam3.lock().unwrap();
+    let mut sam3_lock = state.sam3.lock().map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
     if let Some(engine) = sam3_lock.take() {
         let _ = engine.shutdown();
     }
@@ -1044,17 +1060,44 @@ mod integration_tests {
     use image::ImageFormat;
     use std::io::Cursor;
 
+    /// Write a generated gradient PNG to a unique temp path. Returns the path.
+    /// Using a generated image keeps this test cross-platform (no OS-specific assets).
+    fn write_temp_test_png(w: u32, h: u32) -> std::path::PathBuf {
+        let mut img = image::RgbaImage::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                img.put_pixel(
+                    x,
+                    y,
+                    image::Rgba([(x % 256) as u8, (y % 256) as u8, 128, 255]),
+                );
+            }
+        }
+        let tmp = std::env::temp_dir().join(format!(
+            "moshdither_test_{}_{}.png",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        img.save(&tmp).unwrap();
+        tmp
+    }
+
     #[test]
     fn test_load_and_convert_media() {
-        let path = r"C:\Windows\Web\Wallpaper\Spotlight\img14.jpg".to_string();
-        let frame = load_image(&path).unwrap();
-        assert!(frame.width > 0);
-        assert!(frame.height > 0);
+        let (w, h) = (16u32, 16u32);
+        let tmp = write_temp_test_png(w, h);
+        let frame = load_image(tmp.to_str().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&tmp);
+
+        assert_eq!(frame.width, w);
+        assert_eq!(frame.height, h);
         assert_eq!(frame.data.len(), (frame.width * frame.height * 4) as usize);
 
         let img = image::RgbaImage::from_raw(frame.width, frame.height, frame.data)
-            .ok_or("Invalid frame data.")
-            .unwrap();
+            .expect("valid frame data");
         let mut buf = Cursor::new(Vec::new());
         img.write_to(&mut buf, ImageFormat::Png).unwrap();
 
@@ -1063,7 +1106,197 @@ mod integration_tests {
         assert!(!b64.is_empty());
         let data_url = format!("data:image/png;base64,{}", b64);
         assert!(data_url.starts_with("data:image/png;base64,"));
-        println!("Success! data_url length: {}", data_url.len());
+    }
+
+    // ── Resize helper error handling ────────────────────────────
+    // downscale_frame / upscale_frame return an error (instead of silently
+    // substituting a 1x1 black frame) when the raw buffer is inconsistent
+    // with the declared dimensions.
+
+    #[test]
+    fn test_downscale_frame_valid() {
+        let f = Frame {
+            width: 4,
+            height: 4,
+            data: vec![255u8; (4 * 4 * 4) as usize],
+        };
+        let out = downscale_frame(&f, 0.5).expect("valid frame should downscale");
+        assert_eq!(out.width, 2);
+        assert_eq!(out.height, 2);
+        assert_eq!(out.data.len(), (out.width * out.height * 4) as usize);
+    }
+
+    #[test]
+    fn test_downscale_frame_invalid_buffer_errors() {
+        // Buffer far too small for 10x10 RGBA (should be 400 bytes).
+        let bad = Frame {
+            width: 10,
+            height: 10,
+            data: vec![0u8; 4],
+        };
+        let err = downscale_frame(&bad, 0.5).unwrap_err();
+        assert!(err.contains("downscale_frame"));
+    }
+
+    #[test]
+    fn test_upscale_frame_valid() {
+        let f = Frame {
+            width: 2,
+            height: 2,
+            data: vec![128u8; (2 * 2 * 4) as usize],
+        };
+        let out = upscale_frame(&f, 4, 4).expect("valid frame should upscale");
+        assert_eq!(out.width, 4);
+        assert_eq!(out.height, 4);
+        assert_eq!(out.data.len(), (out.width * out.height * 4) as usize);
+    }
+
+    #[test]
+    fn test_upscale_frame_invalid_buffer_errors() {
+        let bad = Frame {
+            width: 10,
+            height: 10,
+            data: vec![0u8; 4],
+        };
+        let err = upscale_frame(&bad, 20, 20).unwrap_err();
+        assert!(err.contains("upscale_frame"));
+    }
+
+    // ── Poisoned-lock error handling ────────────────────────────
+    // Command handlers map a poisoned Mutex into a `Result::Err(String)`
+    // instead of panicking (which previously could crash the whole app and
+    // permanently poison shared state). These tests poison an AppState mutex
+    // and confirm the same `.lock().map_err(..)` pattern yields an error.
+
+    /// Poison the given mutex by panicking while a guard is held on another thread.
+    fn poison_mutex<T: Send>(m: &Mutex<T>) {
+        let result = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let _guard = m.lock().unwrap();
+                    panic!("intentional poison for test");
+                })
+                .join()
+        });
+        assert!(result.is_err(), "poisoning thread should have panicked");
+    }
+
+    #[test]
+    fn test_poisoned_frame_lock_maps_to_error() {
+        let state = AppState::default();
+        poison_mutex(&state.current_frame);
+
+        let result: std::result::Result<_, String> = state
+            .current_frame
+            .lock()
+            .map_err(|e| format!("frame lock poisoned: {e}"));
+        match result {
+            Ok(_) => panic!("expected poisoned frame lock error"),
+            Err(e) => assert!(e.contains("frame lock poisoned")),
+        }
+    }
+
+    #[test]
+    fn test_poisoned_registry_lock_maps_to_error() {
+        let state = AppState::default();
+        poison_mutex(&state.registry);
+
+        let result: std::result::Result<_, String> = state
+            .registry
+            .lock()
+            .map_err(|e| format!("registry lock poisoned: {e}"));
+        match result {
+            Ok(_) => panic!("expected poisoned registry lock error"),
+            Err(e) => assert!(e.contains("registry lock poisoned")),
+        }
+    }
+
+    #[test]
+    fn test_poisoned_sam3_lock_maps_to_error() {
+        let state = AppState::default();
+        poison_mutex(&state.sam3);
+
+        let result: std::result::Result<_, String> = state
+            .sam3
+            .lock()
+            .map_err(|e| format!("SAM3 lock poisoned: {e}"));
+        match result {
+            Ok(_) => panic!("expected poisoned SAM3 lock error"),
+            Err(e) => assert!(e.contains("SAM3 lock poisoned")),
+        }
+    }
+
+    // ── Purple-team / adversarial regression tests ──────────────
+    // Confirm the command surface degrades to errors (never panics) on
+    // hostile or malformed input.
+
+    #[test]
+    fn test_unknown_effect_id_not_in_registry() {
+        // apply_effect / apply_effect_stack map a missing id to an error via
+        // registry.get(..).ok_or(..). Confirm the lookup returns None (not panic).
+        let reg = EffectRegistry::new();
+        assert!(reg.get("totally.bogus.effect.id").is_none());
+    }
+
+    #[test]
+    fn test_decode_mask_b64_valid_base64_but_not_png_errors() {
+        // Well-formed base64 whose bytes are not a PNG must error, not panic.
+        let junk =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"not a png file");
+        let data_url = format!("data:image/png;base64,{}", junk);
+        assert!(decode_mask_b64(Some(data_url)).is_err());
+    }
+
+    #[test]
+    fn test_load_image_from_memory_rejects_garbage() {
+        // Non-image bytes fed to the base64 media loader must error gracefully.
+        assert!(load_image_from_memory(b"\x00\x01\x02 definitely not an image").is_err());
+    }
+
+    #[test]
+    fn test_blend_mask_with_mismatched_dimensions_does_not_panic() {
+        use crate::effects::color::Invert;
+        use crate::effects::{blend_mask, Effect};
+
+        // 2x2 frame with a 1x1 mask (mismatched dims). blend_mask samples via
+        // nearest-neighbor and must not panic or corrupt the buffer length.
+        let frame = make_test_frame(
+            2,
+            2,
+            &[
+                (10, 10, 10, 255),
+                (20, 20, 20, 255),
+                (30, 30, 30, 255),
+                (40, 40, 40, 255),
+            ],
+        );
+        let mask = crate::effects::types::Mask {
+            width: 1,
+            height: 1,
+            data: vec![255],
+        };
+        let effect = Invert::default();
+        let previous = frame.clone();
+        let mut working = effect
+            .process_frame(&frame, None, &serde_json::Map::new())
+            .unwrap();
+        blend_mask(&mut working, &previous, &mask, "inside");
+        assert_eq!(working.data.len(), frame.data.len());
+    }
+
+    #[test]
+    fn test_effect_extreme_out_of_range_params_do_not_panic() {
+        use crate::effects::color::Invert;
+        use crate::effects::Effect;
+
+        let frame = make_test_frame(2, 1, &[(100, 100, 100, 255), (150, 150, 150, 255)]);
+        let mut params = serde_json::Map::new();
+        params.insert("amount".to_string(), serde_json::json!(1e9));
+        params.insert("scale".to_string(), serde_json::json!(-42.0));
+        params.insert("intensity".to_string(), serde_json::json!(f64::MAX));
+        // Absurd parameters must be clamped/ignored, never panic.
+        let out = Invert::default().process_frame(&frame, None, &params);
+        assert!(out.is_ok());
     }
 
     #[test]
@@ -1486,34 +1719,15 @@ fn validate_project_path(path: &str, is_write: bool) -> std::result::Result<(), 
 /// Validates path safety and enforces a maximum file size.
 #[tauri::command]
 pub async fn save_file(path: String, contents: String) -> std::result::Result<(), String> {
-    eprintln!(
-        "[SAVE DEBUG] save_file called: path={}, contents_len={}",
-        path,
-        contents.len()
-    );
     if contents.len() > PROJECT_FILE_MAX_SIZE {
-        eprintln!("[SAVE DEBUG] Rejected: contents too large");
         return Err(format!(
             "File contents too large: {} bytes (max {} bytes)",
             contents.len(),
             PROJECT_FILE_MAX_SIZE
         ));
     }
-    if let Err(e) = validate_project_path(&path, true) {
-        eprintln!("[SAVE DEBUG] Path validation failed: {}", e);
-        return Err(e);
-    }
-    eprintln!("[SAVE DEBUG] Path validation passed, writing file...");
-    match std::fs::write(&path, contents) {
-        Ok(_) => {
-            eprintln!("[SAVE DEBUG] File written successfully");
-            Ok(())
-        }
-        Err(e) => {
-            eprintln!("[SAVE DEBUG] File write failed: {}", e);
-            Err(e.to_string())
-        }
-    }
+    validate_project_path(&path, true)?;
+    std::fs::write(&path, contents).map_err(|e| e.to_string())
 }
 
 /// Read a file as a string.

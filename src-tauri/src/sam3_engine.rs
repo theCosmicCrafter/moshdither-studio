@@ -66,6 +66,9 @@ struct Sam3Response {
     frame_scores: Vec<Vec<f64>>,
 }
 
+/// Per-frame masks and their scores returned by the SAM3 video predictor.
+pub type VideoPredictorResult = (Vec<Vec<String>>, Vec<Vec<f64>>);
+
 pub struct Sam3Engine {
     child: Mutex<Option<std::process::Child>>,
     stdin: Mutex<ChildStdin>,
@@ -419,7 +422,7 @@ impl Sam3Engine {
             let combined = resp
                 .masks
                 .into_iter()
-                .zip(resp.scores.into_iter())
+                .zip(resp.scores)
                 .collect();
             Ok(combined)
         } else {
@@ -431,7 +434,7 @@ impl Sam3Engine {
         &self,
         frames: Vec<String>,
         prompt: Option<String>,
-    ) -> crate::error::Result<(Vec<Vec<String>>, Vec<Vec<f64>>)> {
+    ) -> crate::error::Result<VideoPredictorResult> {
         let req = Sam3Request {
             cmd: "video_predictor".into(),
             auth_token: None,
