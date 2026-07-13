@@ -79,6 +79,40 @@ describe("Studio Store", () => {
     });
   });
 
+  describe("mask revision", () => {
+    it("increments for mask data mutations", () => {
+      const effect = {
+        id: "dithering.bayer",
+        name: "Bayer Dither",
+        category: "dithering",
+        media_type: "image",
+        parameters: [],
+      };
+
+      expect(useAppStore.getState().maskRevision).toBe(0);
+
+      useAppStore.getState().setActiveMask("mask-a");
+      expect(useAppStore.getState().maskRevision).toBe(1);
+
+      useAppStore.getState().addToStack(effect);
+      const stackId = useAppStore.getState().effectStack[0].id;
+      useAppStore.getState().setStackItemMask(stackId, "active");
+      expect(useAppStore.getState().maskRevision).toBe(2);
+
+      useAppStore.getState().setSam3Masks(["mask-a", "mask-b"], [0.9, 0.8]);
+      expect(useAppStore.getState().maskRevision).toBe(3);
+
+      useAppStore.getState().setSam3MaskIndex(1);
+      expect(useAppStore.getState().maskRevision).toBe(4);
+
+      useAppStore.getState().setSam3FrameMasks({ 0: "frame-mask" });
+      expect(useAppStore.getState().maskRevision).toBe(5);
+
+      useAppStore.getState().clearSam3FrameMasks();
+      expect(useAppStore.getState().maskRevision).toBe(6);
+    });
+  });
+
   describe("undo/redo", () => {
     it("undo restores previous stack", () => {
       const mockEffect = {

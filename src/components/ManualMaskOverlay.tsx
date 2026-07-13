@@ -45,6 +45,8 @@ export default function ManualMaskOverlay() {
   // Initialize canvas from activeMask or blank white.
   // Skip reload when the activeMask change came from this overlay's own commit.
   useEffect(() => {
+    let cancelled = false;
+    let image: HTMLImageElement | null = null;
     const canvas = canvasRef.current;
     if (!canvas || width === 0 || height === 0) return;
     if (activeMask === maskLoadedRef.current) return;
@@ -58,17 +60,22 @@ export default function ManualMaskOverlay() {
     setHoverPoint(null);
 
     if (activeMask) {
-      const img = new Image();
-      img.onload = () => {
+      image = new Image();
+      image.onload = () => {
+        if (cancelled) return;
         ctx.clearRect(0, 0, width, height);
-        ctx.drawImage(img, 0, 0, width, height);
+        ctx.drawImage(image!, 0, 0, width, height);
       };
-      img.src = activeMask;
+      image.src = activeMask;
     } else {
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, width, height);
     }
     maskLoadedRef.current = activeMask;
+    return () => {
+      cancelled = true;
+      if (image) image.onload = null;
+    };
   }, [width, height, activeMask]);
 
   // Polygon preview overlay

@@ -172,6 +172,7 @@ export interface AppState {
 
   // Mask / Segmentation
   activeMask: string | null; // base64 PNG of current mask
+  maskRevision: number;
   maskVisible: boolean;
   maskTab: "sam3" | "manual";
   maskTool: "brush" | "eraser" | "rect" | "ellipse" | "polygon";
@@ -511,6 +512,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   inPoint: null,
   outPoint: null,
   activeMask: null,
+  maskRevision: 0,
   maskVisible: true,
   maskTab: "sam3",
   maskTool: "brush",
@@ -666,6 +668,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         pastStacks: [...state.pastStacks, state.effectStack],
         futureStacks: [],
+        maskRevision: state.maskRevision + 1,
         effectStack: state.effectStack.map((e) => (e.id === id ? { ...e, maskId, maskB64 } : e)),
       };
     }),
@@ -1174,7 +1177,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   // Mask actions
-  setActiveMask: (maskB64) => set({ activeMask: maskB64 }),
+  setActiveMask: (maskB64) => set((state) => ({ activeMask: maskB64, maskRevision: state.maskRevision + 1 })),
   setMaskVisible: (v) => set({ maskVisible: v }),
   setMaskTab: (tab) => set({ maskTab: tab }),
   setMaskTool: (tool) => set({ maskTool: tool }),
@@ -1194,23 +1197,27 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // Multi-mask actions
   setSam3Masks: (masks, scores) =>
-    set({
+    set((state) => ({
       sam3Masks: masks,
       sam3MaskScores: scores,
       sam3MaskIndex: 0,
       activeMask: masks.length > 0 ? masks[0] : null,
-    }),
+      maskRevision: state.maskRevision + 1,
+    })),
   setSam3MaskIndex: (index) =>
     set((state) => {
       const safeIndex = Math.max(0, Math.min(state.sam3Masks.length - 1, index));
       return {
         sam3MaskIndex: safeIndex,
         activeMask: state.sam3Masks[safeIndex] ?? null,
+        maskRevision: state.maskRevision + 1,
       };
     }),
 
-  setSam3FrameMasks: (masks) => set({ sam3FrameMasks: masks }),
-  clearSam3FrameMasks: () => set({ sam3FrameMasks: {} }),
+  setSam3FrameMasks: (masks) =>
+    set((state) => ({ sam3FrameMasks: masks, maskRevision: state.maskRevision + 1 })),
+  clearSam3FrameMasks: () =>
+    set((state) => ({ sam3FrameMasks: {}, maskRevision: state.maskRevision + 1 })),
 
   // Proxy actions
   setProxyEnabled: (v) => set({ proxyEnabled: v }),

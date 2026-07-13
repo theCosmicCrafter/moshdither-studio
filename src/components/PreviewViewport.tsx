@@ -77,7 +77,7 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
   );
   // Full signature including params + mask + maskB64 — used to re-trigger CPU preview on param/mask changes
   const cpuRenderSignature = useAppStore((s) =>
-    s.effectStack.map((e) => `${e.id}:${e.enabled}:${JSON.stringify(e.params)}:${e.maskId}:${e.maskMode}:${(e.maskB64 ?? "").length}`).join("|") + `|${s.activeMask ?? ""}`
+    s.effectStack.map((e) => `${e.id}:${e.enabled}:${JSON.stringify(e.params)}:${e.maskId}:${e.maskMode}`).join("|") + `|${s.maskRevision}`
   );
   const stackCount = useAppStore((s) => s.effectStack.length);
   const isPlaying = useAppStore((s) => s.isPlaying);
@@ -129,6 +129,7 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
   const lastFrameTimeRef = useRef<number>(0);
   const sam3CanvasRef = useRef<HTMLCanvasElement>(null);
   const hoverTimeoutRef = useRef<number | null>(null);
+  const hoverRequestRevisionRef = useRef(0);
   const isProcessingRef = useRef(false);
   const deleteRetiredSourceTextures = useCallback(() => {
     if (activeWebglRendersRef.current !== 0) return;
@@ -405,6 +406,7 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
       const canvas = webglCanvasRef.current || previewImgRef.current;
       if (sam3Mode !== "point" || !mediaInfo || !canvas) return;
       if (hoverTimeoutRef.current) window.clearTimeout(hoverTimeoutRef.current);
+      const requestRevision = ++hoverRequestRevisionRef.current;
       hoverTimeoutRef.current = window.setTimeout(async () => {
         const { x, y } = screenToImageCoords(clientX, clientY, canvas, mediaInfo.width, mediaInfo.height);
         const allPoints = [...sam3Points, { x, y, label: 1 as const }];
@@ -412,9 +414,13 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
           const coords = allPoints.map((p) => [p.x, p.y] as [number, number]);
           const labels = allPoints.map((p) => p.label);
           const result = await sam3PointPrompt(coords, labels);
-          if (result.count > 0) setSam3HoverMask(result.masks[0]);
+          if (requestRevision === hoverRequestRevisionRef.current && result.count > 0) {
+            setSam3HoverMask(result.masks[0]);
+          }
         } catch {
-          setSam3HoverMask(null);
+          if (requestRevision === hoverRequestRevisionRef.current) {
+            setSam3HoverMask(null);
+          }
         }
       }, 80);
     },
@@ -426,6 +432,7 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
       window.clearTimeout(hoverTimeoutRef.current);
       hoverTimeoutRef.current = null;
     }
+    hoverRequestRevisionRef.current += 1;
     setSam3HoverMask(null);
   }, [setSam3HoverMask]);
 
@@ -879,6 +886,9 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
         if (!cancelled) state.setPreviewDataUrl(result);
       } catch (e) {
         console.error('CPU preview render failed:', e);
+        if (!cancelled) {
+          state.setStatusMessage(`Preview render failed: ${e}`);
+        }
       } finally {
         inFlight = false;
         if (pendingRenderScale !== null && !cancelled) {
@@ -922,6 +932,9 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
           if (!cancelled) s.setPreviewDataUrl(result);
         } catch (e) {
           console.error('CPU preview render failed:', e);
+          if (!cancelled) {
+            useAppStore.getState().setStatusMessage(`Preview render failed: ${e}`);
+          }
         }
         if (!cancelled) cpuAnimRafRef.current = requestAnimationFrame(renderCpu);
       };
