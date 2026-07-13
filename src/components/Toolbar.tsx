@@ -26,11 +26,10 @@ export default function Toolbar({ onFileLoaded }: Props) {
     const stackSig = s.effectStack
       .map(
         (e) =>
-          `${e.id}:${e.enabled}:${JSON.stringify(e.params)}:${e.maskId}:${e.maskMode}:${(e.maskB64 ?? "").length}`
+          `${e.id}:${e.enabled}:${JSON.stringify(e.params)}:${e.maskId}:${e.maskMode}`
       )
       .join("|");
-    const maskSig = s.activeMask ? "mask" : "no-mask";
-    return `${stackSig}|${maskSig}|${s.sam3Masks.length}`;
+    return `${stackSig}|${s.maskRevision}`;
   });
   const setShowBeforeAfter = useAppStore((s) => s.setShowBeforeAfter);
   const setZoom = useAppStore((s) => s.setZoom);

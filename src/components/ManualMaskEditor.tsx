@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useAppStore } from "../store";
 
 export default function ManualMaskEditor() {
@@ -13,6 +13,20 @@ export default function ManualMaskEditor() {
 
   const width = mediaInfo?.width ?? 0;
   const height = mediaInfo?.height ?? 0;
+
+  const invertGenerationRef = useRef(0);
+  const invertImageRef = useRef<HTMLImageElement | null>(null);
+  const activeMaskRef = useRef(activeMask);
+  activeMaskRef.current = activeMask;
+  const dimensionsRef = useRef({ width, height });
+  dimensionsRef.current = { width, height };
+
+  useEffect(() => {
+    return () => {
+      invertGenerationRef.current += 1;
+      if (invertImageRef.current) invertImageRef.current.onload = null;
+    };
+  }, []);
 
   const createBlankMask = useCallback(() => {
     if (width === 0 || height === 0) return null;
@@ -48,8 +62,19 @@ export default function ManualMaskEditor() {
     const source = activeMask || createBlankMask();
     if (!source) return;
 
+    const generation = ++invertGenerationRef.current;
+    if (invertImageRef.current) invertImageRef.current.onload = null;
     const img = new Image();
+    invertImageRef.current = img;
     img.onload = () => {
+      if (
+        generation !== invertGenerationRef.current ||
+        activeMaskRef.current !== activeMask ||
+        dimensionsRef.current.width !== width ||
+        dimensionsRef.current.height !== height
+      ) {
+        return;
+      }
       ctx.clearRect(0, 0, width, height);
       ctx.drawImage(img, 0, 0, width, height);
       const imageData = ctx.getImageData(0, 0, width, height);
