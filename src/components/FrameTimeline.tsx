@@ -13,6 +13,7 @@ export default function FrameTimeline() {
   const setCurrentTime = useAppStore((s) => s.setCurrentTime);
   const sam3FrameMasks = useAppStore((s) => s.sam3FrameMasks);
   const setSam3FrameMasks = useAppStore((s) => s.setSam3FrameMasks);
+  const clearSam3FrameMasks = useAppStore((s) => s.clearSam3FrameMasks);
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
 
   const [frames, setFrames] = useState<string[]>([]);
@@ -74,6 +75,9 @@ export default function FrameTimeline() {
   };
 
   useEffect(() => {
+    setFrames([]);
+    clearSam3FrameMasks();
+
     if (isVideo && proxyUrl) {
       const video = document.createElement("video");
       video.crossOrigin = "anonymous";
@@ -81,7 +85,18 @@ export default function FrameTimeline() {
       video.muted = true;
       videoRef.current = video;
     }
-  }, [isVideo, proxyUrl]);
+    return () => {
+      const video = videoRef.current;
+      if (video) {
+        video.pause();
+        video.src = "";
+        video.onseeked = null;
+        videoRef.current = null;
+      }
+      setFrames([]);
+      clearSam3FrameMasks();
+    };
+  }, [clearSam3FrameMasks, isVideo, proxyUrl]);
 
   if (!isVideo) return null;
 

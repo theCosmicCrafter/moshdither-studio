@@ -35,6 +35,10 @@ export class MediaUploader {
     return tex;
   }
 
+  deleteTexture(texture: WebGLTexture) {
+    this.gl.deleteTexture(texture);
+  }
+
   async uploadVideo(url: string): Promise<HTMLVideoElement> {
     const video = document.createElement("video");
     video.crossOrigin = "anonymous";

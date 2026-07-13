@@ -116,6 +116,8 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
   const uploaderRef = useRef<MediaUploader | null>(null);
   const chainRef = useRef<EffectChain | null>(null);
   const sourceTexRef = useRef<WebGLTexture | null>(null);
+  const retiredSourceTexturesRef = useRef<WebGLTexture[]>([]);
+  const activeWebglRendersRef = useRef(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const maskImgRef = useRef<HTMLImageElement | null>(null);
   const panWrapperRef = useRef<HTMLDivElement>(null);
@@ -128,6 +130,23 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
   const sam3CanvasRef = useRef<HTMLCanvasElement>(null);
   const hoverTimeoutRef = useRef<number | null>(null);
   const isProcessingRef = useRef(false);
+  const deleteRetiredSourceTextures = useCallback(() => {
+    if (activeWebglRendersRef.current !== 0) return;
+    const uploader = uploaderRef.current;
+    if (!uploader) return;
+    for (const texture of retiredSourceTexturesRef.current) {
+      uploader.deleteTexture(texture);
+    }
+    retiredSourceTexturesRef.current = [];
+  }, []);
+  const retireSourceTexture = useCallback(() => {
+    const sourceTexture = sourceTexRef.current;
+    if (sourceTexture) {
+      retiredSourceTexturesRef.current.push(sourceTexture);
+      sourceTexRef.current = null;
+    }
+    deleteRetiredSourceTextures();
+  }, [deleteRetiredSourceTextures]);
 
   const [isPanDragging, setIsPanDragging] = useState(false);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -566,17 +585,20 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
       console.error('[Preview] WebGL2 not available:', e);
     }
     return () => {
+      retireSourceTexture();
+      chainRef.current?.destroy();
+      deleteRetiredSourceTextures();
       glCtxRef.current?.destroy();
       glCtxRef.current = null;
       uploaderRef.current = null;
       chainRef.current = null;
     };
-  }, []);
+  }, [deleteRetiredSourceTextures, retireSourceTexture]);
 
   // Invalidate texture when original image changes
   useEffect(() => {
-    sourceTexRef.current = null;
-  }, [originalDataUrl]);
+    retireSourceTexture();
+  }, [originalDataUrl, retireSourceTexture]);
 
   // Load proxy video when a video source is detected
   useEffect(() => {
@@ -591,15 +613,15 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
       video.play().catch(() => {});
     };
     videoRef.current = video;
-    sourceTexRef.current = null;
+    retireSourceTexture();
     return () => {
       video.pause();
       video.src = "";
       video.oncanplay = null;
       videoRef.current = null;
-      sourceTexRef.current = null;
+      retireSourceTexture();
     };
-  }, [isVideo, proxyUrl]);
+  }, [isVideo, proxyUrl, retireSourceTexture]);
 
   // Sync video play/pause
   useEffect(() => {
@@ -657,6 +679,7 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
     const render = async () => {
       if (isRendering) return;
       isRendering = true;
+      activeWebglRendersRef.current += 1;
       try {
         // Resize chain to match media dimensions
         if (mediaInfo) {
@@ -749,6 +772,8 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
         console.error('WebGL render failed:', e);
       } finally {
         isRendering = false;
+        activeWebglRendersRef.current -= 1;
+        deleteRetiredSourceTextures();
       }
     };
 
@@ -786,7 +811,17 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
     return () => {
       cancelAnimationFrame(rafRef.current);
     };
-  }, [originalDataUrl, stackSignature, mediaInfo, audioEnabled, isPlaying, isVideo, proxyUrl, useCpuPreview]);
+  }, [
+    originalDataUrl,
+    stackSignature,
+    mediaInfo,
+    audioEnabled,
+    isPlaying,
+    isVideo,
+    proxyUrl,
+    useCpuPreview,
+    deleteRetiredSourceTextures,
+  ]);
 
   // CPU preview playback loop — advances currentTime when playing and useCpuPreview
   // is true, so the CPU preview re-renders each frame during playback.

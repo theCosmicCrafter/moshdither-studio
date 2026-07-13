@@ -25,6 +25,7 @@ type EventListener = (event: ManifestEvent) => void;
 export class ManifestAudioEngine {
   private audioCtx: AudioContext | null = null;
   private mediaElement: HTMLAudioElement | null = null;
+  private objectUrl: string | null = null;
   private sourceNode: MediaElementAudioSourceNode | null = null;
   private gainNode: GainNode | null = null;
   private manifest: AudioManifest | null = null;
@@ -88,7 +89,8 @@ export class ManifestAudioEngine {
     this.disconnectNodes();
 
     // Create audio element for playback
-    const url = file instanceof File ? URL.createObjectURL(file) : file;
+    this.objectUrl = file instanceof File ? URL.createObjectURL(file) : null;
+    const url = file instanceof File ? this.objectUrl! : file;
     this.mediaElement = new Audio(url);
     this.mediaElement.volume = this._volume;
     this.mediaElement.crossOrigin = "anonymous";
@@ -231,6 +233,10 @@ export class ManifestAudioEngine {
     if (this.mediaElement) {
       this.mediaElement.src = "";
       this.mediaElement = null;
+    }
+    if (this.objectUrl) {
+      URL.revokeObjectURL(this.objectUrl);
+      this.objectUrl = null;
     }
   }
 
