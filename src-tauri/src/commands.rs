@@ -102,8 +102,14 @@ pub async fn load_media(
     .await
     .map_err(|e| format!("Task failed: {}", e))??;
 
-    *state.current_frame.lock().map_err(|e| format!("frame lock poisoned: {e}"))? = Some(frame);
-    *state.frame_cache.lock().map_err(|e| format!("cache lock poisoned: {e}"))? = EffectCache::default();
+    *state
+        .current_frame
+        .lock()
+        .map_err(|e| format!("frame lock poisoned: {e}"))? = Some(frame);
+    *state
+        .frame_cache
+        .lock()
+        .map_err(|e| format!("cache lock poisoned: {e}"))? = EffectCache::default();
     Ok(path)
 }
 
@@ -140,16 +146,20 @@ pub async fn load_media_from_base64(
     .await
     .map_err(|e| format!("Task failed: {}", e))??;
 
-    *state.current_frame.lock().map_err(|e| format!("frame lock poisoned: {e}"))? = Some(frame);
-    *state.frame_cache.lock().map_err(|e| format!("cache lock poisoned: {e}"))? = EffectCache::default();
+    *state
+        .current_frame
+        .lock()
+        .map_err(|e| format!("frame lock poisoned: {e}"))? = Some(frame);
+    *state
+        .frame_cache
+        .lock()
+        .map_err(|e| format!("cache lock poisoned: {e}"))? = EffectCache::default();
     Ok("loaded".to_string())
 }
 
 /// Get metadata for all available effects.
 #[tauri::command]
-pub fn list_effects(
-    state: State<'_, AppState>,
-) -> std::result::Result<Vec<EffectMeta>, String> {
+pub fn list_effects(state: State<'_, AppState>) -> std::result::Result<Vec<EffectMeta>, String> {
     let registry = state
         .registry
         .lock()
@@ -195,7 +205,7 @@ pub fn test_all_functions(
 }
 
 fn decode_mask_b64(
-    mask_b64: Option<String>,
+    mask_b64: Option<&str>,
 ) -> std::result::Result<Option<crate::effects::Mask>, String> {
     let Some(b64) = mask_b64 else {
         return Ok(None);
@@ -222,11 +232,14 @@ pub fn apply_effect(
     params: serde_json::Map<String, serde_json::Value>,
     mask_b64: Option<String>,
 ) -> std::result::Result<String, String> {
-    let frame_lock = state.current_frame.lock().map_err(|e| format!("frame lock poisoned: {e}"))?;
+    let frame_lock = state
+        .current_frame
+        .lock()
+        .map_err(|e| format!("frame lock poisoned: {e}"))?;
     let mut working = frame_lock.as_ref().ok_or("No media loaded")?.clone();
     drop(frame_lock);
 
-    let mask = decode_mask_b64(mask_b64)?;
+    let mask = decode_mask_b64(mask_b64.as_deref())?;
 
     let registry = state
         .registry
@@ -235,8 +248,12 @@ pub fn apply_effect(
     let effect = registry
         .get(&effect_id)
         .ok_or_else(|| format!("Effect '{}' not found", effect_id))?;
-    let previous = working.clone();
     let effect_handles_mask = effect.handles_masking();
+    let previous = if !effect_handles_mask && mask.is_some() {
+        Some(working.clone())
+    } else {
+        None
+    };
     working = effect
         .process_frame(&working, mask.as_ref(), &params)
         .map_err(|e| e.to_string())?;
@@ -245,8 +262,8 @@ pub fn apply_effect(
     // Mask-aware effects (e.g., MaskIsolate) already apply the mask in process_frame,
     // so applying it again would cause double-mask corruption.
     if !effect_handles_mask {
-        if let Some(m) = &mask {
-            blend_mask(&mut working, &previous, m, "inside");
+        if let (Some(previous), Some(m)) = (previous.as_ref(), mask.as_ref()) {
+            blend_mask(&mut working, previous, m, "inside");
         }
     }
 
@@ -280,7 +297,10 @@ pub fn apply_effect_stack(
     mask_b64: Option<String>,
     preview_scale: Option<f32>,
 ) -> std::result::Result<String, String> {
-    let frame_lock = state.current_frame.lock().map_err(|e| format!("frame lock poisoned: {e}"))?;
+    let frame_lock = state
+        .current_frame
+        .lock()
+        .map_err(|e| format!("frame lock poisoned: {e}"))?;
     let original = frame_lock.as_ref().ok_or("No media loaded")?.clone();
     drop(frame_lock);
 
@@ -292,14 +312,14 @@ pub fn apply_effect_stack(
         false
     };
     let mut working = if scaled {
-        downscale_frame(&original, preview_scale.unwrap())?
+        downscale_frame(original, preview_scale.unwrap())?
     } else {
-        original.clone()
+        original
     };
 
     // Decode masks — no need to downscale; blend_mask and process_frame
     // already handle dimension mismatches via nearest-neighbor sampling.
-    let global_mask = decode_mask_b64(mask_b64.clone())?;
+    let global_mask = decode_mask_b64(mask_b64.as_deref())?;
 
     let registry = state
         .registry
@@ -310,7 +330,10 @@ pub fn apply_effect_stack(
 
     // Check if scale or global mask changed
     {
-        let cache_lock = state.frame_cache.lock().map_err(|e| format!("cache lock poisoned: {e}"))?;
+        let cache_lock = state
+            .frame_cache
+            .lock()
+            .map_err(|e| format!("cache lock poisoned: {e}"))?;
         if cache_lock.scale != preview_scale || cache_lock.global_mask_b64 != mask_b64 {
             use_cache = false;
         }
@@ -318,7 +341,10 @@ pub fn apply_effect_stack(
 
     for (i, call) in stack.into_iter().enumerate() {
         if use_cache {
-            let cache_lock = state.frame_cache.lock().map_err(|e| format!("cache lock poisoned: {e}"))?;
+            let cache_lock = state
+                .frame_cache
+                .lock()
+                .map_err(|e| format!("cache lock poisoned: {e}"))?;
             if i < cache_lock.entries.len() {
                 let entry = &cache_lock.entries[i];
                 if entry.effect_id == call.effect_id
@@ -344,16 +370,20 @@ pub fn apply_effect_stack(
         let effect = registry
             .get(&call.effect_id)
             .ok_or_else(|| format!("Effect '{}' not found", call.effect_id))?;
-        let previous = working.clone();
         let effect_handles_mask = effect.handles_masking();
 
         // Per-effect mask overrides global mask
         let per_effect_mask = if let Some(ref b64) = call.mask_b64 {
-            decode_mask_b64(Some(b64.clone()))?
+            decode_mask_b64(Some(b64.as_str()))?
         } else {
             None
         };
         let active_mask = per_effect_mask.as_ref().or(global_mask.as_ref());
+        let previous = if !effect_handles_mask && active_mask.is_some() {
+            Some(working.clone())
+        } else {
+            None
+        };
 
         working = effect
             .process_frame(&working, active_mask, &call.params)
@@ -361,9 +391,9 @@ pub fn apply_effect_stack(
 
         // Only apply post-process mask blend for effects that don't handle masking internally.
         if !effect_handles_mask {
-            if let Some(m) = active_mask {
+            if let (Some(previous), Some(m)) = (previous.as_ref(), active_mask) {
                 let mode = call.mask_mode.as_deref().unwrap_or("inside");
-                blend_mask(&mut working, &previous, m, mode);
+                blend_mask(&mut working, previous, m, mode);
             }
         }
 
@@ -378,7 +408,10 @@ pub fn apply_effect_stack(
 
     // Update cache
     {
-        let mut cache_lock = state.frame_cache.lock().map_err(|e| format!("cache lock poisoned: {e}"))?;
+        let mut cache_lock = state
+            .frame_cache
+            .lock()
+            .map_err(|e| format!("cache lock poisoned: {e}"))?;
         cache_lock.scale = preview_scale;
         cache_lock.global_mask_b64 = mask_b64;
         cache_lock.entries = new_cache;
@@ -386,7 +419,7 @@ pub fn apply_effect_stack(
 
     // Upscale back to original resolution if we downscaled
     if working.width != orig_w || working.height != orig_h {
-        working = upscale_frame(&working, orig_w, orig_h)?;
+        working = upscale_frame(working, orig_w, orig_h)?;
     }
 
     let img = image::RgbaImage::from_raw(working.width, working.height, working.data)
@@ -401,16 +434,15 @@ pub fn apply_effect_stack(
 
 /// Downscale a Frame by a factor using simple box averaging (no external deps).
 /// Returns an error if the frame's raw buffer does not match its declared dimensions.
-fn downscale_frame(frame: &Frame, scale: f32) -> std::result::Result<Frame, String> {
+fn downscale_frame(frame: Frame, scale: f32) -> std::result::Result<Frame, String> {
     let new_w = ((frame.width as f32 * scale) as u32).max(1);
     let new_h = ((frame.height as f32 * scale) as u32).max(1);
-    let img = image::RgbaImage::from_raw(frame.width, frame.height, frame.data.clone())
-        .ok_or_else(|| {
+    let data_len = frame.data.len();
+    let img =
+        image::RgbaImage::from_raw(frame.width, frame.height, frame.data).ok_or_else(|| {
             format!(
                 "downscale_frame: invalid frame buffer ({} bytes) for {}x{}",
-                frame.data.len(),
-                frame.width,
-                frame.height
+                data_len, frame.width, frame.height
             )
         })?;
     let resized = image::imageops::resize(
@@ -428,18 +460,13 @@ fn downscale_frame(frame: &Frame, scale: f32) -> std::result::Result<Frame, Stri
 
 /// Upscale a Frame back to the target dimensions.
 /// Returns an error if the frame's raw buffer does not match its declared dimensions.
-fn upscale_frame(
-    frame: &Frame,
-    target_w: u32,
-    target_h: u32,
-) -> std::result::Result<Frame, String> {
-    let img = image::RgbaImage::from_raw(frame.width, frame.height, frame.data.clone())
-        .ok_or_else(|| {
+fn upscale_frame(frame: Frame, target_w: u32, target_h: u32) -> std::result::Result<Frame, String> {
+    let data_len = frame.data.len();
+    let img =
+        image::RgbaImage::from_raw(frame.width, frame.height, frame.data).ok_or_else(|| {
             format!(
                 "upscale_frame: invalid frame buffer ({} bytes) for {}x{}",
-                frame.data.len(),
-                frame.width,
-                frame.height
+                data_len, frame.width, frame.height
             )
         })?;
     let resized = image::imageops::resize(
@@ -458,7 +485,10 @@ fn upscale_frame(
 /// Get the current frame as base64 PNG.
 #[tauri::command]
 pub fn get_frame_data(state: State<'_, AppState>) -> std::result::Result<String, String> {
-    let frame_lock = state.current_frame.lock().map_err(|e| format!("frame lock poisoned: {e}"))?;
+    let frame_lock = state
+        .current_frame
+        .lock()
+        .map_err(|e| format!("frame lock poisoned: {e}"))?;
     let frame = frame_lock.as_ref().ok_or("No media loaded")?;
     let img = image::RgbaImage::from_raw(frame.width, frame.height, frame.data.clone())
         .ok_or("Invalid frame data.")?;
@@ -479,7 +509,10 @@ pub fn save_media(
     format: Option<String>,
     quality: Option<u8>,
 ) -> std::result::Result<String, String> {
-    let frame_lock = state.current_frame.lock().map_err(|e| format!("frame lock poisoned: {e}"))?;
+    let frame_lock = state
+        .current_frame
+        .lock()
+        .map_err(|e| format!("frame lock poisoned: {e}"))?;
     let frame = frame_lock.as_ref().ok_or("No media loaded")?;
     save_image(frame, &path, format.as_deref(), quality).map_err(|e| e.to_string())?;
     Ok(path)
@@ -646,7 +679,12 @@ fn export_video_blocking(
             .map(|e| (e.max(0.0) * fps).min(total_frames as f64) as usize)
             .unwrap_or(total_frames)
             .max(start_frame);
-        segment.frames = segment.frames[start_frame..end_frame].to_vec();
+        let frames = std::mem::take(&mut segment.frames);
+        segment.frames = frames
+            .into_iter()
+            .skip(start_frame)
+            .take(end_frame - start_frame)
+            .collect();
         if segment.frames.is_empty() {
             return Err("Trim range resulted in no frames".to_string());
         }
@@ -654,7 +692,7 @@ fn export_video_blocking(
 
     // Resolution override is now handled by FFmpeg -vf scale in encode_video
 
-    let global_mask = decode_mask_b64(mask_b64)?;
+    let global_mask = decode_mask_b64(mask_b64.as_deref())?;
 
     // Track whether audio bake data was provided (before it's consumed)
     let has_audio_bake = audio_bake_json.is_some();
@@ -686,7 +724,7 @@ fn export_video_blocking(
 
         // Per-effect mask overrides global mask
         let per_effect_mask = if let Some(ref b64) = call.mask_b64 {
-            decode_mask_b64(Some(b64.clone()))?
+            decode_mask_b64(Some(b64.as_str()))?
         } else {
             None
         };
@@ -826,7 +864,10 @@ pub fn get_media_metadata(path: String) -> std::result::Result<serde_json::Value
 pub fn get_media_info(
     state: State<'_, AppState>,
 ) -> std::result::Result<serde_json::Value, String> {
-    let frame_lock = state.current_frame.lock().map_err(|e| format!("frame lock poisoned: {e}"))?;
+    let frame_lock = state
+        .current_frame
+        .lock()
+        .map_err(|e| format!("frame lock poisoned: {e}"))?;
     match frame_lock.as_ref() {
         Some(frame) => Ok(json!({
             "width": frame.width,
@@ -840,7 +881,10 @@ pub fn get_media_info(
 /// ── SAM3 Segmentation Commands ─────────────────────────────
 #[tauri::command]
 pub fn sam3_init(state: State<'_, AppState>) -> std::result::Result<String, String> {
-    let mut sam3_lock = state.sam3.lock().map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
+    let mut sam3_lock = state
+        .sam3
+        .lock()
+        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
     if sam3_lock.is_none() {
         match Sam3Engine::new() {
             Ok(engine) => {
@@ -860,7 +904,10 @@ pub fn sam3_load_image(
     state: State<'_, AppState>,
     image_b64: String,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state.sam3.lock().map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
+    let sam3_lock = state
+        .sam3
+        .lock()
+        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
     let engine = sam3_lock
         .as_ref()
         .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
@@ -874,7 +921,10 @@ pub fn sam3_text_prompt(
     state: State<'_, AppState>,
     prompt: String,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state.sam3.lock().map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
+    let sam3_lock = state
+        .sam3
+        .lock()
+        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
     let engine = sam3_lock
         .as_ref()
         .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
@@ -895,7 +945,10 @@ pub fn sam3_point_prompt(
     points: Vec<[f64; 2]>,
     labels: Option<Vec<i32>>,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state.sam3.lock().map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
+    let sam3_lock = state
+        .sam3
+        .lock()
+        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
     let engine = sam3_lock
         .as_ref()
         .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
@@ -921,7 +974,10 @@ pub fn sam3_box_prompt(
     state: State<'_, AppState>,
     boxes: Vec<[f64; 4]>,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state.sam3.lock().map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
+    let sam3_lock = state
+        .sam3
+        .lock()
+        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
     let engine = sam3_lock
         .as_ref()
         .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
@@ -947,7 +1003,10 @@ pub fn sam3_auto_mask(
     iou_threshold: f32,
     min_mask_region_area: u32,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state.sam3.lock().map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
+    let sam3_lock = state
+        .sam3
+        .lock()
+        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
     let engine = sam3_lock
         .as_ref()
         .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
@@ -970,7 +1029,10 @@ pub fn sam3_video_predictor(
     frames: Vec<String>,
     prompt: Option<String>,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state.sam3.lock().map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
+    let sam3_lock = state
+        .sam3
+        .lock()
+        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
     let engine = sam3_lock
         .as_ref()
         .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
@@ -994,7 +1056,10 @@ pub fn sam3_refine_mask(
     points: Vec<[f64; 2]>,
     labels: Option<Vec<i32>>,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state.sam3.lock().map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
+    let sam3_lock = state
+        .sam3
+        .lock()
+        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
     let engine = sam3_lock
         .as_ref()
         .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
@@ -1025,7 +1090,10 @@ pub fn sam3_postprocess_mask(
     feather: i32,
     fill_holes: bool,
 ) -> std::result::Result<String, String> {
-    let sam3_lock = state.sam3.lock().map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
+    let sam3_lock = state
+        .sam3
+        .lock()
+        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
     let engine = sam3_lock
         .as_ref()
         .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
@@ -1037,7 +1105,10 @@ pub fn sam3_postprocess_mask(
 /// Clear SAM3 state (image + masks).
 #[tauri::command]
 pub fn sam3_clear(state: State<'_, AppState>) -> std::result::Result<String, String> {
-    let sam3_lock = state.sam3.lock().map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
+    let sam3_lock = state
+        .sam3
+        .lock()
+        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
     if let Some(engine) = sam3_lock.as_ref() {
         engine.clear().map_err(|e| e.to_string())?;
     }
@@ -1047,7 +1118,10 @@ pub fn sam3_clear(state: State<'_, AppState>) -> std::result::Result<String, Str
 /// Shutdown the SAM3 bridge process.
 #[tauri::command]
 pub fn sam3_shutdown(state: State<'_, AppState>) -> std::result::Result<String, String> {
-    let mut sam3_lock = state.sam3.lock().map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
+    let mut sam3_lock = state
+        .sam3
+        .lock()
+        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
     if let Some(engine) = sam3_lock.take() {
         let _ = engine.shutdown();
     }
@@ -1120,7 +1194,7 @@ mod integration_tests {
             height: 4,
             data: vec![255u8; (4 * 4 * 4) as usize],
         };
-        let out = downscale_frame(&f, 0.5).expect("valid frame should downscale");
+        let out = downscale_frame(f, 0.5).expect("valid frame should downscale");
         assert_eq!(out.width, 2);
         assert_eq!(out.height, 2);
         assert_eq!(out.data.len(), (out.width * out.height * 4) as usize);
@@ -1134,7 +1208,7 @@ mod integration_tests {
             height: 10,
             data: vec![0u8; 4],
         };
-        let err = downscale_frame(&bad, 0.5).unwrap_err();
+        let err = downscale_frame(bad, 0.5).unwrap_err();
         assert!(err.contains("downscale_frame"));
     }
 
@@ -1145,7 +1219,7 @@ mod integration_tests {
             height: 2,
             data: vec![128u8; (2 * 2 * 4) as usize],
         };
-        let out = upscale_frame(&f, 4, 4).expect("valid frame should upscale");
+        let out = upscale_frame(f, 4, 4).expect("valid frame should upscale");
         assert_eq!(out.width, 4);
         assert_eq!(out.height, 4);
         assert_eq!(out.data.len(), (out.width * out.height * 4) as usize);
@@ -1158,7 +1232,7 @@ mod integration_tests {
             height: 10,
             data: vec![0u8; 4],
         };
-        let err = upscale_frame(&bad, 20, 20).unwrap_err();
+        let err = upscale_frame(bad, 20, 20).unwrap_err();
         assert!(err.contains("upscale_frame"));
     }
 
@@ -1241,10 +1315,12 @@ mod integration_tests {
     #[test]
     fn test_decode_mask_b64_valid_base64_but_not_png_errors() {
         // Well-formed base64 whose bytes are not a PNG must error, not panic.
-        let junk =
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"not a png file");
+        let junk = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            b"not a png file",
+        );
         let data_url = format!("data:image/png;base64,{}", junk);
-        assert!(decode_mask_b64(Some(data_url)).is_err());
+        assert!(decode_mask_b64(Some(data_url.as_str())).is_err());
     }
 
     #[test]
@@ -1314,7 +1390,7 @@ mod integration_tests {
             base64::Engine::encode(&base64::engine::general_purpose::STANDARD, buf.into_inner());
         let data_url = format!("data:image/png;base64,{}", b64);
 
-        let mask = decode_mask_b64(Some(data_url)).unwrap();
+        let mask = decode_mask_b64(Some(data_url.as_str())).unwrap();
         assert!(mask.is_some());
         let m = mask.unwrap();
         assert_eq!(m.width, 2);
@@ -1333,7 +1409,7 @@ mod integration_tests {
 
     #[test]
     fn test_decode_mask_b64_invalid() {
-        let result = decode_mask_b64(Some("not-valid-base64!!!".to_string()));
+        let result = decode_mask_b64(Some("not-valid-base64!!!"));
         assert!(result.is_err());
     }
 
@@ -1521,7 +1597,7 @@ mod integration_tests {
 
         // Create a 4x1 mask: [255, 128, 0, 255] via base64 PNG
         let mask_b64 = encode_mask_b64(4, 1, &[255, 128, 0, 255]);
-        let mask = decode_mask_b64(Some(mask_b64)).unwrap().unwrap();
+        let mask = decode_mask_b64(Some(mask_b64.as_str())).unwrap().unwrap();
 
         // Create a 4x1 frame: all pixels = (100, 150, 200)
         let frame = Frame {

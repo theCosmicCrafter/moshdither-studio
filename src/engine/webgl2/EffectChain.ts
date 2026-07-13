@@ -341,11 +341,11 @@ export class EffectChain {
 
   destroy() {
     this.quad.destroy();
-    // Clean up cached mask textures
     for (const tex of this.maskTextureCache.values()) {
       this.gl.deleteTexture(tex);
     }
     this.maskTextureCache.clear();
+    this.lutLoader.clearCache();
   }
 
   private savedPreviousTex: WebGLTexture | null = null;

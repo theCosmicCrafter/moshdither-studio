@@ -28,6 +28,7 @@ export class AudioEngine {
   private sourceNode: AudioNode | null = null;
   private gainNode: GainNode | null = null;
   private mediaElement: HTMLAudioElement | null = null;
+  private objectUrl: string | null = null;
   private stream: MediaStream | null = null;
   private meydaAnalyzer: ReturnType<typeof Meyda.createMeydaAnalyzer> | null = null;
 
@@ -299,7 +300,8 @@ export class AudioEngine {
     if (typeof file === "string") {
       audio.src = file;
     } else {
-      audio.src = URL.createObjectURL(file);
+      this.objectUrl = URL.createObjectURL(file);
+      audio.src = this.objectUrl;
     }
 
     this.mediaElement = audio;
@@ -377,6 +379,10 @@ export class AudioEngine {
       this.mediaElement.pause();
       this.mediaElement.src = "";
       this.mediaElement = null;
+    }
+    if (this.objectUrl) {
+      URL.revokeObjectURL(this.objectUrl);
+      this.objectUrl = null;
     }
     if (this.stream) {
       this.stream.getTracks().forEach((t) => t.stop());

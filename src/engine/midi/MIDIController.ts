@@ -23,6 +23,7 @@ export class MIDIController {
   private onMessage: MIDIMessageHandler[] = [];
   private onConnection: ConnectionHandler[] = [];
   private listeners: Array<() => void> = [];
+  private stateChangeHandler: ((event: Event) => void) | null = null;
 
   constructor() {
     this.state = {
@@ -41,9 +42,14 @@ export class MIDIController {
     }
 
     try {
-      this.access = await navigator.requestMIDIAccess({ sysex: false, software: false });
+      const access = await navigator.requestMIDIAccess({ sysex: false, software: false });
+      if (this.access && this.stateChangeHandler) {
+        this.access.removeEventListener("statechange", this.stateChangeHandler);
+      }
+      this.access = access;
       this.setupInputs();
-      this.access.addEventListener("statechange", () => this.setupInputs());
+      this.stateChangeHandler = () => this.setupInputs();
+      this.access.addEventListener("statechange", this.stateChangeHandler);
       return this.state.connected;
     } catch (err) {
       console.error("MIDI access denied:", err);
@@ -54,6 +60,10 @@ export class MIDIController {
   disconnect() {
     this.listeners.forEach((l) => l());
     this.listeners = [];
+    if (this.access && this.stateChangeHandler) {
+      this.access.removeEventListener("statechange", this.stateChangeHandler);
+    }
+    this.stateChangeHandler = null;
     this.access = null;
     this.setConnected(false, null);
   }

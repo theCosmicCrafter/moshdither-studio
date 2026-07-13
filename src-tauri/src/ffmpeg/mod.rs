@@ -5,7 +5,7 @@
 use crate::commands::WatermarkSettings;
 use crate::effects::types::{Frame, VideoSegment};
 use crate::error::{AppError, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
@@ -129,9 +129,12 @@ pub fn ffglitch_available() -> bool {
 pub fn decode_video(path: &str, max_frames: Option<usize>) -> Result<VideoSegment> {
     let ffmpeg = ffmpeg_binary()?;
     let mut cmd = Command::new(&ffmpeg);
+    cmd.args(["-i", path]);
+    let max_frames_arg = max_frames.map(|n| n.to_string());
+    if let Some(max_frames_arg) = max_frames_arg.as_deref() {
+        cmd.args(["-frames:v", max_frames_arg]);
+    }
     cmd.args([
-        "-i",
-        path,
         "-vf",
         "format=rgba",
         "-f",
@@ -641,19 +644,30 @@ pub fn encode_video(
     Ok(())
 }
 
-type ProbeCache = Mutex<HashMap<String, (u32, u32, f64)>>;
+const PROBE_CACHE_CAPACITY: usize = 128;
+
+#[derive(Default)]
+struct ProbeCache {
+    entries: HashMap<String, (u32, u32, f64)>,
+    order: VecDeque<String>,
+}
 
 /// Probe video file for width, height, and fps.
 /// Results are cached in-memory to avoid repeated ffprobe calls for the same file.
 pub fn probe_video(path: &str) -> Result<(u32, u32, f64)> {
-    static CACHE: OnceLock<ProbeCache> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(entry) = cache
-        .lock()
-        .map_err(|e| AppError::Generic(format!("probe cache lock poisoned: {e}")))?
-        .get(path)
+    static CACHE: OnceLock<Mutex<ProbeCache>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(ProbeCache::default()));
     {
-        return Ok(*entry);
+        let mut cache = cache
+            .lock()
+            .map_err(|e| AppError::Generic(format!("probe cache lock poisoned: {e}")))?;
+        if let Some(entry) = cache.entries.get(path).copied() {
+            if let Some(position) = cache.order.iter().position(|key| key == path) {
+                cache.order.remove(position);
+            }
+            cache.order.push_back(path.to_string());
+            return Ok(entry);
+        }
     }
 
     let bin = ffprobe_binary()?;
@@ -704,10 +718,19 @@ pub fn probe_video(path: &str) -> Result<(u32, u32, f64)> {
     }
 
     let result = (width, height, fps);
-    cache
+    let mut cache = cache
         .lock()
-        .map_err(|e| AppError::Generic(format!("probe cache lock poisoned: {e}")))?
-        .insert(path.to_string(), result);
+        .map_err(|e| AppError::Generic(format!("probe cache lock poisoned: {e}")))?;
+    if cache.entries.contains_key(path) {
+        cache.order.retain(|key| key != path);
+    }
+    cache.entries.insert(path.to_string(), result);
+    cache.order.push_back(path.to_string());
+    while cache.entries.len() > PROBE_CACHE_CAPACITY {
+        if let Some(oldest) = cache.order.pop_front() {
+            cache.entries.remove(&oldest);
+        }
+    }
     Ok(result)
 }
 
