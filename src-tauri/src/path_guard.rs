@@ -154,10 +154,10 @@ fn is_system_path(path: &Path, allowed_roots: &[PathBuf]) -> bool {
     {
         // Windows: C:\Windows, C:\Program Files, C:\Program Files (x86),
         // C:\ProgramData, C:\$Recycle.Bin, etc.
-        return matches!(
+        matches!(
             name.as_str(),
             "windows" | "program files" | "program files (x86)" | "programdata" | "$recycle.bin"
-        );
+        )
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -168,23 +168,24 @@ fn is_system_path(path: &Path, allowed_roots: &[PathBuf]) -> bool {
             if let Some(Component::Normal(second)) = components.next() {
                 return second.to_string_lossy().as_ref() != "folders";
             }
-            return true; // /var itself
+            true // /var itself
+        } else {
+            matches!(
+                name.as_str(),
+                "bin"
+                    | "sbin"
+                    | "usr"
+                    | "etc"
+                    | "lib"
+                    | "lib64"
+                    | "sys"
+                    | "proc"
+                    | "dev"
+                    | "boot"
+                    | "opt"
+                    | "run"
+            )
         }
-        return matches!(
-            name.as_str(),
-            "bin"
-                | "sbin"
-                | "usr"
-                | "etc"
-                | "lib"
-                | "lib64"
-                | "sys"
-                | "proc"
-                | "dev"
-                | "boot"
-                | "opt"
-                | "run"
-        );
     }
 }
 

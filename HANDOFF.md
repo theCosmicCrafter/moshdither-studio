@@ -16,6 +16,61 @@
 
 ---
 
+**Session Date:** 2026-07-19 (late)
+**Phase:** Purple-team audit + production hardening (security, memory, performance, architecture)
+**Status:**
+
+- `cargo clippy --all-targets --all-features -- -D warnings` PASS
+- `cargo test --lib` PASS (414/414)
+- `cargo audit` PASS (0 vulnerabilities; 18 unmaintained-crate warnings)
+- `npm audit` PASS (0 vulnerabilities)
+- `npm run lint` PASS (0 warnings)
+- `npx tsc --noEmit` PASS
+- `npm run test` PASS (1017/1017)
+- `mosh-verify verify-all` PASS (98/98)
+
+## Audit / Production Hardening Session (2026-07-19)
+
+### Changes (audit / production hardening)
+
+- Added `src-tauri/src/path_guard.rs` with `validate_io_path()` — validates all frontend-supplied paths are absolute, resolves `..`, blocks system directories, and requires existing parents for writes.
+- Applied path validation to `load_media`, `export_video`, `apply_ffglitch`, `save_media`, `get_media_metadata`, and `generate_proxy_command`.
+- Tightened `src-tauri/capabilities/default.json` to only allow app temp/data/config directories; user files are now accessed through the Tauri dialog plugin and custom-command path validation.
+- Enabled `assetProtocol` in `src-tauri/tauri.conf.json` with a scoped allowlist for proxy/temp/app data, and added the `protocol-asset` Tauri feature.
+- Added a 32 MPixel cap to the in-memory preview frame (`fit_to_preview_budget`) so oversized still images cannot exhaust RAM.
+- Added a 256 MiB memory budget to the effect preview cache (`trim_cache_to_budget`) and evict oldest entries when exceeded.
+- Fixed the local `../tools/scan-gate.ps1` script: it now handles missing scanners gracefully and uses correct PowerShell syntax for `Test-Path -or`.
+
+### Security findings
+
+- **Dependency warnings:** `cargo audit` reports 18 unmaintained crates (GTK3 bindings, `paste`, `proc-macro-error`, `unic-*`, `glib`). None are exploitable CVEs today, but GTK3 in particular is EOL and should be replaced or pinned before a long-term release.
+- **No leaked secrets:** grep/gitleaks-style scan found no real secrets in source; only placeholders in `.env.example` and third-party skill docs.
+- **Tauri capabilities:** were overly broad (`$DESKTOP/**`, `$DOCUMENT/**`, etc.). Now restricted to app directories plus dialog-driven access.
+
+### Performance / memory findings
+
+- **Whole-video decode:** `decode_video()` loads every frame into a `Vec<Frame>` before processing. For long 4K videos this is the dominant memory risk. Mitigated with an existing 4 GiB guard in `export_video`, but streaming/chunked decoding is the real fix.
+- **Base64 IPC:** every preview frame and exported frame is base64-encoded across the Rust↔frontend boundary. This adds ~33% size overhead and CPU. A binary IPC path or shared-memory seam is the long-term fix.
+- **Preview / export duplication:** effects are implemented once in Rust (CPU/export) and once in WebGL (GPU/preview), with `effectConverter.ts` bridging them. This is a perennial parity risk; consider a single spec-driven code generator or a CPU reference test suite.
+- **Frame cache:** was unbounded and cloned entire frames per effect. Now capped at 256 MiB.
+
+### Architecture findings
+
+- **EffectRegistry** is shallow: callers know about `handles_masking()`, `is_temporal()`, and `blend_mask()`. A deeper registry facade would reduce parity bugs.
+- **tauri.ts** is a thin pass-through layer; it does not create real seams.
+- **PreviewViewport** coordinates Rust payload, WebGL passes, and conversion logic; it is a god-function candidate. Consider a `PreviewPipeline` module.
+
+### Remaining follow-ups (audit / production hardening)
+
+- Stream video decode/encode instead of buffering whole segments. Libraries like `ff-decode`, `unbundle`, or `video_reader-rs` provide frame iterators.
+- Replace `image::imageops::resize` with `fast_image_resize` (SIMD) for preview downscale/upscale; benchmarks show 10-20x speedups on RGBA.
+- Add WebGL memory tracking in dev builds (e.g., `webgl-memory` / `@webgltools/core`) to catch texture leaks.
+- Resolve the 18 `cargo audit` unmaintained-crate warnings by upgrading to GTK4-rs or removing unused transitive deps.
+- Consider a single effect-definition spec that generates both Rust and WebGL parameter mappings.
+- Implement code signing and an updater block in `tauri.conf.json` before public release.
+
+---
+
 **Session Date:** 2026-07-19 (evening)
 **Phase:** Dither effects hardening + Audio Dither parity + UI filename fix
 **Status:**
