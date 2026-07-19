@@ -271,7 +271,10 @@ export default function Toolbar({ onFileLoaded }: Props) {
   }, [processSignature, handleProcess, mediaLoaded]);
 
   return (
-    <header className="flex justify-between items-center h-header-height px-container-padding w-full z-50 bg-surface/80 backdrop-blur-xl border-b border-outline-variant/30">
+    <header
+      data-tauri-drag-region
+      className="flex justify-between items-center h-header-height px-container-padding w-full z-50 bg-surface/80 backdrop-blur-xl border-b border-outline-variant/30"
+    >
       {/* Left: Logo + Nav */}
       <div className="flex items-center gap-6">
         <span

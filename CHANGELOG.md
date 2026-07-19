@@ -63,6 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bumped pre-commit hook versions via `pre-commit autoupdate`:
   `gitleaks` 8.21.2 → 8.30.0, `semgrep` 1.82.0 → 1.165.0, `bandit` 1.8.3 →
   1.9.4, `pip-audit` 2.8.0 → 2.10.1.
+- Removed native Tauri window decorations (`decorations: false`) and unified the
+  OS title bar with the app's `Toolbar` header. Added `data-tauri-drag-region`
+  to the header for dragging and granted `core:window:allow-start-dragging` and
+  `core:window:allow-is-maximized` permissions.
 
 ### Security
 
