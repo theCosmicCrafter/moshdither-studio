@@ -2,7 +2,7 @@ use crate::effects::types::*;
 use crate::effects::Effect;
 use crate::error::Result;
 use serde_json::json;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// 3D LUT color grading using a 512x512 LUT PNG.
 /// LUT layout: 8x8 grid of 64x64 tiles. Each tile = one blue slice.
@@ -25,6 +25,125 @@ impl Default for LutGrading {
     fn default() -> Self {
         Self::new(1.0, String::new())
     }
+}
+
+/// Resolve a LUT path against the locations LUTs actually live in.
+///
+/// The frontend refers to LUTs by web-style paths like `lut/amatorka.png`
+/// (or `/lut/amatorka.png`). On disk they live in:
+/// - dev: `<repo>/public/lut/*.png` (cwd is `src-tauri` under `tauri dev`)
+/// - prod: `<exe_dir>/lut/*.png` (bundled via tauri.conf.json resources)
+/// - absolute paths are honored as-is (custom user LUTs)
+fn locate_lut_file(lut_path: &str) -> Option<PathBuf> {
+    let cleaned = lut_path.trim_start_matches(['/', '\\']);
+    let direct = Path::new(lut_path);
+    if direct.is_absolute() && direct.exists() {
+        return Some(direct.to_path_buf());
+    }
+
+    let mut candidates: Vec<PathBuf> = vec![
+        PathBuf::from(cleaned),
+        Path::new("..").join("public").join(cleaned),
+        Path::new("..").join("..").join("public").join(cleaned),
+    ];
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join(cleaned));
+            candidates.push(dir.join("resources").join(cleaned));
+        }
+    }
+    candidates.into_iter().find(|c| c.exists())
+}
+
+/// A decoded 512x512 3D LUT, loaded once and applied to many frames.
+struct LoadedLut {
+    rgba: image::RgbaImage,
+}
+
+impl LoadedLut {
+    fn load(lut_path: &str) -> Result<Self> {
+        let resolved = locate_lut_file(lut_path).ok_or_else(|| {
+            crate::error::AppError::Generic(format!("LUT file not found: {}", lut_path))
+        })?;
+        let lut_img = image::open(&resolved)
+            .map_err(|e| crate::error::AppError::Generic(format!("Failed to load LUT: {}", e)))?;
+        let rgba = lut_img.to_rgba8();
+        if rgba.width() != 512 || rgba.height() != 512 {
+            return Err(crate::error::AppError::Generic(format!(
+                "LUT must be 512x512 pixels (got {}x{})",
+                rgba.width(),
+                rgba.height()
+            )));
+        }
+        Ok(Self { rgba })
+    }
+
+    fn apply(&self, input: &Frame, amount: f32) -> Frame {
+        let lut_rgba = &self.rgba;
+        let lut_w = lut_rgba.width();
+        let lut_h = lut_rgba.height();
+        let tile_count = 8u32;
+        let tile_size = 64u32; // 512 / 8
+
+        let mut data = input.data.clone();
+        for chunk in data.chunks_exact_mut(4) {
+            let r = chunk[0] as f32 / 255.0;
+            let g = chunk[1] as f32 / 255.0;
+            let b = chunk[2] as f32 / 255.0;
+
+            let b_slice = b * 63.0;
+            let b_slice_floor = b_slice.floor().clamp(0.0, 63.0) as u32;
+            let b_slice_fract = b_slice - b_slice_floor as f32;
+
+            let tile_col = b_slice_floor % tile_count;
+            let tile_row = b_slice_floor / tile_count;
+
+            let lut_x = (tile_col * tile_size) as f32 + r * (tile_size - 1) as f32;
+            let lut_y = (tile_row * tile_size) as f32 + g * (tile_size - 1) as f32;
+
+            let sample = sample_bilinear(lut_rgba, lut_w, lut_h, lut_x, lut_y);
+
+            // Next blue slice
+            let b_slice_floor2 = (b_slice_floor + 1).min(63);
+            let tile_col2 = b_slice_floor2 % tile_count;
+            let tile_row2 = b_slice_floor2 / tile_count;
+            let lut_x2 = (tile_col2 * tile_size) as f32 + r * (tile_size - 1) as f32;
+            let lut_y2 = (tile_row2 * tile_size) as f32 + g * (tile_size - 1) as f32;
+            let sample2 = sample_bilinear(lut_rgba, lut_w, lut_h, lut_x2, lut_y2);
+
+            let final_color = [
+                sample[0] * (1.0 - b_slice_fract) + sample2[0] * b_slice_fract,
+                sample[1] * (1.0 - b_slice_fract) + sample2[1] * b_slice_fract,
+                sample[2] * (1.0 - b_slice_fract) + sample2[2] * b_slice_fract,
+            ];
+
+            chunk[0] = ((r * (1.0 - amount) + final_color[0] * amount) * 255.0) as u8;
+            chunk[1] = ((g * (1.0 - amount) + final_color[1] * amount) * 255.0) as u8;
+            chunk[2] = ((b * (1.0 - amount) + final_color[2] * amount) * 255.0) as u8;
+        }
+
+        Frame {
+            width: input.width,
+            height: input.height,
+            data,
+        }
+    }
+}
+
+/// Extract the LUT path from params, accepting both the Rust-native `lut_path`
+/// key and the frontend WebGL `tLUT` key (which uses `/lut/...` URLs).
+fn lut_path_from_params<'a>(params: &'a ParameterValues, fallback: &'a str) -> &'a str {
+    params
+        .get("lut_path")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            params
+                .get("tLUT")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or(fallback)
 }
 
 impl Effect for LutGrading {
@@ -109,84 +228,36 @@ impl Effect for LutGrading {
             .get("amount")
             .and_then(|v| v.as_f64())
             .unwrap_or(self.amount as f64) as f32;
-        let lut_path = params
-            .get("lut_path")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&self.lut_path);
+        let lut_path = lut_path_from_params(params, &self.lut_path);
 
-        if lut_path.is_empty() || !Path::new(lut_path).exists() {
+        // No LUT selected is a legitimate neutral state, not an error.
+        if lut_path.is_empty() {
             return Ok(input.clone());
         }
 
-        let lut_img = image::open(lut_path)
-            .map_err(|e| crate::error::AppError::Generic(format!("Failed to load LUT: {}", e)))?;
-        let lut_rgba = lut_img.to_rgba8();
-        let lut_w = lut_rgba.width();
-        let lut_h = lut_rgba.height();
-
-        if lut_w != 512 || lut_h != 512 {
-            return Err(crate::error::AppError::Generic(
-                "LUT must be 512x512 pixels".to_string(),
-            ));
-        }
-
-        let tile_count = 8;
-        let tile_size = 64; // 512 / 8
-
-        let mut data = input.data.clone();
-        for chunk in data.chunks_exact_mut(4) {
-            let r = chunk[0] as f32 / 255.0;
-            let g = chunk[1] as f32 / 255.0;
-            let b = chunk[2] as f32 / 255.0;
-
-            let b_slice = b * 63.0;
-            let b_slice_floor = b_slice.floor().clamp(0.0, 63.0) as u32;
-            let b_slice_fract = b_slice - b_slice_floor as f32;
-
-            let tile_col = b_slice_floor % tile_count;
-            let tile_row = b_slice_floor / tile_count;
-
-            let lut_x = (tile_col * tile_size as u32) as f32 + r * (tile_size - 1) as f32;
-            let lut_y = (tile_row * tile_size as u32) as f32 + g * (tile_size - 1) as f32;
-
-            let sample = sample_bilinear(&lut_rgba, lut_w, lut_h, lut_x, lut_y);
-
-            // Next blue slice
-            let b_slice_floor2 = (b_slice_floor + 1).min(63);
-            let tile_col2 = b_slice_floor2 % tile_count;
-            let tile_row2 = b_slice_floor2 / tile_count;
-            let lut_x2 = (tile_col2 * tile_size as u32) as f32 + r * (tile_size - 1) as f32;
-            let lut_y2 = (tile_row2 * tile_size as u32) as f32 + g * (tile_size - 1) as f32;
-            let sample2 = sample_bilinear(&lut_rgba, lut_w, lut_h, lut_x2, lut_y2);
-
-            let final_color = [
-                sample[0] * (1.0 - b_slice_fract) + sample2[0] * b_slice_fract,
-                sample[1] * (1.0 - b_slice_fract) + sample2[1] * b_slice_fract,
-                sample[2] * (1.0 - b_slice_fract) + sample2[2] * b_slice_fract,
-            ];
-
-            chunk[0] = ((r * (1.0 - amount) + final_color[0] * amount) * 255.0) as u8;
-            chunk[1] = ((g * (1.0 - amount) + final_color[1] * amount) * 255.0) as u8;
-            chunk[2] = ((b * (1.0 - amount) + final_color[2] * amount) * 255.0) as u8;
-        }
-
-        Ok(Frame {
-            width: input.width,
-            height: input.height,
-            data,
-        })
+        let lut = LoadedLut::load(lut_path)?;
+        Ok(lut.apply(input, amount))
     }
 
     fn process_video(
         &self,
         input: &VideoSegment,
-        mask: Option<&Mask>,
+        _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
+        let amount = params
+            .get("amount")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(self.amount as f64) as f32;
+        let lut_path = lut_path_from_params(params, &self.lut_path);
+
+        if lut_path.is_empty() {
+            return Ok(input.clone());
         }
+
+        // Load the LUT once for the whole segment instead of once per frame.
+        let lut = LoadedLut::load(lut_path)?;
+        let frames = input.frames.iter().map(|f| lut.apply(f, amount)).collect();
         Ok(VideoSegment {
             frames,
             fps: input.fps,

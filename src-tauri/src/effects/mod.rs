@@ -17,6 +17,8 @@ pub mod engine;
 pub mod functional_tests;
 pub mod preview;
 pub mod registry;
+#[cfg(test)]
+pub mod semantic_tests;
 pub mod test_helpers;
 pub mod types;
 pub mod verification;

@@ -3,22 +3,24 @@ use crate::effects::Effect;
 use crate::error::Result;
 use serde_json::json;
 
-/// Halftone pattern dithering using a dot pattern.
+/// Halftone pattern dithering using a rotated dot screen.
 pub struct HalftoneDither {
     dot_size: u32,
+    screen_angle: f32,
 }
 
 impl HalftoneDither {
-    pub fn new(dot_size: u32) -> Self {
+    pub fn new(dot_size: u32, screen_angle: f32) -> Self {
         Self {
             dot_size: dot_size.clamp(1, 32),
+            screen_angle,
         }
     }
 }
 
 impl Default for HalftoneDither {
     fn default() -> Self {
-        Self::new(8)
+        Self::new(8, 45.0)
     }
 }
 
@@ -29,16 +31,28 @@ impl Effect for HalftoneDither {
             name: "Halftone".to_string(),
             category: EffectCategory::Dithering,
             media_type: MediaType::Both,
-            parameters: vec![ParameterDef {
-                id: "dot_size".to_string(),
-                name: "Dot Size".to_string(),
-                param_type: ParamType::Slider,
-                default: json!(8),
-                min: Some(2.0),
-                max: Some(32.0),
-                step: Some(1.0),
-                options: None,
-            }],
+            parameters: vec![
+                ParameterDef {
+                    id: "dot_size".to_string(),
+                    name: "Dot Size".to_string(),
+                    param_type: ParamType::Slider,
+                    default: json!(8),
+                    min: Some(2.0),
+                    max: Some(32.0),
+                    step: Some(1.0),
+                    options: None,
+                },
+                ParameterDef {
+                    id: "screen_angle".to_string(),
+                    name: "Screen Angle".to_string(),
+                    param_type: ParamType::Slider,
+                    default: json!(45.0),
+                    min: Some(-90.0),
+                    max: Some(90.0),
+                    step: Some(1.0),
+                    options: None,
+                },
+            ],
         }
     }
 
@@ -53,12 +67,22 @@ impl Effect for HalftoneDither {
             .and_then(|v| v.as_u64())
             .unwrap_or(self.dot_size as u64) as u32;
         let dot_size = dot_size.max(1);
+        let screen_angle = params
+            .get("screen_angle")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(self.screen_angle as f64) as f32;
         let mut data = vec![0u8; input.data.len()];
         let w = input.width;
         let h = input.height;
 
+        let theta = screen_angle.to_radians();
+        let cos_t = theta.cos();
+        let sin_t = theta.sin();
+        let half = (dot_size as f32 - 1.0) / 2.0;
+
         for y in (0..h).step_by(dot_size as usize) {
             for x in (0..w).step_by(dot_size as usize) {
+                // Compute local average luminance over the cell.
                 let mut sum = 0.0;
                 let mut count = 0;
                 for dy in 0..dot_size {
@@ -76,9 +100,11 @@ impl Effect for HalftoneDither {
                     }
                 }
                 let avg = sum / count.max(1) as f32;
-                let radius = (avg / 255.0) * (dot_size as f32 / 2.0);
-                let center_x = x as f32 + (dot_size as f32 - 1.0) / 2.0;
-                let center_y = y as f32 + (dot_size as f32 - 1.0) / 2.0;
+                // For dark average we want *large* black dots (small white radius);
+                // for light average we want *small* dots. Invert so radius grows with darkness.
+                let radius = ((255.0 - avg) / 255.0) * (dot_size as f32 / 2.0);
+                let center_x = x as f32 + half;
+                let center_y = y as f32 + half;
 
                 for dy in 0..dot_size {
                     for dx in 0..dot_size {
@@ -86,9 +112,13 @@ impl Effect for HalftoneDither {
                         let py = y + dy;
                         if px < w && py < h {
                             let idx = ((py * w + px) * 4) as usize;
-                            let dist = ((px as f32 - center_x).powi(2)
-                                + (py as f32 - center_y).powi(2))
-                            .sqrt();
+                            // Rotate the offset by the screen angle.
+                            let lx = px as f32 - center_x;
+                            let ly = py as f32 - center_y;
+                            let rx = lx * cos_t - ly * sin_t;
+                            let ry = lx * sin_t + ly * cos_t;
+                            let dist = (rx * rx + ry * ry).sqrt();
+                            // Dot grows inward from the cell corners.
                             let on = if dist <= radius { 0u8 } else { 255u8 };
                             data[idx] = on;
                             data[idx + 1] = on;
@@ -136,7 +166,7 @@ mod tests {
             height: 2,
             data: d,
         };
-        let e = HalftoneDither::new(2);
+        let e = HalftoneDither::new(2, 0.0);
         let r = e.process_frame(&f, None, &serde_json::Map::new()).unwrap();
         assert_eq!(r.data.len(), 64);
     }

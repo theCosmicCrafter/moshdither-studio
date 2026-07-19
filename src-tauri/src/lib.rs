@@ -23,6 +23,7 @@ use commands::{
     test_all_functions, verify_effects, AppState,
 };
 use environment::{get_environment_status, install_local_environment};
+use tauri::Manager;
 
 pub fn run() {
     println!("Initializing Tauri Builder...");
@@ -33,6 +34,17 @@ pub fn run() {
         })
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                let app = window.app_handle();
+                let state = app.state::<AppState>();
+                if let Ok(mut sam3) = state.sam3.lock() {
+                    if let Some(engine) = sam3.as_mut() {
+                        let _ = engine.shutdown();
+                    }
+                };
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             load_media,
             load_media_from_base64,

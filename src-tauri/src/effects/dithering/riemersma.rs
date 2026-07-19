@@ -2,8 +2,24 @@ use crate::effects::types::*;
 use crate::effects::Effect;
 use crate::error::Result;
 
-/// Riemersma dithering — Hilbert curve-based error diffusion.
+/// Riemersma dithering — Hilbert curve traversal with an exponentially
+/// decaying error history, per Thiadmer Riemersma's "A Balanced Dithering
+/// Technique" (C/C++ Users Journal, 1998).
 pub struct RiemersmaDither;
+
+/// Number of past errors remembered along the Hilbert path.
+const HIST_LEN: usize = 16;
+/// Ratio between the largest (most recent) and smallest (oldest) weight.
+const HIST_RATIO: f32 = 16.0;
+
+/// Exponentially increasing weights: index 0 = oldest (1/ratio), last = newest (1.0).
+fn history_weights() -> [f32; HIST_LEN] {
+    let mut w = [0.0f32; HIST_LEN];
+    for (i, v) in w.iter_mut().enumerate() {
+        *v = HIST_RATIO.powf((i as f32 - (HIST_LEN as f32 - 1.0)) / (HIST_LEN as f32 - 1.0));
+    }
+    w
+}
 
 impl RiemersmaDither {
     pub fn new() -> Self {
@@ -49,19 +65,36 @@ impl Effect for RiemersmaDither {
             }
         }
 
-        let mut err = 0.0f32;
+        // Walk pixels in Hilbert order carrying a ring buffer of the last
+        // HIST_LEN quantization errors. The correction applied to each pixel
+        // is the weighted sum of that history, with recent errors weighing
+        // exponentially more than old ones.
+        let weights = history_weights();
+        let mut history = [0.0f32; HIST_LEN];
+        let mut head = 0usize; // index of the oldest entry (next overwrite target)
 
-        // Simple approximation: walk pixels in Hilbert-like order
         for i in 0..(n * n) {
             let (hx, hy) = hilbert_xy(i, n);
             if hx >= w || hy >= h {
                 continue;
             }
-            let i = hy * w + hx;
-            let old = lum[i] + err * 0.5;
-            let new = if old > 127.0 { 255.0 } else { 0.0 };
-            err = old - new;
-            lum[i] = new;
+            let pi = hy * w + hx;
+
+            let mut correction = 0.0f32;
+            for (j, wgt) in weights.iter().enumerate() {
+                correction += history[(head + j) % HIST_LEN] * wgt;
+            }
+
+            let original = lum[pi];
+            let corrected = original + correction;
+            let new = if corrected > 127.0 { 255.0 } else { 0.0 };
+
+            // Store the raw quantization error (original minus output), as in
+            // the original algorithm — this keeps the history bounded.
+            history[head] = original - new;
+            head = (head + 1) % HIST_LEN;
+
+            lum[pi] = new;
         }
 
         let mut data = input.data.clone();

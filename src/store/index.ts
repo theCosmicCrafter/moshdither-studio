@@ -592,7 +592,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       id: `stack-${instanceIdCounter}`,
       effectId: "color.lut_grading",
       effectName: effect?.name ?? "LUT Color Grading",
-      params: { ...defaults, tLUT: url },
+      // tLUT drives the WebGL preview texture; lut_path drives the Rust
+      // CPU/export pipeline (same file, resolved on disk by the backend).
+      params: { ...defaults, tLUT: url, lut_path: url.replace(/^\//, "") },
       enabled: true,
       maskId: null,
       maskB64: null,
@@ -1177,7 +1179,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   // Mask actions
-  setActiveMask: (maskB64) => set((state) => ({ activeMask: maskB64, maskRevision: state.maskRevision + 1 })),
+  setActiveMask: (maskB64) =>
+    set((state) => ({ activeMask: maskB64, maskRevision: state.maskRevision + 1 })),
   setMaskVisible: (v) => set({ maskVisible: v }),
   setMaskTab: (tab) => set({ maskTab: tab }),
   setMaskTool: (tool) => set({ maskTool: tool }),

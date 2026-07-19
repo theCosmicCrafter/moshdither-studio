@@ -128,7 +128,7 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   },
   "color.lut_grading": {
     shaderId: "lut_color_grading",
-    paramMap: { amount: "amount" },
+    paramMap: { amount: "amount", tLUT: "tLUT" },
   },
   "color.rgb_shift": {
     shaderId: "rgb_shift",
@@ -720,6 +720,9 @@ export function stackToRenderPasses(
         const { rustParam, value } = group[0];
         if (mapping.transform) {
           uniforms[webglUniform] = mapping.transform(rustParam, value);
+        } else if (typeof value === "string") {
+          // Preserve string values (e.g., sampler2D texture URLs).
+          uniforms[webglUniform] = value;
         } else {
           const num = typeof value === "number" ? value : Number(value);
           uniforms[webglUniform] = Number.isNaN(num) ? 0 : num;
@@ -735,6 +738,9 @@ export function stackToRenderPasses(
             return typeof v === "number" ? v : Number(v);
           };
           uniforms[webglUniform] = [getVal(r), getVal(g_), getVal(b)];
+        } else if (group[0].value !== undefined && typeof group[0].value === "string") {
+          // String values are not combined.
+          uniforms[webglUniform] = group[0].value as string;
         } else {
           // Fallback: use last value
           const last = group[group.length - 1];

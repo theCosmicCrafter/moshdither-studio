@@ -53,7 +53,8 @@
     ],
     "externalBin": ["bin/ffmpeg", "bin/ffprobe", "bin/ffgac", "bin/ffedit"],
     "resources": {
-      "../packages/python-backend": "packages/python-backend"
+      "../packages/python-backend": "packages/python-backend",
+      "../public/lut": "lut"
     }
   }
 }

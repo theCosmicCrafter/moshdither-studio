@@ -2323,7 +2323,9 @@ mod tests {
         }
 
         #[test]
-        fn test_lut_grading_nonexistent_path_returns_unchanged() {
+        fn test_lut_grading_nonexistent_path_errors() {
+            // Missing LUT files should surface a clear error instead of silently
+            // returning the original frame.
             let frame = solid_frame(2, 2, 100, 150, 200, 255);
             let effect = LutGrading::default();
             let mut params = serde_json::Map::new();
@@ -2331,11 +2333,8 @@ mod tests {
                 "lut_path".to_string(),
                 serde_json::json!("/nonexistent/lut.png"),
             );
-            let result = effect.process_frame(&frame, None, &params).unwrap();
-            assert_eq!(
-                result.data, frame.data,
-                "LUT grading with non-existent file should be a no-op"
-            );
+            let result = effect.process_frame(&frame, None, &params);
+            assert!(result.is_err(), "missing LUT file must return an error");
         }
 
         #[test]

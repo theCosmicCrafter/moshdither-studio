@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useAppStore } from "../store";
-import { listEffects, getFrameData, getMediaInfo, loadMediaFromPath, sam3Init } from "../lib/tauri";
+import { listEffects, getFrameData, getMediaInfo, loadMediaFromPath } from "../lib/tauri";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { useKeyframePlayback } from "../hooks/useKeyframePlayback";
@@ -54,24 +54,9 @@ export default function AppLayout() {
       .catch((err) => setStatusMessage(`Error: ${err}`));
   }, [setAllEffects, setStatusMessage]);
 
-  // Auto-initialize SAM3 engine on app startup (non-blocking, runs in background)
-  const setSam3Ready = useAppStore((s) => s.setSam3Ready);
-  useEffect(() => {
-    let cancelled = false;
-    sam3Init()
-      .then(() => {
-        if (!cancelled) {
-          setSam3Ready(true);
-          console.log("[SAM3] Auto-initialized on startup");
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          console.warn("[SAM3] Auto-init failed:", err);
-        }
-      });
-    return () => { cancelled = true; };
-  }, [setSam3Ready]);
+  // SAM3 is initialized lazily on first use (see MaskPanel's ensureSam3Ready).
+  // Auto-initializing at startup loaded a ~6 GB model before the user asked for
+  // segmentation, delaying app readiness and holding RAM/VRAM for nothing.
 
   // Refresh preview on demand (called after file load / effect apply).
   // NOT polled — polling every 500 ms held the Rust frame mutex continuously

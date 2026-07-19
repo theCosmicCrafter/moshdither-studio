@@ -29,6 +29,63 @@
 - `npm run test` PASS (1017/1017)
 - `mosh-verify verify-all` PASS (98/98)
 
+---
+
+**Session Date:** 2026-07-19 (evening)
+**Phase:** Semantic correctness verification + SAM3 / LUT / resource-allocation hardening
+**Status:**
+
+- `cargo clippy --all-targets --all-features -- -D warnings` PASS
+- `cargo test --lib` PASS (433/433)
+- `cargo fmt -- --check` PASS
+- `cargo audit` PASS (0 vulnerabilities; 18 unmaintained-crate warnings)
+- `npm audit` PASS (0 vulnerabilities)
+- `npm run lint` PASS (0 warnings)
+- `npx tsc --noEmit` PASS
+- `npm run test` PASS (1017/1017)
+- `mosh-verify verify-all` PASS (98/98)
+
+## Semantic Verification / Resource Allocation Session (2026-07-19)
+
+### Changes (semantic correctness + resource allocation)
+
+- **SAM3 startup:** removed eager `sam3Init()` from `AppLayout.tsx`; SAM3 is now lazy-initialized on first mask-panel use. Added a `CloseRequested` window handler in `src-tauri/src/lib.rs` to explicitly shut down the SAM3 child process on app close.
+- **LUT color grading (export fix):**
+  - `src-tauri/src/effects/color/lut_grading.rs` now accepts both `lut_path` (Rust-native) and `tLUT` (frontend URL) keys, locates bundled LUTs across dev and production paths, loads the LUT once per video segment, and errors clearly on missing files.
+  - `src/store/index.ts` `addLUTEffect()` writes both `tLUT` and `lut_path`.
+  - `src/utils/effectConverter.ts` maps `tLUT` to the WebGL `tLUT` uniform and preserves string sampler2D values.
+  - `src-tauri/tauri.conf.json` bundles `../public/lut` as `lut` resources.
+- **Effect algorithm truth:**
+  - `color/lift_gamma_gain.rs` + `liftGammaGain.ts` shader now use the canonical formula.
+  - `glitch/jpeg_quantize.rs` uses real 8×8 DCT, YCbCr conversion, and standard JPEG quantization matrices scaled by the libjpeg quality formula.
+  - `dithering/blue_noise.rs` generates a true void-and-cluster blue-noise threshold matrix.
+  - `dithering/riemersma.rs` uses the canonical exponentially-decaying error history along the Hilbert curve.
+  - `noise/fractal.rs` uses smooth 2D value noise with bilinear smoothstep interpolation for real FBM.
+  - `dithering/halftone.rs` adds a `screen_angle` parameter and rotates the dot grid.
+- **Semantic tests:** added `src-tauri/src/effects/semantic_tests.rs` with 15 algorithm-truth assertions for invert, brightness/contrast, lift/gamma/gain, pixel sort, JPEG quantize, Bayer, blue noise, halftone, LUT identity/bundled loading, fractal noise, and Riemersma dither.
+
+### Verification results
+
+| Check                                                      | Result                            |
+| ---------------------------------------------------------- | --------------------------------- |
+| `cargo clippy --all-targets --all-features -- -D warnings` | PASS                              |
+| `cargo test --lib`                                         | 433/433                           |
+| `cargo fmt -- --check`                                     | PASS                              |
+| `cargo audit`                                              | 0 vulns; 18 unmaintained warnings |
+| `npm audit`                                                | 0 vulns                           |
+| `npm run lint`                                             | 0 warnings                        |
+| `npx tsc --noEmit`                                         | PASS                              |
+| `npm run test`                                             | 1017/1017                         |
+| `mosh-verify verify-all`                                   | 98/98                             |
+
+### Remaining follow-ups
+
+- Add `.cube` LUT parser to the Rust backend and a custom LUT file picker in the UI.
+- Correct `analog.vhs` to include chroma delay/bleed, head-switching noise, and luma noise.
+- Validate CGA vs EGA palette entries in `color/historical_palettes.rs`.
+- Stream video decode/encode for long 4K exports.
+- Add a binary IPC seam to remove base64 frame transfer overhead.
+
 ## Audit / Production Hardening Session (2026-07-19)
 
 ### Changes (audit / production hardening)
