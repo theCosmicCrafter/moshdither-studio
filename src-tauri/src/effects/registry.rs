@@ -160,6 +160,15 @@ impl EffectRegistry {
             .filter(|m| m.category == category)
             .collect()
     }
+
+    /// Return a map of effect ID to parameter definitions, used for input
+    /// validation and clamping without repeatedly re-instantiating metadata.
+    pub fn parameter_defs(&self) -> HashMap<String, Vec<ParameterDef>> {
+        self.effects
+            .iter()
+            .map(|(id, e)| (id.clone(), e.meta().parameters))
+            .collect()
+    }
 }
 
 impl Default for EffectRegistry {

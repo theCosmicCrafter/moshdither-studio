@@ -13,7 +13,9 @@ use std::env;
 use std::process::ExitCode;
 
 use moshdither_studio_lib::effects::types::{Frame, Mask, MediaType, ParameterDef, VideoSegment};
-use moshdither_studio_lib::effects::{functional_tests, verification, EffectRegistry};
+use moshdither_studio_lib::effects::{
+    clamp_params, functional_tests, verification, EffectRegistry,
+};
 use moshdither_studio_lib::ffmpeg;
 use moshdither_studio_lib::utils::image_io;
 
@@ -509,7 +511,7 @@ fn cmd_render_all(args: &[String]) -> ExitCode {
         };
 
         let safe_name = sanitize_filename(&meta.id);
-        let params = build_default_params(&meta.id, &meta.parameters);
+        let params = clamp_params(&meta.id, &build_default_params(&meta.id, &meta.parameters));
 
         // ── Render image output ──────────────────────────────
         let img_out_path = format!("{}/images/{}.png", output_dir, safe_name);
@@ -800,7 +802,7 @@ fn animate_effect_params(
         _ => {}
     }
 
-    params
+    clamp_params(effect_id, &params)
 }
 
 /// Apply a small horizontal drift to a frame so purely-deterministic effects
@@ -999,6 +1001,7 @@ fn cmd_animate_all(args: &[String]) -> ExitCode {
                 params.insert("threshold".to_string(), serde_json::json!(50.0));
                 params.insert("n_frames".to_string(), serde_json::json!(5));
             }
+            let params = clamp_params(&meta.id, &params);
             match effect.process_video(&synthetic, vid_mask.as_ref(), &params) {
                 Ok(seg) => frames = seg.frames,
                 Err(e) => process_error = Some(format!("process_video: {}", e)),

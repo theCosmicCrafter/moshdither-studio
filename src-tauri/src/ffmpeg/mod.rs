@@ -5,10 +5,16 @@
 use crate::commands::WatermarkSettings;
 use crate::effects::types::{Frame, VideoSegment};
 use crate::error::{AppError, Result};
+use parking_lot::Mutex as ParkingLotMutex;
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
+
+/// Default ceiling on the number of decoded frames kept in memory.
+const DEFAULT_DECODE_MAX_FRAMES: usize = 10_000;
+/// Per-decode memory budget (bytes). Limits total decoded raw RGBA buffer size.
+const DEFAULT_DECODE_MEMORY_BUDGET_BYTES: usize = 2 * 1024 * 1024 * 1024; // 2 GiB
 
 /// Locate a binary by name. Tries bundled sidecar first, then dev path, then PATH.
 fn locate_binary(base: &str) -> Result<String> {
@@ -127,13 +133,13 @@ pub fn ffglitch_available() -> bool {
 
 /// Decode a video file to a sequence of raw RGBA frames.
 pub fn decode_video(path: &str, max_frames: Option<usize>) -> Result<VideoSegment> {
+    // Resolve an explicit or default frame cap up-front.
+    let requested_max = max_frames.unwrap_or(DEFAULT_DECODE_MAX_FRAMES);
+
     let ffmpeg = ffmpeg_binary()?;
     let mut cmd = Command::new(&ffmpeg);
     cmd.args(["-i", path]);
-    let max_frames_arg = max_frames.map(|n| n.to_string());
-    if let Some(max_frames_arg) = max_frames_arg.as_deref() {
-        cmd.args(["-frames:v", max_frames_arg]);
-    }
+    cmd.args(["-frames:v", &requested_max.to_string()]);
     cmd.args([
         "-vf",
         "format=rgba",
@@ -158,12 +164,32 @@ pub fn decode_video(path: &str, max_frames: Option<usize>) -> Result<VideoSegmen
 
     // Probe dimensions
     let (width, height, fps) = probe_video(path)?;
-    let frame_size = (width * height * 4) as usize;
+    let frame_size = (width as usize)
+        .saturating_mul(height as usize)
+        .saturating_mul(4);
+    if frame_size == 0 {
+        return Ok(VideoSegment {
+            frames: Vec::new(),
+            fps,
+        });
+    }
+
+    // Enforce a per-operation memory budget: if a single frame already exceeds
+    // the budget, decoding it is not safe.
+    if frame_size > DEFAULT_DECODE_MEMORY_BUDGET_BYTES {
+        return Err(AppError::Ffmpeg(format!(
+            "video frame size {}x{} ({} bytes) exceeds decode memory budget",
+            width, height, frame_size
+        )));
+    }
+    let budget_frames = DEFAULT_DECODE_MEMORY_BUDGET_BYTES / frame_size;
+    let max_frames = requested_max.min(budget_frames).max(1);
+
     let raw = output.stdout;
     let mut frames = Vec::new();
 
     for chunk in raw.chunks_exact(frame_size) {
-        if max_frames.map(|m| frames.len() >= m).unwrap_or(false) {
+        if frames.len() >= max_frames {
             break;
         }
         frames.push(Frame {
@@ -733,15 +759,27 @@ struct ProbeCache {
     order: VecDeque<String>,
 }
 
+/// Parse an ffprobe `r_frame_rate` string, which is typically a ratio such as
+/// `30000/1001` or a decimal like `30`.
+fn parse_r_frame_rate(s: &str) -> f64 {
+    let parts: Vec<&str> = s.split('/').collect();
+    if parts.len() == 2 {
+        let num: f64 = parts[0].parse().unwrap_or(30.0);
+        let den: f64 = parts[1].parse().unwrap_or(1.0);
+        if den != 0.0 {
+            return num / den;
+        }
+    }
+    s.parse::<f64>().unwrap_or(30.0)
+}
+
 /// Probe video file for width, height, and fps.
 /// Results are cached in-memory to avoid repeated ffprobe calls for the same file.
 pub fn probe_video(path: &str) -> Result<(u32, u32, f64)> {
-    static CACHE: OnceLock<Mutex<ProbeCache>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(ProbeCache::default()));
+    static CACHE: OnceLock<ParkingLotMutex<ProbeCache>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| ParkingLotMutex::new(ProbeCache::default()));
     {
-        let mut cache = cache
-            .lock()
-            .map_err(|e| AppError::Generic(format!("probe cache lock poisoned: {e}")))?;
+        let mut cache = cache.lock();
         if let Some(entry) = cache.entries.get(path).copied() {
             if let Some(position) = cache.order.iter().position(|key| key == path) {
                 cache.order.remove(position);
@@ -762,35 +800,45 @@ pub fn probe_video(path: &str) -> Result<(u32, u32, f64)> {
             "-show_entries",
             "stream=width,height,r_frame_rate",
             "-of",
-            "default=noprint_wrappers=1",
+            "json",
             path,
         ])
         .output()
         .map_err(AppError::Io)?;
 
-    let text = String::from_utf8_lossy(&output.stdout);
-    let mut width = 0u32;
-    let mut height = 0u32;
-    let mut fps = 30.0f64;
-
-    for line in text.lines() {
-        if let Some(v) = line.strip_prefix("width=") {
-            width = v
-                .parse()
-                .map_err(|_| AppError::Ffmpeg("Invalid width".to_string()))?;
-        } else if let Some(v) = line.strip_prefix("height=") {
-            height = v
-                .parse()
-                .map_err(|_| AppError::Ffmpeg("Invalid height".to_string()))?;
-        } else if let Some(v) = line.strip_prefix("r_frame_rate=") {
-            let parts: Vec<&str> = v.split('/').collect();
-            if parts.len() == 2 {
-                let num: f64 = parts[0].parse().unwrap_or(30.0);
-                let den: f64 = parts[1].parse().unwrap_or(1.0);
-                fps = num / den;
-            }
-        }
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(AppError::Ffmpeg(format!(
+            "ffprobe failed (exit {}): {}",
+            output.status.code().unwrap_or(-1),
+            stderr.chars().take(2000).collect::<String>()
+        )));
     }
+
+    let raw: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|e| AppError::Ffmpeg(format!("Invalid ffprobe JSON: {e}")))?;
+    let stream = raw
+        .get("streams")
+        .and_then(|s| s.as_array())
+        .and_then(|a| a.first())
+        .ok_or_else(|| AppError::Ffmpeg("ffprobe returned no video streams".to_string()))?;
+
+    let width = stream
+        .get("width")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| AppError::Ffmpeg("ffprobe did not return width".to_string()))?
+        as u32;
+    let height = stream
+        .get("height")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| AppError::Ffmpeg("ffprobe did not return height".to_string()))?
+        as u32;
+    let fps = parse_r_frame_rate(
+        stream
+            .get("r_frame_rate")
+            .and_then(|v| v.as_str())
+            .unwrap_or("30/1"),
+    );
 
     if width == 0 || height == 0 {
         return Err(AppError::Ffmpeg(
@@ -799,9 +847,7 @@ pub fn probe_video(path: &str) -> Result<(u32, u32, f64)> {
     }
 
     let result = (width, height, fps);
-    let mut cache = cache
-        .lock()
-        .map_err(|e| AppError::Generic(format!("probe cache lock poisoned: {e}")))?;
+    let mut cache = cache.lock();
     if cache.entries.contains_key(path) {
         cache.order.retain(|key| key != path);
     }

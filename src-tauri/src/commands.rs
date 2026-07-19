@@ -70,6 +70,7 @@ pub struct AppState {
     pub sam3: Mutex<Option<Sam3Engine>>,
     pub frame_cache: Mutex<EffectCache>,
     pub export_cancel: Arc<AtomicBool>,
+    pub export_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl Default for AppState {
@@ -80,6 +81,7 @@ impl Default for AppState {
             sam3: Mutex::new(None),
             frame_cache: Mutex::new(EffectCache::default()),
             export_cancel: Arc::new(AtomicBool::new(false)),
+            export_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
         }
     }
 }
@@ -308,6 +310,7 @@ pub fn apply_effect(
     } else {
         None
     };
+    let params = crate::effects::clamp_for_effect(effect, &params);
     working = effect
         .process_frame(&working, mask.as_ref(), &params)
         .map_err(|e| e.to_string())?;
@@ -317,7 +320,7 @@ pub fn apply_effect(
     // so applying it again would cause double-mask corruption.
     if !effect_handles_mask {
         if let (Some(previous), Some(m)) = (previous.as_ref(), mask.as_ref()) {
-            blend_mask(&mut working, previous, m, "inside");
+            blend_mask(&mut working, previous, m, "inside").map_err(|e| e.to_string())?;
         }
     }
 
@@ -439,15 +442,16 @@ pub fn apply_effect_stack(
             None
         };
 
+        let params = crate::effects::clamp_for_effect(effect, &call.params);
         working = effect
-            .process_frame(&working, active_mask, &call.params)
+            .process_frame(&working, active_mask, &params)
             .map_err(|e| e.to_string())?;
 
         // Only apply post-process mask blend for effects that don't handle masking internally.
         if !effect_handles_mask {
             if let (Some(previous), Some(m)) = (previous.as_ref(), active_mask) {
                 let mode = call.mask_mode.as_deref().unwrap_or("inside");
-                blend_mask(&mut working, previous, m, mode);
+                blend_mask(&mut working, previous, m, mode).map_err(|e| e.to_string())?;
             }
         }
 
@@ -607,7 +611,16 @@ pub async fn export_video(
     let source_path = validated_source.to_string_lossy().into_owned();
     let output_path = validated_output.to_string_lossy().into_owned();
 
+    // Serialize expensive exports so only one runs at a time.
+    let permit = state
+        .export_semaphore
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|e| format!("Export queue error: {}", e))?;
+
     tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
         export_video_blocking(
             registry,
             app_handle,
@@ -787,6 +800,9 @@ fn export_video_blocking(
             effect.is_temporal()
         );
 
+        // Clamp parameters to declared min/max before any processing.
+        let params = crate::effects::clamp_for_effect(effect, &call.params);
+
         // Per-effect mask overrides global mask
         let per_effect_mask = if let Some(ref b64) = call.mask_b64 {
             decode_mask_b64(Some(b64.as_str()))?
@@ -808,12 +824,12 @@ fn export_video_blocking(
         if effect.is_temporal() {
             // Temporal effects: must use sequential process_video for cross-frame correctness
             segment = effect
-                .process_video(&segment, active_mask, &call.params)
+                .process_video(&segment, active_mask, &params)
                 .map_err(|e| e.to_string())?;
         } else if audio_data.is_none() {
             // Non-temporal, no audio: parallelize frame processing with rayon
             let mask_ref = active_mask;
-            let params_ref = &call.params;
+            let params_ref = &params;
             let fps_val = segment.fps;
             let results: std::result::Result<Vec<_>, _> = segment
                 .frames
@@ -834,7 +850,7 @@ fn export_video_blocking(
             let mut frames = Vec::with_capacity(segment.frames.len());
             let fps_val = segment.fps;
             for (frame_idx, frame) in segment.frames.iter().enumerate() {
-                let mut frame_params = call.params.clone();
+                let mut frame_params = params.clone();
                 frame_params.insert(
                     "time".to_string(),
                     serde_json::Value::from(frame_idx as f64 / fps_val),
@@ -866,9 +882,9 @@ fn export_video_blocking(
                 .frames
                 .par_iter_mut()
                 .enumerate()
-                .for_each(|(i, frame)| {
-                    blend_mask(frame, &prev[i], m, mode);
-                });
+                .try_for_each(|(i, frame)| {
+                    blend_mask(frame, &prev[i], m, mode).map_err(|e| e.to_string())
+                })?;
         }
 
         eprintln!("[export] Effect {}/{} done", effect_idx + 1, stack.len());
@@ -1436,7 +1452,7 @@ mod integration_tests {
         let mut working = effect
             .process_frame(&frame, None, &serde_json::Map::new())
             .unwrap();
-        blend_mask(&mut working, &previous, &mask, "inside");
+        blend_mask(&mut working, &previous, &mask, "inside").unwrap();
         assert_eq!(working.data.len(), frame.data.len());
     }
 
@@ -1571,7 +1587,7 @@ mod integration_tests {
             .unwrap();
 
         // Apply mask blend with "inside" mode
-        blend_mask(&mut working, &previous, &mask, "inside");
+        blend_mask(&mut working, &previous, &mask, "inside").unwrap();
 
         // Pixel 0: mask=255 → inverted (255-100=155)
         assert_eq!(working.data[0], 155);
@@ -1602,7 +1618,7 @@ mod integration_tests {
             .unwrap();
 
         // Apply mask blend with "outside" mode
-        blend_mask(&mut working, &previous, &mask, "outside");
+        blend_mask(&mut working, &previous, &mask, "outside").unwrap();
 
         // Pixel 0: mask=255 → original (100) — outside mode preserves masked area
         assert_eq!(working.data[0], 100);
@@ -1630,7 +1646,7 @@ mod integration_tests {
 
         // Invert produces 155 for input 100
         // Apply alpha mode: working = effect_output * mask_val
-        blend_mask(&mut working, &previous, &mask, "alpha");
+        blend_mask(&mut working, &previous, &mask, "alpha").unwrap();
 
         // Pixel 0: mask=255 → 155 * 1.0 = 155
         assert_eq!(working.data[0], 155);
@@ -1658,7 +1674,7 @@ mod integration_tests {
             .process_frame(&frame, None, &serde_json::Map::new())
             .unwrap();
 
-        blend_mask(&mut working, &previous, &mask, "inside");
+        blend_mask(&mut working, &previous, &mask, "inside").unwrap();
 
         // Pixel 0: mask=255 → grayscale (luminance of red ≈ 76)
         // Grayscale converts to luminance: 0.299*255 ≈ 76
@@ -1696,7 +1712,7 @@ mod integration_tests {
             .unwrap();
 
         // Blend with decoded mask using "inside" mode
-        blend_mask(&mut working, &previous, &mask, "inside");
+        blend_mask(&mut working, &previous, &mask, "inside").unwrap();
 
         // Invert(100,150,200) = (155,105,55)
         // Pixel 0: mask=255 → fully inverted
@@ -1748,7 +1764,7 @@ mod integration_tests {
 
         // Simulate the pipeline check: only blend if effect doesn't handle masking
         if !effect.handles_masking() {
-            blend_mask(&mut working, &previous, &mask, "inside");
+            blend_mask(&mut working, &previous, &mask, "inside").unwrap();
         }
 
         // After pipeline: MaskIsolate output should be unchanged (no double-blend)
@@ -1786,7 +1802,7 @@ mod integration_tests {
             .unwrap();
         // After second invert: pixel 0 = (50, 50, 50), pixel 1 = (200, 200, 200)
 
-        blend_mask(&mut working, &previous, &mask, "inside");
+        blend_mask(&mut working, &previous, &mask, "inside").unwrap();
 
         // Pixel 0: mask=255 → second invert applied (50, 50, 50)
         assert_eq!(working.data[0], 50);

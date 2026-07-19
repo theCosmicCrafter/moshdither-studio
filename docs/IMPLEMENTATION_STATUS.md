@@ -2,7 +2,7 @@
 
 **Date:** June 2026
 **Audited by:** Code-level verification against Tauri v2 codebase
-**Build:** `npm run build` passes, `cargo check --lib` passes
+**Build:** `npm run build` passes, `cargo check --lib` passes, `cargo test --lib` passes
 
 ---
 
@@ -172,6 +172,19 @@
 | 4   | PRD                           | **Done** | `docs/PRD.md`                    | Product requirements document                      |
 | 5   | Implementation status         | **Done** | `docs/IMPLEMENTATION_STATUS.md`  | This document                                      |
 | 6   | UI/UX improvement plan        | **Done** | `docs/UI_UX_IMPROVEMENT_PLAN.md` | 4-sprint roadmap                                   |
+
+---
+
+## 12. Backend Hardening
+
+| #   | Item                         | Status   | Verified                          | Notes                                                                                                  |
+| --- | ---------------------------- | -------- | --------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| 1   | Parameter clamping           | **Done** | `src-tauri/src/effects/params.rs` | `clamp_value` helper + per-effect `clamp_for_effect` used before every `process_frame`/`process_video` |
+| 2   | Video decode memory bounding | **Done** | `src-tauri/src/ffmpeg/mod.rs`     | `DEFAULT_DECODE_MAX_FRAMES` + 2 GiB memory budget, prevents unbounded raw frame buffers                |
+| 3   | ffprobe JSON parsing         | **Done** | `src-tauri/src/ffmpeg/mod.rs`     | `probe_video` parses JSON `streams[0]` instead of ad-hoc line parsing                                  |
+| 4   | Panic-safe probe cache       | **Done** | `src-tauri/src/ffmpeg/mod.rs`     | `parking_lot::Mutex` cache (no poisoning), bounded by `PROBE_CACHE_CAPACITY`                           |
+| 5   | `blend_mask` validation      | **Done** | `src-tauri/src/effects/engine.rs` | Returns `Result` on dimension mismatch and mismatched frame dimensions                                 |
+| 6   | Serialized expensive exports | **Done** | `src-tauri/src/commands.rs`       | `tokio::sync::Semaphore` in `AppState`; `export_video` acquires one permit                             |
 
 ---
 

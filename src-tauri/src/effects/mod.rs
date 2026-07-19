@@ -15,6 +15,7 @@ pub mod segmentation;
 pub mod effect_mask_tests;
 pub mod engine;
 pub mod functional_tests;
+pub mod params;
 pub mod preview;
 pub mod registry;
 #[cfg(test)]
@@ -24,5 +25,6 @@ pub mod types;
 pub mod verification;
 
 pub use engine::blend_mask;
+pub use params::{clamp_for_effect, clamp_params};
 pub use registry::EffectRegistry;
 pub use types::*;

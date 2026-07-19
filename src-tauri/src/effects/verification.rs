@@ -9,7 +9,7 @@
 //! Results are returned as a structured JSON-serializable report.
 
 use crate::effects::types::{Frame, Mask, ParamType, ParameterDef, VideoSegment};
-use crate::effects::{blend_mask, EffectRegistry};
+use crate::effects::{blend_mask, clamp_params, EffectRegistry};
 use serde::{Deserialize, Serialize};
 
 /// Result of verifying a single effect.
@@ -384,7 +384,7 @@ fn animate_effect_params(
         }
         _ => {}
     }
-    params
+    clamp_params(effect_id, &params)
 }
 
 /// Create a small synthetic video with a horizontal drift so temporal effects have variation.
@@ -555,17 +555,25 @@ pub fn verify_effect(effect_id: &str, registry: &EffectRegistry) -> EffectVerifi
         };
 
         if !effect.handles_masking() {
-            // Test "inside" mode
+            // Test "inside" and "outside" modes; report the blend as failed if the
+            // mask dimensions don't line up instead of panicking.
             let mut working_inside = processed.clone();
-            blend_mask(&mut working_inside, &previous, &mask, "inside");
-            checks.mask_inside_correct =
-                check_mask_blend(&previous, &working_inside, &mask, "inside");
-
-            // Test "outside" mode
             let mut working_outside = processed.clone();
-            blend_mask(&mut working_outside, &previous, &mask, "outside");
-            checks.mask_outside_correct =
-                check_mask_blend(&previous, &working_outside, &mask, "outside");
+            let blend_ok: crate::error::Result<()> = (|| {
+                blend_mask(&mut working_inside, &previous, &mask, "inside")?;
+                blend_mask(&mut working_outside, &previous, &mask, "outside")?;
+                Ok(())
+            })();
+            if let Err(e) = blend_ok {
+                error_message = Some(format!("mask blend failed: {e}"));
+                checks.mask_inside_correct = false;
+                checks.mask_outside_correct = false;
+            } else {
+                checks.mask_inside_correct =
+                    check_mask_blend(&previous, &working_inside, &mask, "inside");
+                checks.mask_outside_correct =
+                    check_mask_blend(&previous, &working_outside, &mask, "outside");
+            }
         } else {
             // Effect handles its own masking — verify it doesn't crash with a mask
             if effect.is_temporal() {

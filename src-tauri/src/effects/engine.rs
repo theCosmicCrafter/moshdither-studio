@@ -11,7 +11,29 @@ use rayon::prelude::*;
 /// Only RGB channels are blended; alpha is left unchanged.
 /// If mask dimensions don't match the frame, the mask is nearest-neighbor
 /// scaled to the frame dimensions before blending.
-pub fn blend_mask(working: &mut Frame, previous: &Frame, mask: &Mask, mode: &str) {
+pub fn blend_mask(
+    working: &mut Frame,
+    previous: &Frame,
+    mask: &Mask,
+    mode: &str,
+) -> crate::error::Result<()> {
+    if working.width != previous.width || working.height != previous.height {
+        return Err(crate::error::AppError::Generic(
+            "Cannot blend frames with mismatched dimensions".to_string(),
+        ));
+    }
+
+    let expected_mask_pixels = (mask.width as u64).saturating_mul(mask.height as u64);
+    if mask.data.is_empty() || mask.data.len() as u64 != expected_mask_pixels {
+        return Err(crate::error::AppError::Generic(format!(
+            "mask dimension mismatch: {}x{} expects {} pixels, got {}",
+            mask.width,
+            mask.height,
+            expected_mask_pixels,
+            mask.data.len()
+        )));
+    }
+
     let img_w = working.width as usize;
     let img_h = working.height as usize;
     let mask_w = mask.width as usize;
@@ -36,6 +58,8 @@ pub fn blend_mask(working: &mut Frame, previous: &Frame, mask: &Mask, mode: &str
             }
         }
     }
+
+    Ok(())
 }
 
 /// The linear effect stack. Applies effects in order.
@@ -56,7 +80,8 @@ impl EffectStack {
     /// Run the stack on a single frame.
     pub fn process_frame(&self, mut frame: Frame) -> crate::error::Result<Frame> {
         for (effect, params, mask) in &self.effects {
-            frame = effect.process_frame(&frame, mask.as_ref(), params)?;
+            let params = super::clamp_for_effect(effect.as_ref(), params);
+            frame = effect.process_frame(&frame, mask.as_ref(), &params)?;
         }
         Ok(frame)
     }
@@ -66,11 +91,12 @@ impl EffectStack {
     /// are applied frame-by-frame in parallel via rayon.
     pub fn process_video(&self, mut segment: VideoSegment) -> crate::error::Result<VideoSegment> {
         for (effect, params, mask) in &self.effects {
+            let params = super::clamp_for_effect(effect.as_ref(), params);
             if effect.is_temporal() {
-                segment = effect.process_video(&segment, mask.as_ref(), params)?;
+                segment = effect.process_video(&segment, mask.as_ref(), &params)?;
             } else {
                 let mask_ref = mask.as_ref();
-                let params_ref = params;
+                let params_ref = &params;
                 let results: crate::error::Result<Vec<Frame>> = segment
                     .frames
                     .par_iter()
@@ -100,7 +126,8 @@ impl EffectStack {
             .map(|frame| {
                 let mut working = frame.clone();
                 for (effect, params, mask) in &self.effects {
-                    working = effect.process_frame(&working, mask.as_ref(), params)?;
+                    let params = super::clamp_for_effect(effect.as_ref(), params);
+                    working = effect.process_frame(&working, mask.as_ref(), &params)?;
                 }
                 Ok(working)
             })
@@ -143,7 +170,7 @@ mod tests {
         let prev = make_frame(1, 1, &[(255, 0, 0, 255)]);
         let mut working = make_frame(1, 1, &[(0, 0, 255, 255)]);
         let mask = make_mask(1, 1, &[255]);
-        blend_mask(&mut working, &prev, &mask, "inside");
+        blend_mask(&mut working, &prev, &mask, "inside").unwrap();
         // mask_val = 1.0, blended = old*(1-1) + new*1 = new
         assert_eq!(working.data[0], 0); // R
         assert_eq!(working.data[1], 0); // G
@@ -158,7 +185,7 @@ mod tests {
         let prev = make_frame(1, 1, &[(255, 0, 0, 255)]);
         let mut working = make_frame(1, 1, &[(0, 0, 255, 255)]);
         let mask = make_mask(1, 1, &[0]);
-        blend_mask(&mut working, &prev, &mask, "inside");
+        blend_mask(&mut working, &prev, &mask, "inside").unwrap();
         // mask_val = 0.0, blended = old*(1-0) + new*0 = old
         assert_eq!(working.data[0], 255); // R
         assert_eq!(working.data[1], 0); // G
@@ -172,7 +199,7 @@ mod tests {
         let prev = make_frame(1, 1, &[(0, 0, 0, 255)]);
         let mut working = make_frame(1, 1, &[(255, 255, 255, 255)]);
         let mask = make_mask(1, 1, &[128]);
-        blend_mask(&mut working, &prev, &mask, "inside");
+        blend_mask(&mut working, &prev, &mask, "inside").unwrap();
         let expected = (255.0f32 * (128.0f32 / 255.0f32)).round() as u8;
         assert_eq!(working.data[0], expected);
         assert_eq!(working.data[1], expected);
@@ -185,7 +212,7 @@ mod tests {
         let prev = make_frame(2, 1, &[(100, 100, 100, 255), (200, 200, 200, 255)]);
         let mut working = make_frame(2, 1, &[(50, 50, 50, 255), (10, 10, 10, 255)]);
         let mask = make_mask(2, 1, &[255, 0]);
-        blend_mask(&mut working, &prev, &mask, "inside");
+        blend_mask(&mut working, &prev, &mask, "inside").unwrap();
         // Pixel 0: mask=255 → effect (50)
         assert_eq!(working.data[0], 50);
         // Pixel 1: mask=0 → original (200)
@@ -200,7 +227,7 @@ mod tests {
         let prev = make_frame(1, 1, &[(255, 0, 0, 255)]);
         let mut working = make_frame(1, 1, &[(0, 0, 255, 255)]);
         let mask = make_mask(1, 1, &[255]);
-        blend_mask(&mut working, &prev, &mask, "outside");
+        blend_mask(&mut working, &prev, &mask, "outside").unwrap();
         assert_eq!(working.data[0], 255); // R from original
         assert_eq!(working.data[2], 0); // B from original
     }
@@ -211,7 +238,7 @@ mod tests {
         let prev = make_frame(1, 1, &[(255, 0, 0, 255)]);
         let mut working = make_frame(1, 1, &[(0, 0, 255, 255)]);
         let mask = make_mask(1, 1, &[0]);
-        blend_mask(&mut working, &prev, &mask, "outside");
+        blend_mask(&mut working, &prev, &mask, "outside").unwrap();
         assert_eq!(working.data[0], 0); // R from effect
         assert_eq!(working.data[2], 255); // B from effect
     }
@@ -224,7 +251,7 @@ mod tests {
         let prev = make_frame(1, 1, &[(255, 0, 0, 255)]);
         let mut working = make_frame(1, 1, &[(0, 0, 255, 255)]);
         let mask = make_mask(1, 1, &[255]);
-        blend_mask(&mut working, &prev, &mask, "alpha");
+        blend_mask(&mut working, &prev, &mask, "alpha").unwrap();
         assert_eq!(working.data[0], 0);
         assert_eq!(working.data[2], 255);
     }
@@ -235,7 +262,7 @@ mod tests {
         let prev = make_frame(1, 1, &[(255, 0, 0, 255)]);
         let mut working = make_frame(1, 1, &[(0, 0, 255, 255)]);
         let mask = make_mask(1, 1, &[0]);
-        blend_mask(&mut working, &prev, &mask, "alpha");
+        blend_mask(&mut working, &prev, &mask, "alpha").unwrap();
         assert_eq!(working.data[0], 0);
         assert_eq!(working.data[1], 0);
         assert_eq!(working.data[2], 0);
@@ -247,7 +274,7 @@ mod tests {
         let prev = make_frame(1, 1, &[(255, 255, 255, 255)]);
         let mut working = make_frame(1, 1, &[(200, 200, 200, 255)]);
         let mask = make_mask(1, 1, &[128]);
-        blend_mask(&mut working, &prev, &mask, "alpha");
+        blend_mask(&mut working, &prev, &mask, "alpha").unwrap();
         let expected = (200.0f32 * (128.0f32 / 255.0f32)).round() as u8;
         assert_eq!(working.data[0], expected);
     }
@@ -259,7 +286,7 @@ mod tests {
         let prev = make_frame(1, 1, &[(100, 100, 100, 128)]);
         let mut working = make_frame(1, 1, &[(200, 200, 200, 200)]);
         let mask = make_mask(1, 1, &[255]);
-        blend_mask(&mut working, &prev, &mask, "inside");
+        blend_mask(&mut working, &prev, &mask, "inside").unwrap();
         // Alpha should not be touched
         assert_eq!(working.data[3], 200);
     }
@@ -272,7 +299,7 @@ mod tests {
         let prev = make_frame(2, 1, &[(100, 100, 100, 255), (100, 100, 100, 255)]);
         let mut working = make_frame(2, 1, &[(50, 50, 50, 255), (50, 50, 50, 255)]);
         let mask = make_mask(1, 1, &[255]);
-        blend_mask(&mut working, &prev, &mask, "inside");
+        blend_mask(&mut working, &prev, &mask, "inside").unwrap();
         // White mask → effect shows (50), not original (100)
         assert_eq!(working.data[0], 50);
         assert_eq!(working.data[4], 50);
@@ -303,7 +330,7 @@ mod tests {
             ],
         );
         let mask = make_mask(2, 1, &[255, 0]);
-        blend_mask(&mut working, &prev, &mask, "inside");
+        blend_mask(&mut working, &prev, &mask, "inside").unwrap();
         // Pixels 0,1: mask=255 → effect (200)
         assert_eq!(working.data[0], 200);
         assert_eq!(working.data[4], 200);
@@ -339,7 +366,7 @@ mod tests {
             ],
         );
         let mask = make_mask(4, 1, &[255, 255, 0, 0]);
-        blend_mask(&mut working, &prev, &mask, "inside");
+        blend_mask(&mut working, &prev, &mask, "inside").unwrap();
 
         // Pixels 0,1: mask=255 → effect (0,0,0)
         assert_eq!(working.data[0], 0); // pixel 0 R
@@ -374,7 +401,7 @@ mod tests {
             ],
         );
         let mask = make_mask(4, 1, &[255, 255, 0, 0]);
-        blend_mask(&mut working, &prev, &mask, "outside");
+        blend_mask(&mut working, &prev, &mask, "outside").unwrap();
 
         // Pixels 0,1: mask=255 → original (100)
         assert_eq!(working.data[0], 100);
@@ -406,7 +433,7 @@ mod tests {
             height: 2,
             data: vec![255, 0, 0, 0],
         };
-        blend_mask(&mut working, &prev, &mask, "inside");
+        blend_mask(&mut working, &prev, &mask, "inside").unwrap();
 
         // Top-left (0,0): mask=255 → effect (0)
         assert_eq!(working.data[0], 0);

@@ -124,7 +124,7 @@ pub fn run_effect_with_mask(
 
     if !effect.handles_masking() {
         if let Some(m) = mask {
-            blend_mask(&mut working, &previous, m, mask_mode);
+            blend_mask(&mut working, &previous, m, mask_mode).unwrap();
         }
     }
 

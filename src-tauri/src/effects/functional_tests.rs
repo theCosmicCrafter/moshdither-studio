@@ -322,7 +322,7 @@ pub fn run_all_function_tests() -> FunctionTestReport {
             }
         }
         let mut working = processed.clone();
-        blend_mask(&mut working, &original, &half_mask, "inside");
+        blend_mask(&mut working, &original, &half_mask, "inside").unwrap();
         // Left half should be modified (inverted), right half should be original
         let left_pixel = &working.data[0..3];
         let right_pixel = &working.data[(working.width as usize - 1) * 4..][..3];
@@ -346,7 +346,7 @@ pub fn run_all_function_tests() -> FunctionTestReport {
             }
         }
         let mut working = processed.clone();
-        blend_mask(&mut working, &original, &half_mask, "outside");
+        blend_mask(&mut working, &original, &half_mask, "outside").unwrap();
         let left_pixel = &working.data[0..3];
         let right_pixel = &working.data[(working.width as usize - 1) * 4..][..3];
         let orig_left = &original.data[0..3];
@@ -369,7 +369,7 @@ pub fn run_all_function_tests() -> FunctionTestReport {
             }
         }
         let mut working = processed.clone();
-        blend_mask(&mut working, &original, &half_mask, "alpha");
+        blend_mask(&mut working, &original, &half_mask, "alpha").unwrap();
         // Alpha mode should produce a blend — just check it doesn't crash and produces valid output
         if working.data.len() != original.data.len() {
             return Err("Output size mismatch".to_string());

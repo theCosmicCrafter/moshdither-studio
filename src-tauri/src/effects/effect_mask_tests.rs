@@ -2008,7 +2008,7 @@ mod tests {
 
             if !effect.handles_masking() {
                 if let Some(m) = mask {
-                    crate::effects::blend_mask(&mut working, &previous, m, mask_mode);
+                    crate::effects::blend_mask(&mut working, &previous, m, mask_mode).unwrap();
                 }
             }
 
