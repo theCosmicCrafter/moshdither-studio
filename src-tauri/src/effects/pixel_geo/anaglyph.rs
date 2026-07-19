@@ -9,11 +9,15 @@ pub struct Anaglyph {
 }
 
 impl Anaglyph {
-    pub fn new(shift: u32) -> Self { Self { shift } }
+    pub fn new(shift: u32) -> Self {
+        Self { shift }
+    }
 }
 
 impl Default for Anaglyph {
-    fn default() -> Self { Self::new(6) }
+    fn default() -> Self {
+        Self::new(6)
+    }
 }
 
 impl Effect for Anaglyph {
@@ -23,23 +27,29 @@ impl Effect for Anaglyph {
             name: "Anaglyph".to_string(),
             category: EffectCategory::PixelGeometry,
             media_type: MediaType::Both,
-            parameters: vec![
-                ParameterDef {
-                    id: "shift".to_string(),
-                    name: "Shift".to_string(),
-                    param_type: ParamType::Slider,
-                    default: json!(6),
-                    min: Some(0.0),
-                    max: Some(50.0),
-                    step: Some(1.0),
-                    options: None,
-                },
-            ],
+            parameters: vec![ParameterDef {
+                id: "shift".to_string(),
+                name: "Shift".to_string(),
+                param_type: ParamType::Slider,
+                default: json!(6),
+                min: Some(0.0),
+                max: Some(50.0),
+                step: Some(1.0),
+                options: None,
+            }],
         }
     }
 
-    fn process_frame(&self, input: &Frame, _m: Option<&Mask>, params: &ParameterValues) -> Result<Frame> {
-        let shift = params.get("shift").and_then(|v| v.as_u64()).unwrap_or(self.shift as u64) as usize;
+    fn process_frame(
+        &self,
+        input: &Frame,
+        _m: Option<&Mask>,
+        params: &ParameterValues,
+    ) -> Result<Frame> {
+        let shift = params
+            .get("shift")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(self.shift as u64) as usize;
         let w = input.width as usize;
         let h = input.height as usize;
         let mut data = input.data.clone();
@@ -54,13 +64,27 @@ impl Effect for Anaglyph {
                 data[dst_idx + 2] = input.data[(y * w + bx) * 4 + 2];
             }
         }
-        Ok(Frame { width: input.width, height: input.height, data })
+        Ok(Frame {
+            width: input.width,
+            height: input.height,
+            data,
+        })
     }
 
-    fn process_video(&self, input: &VideoSegment, mask: Option<&Mask>, params: &ParameterValues) -> Result<VideoSegment> {
+    fn process_video(
+        &self,
+        input: &VideoSegment,
+        mask: Option<&Mask>,
+        params: &ParameterValues,
+    ) -> Result<VideoSegment> {
         let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames { frames.push(self.process_frame(frame, mask, params)?); }
-        Ok(VideoSegment { frames, fps: input.fps })
+        for frame in &input.frames {
+            frames.push(self.process_frame(frame, mask, params)?);
+        }
+        Ok(VideoSegment {
+            frames,
+            fps: input.fps,
+        })
     }
 }
 
@@ -70,8 +94,14 @@ mod tests {
 
     #[test]
     fn test_anaglyph() {
-        let d = vec![255u8, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 0, 0, 0, 255];
-        let f = Frame { width: 4, height: 1, data: d };
+        let d = vec![
+            255u8, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 0, 0, 0, 255,
+        ];
+        let f = Frame {
+            width: 4,
+            height: 1,
+            data: d,
+        };
         let e = Anaglyph::new(1);
         let r = e.process_frame(&f, None, &serde_json::Map::new()).unwrap();
         // At x=1, red from x=0 (255), blue from x=2 (255)

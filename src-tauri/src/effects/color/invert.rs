@@ -29,18 +29,16 @@ impl Effect for Invert {
             name: "Invert".to_string(),
             category: EffectCategory::Color,
             media_type: MediaType::Both,
-            parameters: vec![
-                ParameterDef {
-                    id: "intensity".to_string(),
-                    name: "Intensity".to_string(),
-                    param_type: ParamType::Slider,
-                    default: json!(1.0),
-                    min: Some(0.0),
-                    max: Some(1.0),
-                    step: Some(0.05),
-                    options: None,
-                },
-            ],
+            parameters: vec![ParameterDef {
+                id: "intensity".to_string(),
+                name: "Intensity".to_string(),
+                param_type: ParamType::Slider,
+                default: json!(1.0),
+                min: Some(0.0),
+                max: Some(1.0),
+                step: Some(0.05),
+                options: None,
+            }],
         }
     }
 

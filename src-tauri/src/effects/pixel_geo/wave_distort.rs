@@ -11,7 +11,10 @@ pub struct WaveDistort {
 
 impl WaveDistort {
     pub fn new(amplitude: f32, frequency: f32) -> Self {
-        Self { amplitude, frequency }
+        Self {
+            amplitude,
+            frequency,
+        }
     }
 }
 
@@ -59,8 +62,14 @@ impl Effect for WaveDistort {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let amplitude = params.get("amplitude").and_then(|v| v.as_f64()).unwrap_or(self.amplitude as f64) as f32;
-        let frequency = params.get("frequency").and_then(|v| v.as_f64()).unwrap_or(self.frequency as f64) as f32;
+        let amplitude = params
+            .get("amplitude")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(self.amplitude as f64) as f32;
+        let frequency = params
+            .get("frequency")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(self.frequency as f64) as f32;
         let time = params.get("time").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
 
         let w = input.width as usize;
@@ -94,7 +103,10 @@ impl Effect for WaveDistort {
         for frame in &input.frames {
             frames.push(self.process_frame(frame, mask, params)?);
         }
-        Ok(VideoSegment { frames, fps: input.fps })
+        Ok(VideoSegment {
+            frames,
+            fps: input.fps,
+        })
     }
 }
 
@@ -105,9 +117,15 @@ mod tests {
     #[test]
     fn test_wave_distort_creates_output() {
         let data = vec![128u8; 32 * 32 * 4];
-        let frame = Frame { width: 32, height: 32, data };
+        let frame = Frame {
+            width: 32,
+            height: 32,
+            data,
+        };
         let effect = WaveDistort::new(5.0, 0.1);
-        let result = effect.process_frame(&frame, None, &serde_json::Map::new()).unwrap();
+        let result = effect
+            .process_frame(&frame, None, &serde_json::Map::new())
+            .unwrap();
         assert_eq!(result.width, 32);
         assert_eq!(result.height, 32);
     }

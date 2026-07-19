@@ -11,7 +11,9 @@ pub struct JpegQuantize {
 
 impl JpegQuantize {
     pub fn new(quality: u8) -> Self {
-        Self { quality: quality.clamp(1, 100) }
+        Self {
+            quality: quality.clamp(1, 100),
+        }
     }
 }
 
@@ -28,18 +30,16 @@ impl Effect for JpegQuantize {
             name: "JPEG Quantize".to_string(),
             category: EffectCategory::Glitch,
             media_type: MediaType::Image,
-            parameters: vec![
-                ParameterDef {
-                    id: "quality".to_string(),
-                    name: "Quality".to_string(),
-                    param_type: ParamType::Slider,
-                    default: json!(10),
-                    min: Some(1.0),
-                    max: Some(100.0),
-                    step: Some(1.0),
-                    options: None,
-                },
-            ],
+            parameters: vec![ParameterDef {
+                id: "quality".to_string(),
+                name: "Quality".to_string(),
+                param_type: ParamType::Slider,
+                default: json!(10),
+                min: Some(1.0),
+                max: Some(100.0),
+                step: Some(1.0),
+                options: None,
+            }],
         }
     }
 
@@ -49,7 +49,10 @@ impl Effect for JpegQuantize {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let quality = params.get("quality").and_then(|v| v.as_u64()).unwrap_or(self.quality as u64) as u8;
+        let quality = params
+            .get("quality")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(self.quality as u64) as u8;
         let step = (101 - quality).max(1);
         let mut data = input.data.clone();
 
@@ -76,7 +79,10 @@ impl Effect for JpegQuantize {
         for frame in &input.frames {
             frames.push(self.process_frame(frame, mask, params)?);
         }
-        Ok(VideoSegment { frames, fps: input.fps })
+        Ok(VideoSegment {
+            frames,
+            fps: input.fps,
+        })
     }
 }
 
@@ -87,9 +93,15 @@ mod tests {
     #[test]
     fn test_jpeg_quantize_reduces_colors() {
         let data = vec![137u8; 16 * 4];
-        let frame = Frame { width: 4, height: 4, data };
+        let frame = Frame {
+            width: 4,
+            height: 4,
+            data,
+        };
         let effect = JpegQuantize::new(10);
-        let result = effect.process_frame(&frame, None, &serde_json::Map::new()).unwrap();
+        let result = effect
+            .process_frame(&frame, None, &serde_json::Map::new())
+            .unwrap();
         // With quality=10, step = 91, so 137 / 91 = 1, * 91 = 91
         assert_eq!(result.data[0], 91);
     }

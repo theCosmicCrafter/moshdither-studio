@@ -29,7 +29,9 @@ struct EnvConfig {
 }
 
 fn app_data_dir(app: &AppHandle) -> PathBuf {
-    app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."))
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
 }
 
 fn config_path(app: &AppHandle) -> PathBuf {
@@ -65,7 +67,10 @@ fn save_config(app: &AppHandle, mode: &str) {
     let cfg = EnvConfig {
         mode: mode.to_string(),
     };
-    let _ = std::fs::write(&path, serde_json::to_string_pretty(&cfg).unwrap_or_default());
+    let _ = std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&cfg).unwrap_or_default(),
+    );
 }
 
 fn python_on_path() -> Option<String> {
@@ -90,18 +95,37 @@ fn bundled_ffglitch_dir(app: &AppHandle) -> PathBuf {
 }
 
 fn exe_suffix() -> &'static str {
-    if cfg!(windows) { ".exe" } else { "" }
+    if cfg!(windows) {
+        ".exe"
+    } else {
+        ""
+    }
 }
 
 fn mosh_cli_path() -> Option<PathBuf> {
     let candidates = [
-        Path::new("..").join("..").join("packages").join("python-backend").join("mosh_cli.py"),
-        Path::new("..").join("packages").join("python-backend").join("mosh_cli.py"),
+        Path::new("..")
+            .join("..")
+            .join("packages")
+            .join("python-backend")
+            .join("mosh_cli.py"),
+        Path::new("..")
+            .join("packages")
+            .join("python-backend")
+            .join("mosh_cli.py"),
         std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-            .map(|p| p.join("packages").join("python-backend").join("mosh_cli.py"))
-            .unwrap_or_else(|| Path::new("packages").join("python-backend").join("mosh_cli.py")),
+            .map(|p| {
+                p.join("packages")
+                    .join("python-backend")
+                    .join("mosh_cli.py")
+            })
+            .unwrap_or_else(|| {
+                Path::new("packages")
+                    .join("python-backend")
+                    .join("mosh_cli.py")
+            }),
     ];
     for c in &candidates {
         if c.exists() {
@@ -125,14 +149,22 @@ fn copy_bundled_ffmpeg(app: &AppHandle) -> Result<(), String> {
     let candidates = [
         Path::new("bin").join(format!("ffmpeg-x86_64-pc-windows-msvc{}", exe_suffix())),
         Path::new("bin").join(format!("ffmpeg{}", exe_suffix())),
-        Path::new("src-tauri").join("bin").join(format!("ffmpeg-x86_64-pc-windows-msvc{}", exe_suffix())),
-        Path::new("src-tauri").join("bin").join(format!("ffmpeg{}", exe_suffix())),
+        Path::new("src-tauri")
+            .join("bin")
+            .join(format!("ffmpeg-x86_64-pc-windows-msvc{}", exe_suffix())),
+        Path::new("src-tauri")
+            .join("bin")
+            .join(format!("ffmpeg{}", exe_suffix())),
     ];
     let ffprobe_candidates = [
         Path::new("bin").join(format!("ffprobe-x86_64-pc-windows-msvc{}", exe_suffix())),
         Path::new("bin").join(format!("ffprobe{}", exe_suffix())),
-        Path::new("src-tauri").join("bin").join(format!("ffprobe-x86_64-pc-windows-msvc{}", exe_suffix())),
-        Path::new("src-tauri").join("bin").join(format!("ffprobe{}", exe_suffix())),
+        Path::new("src-tauri")
+            .join("bin")
+            .join(format!("ffprobe-x86_64-pc-windows-msvc{}", exe_suffix())),
+        Path::new("src-tauri")
+            .join("bin")
+            .join(format!("ffprobe{}", exe_suffix())),
     ];
 
     for src in &candidates {
@@ -167,14 +199,22 @@ fn copy_bundled_ffglitch(app: &AppHandle) -> Result<(), String> {
     let candidates = [
         Path::new("bin").join(format!("ffgac-x86_64-pc-windows-msvc{}", exe_suffix())),
         Path::new("bin").join(format!("ffgac{}", exe_suffix())),
-        Path::new("src-tauri").join("bin").join(format!("ffgac-x86_64-pc-windows-msvc{}", exe_suffix())),
-        Path::new("src-tauri").join("bin").join(format!("ffgac{}", exe_suffix())),
+        Path::new("src-tauri")
+            .join("bin")
+            .join(format!("ffgac-x86_64-pc-windows-msvc{}", exe_suffix())),
+        Path::new("src-tauri")
+            .join("bin")
+            .join(format!("ffgac{}", exe_suffix())),
     ];
     let ffedit_candidates = [
         Path::new("bin").join(format!("ffedit-x86_64-pc-windows-msvc{}", exe_suffix())),
         Path::new("bin").join(format!("ffedit{}", exe_suffix())),
-        Path::new("src-tauri").join("bin").join(format!("ffedit-x86_64-pc-windows-msvc{}", exe_suffix())),
-        Path::new("src-tauri").join("bin").join(format!("ffedit{}", exe_suffix())),
+        Path::new("src-tauri")
+            .join("bin")
+            .join(format!("ffedit-x86_64-pc-windows-msvc{}", exe_suffix())),
+        Path::new("src-tauri")
+            .join("bin")
+            .join(format!("ffedit{}", exe_suffix())),
     ];
 
     for src in &candidates {
@@ -216,9 +256,18 @@ fn run_command(cmd: &str, args: &[&str]) -> Result<(), String> {
 
 fn python_requirements_path() -> Option<PathBuf> {
     let candidates = [
-        Path::new("packages").join("python-backend").join("requirements.txt"),
-        Path::new("..").join("packages").join("python-backend").join("requirements.txt"),
-        Path::new("..").join("..").join("packages").join("python-backend").join("requirements.txt"),
+        Path::new("packages")
+            .join("python-backend")
+            .join("requirements.txt"),
+        Path::new("..")
+            .join("packages")
+            .join("python-backend")
+            .join("requirements.txt"),
+        Path::new("..")
+            .join("..")
+            .join("packages")
+            .join("python-backend")
+            .join("requirements.txt"),
     ];
     for c in &candidates {
         if c.exists() {
@@ -269,9 +318,7 @@ pub async fn get_environment_status(app: AppHandle) -> std::result::Result<EnvSt
 
 /// Install a local Python environment in the app data directory.
 #[tauri::command]
-pub async fn install_local_environment(
-    app: AppHandle,
-) -> std::result::Result<EnvStatus, String> {
+pub async fn install_local_environment(app: AppHandle) -> std::result::Result<EnvStatus, String> {
     save_config(&app, "local");
 
     let system_python = python_on_path().ok_or("Python not found on PATH")?;
@@ -283,10 +330,16 @@ pub async fn install_local_environment(
         run_command(&system_python, &["-m", "venv", &venv.to_string_lossy()])?;
     }
     if !py.exists() {
-        return Err(format!("venv created but python not found at {}", py.display()));
+        return Err(format!(
+            "venv created but python not found at {}",
+            py.display()
+        ));
     }
 
-    run_command(&py.to_string_lossy(), &["-m", "pip", "install", "--upgrade", "pip"])?;
+    run_command(
+        &py.to_string_lossy(),
+        &["-m", "pip", "install", "--upgrade", "pip"],
+    )?;
 
     if let Some(reqs) = python_requirements_path() {
         run_command(

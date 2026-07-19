@@ -9,11 +9,17 @@ pub struct MirrorSlices {
 }
 
 impl MirrorSlices {
-    pub fn new(slice_height: u32) -> Self { Self { slice_height: slice_height.max(1) } }
+    pub fn new(slice_height: u32) -> Self {
+        Self {
+            slice_height: slice_height.max(1),
+        }
+    }
 }
 
 impl Default for MirrorSlices {
-    fn default() -> Self { Self::new(4) }
+    fn default() -> Self {
+        Self::new(4)
+    }
 }
 
 impl Effect for MirrorSlices {
@@ -23,29 +29,37 @@ impl Effect for MirrorSlices {
             name: "Mirror Slices".to_string(),
             category: EffectCategory::PixelGeometry,
             media_type: MediaType::Both,
-            parameters: vec![
-                ParameterDef {
-                    id: "slice_height".to_string(),
-                    name: "Slice Height".to_string(),
-                    param_type: ParamType::Slider,
-                    default: json!(4),
-                    min: Some(1.0),
-                    max: Some(32.0),
-                    step: Some(1.0),
-                    options: None,
-                },
-            ],
+            parameters: vec![ParameterDef {
+                id: "slice_height".to_string(),
+                name: "Slice Height".to_string(),
+                param_type: ParamType::Slider,
+                default: json!(4),
+                min: Some(1.0),
+                max: Some(32.0),
+                step: Some(1.0),
+                options: None,
+            }],
         }
     }
 
-    fn process_frame(&self, input: &Frame, _m: Option<&Mask>, params: &ParameterValues) -> Result<Frame> {
-        let slice_height = params.get("slice_height").and_then(|v| v.as_u64()).unwrap_or(self.slice_height as u64) as usize;
+    fn process_frame(
+        &self,
+        input: &Frame,
+        _m: Option<&Mask>,
+        params: &ParameterValues,
+    ) -> Result<Frame> {
+        let slice_height = params
+            .get("slice_height")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(self.slice_height as u64) as usize;
         let w = input.width as usize;
         let h = input.height as usize;
         let mut data = input.data.clone();
 
         for (slice_idx, y_start) in (0..h).step_by(slice_height).enumerate() {
-            if slice_idx % 2 == 0 { continue; }
+            if slice_idx % 2 == 0 {
+                continue;
+            }
             for y in y_start..(y_start + slice_height).min(h) {
                 for x in 0..w / 2 {
                     let left = (y * w + x) * 4;
@@ -56,13 +70,27 @@ impl Effect for MirrorSlices {
                 }
             }
         }
-        Ok(Frame { width: input.width, height: input.height, data })
+        Ok(Frame {
+            width: input.width,
+            height: input.height,
+            data,
+        })
     }
 
-    fn process_video(&self, input: &VideoSegment, mask: Option<&Mask>, params: &ParameterValues) -> Result<VideoSegment> {
+    fn process_video(
+        &self,
+        input: &VideoSegment,
+        mask: Option<&Mask>,
+        params: &ParameterValues,
+    ) -> Result<VideoSegment> {
         let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames { frames.push(self.process_frame(frame, mask, params)?); }
-        Ok(VideoSegment { frames, fps: input.fps })
+        for frame in &input.frames {
+            frames.push(self.process_frame(frame, mask, params)?);
+        }
+        Ok(VideoSegment {
+            frames,
+            fps: input.fps,
+        })
     }
 }
 
@@ -74,10 +102,14 @@ mod tests {
     fn test_mirror_slices() {
         // 2x2 image: row 0 = [255, 0], row 1 = [100, 50]
         let d = vec![
-            255, 0, 0, 0,   0, 0, 0, 0,   // row 0
-            100, 0, 0, 0,   50, 0, 0, 0,   // row 1
+            255, 0, 0, 0, 0, 0, 0, 0, // row 0
+            100, 0, 0, 0, 50, 0, 0, 0, // row 1
         ];
-        let f = Frame { width: 2, height: 2, data: d };
+        let f = Frame {
+            width: 2,
+            height: 2,
+            data: d,
+        };
         let e = MirrorSlices::new(1);
         let r = e.process_frame(&f, None, &serde_json::Map::new()).unwrap();
         // Slice 0 (even) is NOT mirrored

@@ -84,7 +84,12 @@ impl Effect for BayerDither {
                 min: None,
                 max: None,
                 step: None,
-                options: Some(vec!["2".to_string(), "4".to_string(), "8".to_string(), "16".to_string()]),
+                options: Some(vec![
+                    "2".to_string(),
+                    "4".to_string(),
+                    "8".to_string(),
+                    "16".to_string(),
+                ]),
             }],
         }
     }
@@ -98,8 +103,11 @@ impl Effect for BayerDither {
         let mut output = input.clone();
         let w = input.width as usize;
         let h = input.height as usize;
-        
-        let matrix_size_idx = params.get("matrix_size").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+
+        let matrix_size_idx = params
+            .get("matrix_size")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(1) as usize;
         let ms_values = [2, 4, 8, 16];
         let ms = ms_values[matrix_size_idx % 4] as usize;
         let matrix = Self::generate_bayer_matrix(ms as u32);
@@ -151,7 +159,11 @@ mod tests {
             data.push(b);
             data.push(255);
         }
-        Frame { width, height, data }
+        Frame {
+            width,
+            height,
+            data,
+        }
     }
 
     #[test]
@@ -173,7 +185,9 @@ mod tests {
     fn test_process_black_frame_stays_black() {
         let dither = BayerDither::new(4);
         let frame = make_solid_frame(8, 8, 0, 0, 0);
-        let result = dither.process_frame(&frame, None, &serde_json::Map::new()).unwrap();
+        let result = dither
+            .process_frame(&frame, None, &serde_json::Map::new())
+            .unwrap();
 
         // All pixels should remain black (0 + threshold is still < 127)
         for i in 0..result.data.len() / 4 {
@@ -188,7 +202,9 @@ mod tests {
     fn test_process_white_frame_stays_white() {
         let dither = BayerDither::new(4);
         let frame = make_solid_frame(8, 8, 255, 255, 255);
-        let result = dither.process_frame(&frame, None, &serde_json::Map::new()).unwrap();
+        let result = dither
+            .process_frame(&frame, None, &serde_json::Map::new())
+            .unwrap();
 
         // All pixels should remain white (255 + threshold is still > 127)
         for i in 0..result.data.len() / 4 {
@@ -203,15 +219,21 @@ mod tests {
     fn test_gray_frame_produces_pattern() {
         let dither = BayerDither::new(4);
         let frame = make_solid_frame(8, 8, 128, 128, 128);
-        let result = dither.process_frame(&frame, None, &serde_json::Map::new()).unwrap();
+        let result = dither
+            .process_frame(&frame, None, &serde_json::Map::new())
+            .unwrap();
 
         // Should produce a mix of black and white pixels (pattern)
         let mut has_black = false;
         let mut has_white = false;
         for i in 0..result.data.len() / 4 {
             let r = result.data[i * 4];
-            if r == 0 { has_black = true; }
-            if r == 255 { has_white = true; }
+            if r == 0 {
+                has_black = true;
+            }
+            if r == 255 {
+                has_white = true;
+            }
         }
         assert!(has_black, "Should have some black pixels");
         assert!(has_white, "Should have some white pixels");
@@ -221,8 +243,14 @@ mod tests {
     fn test_alpha_preserved() {
         let dither = BayerDither::new(2);
         let data = vec![128u8, 128, 128, 128];
-        let frame = Frame { width: 1, height: 1, data };
-        let result = dither.process_frame(&frame, None, &serde_json::Map::new()).unwrap();
+        let frame = Frame {
+            width: 1,
+            height: 1,
+            data,
+        };
+        let result = dither
+            .process_frame(&frame, None, &serde_json::Map::new())
+            .unwrap();
         assert_eq!(result.data[3], 128);
     }
 }

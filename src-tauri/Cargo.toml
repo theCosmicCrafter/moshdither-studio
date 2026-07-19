@@ -9,13 +9,16 @@ edition = "2021"
 rust-version = "1.75"
 default-run = "moshdither-studio"
 
+[lib]
+name = "moshdither_studio"
+crate-type = ["rlib", "staticlib", "cdylib"]
+
 [build-dependencies]
 tauri-build = { version = "2.0.0", features = [] }
 
 [dependencies]
 tauri = { version = "2.0.0", features = [] }
 tauri-plugin-dialog = "2.0.0"
-tauri-plugin-shell = "2.0.0"
 ort = "2.0.0-rc.12"
 image = "0.25"
 rayon = "1.8"

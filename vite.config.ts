@@ -1,5 +1,5 @@
-import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
 
 export default defineConfig(async () => ({
   plugins: [react()],
@@ -13,13 +13,16 @@ export default defineConfig(async () => ({
   },
   envPrefix: ["VITE_", "TAURI_"],
   build: {
-    target: process.env.TAURI_PLATFORM === "windows" ? "chrome105" : "safari13",
+    target: "es2022",
     minify: !process.env.TAURI_DEBUG ? "esbuild" : false,
     sourcemap: !!process.env.TAURI_DEBUG,
     rollupOptions: {
       output: {
-        manualChunks: {
-          vendor: ["react", "react-dom", "zustand", "lucide-react"],
+        manualChunks: (id) => {
+          const vendor = ["react", "react-dom", "zustand", "lucide-react"];
+          if (vendor.some((m) => id.includes(`node_modules/${m}`))) {
+            return "vendor";
+          }
         },
       },
     },

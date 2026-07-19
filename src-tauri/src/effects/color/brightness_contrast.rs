@@ -20,7 +20,11 @@ fn rgb_to_hsl(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
         return (0.0, 0.0, l);
     }
     let d = max - min;
-    let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+    let s = if l > 0.5 {
+        d / (2.0 - max - min)
+    } else {
+        d / (max + min)
+    };
     let h = if max == r {
         ((g - b) / d + (if g < b { 6.0 } else { 0.0 })) / 6.0
     } else if max == g {
@@ -35,7 +39,11 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
     if s == 0.0 {
         return (l, l, l);
     }
-    let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+    let q = if l < 0.5 {
+        l * (1.0 + s)
+    } else {
+        l + s - l * s
+    };
     let p = 2.0 * l - q;
     let hue_to_rgb = |t: f32| {
         let t = t.fract();
@@ -50,7 +58,11 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
             p
         }
     };
-    (hue_to_rgb(h + 1.0 / 3.0), hue_to_rgb(h), hue_to_rgb(h - 1.0 / 3.0))
+    (
+        hue_to_rgb(h + 1.0 / 3.0),
+        hue_to_rgb(h),
+        hue_to_rgb(h - 1.0 / 3.0),
+    )
 }
 
 impl Effect for BrightnessContrast {
@@ -105,11 +117,25 @@ impl Effect for BrightnessContrast {
         }
     }
 
-    fn process_frame(&self, input: &Frame, _m: Option<&Mask>, params: &ParameterValues) -> Result<Frame> {
-        let brightness = params.get("brightness").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-        let contrast = params.get("contrast").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+    fn process_frame(
+        &self,
+        input: &Frame,
+        _m: Option<&Mask>,
+        params: &ParameterValues,
+    ) -> Result<Frame> {
+        let brightness = params
+            .get("brightness")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as f32;
+        let contrast = params
+            .get("contrast")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as f32;
         let gamma = params.get("gamma").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
-        let saturation = params.get("saturation").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+        let saturation = params
+            .get("saturation")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1.0) as f32;
         let gamma = gamma.clamp(0.01, 10.0);
 
         let contrast_factor = (contrast + 1.0).clamp(0.0, 2.0);
@@ -159,7 +185,10 @@ impl Effect for BrightnessContrast {
         for frame in &input.frames {
             frames.push(self.process_frame(frame, mask, params)?);
         }
-        Ok(VideoSegment { frames, fps: input.fps })
+        Ok(VideoSegment {
+            frames,
+            fps: input.fps,
+        })
     }
 }
 
@@ -170,7 +199,11 @@ mod tests {
     #[test]
     fn test_brightness_contrast() {
         let d = vec![128u8, 128, 128, 255];
-        let f = Frame { width: 1, height: 1, data: d };
+        let f = Frame {
+            width: 1,
+            height: 1,
+            data: d,
+        };
         let e = BrightnessContrast;
         let mut params = serde_json::Map::new();
         params.insert("brightness".to_string(), json!(0.1));

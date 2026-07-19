@@ -128,21 +128,31 @@ mod tests {
             data.push(gray);
             data.push(255);
         }
-        Frame { width, height, data }
+        Frame {
+            width,
+            height,
+            data,
+        }
     }
 
     #[test]
     fn test_floyd_steinberg_produces_pattern() {
         let dither = FloydSteinbergDither::new();
         let frame = make_gray_frame(16, 16, 128);
-        let result = dither.process_frame(&frame, None, &serde_json::Map::new()).unwrap();
+        let result = dither
+            .process_frame(&frame, None, &serde_json::Map::new())
+            .unwrap();
 
         let mut has_black = false;
         let mut has_white = false;
         for i in 0..result.data.len() / 4 {
             let r = result.data[i * 4];
-            if r == 0 { has_black = true; }
-            if r == 255 { has_white = true; }
+            if r == 0 {
+                has_black = true;
+            }
+            if r == 255 {
+                has_white = true;
+            }
         }
         assert!(has_black, "Should have black pixels");
         assert!(has_white, "Should have white pixels");
@@ -152,8 +162,14 @@ mod tests {
     fn test_alpha_preserved() {
         let dither = FloydSteinbergDither::new();
         let data = vec![128u8, 128, 128, 128];
-        let frame = Frame { width: 1, height: 1, data };
-        let result = dither.process_frame(&frame, None, &serde_json::Map::new()).unwrap();
+        let frame = Frame {
+            width: 1,
+            height: 1,
+            data,
+        };
+        let result = dither
+            .process_frame(&frame, None, &serde_json::Map::new())
+            .unwrap();
         assert_eq!(result.data[3], 128);
     }
 }

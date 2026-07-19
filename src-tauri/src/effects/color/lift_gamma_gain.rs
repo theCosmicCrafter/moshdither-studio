@@ -7,7 +7,9 @@ use serde_json::json;
 pub struct LiftGammaGain;
 
 fn apply_lift_gamma_gain(
-    r: u8, g: u8, b: u8,
+    r: u8,
+    g: u8,
+    b: u8,
     lift: [f32; 3],
     gamma: [f32; 3],
     gain: [f32; 3],
@@ -167,9 +169,8 @@ impl Effect for LiftGammaGain {
         let w = input.width as usize;
         let h = input.height as usize;
 
-        let get_f32 = |key: &str| -> f32 {
-            params.get(key).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32
-        };
+        let get_f32 =
+            |key: &str| -> f32 { params.get(key).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32 };
 
         let lift = [get_f32("lift_r"), get_f32("lift_g"), get_f32("lift_b")];
         let gamma = [get_f32("gamma_r"), get_f32("gamma_g"), get_f32("gamma_b")];

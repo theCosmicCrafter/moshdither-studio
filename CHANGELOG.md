@@ -55,6 +55,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Tightened Tauri filesystem capability scope in `src-tauri/capabilities/default.json`:
+  removed `$HOME/**`, `$APPDATA/**`, `$APPCONFIG/**`, `$TEMP/**` and narrowed to
+  common media/project directories (`$DESKTOP/**`, `$DOCUMENT/**`, `$PICTURE/**`,
+  `$VIDEO/**`, `$DOWNLOAD/**`) plus app-specific subdirs under `$TEMP` and
+  `$APPDATA`/`$APPCONFIG`.
+- Removed unused `tauri-plugin-shell` from the Rust backend (`Cargo.toml` and
+  `src-tauri/src/lib.rs`) to reduce attack surface.
+- Added `src-tauri/deny.toml` for `cargo-deny` supply-chain auditing (advisories,
+  licenses, sources, banned wildcards).
+- Added `cargo-deny` and `npm audit --audit-level=high` jobs to
+  `.github/workflows/security.yml`.
 - Hardened the Tauri command surface against panics: all 29 `.lock().unwrap()`
   calls in `src-tauri/src/commands.rs` and both in `src-tauri/src/ffmpeg/mod.rs`
   now map a poisoned mutex to a `Result::Err(String)` (e.g. `"registry lock poisoned: .."`)
@@ -92,6 +103,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `src/engine/lut/loader.ts` to prevent LUT images from being flipped by
   leftover pixel-store state (port of the old `feature/production-audit-fixes`
   fix to the current WebGL2 engine).
+
+### Changed
+
+- Upgraded build toolchain: `vite` 5.3.3 → 8.1.5, `vitest` 1.6.0 → 4.1.10,
+  `@vitejs/plugin-react` 4.3.1 → 6.0.3, and added `esbuild` as an explicit dev
+  dependency. This resolves `npm audit` HIGH/CRITICAL findings and brings the
+  project onto the current Vite 8 / Rolldown build pipeline.
+- Added `[lib]` crate-type declaration to `src-tauri/Cargo.toml` for Tauri v2
+  mobile/desktop parity (`rlib`, `staticlib`, `cdylib`).
+- Bumped pre-commit hook versions via `pre-commit autoupdate`:
+  `gitleaks` 8.21.2 → 8.30.0, `semgrep` 1.82.0 → 1.165.0, `bandit` 1.8.3 →
+  1.9.4, `pip-audit` 2.8.0 → 2.10.1.
+
+### Fixed
+
+- `vite.config.ts` `manualChunks` converted from an object to a function to
+  satisfy Vite 8 / Rolldown output option validation.
+- `vite.config.ts` build `target` changed from per-platform `chrome105`/`safari13`
+  to `es2022` to avoid esbuild destructuring-lowering errors with Vite 8.
+- `src/lib/mediaLoading.e2e.test.ts` `Image` mock made constructable for
+  Vitest 4 (`vi.fn(function () { return mockImg; })`).
+- Ran `cargo fmt` across the `src-tauri` crate so `cargo fmt -- --check`
+  passes in CI.
+- Updated `SECURITY.md` to reference the consolidated agent-skill directory
+  (`.codeium/windsurf/skills/security/`) instead of the old `.claude/skills/security/`
+  path.
 
 ## [0.1.0] - 2026-06-15
 

@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { getMediaInfo, getFrameData, loadMediaFromBase64 } from "./tauri";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isTauriAvailable } from "./browserFallback";
+import { getFrameData, getMediaInfo, loadMediaFromBase64 } from "./tauri";
 
 // Mock browserMedia module-level variable via the loadMediaFromBase64 / getMediaInfo / getFrameData flow
 
@@ -52,7 +52,9 @@ describe("Media Loading Pipeline E2E", () => {
       const OrigImage = globalThis.Image;
       vi.stubGlobal(
         "Image",
-        vi.fn(() => mockImg)
+        vi.fn(function () {
+          return mockImg;
+        })
       );
 
       // Trigger onload asynchronously

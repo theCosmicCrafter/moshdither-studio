@@ -27,18 +27,16 @@ impl Effect for PixelSort {
             name: "Pixel Sort".to_string(),
             category: EffectCategory::PixelGeometry,
             media_type: MediaType::Image,
-            parameters: vec![
-                ParameterDef {
-                    id: "threshold".to_string(),
-                    name: "Threshold".to_string(),
-                    param_type: ParamType::Slider,
-                    default: json!(128),
-                    min: Some(0.0),
-                    max: Some(255.0),
-                    step: Some(1.0),
-                    options: None,
-                },
-            ],
+            parameters: vec![ParameterDef {
+                id: "threshold".to_string(),
+                name: "Threshold".to_string(),
+                param_type: ParamType::Slider,
+                default: json!(128),
+                min: Some(0.0),
+                max: Some(255.0),
+                step: Some(1.0),
+                options: None,
+            }],
         }
     }
 
@@ -48,7 +46,10 @@ impl Effect for PixelSort {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let threshold = params.get("threshold").and_then(|v| v.as_u64()).unwrap_or(self.threshold as u64) as u8;
+        let threshold = params
+            .get("threshold")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(self.threshold as u64) as u8;
         let w = input.width as usize;
         let h = input.height as usize;
         let mut data = input.data.clone();
@@ -59,7 +60,9 @@ impl Effect for PixelSort {
 
             for x in 0..w {
                 let idx = (y * w + x) * 4;
-                let lum = (0.299 * data[idx] as f32 + 0.587 * data[idx + 1] as f32 + 0.114 * data[idx + 2] as f32) as u8;
+                let lum = (0.299 * data[idx] as f32
+                    + 0.587 * data[idx + 1] as f32
+                    + 0.114 * data[idx + 2] as f32) as u8;
 
                 if lum > threshold && !in_run {
                     run_start = x;
@@ -105,7 +108,10 @@ impl Effect for PixelSort {
         for frame in &input.frames {
             frames.push(self.process_frame(frame, mask, params)?);
         }
-        Ok(VideoSegment { frames, fps: input.fps })
+        Ok(VideoSegment {
+            frames,
+            fps: input.fps,
+        })
     }
 }
 
@@ -117,14 +123,28 @@ mod tests {
     fn test_pixel_sort_sorts_above_threshold() {
         let mut data = vec![0u8; 16 * 4];
         // 4 pixels all above threshold, unsorted brightness: 200, 50, 210, 150
-        data[0] = 200; data[1] = 200; data[2] = 200;
-        data[4] = 50;  data[5] = 50;  data[6] = 50;
-        data[8] = 210; data[9] = 210; data[10] = 210;
-        data[12] = 150; data[13] = 150; data[14] = 150;
+        data[0] = 200;
+        data[1] = 200;
+        data[2] = 200;
+        data[4] = 50;
+        data[5] = 50;
+        data[6] = 50;
+        data[8] = 210;
+        data[9] = 210;
+        data[10] = 210;
+        data[12] = 150;
+        data[13] = 150;
+        data[14] = 150;
 
-        let frame = Frame { width: 4, height: 1, data };
+        let frame = Frame {
+            width: 4,
+            height: 1,
+            data,
+        };
         let effect = PixelSort::new(20);
-        let result = effect.process_frame(&frame, None, &serde_json::Map::new()).unwrap();
+        let result = effect
+            .process_frame(&frame, None, &serde_json::Map::new())
+            .unwrap();
 
         // All pixels should be sorted by brightness: 50, 150, 200, 210
         assert_eq!(result.data[0], 50);

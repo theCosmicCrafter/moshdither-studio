@@ -51,13 +51,13 @@ Install: `pip install pre-commit && pre-commit install`
 - **sarif-digest.py** - Multi-tool SARIF aggregator
 - **mcp-security.py** - MCP server exposing scanners as tools (localhost:9991)
 
-### Agent Skills (.claude/skills/security/)
+### Agent Skills (.codeium/windsurf/skills/security/)
 
 - **security-scan** - Multi-tool scan pipeline execution
 - **vuln-triage** - Finding classification (CONFIRMED/FALSE-POSITIVE/NEEDS-CONTEXT)
 - **sast-fix** - Minimal secure fix generation
 - **secret-gate** - Pre-commit secret detection
-- **best_skill.md** - Security-aware code generation guidelines
+- **best-skill** - Security-aware code generation guidelines
 
 ### IDE Extensions (.vscode/extensions.json)
 

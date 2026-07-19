@@ -11,7 +11,10 @@ pub struct SliceShift {
 
 impl SliceShift {
     pub fn new(slice_height: u32, max_shift: u32) -> Self {
-        Self { slice_height: slice_height.max(1), max_shift }
+        Self {
+            slice_height: slice_height.max(1),
+            max_shift,
+        }
     }
 }
 
@@ -59,8 +62,14 @@ impl Effect for SliceShift {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let slice_height = params.get("slice_height").and_then(|v| v.as_u64()).unwrap_or(self.slice_height as u64) as u32;
-        let max_shift = params.get("max_shift").and_then(|v| v.as_u64()).unwrap_or(self.max_shift as u64) as u32;
+        let slice_height = params
+            .get("slice_height")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(self.slice_height as u64) as u32;
+        let max_shift = params
+            .get("max_shift")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(self.max_shift as u64) as u32;
         let time = params.get("time").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
 
         let w = input.width as usize;
@@ -69,7 +78,9 @@ impl Effect for SliceShift {
 
         for y in 0..h {
             let slice = y / slice_height as usize;
-            let seed = (slice as u32).wrapping_add(time.wrapping_mul(101)).wrapping_mul(374761393u32);
+            let seed = (slice as u32)
+                .wrapping_add(time.wrapping_mul(101))
+                .wrapping_mul(374761393u32);
             let shift = ((seed >> 24) % (max_shift * 2 + 1)) as isize - max_shift as isize;
 
             for x in 0..w {
@@ -97,7 +108,10 @@ impl Effect for SliceShift {
         for frame in &input.frames {
             frames.push(self.process_frame(frame, mask, params)?);
         }
-        Ok(VideoSegment { frames, fps: input.fps })
+        Ok(VideoSegment {
+            frames,
+            fps: input.fps,
+        })
     }
 }
 
@@ -108,9 +122,15 @@ mod tests {
     #[test]
     fn test_slice_shift_creates_output() {
         let data = vec![128u8; 32 * 32 * 4];
-        let frame = Frame { width: 32, height: 32, data };
+        let frame = Frame {
+            width: 32,
+            height: 32,
+            data,
+        };
         let effect = SliceShift::new(4, 10);
-        let result = effect.process_frame(&frame, None, &serde_json::Map::new()).unwrap();
+        let result = effect
+            .process_frame(&frame, None, &serde_json::Map::new())
+            .unwrap();
         assert_eq!(result.width, 32);
         assert_eq!(result.height, 32);
     }

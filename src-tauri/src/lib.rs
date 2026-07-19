@@ -18,8 +18,8 @@ use commands::{
     get_frame_data, get_media_info, get_media_metadata, list_effects, list_effects_by_category,
     load_media, load_media_from_base64, read_file, sam3_auto_mask, sam3_box_prompt, sam3_clear,
     sam3_init, sam3_load_image, sam3_point_prompt, sam3_postprocess_mask, sam3_refine_mask,
-    sam3_shutdown, sam3_text_prompt, sam3_video_predictor, save_file, save_media, test_all_functions, verify_effects,
-    AppState,
+    sam3_shutdown, sam3_text_prompt, sam3_video_predictor, save_file, save_media,
+    test_all_functions, verify_effects, AppState,
 };
 use environment::{get_environment_status, install_local_environment};
 
@@ -31,7 +31,6 @@ pub fn run() {
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_shell::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             load_media,

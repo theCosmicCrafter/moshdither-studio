@@ -5,7 +5,7 @@
 repos:
   # ── SECRETS ──────────────────────────────────────────────────
   - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.21.2
+    rev: v8.30.0
     hooks:
       - id: gitleaks
         name: "gitleaks — secret scan"
@@ -19,7 +19,7 @@ repos:
 
   # ── MULTI-LANG SAST ───────────────────────────────────────────
   - repo: https://github.com/returntocorp/semgrep
-    rev: v1.82.0
+    rev: v1.165.0
     hooks:
       - id: semgrep
         name: "semgrep — multi-lang SAST"
@@ -32,7 +32,7 @@ repos:
 
   # ── PYTHON ───────────────────────────────────────────────────
   - repo: https://github.com/PyCQA/bandit
-    rev: 1.8.3
+    rev: 1.9.4
     hooks:
       - id: bandit
         name: "bandit — Python SAST"
@@ -48,7 +48,7 @@ repos:
 
   # ── DEPS ─────────────────────────────────────────────────────
   - repo: https://github.com/pypa/pip-audit
-    rev: v2.8.0
+    rev: v2.10.1
     hooks:
       - id: pip-audit
         name: "pip-audit — Python CVE check"

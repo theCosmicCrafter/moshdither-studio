@@ -159,7 +159,11 @@ mod tests {
         for _ in 0..w * h {
             data.extend_from_slice(&[v, v, v, 255]);
         }
-        Frame { width: w, height: h, data }
+        Frame {
+            width: w,
+            height: h,
+            data,
+        }
     }
 
     #[test]
@@ -176,7 +180,9 @@ mod tests {
         let e = OpticalFlow::default();
         let frames = vec![make_frame(16, 16, 100), make_frame(16, 16, 150)];
         let seg = VideoSegment { frames, fps: 30.0 };
-        let r = e.process_video(&seg, None, &serde_json::Map::new()).unwrap();
+        let r = e
+            .process_video(&seg, None, &serde_json::Map::new())
+            .unwrap();
         assert_eq!(r.frames.len(), 2);
         // Second frame should be warped
         assert_eq!(r.frames[1].width, 16);

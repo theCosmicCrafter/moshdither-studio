@@ -99,7 +99,11 @@ impl Effect for PixelGridOverlay {
             }
         }
 
-        Ok(Frame { width: iw, height: ih, data })
+        Ok(Frame {
+            width: iw,
+            height: ih,
+            data,
+        })
     }
 
     fn process_video(
@@ -112,6 +116,9 @@ impl Effect for PixelGridOverlay {
         for frame in &input.frames {
             frames.push(self.process_frame(frame, mask, params)?);
         }
-        Ok(VideoSegment { frames, fps: input.fps })
+        Ok(VideoSegment {
+            frames,
+            fps: input.fps,
+        })
     }
 }

@@ -72,7 +72,10 @@ impl Effect for Vaporwave {
         for frame in &input.frames {
             frames.push(self.process_frame(frame, mask, params)?);
         }
-        Ok(VideoSegment { frames, fps: input.fps })
+        Ok(VideoSegment {
+            frames,
+            fps: input.fps,
+        })
     }
 }
 
@@ -83,9 +86,15 @@ mod tests {
     #[test]
     fn test_vaporwave_changes_colors() {
         let data = vec![100u8, 150, 200, 255];
-        let frame = Frame { width: 1, height: 1, data };
+        let frame = Frame {
+            width: 1,
+            height: 1,
+            data,
+        };
         let effect = Vaporwave::new();
-        let result = effect.process_frame(&frame, None, &serde_json::Map::new()).unwrap();
+        let result = effect
+            .process_frame(&frame, None, &serde_json::Map::new())
+            .unwrap();
 
         // Should be different from input due to color shift + banding
         assert_ne!(result.data[0], 100);

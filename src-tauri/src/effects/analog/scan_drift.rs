@@ -11,12 +11,17 @@ pub struct ScanDrift {
 
 impl ScanDrift {
     pub fn new(amplitude: f32, frequency: f32) -> Self {
-        Self { amplitude, frequency }
+        Self {
+            amplitude,
+            frequency,
+        }
     }
 }
 
 impl Default for ScanDrift {
-    fn default() -> Self { Self::new(5.0, 0.1) }
+    fn default() -> Self {
+        Self::new(5.0, 0.1)
+    }
 }
 
 impl Effect for ScanDrift {
@@ -51,9 +56,20 @@ impl Effect for ScanDrift {
         }
     }
 
-    fn process_frame(&self, input: &Frame, _m: Option<&Mask>, params: &ParameterValues) -> Result<Frame> {
-        let amplitude = params.get("amplitude").and_then(|v| v.as_f64()).unwrap_or(self.amplitude as f64) as f32;
-        let frequency = params.get("frequency").and_then(|v| v.as_f64()).unwrap_or(self.frequency as f64) as f32;
+    fn process_frame(
+        &self,
+        input: &Frame,
+        _m: Option<&Mask>,
+        params: &ParameterValues,
+    ) -> Result<Frame> {
+        let amplitude = params
+            .get("amplitude")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(self.amplitude as f64) as f32;
+        let frequency = params
+            .get("frequency")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(self.frequency as f64) as f32;
         let time = params.get("time").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
         let w = input.width as usize;
         let h = input.height as usize;
@@ -68,13 +84,27 @@ impl Effect for ScanDrift {
                 data[dst..dst + 4].copy_from_slice(&input.data[src..src + 4]);
             }
         }
-        Ok(Frame { width: input.width, height: input.height, data })
+        Ok(Frame {
+            width: input.width,
+            height: input.height,
+            data,
+        })
     }
 
-    fn process_video(&self, input: &VideoSegment, mask: Option<&Mask>, params: &ParameterValues) -> Result<VideoSegment> {
+    fn process_video(
+        &self,
+        input: &VideoSegment,
+        mask: Option<&Mask>,
+        params: &ParameterValues,
+    ) -> Result<VideoSegment> {
         let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames { frames.push(self.process_frame(frame, mask, params)?); }
-        Ok(VideoSegment { frames, fps: input.fps })
+        for frame in &input.frames {
+            frames.push(self.process_frame(frame, mask, params)?);
+        }
+        Ok(VideoSegment {
+            frames,
+            fps: input.fps,
+        })
     }
 }
 
@@ -85,7 +115,11 @@ mod tests {
     #[test]
     fn test_scan_drift() {
         let d = vec![128u8; 32 * 32 * 4];
-        let f = Frame { width: 32, height: 32, data: d };
+        let f = Frame {
+            width: 32,
+            height: 32,
+            data: d,
+        };
         let e = ScanDrift::new(5.0, 0.1);
         let r = e.process_frame(&f, None, &serde_json::Map::new()).unwrap();
         assert_eq!(r.width, 32);

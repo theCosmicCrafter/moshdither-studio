@@ -12,12 +12,18 @@ pub struct RgbShift {
 
 impl RgbShift {
     pub fn new(r_shift: i32, g_shift: i32, b_shift: i32) -> Self {
-        Self { r_shift, g_shift, b_shift }
+        Self {
+            r_shift,
+            g_shift,
+            b_shift,
+        }
     }
 }
 
 impl Default for RgbShift {
-    fn default() -> Self { Self::new(-3, 0, 3) }
+    fn default() -> Self {
+        Self::new(-3, 0, 3)
+    }
 }
 
 impl Effect for RgbShift {
@@ -62,10 +68,24 @@ impl Effect for RgbShift {
         }
     }
 
-    fn process_frame(&self, input: &Frame, _m: Option<&Mask>, params: &ParameterValues) -> Result<Frame> {
-        let r_shift = params.get("r_shift").and_then(|v| v.as_i64()).unwrap_or(self.r_shift as i64) as isize;
-        let g_shift = params.get("g_shift").and_then(|v| v.as_i64()).unwrap_or(self.g_shift as i64) as isize;
-        let b_shift = params.get("b_shift").and_then(|v| v.as_i64()).unwrap_or(self.b_shift as i64) as isize;
+    fn process_frame(
+        &self,
+        input: &Frame,
+        _m: Option<&Mask>,
+        params: &ParameterValues,
+    ) -> Result<Frame> {
+        let r_shift = params
+            .get("r_shift")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(self.r_shift as i64) as isize;
+        let g_shift = params
+            .get("g_shift")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(self.g_shift as i64) as isize;
+        let b_shift = params
+            .get("b_shift")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(self.b_shift as i64) as isize;
         let w = input.width as usize;
         let h = input.height as usize;
         let mut data = vec![0u8; input.data.len()];
@@ -83,13 +103,27 @@ impl Effect for RgbShift {
                 data[dst_idx + 3] = input.data[dst_idx + 3];
             }
         }
-        Ok(Frame { width: input.width, height: input.height, data })
+        Ok(Frame {
+            width: input.width,
+            height: input.height,
+            data,
+        })
     }
 
-    fn process_video(&self, input: &VideoSegment, mask: Option<&Mask>, params: &ParameterValues) -> Result<VideoSegment> {
+    fn process_video(
+        &self,
+        input: &VideoSegment,
+        mask: Option<&Mask>,
+        params: &ParameterValues,
+    ) -> Result<VideoSegment> {
         let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames { frames.push(self.process_frame(frame, mask, params)?); }
-        Ok(VideoSegment { frames, fps: input.fps })
+        for frame in &input.frames {
+            frames.push(self.process_frame(frame, mask, params)?);
+        }
+        Ok(VideoSegment {
+            frames,
+            fps: input.fps,
+        })
     }
 }
 
@@ -100,7 +134,11 @@ mod tests {
     #[test]
     fn test_rgb_shift() {
         let d = vec![100u8, 150, 200, 255, 50, 100, 150, 255];
-        let f = Frame { width: 2, height: 1, data: d };
+        let f = Frame {
+            width: 2,
+            height: 1,
+            data: d,
+        };
         let e = RgbShift::new(-1, 0, 1);
         let r = e.process_frame(&f, None, &serde_json::Map::new()).unwrap();
         // At x=1, R comes from x=0 (100), B comes from x=1 clamped (150)

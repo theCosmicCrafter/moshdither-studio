@@ -1,10 +1,45 @@
 # Handoff Notes — MoshDither Studio
 
+**Session Date:** 2026-07-19
+**Phase:** Production hardening pass — Tauri capability scoping, dependency upgrade, Rust formatting, supply-chain audit config
+**Status:**
+
+- `cargo clippy --all-targets --all-features -- -D warnings` PASS
+- `cargo test` PASS (408/408)
+- `cargo fmt -- --check` PASS
+- `npm run lint` PASS (0 warnings)
+- `npx tsc --noEmit` PASS
+- `npm run test:unit` PASS (1016/1016)
+- `npm run build` PASS (Vite 8.1.5 / Rolldown)
+- `npx playwright test tests/e2e/app-launch.spec.ts` PASS (4/4; one flaky failure in full suite rerun passed individually)
+- `npm audit` PASS (0 vulnerabilities)
+
+## Hardening Session (2026-07-19)
+
+### Changes
+
+- Tightened `src-tauri/capabilities/default.json` filesystem scope.
+- Removed unused `tauri-plugin-shell` from backend.
+- Added `src-tauri/deny.toml` and CI `cargo-deny` + `npm audit` jobs.
+- Upgraded `vite`/`vitest`/`@vitejs/plugin-react`/`esbuild` to current versions.
+- Added `[lib]` crate-type declaration in `src-tauri/Cargo.toml`.
+- Ran `cargo fmt` across the Rust workspace.
+- Fixed `vite.config.ts` for Vite 8 (`manualChunks` function, `target: "es2022"`).
+- Fixed `src/lib/mediaLoading.e2e.test.ts` `Image` mock for Vitest 4.
+- Updated `SECURITY.md` skill path reference to `.codeium/windsurf/skills/security/`.
+
+### Remaining follow-ups
+
+- Verify Tauri desktop app bundle (`npx tauri build`) on target platforms.
+- Revalidate full Playwright suite under CI with retries enabled.
+- Consider pruning stale remote branches (`origin/feature/production-audit-fixes`,
+  `origin/add-features-doc`) if confirmed obsolete.
+
+---
+
 **Session Date:** 2026-07-18
 **Phase:** True E2E audit — build and execute the Tauri desktop app, branch review, dependency audit
 **Status:** clippy clean (`-D warnings`), lint clean (0 warnings), tsc clean, cargo 408/408, vitest 1016/1016, Playwright E2E 66/66, effect verification 98/98, desktop app launched and exercised via CDP with 0 console errors
-
----
 
 ## E2E Audit Session (2026-07-18)
 

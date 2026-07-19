@@ -419,11 +419,7 @@ impl Sam3Engine {
         };
         let resp = self.send(req)?;
         if resp.status == "ok" {
-            let combined = resp
-                .masks
-                .into_iter()
-                .zip(resp.scores)
-                .collect();
+            let combined = resp.masks.into_iter().zip(resp.scores).collect();
             Ok(combined)
         } else {
             Err(crate::error::AppError::Generic(resp.message))

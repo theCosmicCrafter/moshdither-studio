@@ -223,9 +223,20 @@ impl Effect for AutoPaletteDither {
         false
     }
 
-    fn process_frame(&self, input: &Frame, _m: Option<&Mask>, params: &ParameterValues) -> Result<Frame> {
-        let num_colors = params.get("num_colors").and_then(|v| v.as_u64()).unwrap_or(8) as usize;
-        let strength = params.get("strength").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+    fn process_frame(
+        &self,
+        input: &Frame,
+        _m: Option<&Mask>,
+        params: &ParameterValues,
+    ) -> Result<Frame> {
+        let num_colors = params
+            .get("num_colors")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(8) as usize;
+        let strength = params
+            .get("strength")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1.0) as f32;
 
         let palette = extract_palette(input, num_colors);
         let w = input.width as usize;
@@ -283,12 +294,20 @@ impl Effect for AutoPaletteDither {
         })
     }
 
-    fn process_video(&self, input: &VideoSegment, mask: Option<&Mask>, params: &ParameterValues) -> Result<VideoSegment> {
+    fn process_video(
+        &self,
+        input: &VideoSegment,
+        mask: Option<&Mask>,
+        params: &ParameterValues,
+    ) -> Result<VideoSegment> {
         let mut frames = Vec::with_capacity(input.frames.len());
         for frame in &input.frames {
             frames.push(self.process_frame(frame, mask, params)?);
         }
-        Ok(VideoSegment { frames, fps: input.fps })
+        Ok(VideoSegment {
+            frames,
+            fps: input.fps,
+        })
     }
 }
 
@@ -303,7 +322,11 @@ mod tests {
                 data.extend_from_slice(&[(x * 255 / w) as u8, (y * 255 / h) as u8, 128, 255]);
             }
         }
-        Frame { width: w, height: h, data }
+        Frame {
+            width: w,
+            height: h,
+            data,
+        }
     }
 
     #[test]
@@ -329,11 +352,22 @@ mod tests {
     fn test_nearest_color() {
         let palette = vec![
             RgbColor { r: 0, g: 0, b: 0 },
-            RgbColor { r: 255, g: 255, b: 255 },
+            RgbColor {
+                r: 255,
+                g: 255,
+                b: 255,
+            },
         ];
         let c = nearest_palette_color(10, 10, 10, &palette);
         assert_eq!(c, RgbColor { r: 0, g: 0, b: 0 });
         let c = nearest_palette_color(200, 200, 200, &palette);
-        assert_eq!(c, RgbColor { r: 255, g: 255, b: 255 });
+        assert_eq!(
+            c,
+            RgbColor {
+                r: 255,
+                g: 255,
+                b: 255
+            }
+        );
     }
 }

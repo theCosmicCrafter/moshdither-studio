@@ -6,13 +6,16 @@ use serde_json::json;
 /// CRT-style scanline effect.
 /// Darkens every other row to simulate CRT phosphor gaps.
 pub struct Scanlines {
-    gap: u32,     // Row gap (every N rows)
+    gap: u32,       // Row gap (every N rows)
     intensity: f32, // Darkness intensity [0.0, 1.0]
 }
 
 impl Scanlines {
     pub fn new(gap: u32, intensity: f32) -> Self {
-        Self { gap: gap.max(1), intensity: intensity.clamp(0.0, 1.0) }
+        Self {
+            gap: gap.max(1),
+            intensity: intensity.clamp(0.0, 1.0),
+        }
     }
 }
 
@@ -60,8 +63,14 @@ impl Effect for Scanlines {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let gap = params.get("gap").and_then(|v| v.as_u64()).unwrap_or(self.gap as u64) as u32;
-        let intensity = params.get("intensity").and_then(|v| v.as_f64()).unwrap_or(self.intensity as f64) as f32;
+        let gap = params
+            .get("gap")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(self.gap as u64) as u32;
+        let intensity = params
+            .get("intensity")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(self.intensity as f64) as f32;
 
         let w = input.width as usize;
         let h = input.height as usize;
@@ -97,7 +106,10 @@ impl Effect for Scanlines {
         for frame in &input.frames {
             frames.push(self.process_frame(frame, mask, params)?);
         }
-        Ok(VideoSegment { frames, fps: input.fps })
+        Ok(VideoSegment {
+            frames,
+            fps: input.fps,
+        })
     }
 }
 
@@ -109,8 +121,14 @@ mod tests {
     fn test_scanlines_darkens_rows() {
         let effect = Scanlines::new(2, 0.5);
         let data = vec![200u8; 4 * 4 * 4]; // 4x4 white-ish
-        let frame = Frame { width: 4, height: 4, data };
-        let result = effect.process_frame(&frame, None, &serde_json::Map::new()).unwrap();
+        let frame = Frame {
+            width: 4,
+            height: 4,
+            data,
+        };
+        let result = effect
+            .process_frame(&frame, None, &serde_json::Map::new())
+            .unwrap();
 
         // Row 0 (bright): unchanged
         assert_eq!(result.data[0], 200);

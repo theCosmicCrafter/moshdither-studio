@@ -27,11 +27,11 @@ Never suppress a scanner finding without an explicit comment and user sign-off.
 
 | Skill          | Path                                                         | Purpose                           |
 | -------------- | ------------------------------------------------------------ | --------------------------------- |
-| /security-scan | global `/.codeium/windsurf/skills/security/security-scan.md` | Multi-tool SAST pipeline          |
-| /vuln-triage   | global `/.codeium/windsurf/skills/security/vuln-triage.md`   | Classify findings                 |
-| /sast-fix      | global `/.codeium/windsurf/skills/security/sast-fix.md`      | Generate secure fixes             |
-| /secret-gate   | global `/.codeium/windsurf/skills/security/secret-gate.md`   | Pre-commit secrets check          |
-| /best-skill    | global `/.codeium/windsurf/skills/security/best-skill.md`    | Secure code generation guidelines |
+| /security-scan | global `/.codeium/windsurf/skills/security/security-scan/SKILL.md` | Multi-tool SAST pipeline          |
+| /vuln-triage   | global `/.codeium/windsurf/skills/security/vuln-triage/SKILL.md`   | Classify findings                 |
+| /sast-fix      | global `/.codeium/windsurf/skills/security/sast-fix/SKILL.md`      | Generate secure fixes             |
+| /secret-gate   | global `/.codeium/windsurf/skills/security/secret-gate/SKILL.md`   | Pre-commit secrets check          |
+| /best-skill    | global `/.codeium/windsurf/skills/security/best-skill/SKILL.md`    | Secure code generation guidelines |
 
 ## Session Start Checklist
 
