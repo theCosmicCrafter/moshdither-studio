@@ -18,6 +18,7 @@ Thumbs.db
 # Test artifacts
 /tests/fixtures/output
 /coverage
+*.tsbuildinfo
 
 # Ignore .git files/worktrees to prevent Tauri build scanner issues
 **/.git

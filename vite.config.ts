@@ -1,7 +1,7 @@
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 
-export default defineConfig(async () => ({
+export default defineConfig({
   plugins: [react()],
   clearScreen: false,
   server: {
@@ -18,9 +18,9 @@ export default defineConfig(async () => ({
     sourcemap: !!process.env.TAURI_DEBUG,
     rollupOptions: {
       output: {
-        manualChunks: (id) => {
+        manualChunks(id) {
           const vendor = ["react", "react-dom", "zustand", "lucide-react"];
-          if (vendor.some((m) => id.includes(`node_modules/${m}`))) {
+          if (vendor.some((module) => id.includes(`node_modules/${module}`))) {
             return "vendor";
           }
         },
@@ -33,4 +33,4 @@ export default defineConfig(async () => ({
     setupFiles: ["./src/test/setup.ts"],
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
   },
-}));
+});
