@@ -286,7 +286,7 @@ function TButton({
     <button
       onClick={onClick}
       title={title}
-      className={`material-symbols-outlined neo-btn rounded flex items-center justify-center transition-colors overflow-hidden ${active ? "neo-pressed text-accent-pink" : "text-on-surface-variant hover:text-accent-teal"}`}
+      className={`material-symbols-outlined neo-btn rounded-md flex items-center justify-center transition-colors overflow-hidden ${active ? "neo-pressed text-accent-pink" : "text-on-surface-variant hover:text-accent-teal"}`}
       style={{ width: 28, height: 28, fontSize: 16, lineHeight: 1 }}
     >
       {icon}

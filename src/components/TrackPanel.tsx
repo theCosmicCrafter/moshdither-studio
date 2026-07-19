@@ -35,7 +35,7 @@ export default function TrackPanel() {
         </span>
         <button
           onClick={() => addTrack()}
-          className="neo-btn rounded px-2 py-0.5 font-label-sm text-label-sm text-accent-cyan hover:text-accent-pink transition-colors"
+          className="neo-btn rounded-md px-2 py-0.5 font-label-sm text-label-sm text-accent-cyan hover:text-accent-pink transition-colors"
         >
           + Add
         </button>
@@ -77,7 +77,7 @@ export default function TrackPanel() {
                 moveTrack(index, Math.max(0, index - 1));
               }}
               disabled={index === 0}
-              className="neo-btn rounded px-1 py-0.5 text-xs disabled:opacity-30"
+              className="neo-btn rounded-md px-1 py-0.5 text-xs disabled:opacity-30"
             >
               ↑
             </button>
@@ -87,7 +87,7 @@ export default function TrackPanel() {
                 moveTrack(index, Math.min(tracks.length - 1, index + 1));
               }}
               disabled={index === tracks.length - 1}
-              className="neo-btn rounded px-1 py-0.5 text-xs disabled:opacity-30"
+              className="neo-btn rounded-md px-1 py-0.5 text-xs disabled:opacity-30"
             >
               ↓
             </button>
@@ -96,7 +96,7 @@ export default function TrackPanel() {
                 e.stopPropagation();
                 removeTrack(track.id);
               }}
-              className="neo-btn rounded px-1 py-0.5 text-xs text-accent-pink"
+              className="neo-btn rounded-md px-1 py-0.5 text-xs text-accent-pink"
             >
               ✕
             </button>

@@ -79,7 +79,7 @@ export default function ProxyPanel() {
       <button
         onClick={handleGenerate}
         disabled={proxyGenerating || !filePath}
-        className="neo-btn rounded px-3 py-1.5 font-label-sm text-label-sm text-accent-cyan hover:text-accent-pink transition-colors disabled:opacity-50"
+        className="neo-btn rounded-md px-3 py-1.5 font-label-sm text-label-sm text-accent-cyan hover:text-accent-pink transition-colors disabled:opacity-50"
       >
         {proxyGenerating ? "Generating..." : "Generate Proxy"}
       </button>

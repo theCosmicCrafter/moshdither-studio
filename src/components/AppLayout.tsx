@@ -196,7 +196,7 @@ export default function AppLayout() {
                   clearAutoSave();
                   setShowRecovery(false);
                 }}
-                className="neo-btn rounded px-3 py-1.5 font-label-sm text-label-sm text-on-surface-variant hover:text-accent-pink transition-colors"
+                className="neo-btn rounded-md px-3 py-1.5 font-label-sm text-label-sm text-on-surface-variant hover:text-accent-pink transition-colors"
               >
                 Discard
               </button>
@@ -205,7 +205,7 @@ export default function AppLayout() {
                   restoreSession(autoSave);
                   setShowRecovery(false);
                 }}
-                className="neo-btn rounded px-3 py-1.5 font-label-sm text-label-sm text-on-surface bg-accent-pink/20 hover:bg-accent-pink/30 transition-colors"
+                className="neo-btn rounded-md px-3 py-1.5 font-label-sm text-label-sm text-on-surface bg-accent-pink/20 hover:bg-accent-pink/30 transition-colors"
               >
                 Restore Session
               </button>

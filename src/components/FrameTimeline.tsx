@@ -109,7 +109,7 @@ export default function FrameTimeline() {
         <button
           onClick={extractFrames}
           disabled={isProcessing}
-          className="neo-btn rounded px-2 py-1 text-xs bg-[var(--surface-2)]"
+          className="neo-btn rounded-md px-2 py-1 text-xs bg-[var(--surface-2)]"
         >
           {isProcessing ? "Processing..." : "Run Video Predictor"}
         </button>
