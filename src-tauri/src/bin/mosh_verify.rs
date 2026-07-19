@@ -597,6 +597,8 @@ fn cmd_render_all(args: &[String]) -> ExitCode {
                                 None,
                                 None,
                                 None,
+                                None,
+                                None,
                             ) {
                                 Ok(()) => {
                                     eprintln!(
@@ -1070,6 +1072,8 @@ fn cmd_animate_all(args: &[String]) -> ExitCode {
             &segment,
             &vid_out_path,
             "h264",
+            None,
+            None,
             None,
             None,
             None,

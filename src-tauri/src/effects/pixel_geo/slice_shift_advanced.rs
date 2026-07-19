@@ -143,7 +143,7 @@ impl Effect for SliceShiftAdvanced {
             let slice_size =
                 (min_slice_size + (variability * (max_slice_size - min_slice_size) / 3)).max(1);
             let slice_height = slice_size.min(h - y);
-            let should_modify = repeat == 0 || slice_idx % repeat == 0;
+            let should_modify = repeat == 0 || slice_idx.is_multiple_of(repeat);
 
             if should_modify {
                 for row in y..(y + slice_height) {

@@ -1,4 +1,5 @@
 use base64::Engine;
+use child_wait_timeout::ChildWT;
 use parking_lot::Mutex;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -7,6 +8,7 @@ use std::path::PathBuf;
 use std::process::{ChildStdin, Command, Stdio};
 use std::sync::mpsc::{channel, Receiver};
 use std::time::Duration;
+use sysinfo::{Pid, System};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Sam3Request {
@@ -68,6 +70,61 @@ struct Sam3Response {
 
 /// Per-frame masks and their scores returned by the SAM3 video predictor.
 pub type VideoPredictorResult = (Vec<Vec<String>>, Vec<Vec<f64>>);
+
+/// Path to a small PID file used to detect and reap a stale SAM3 bridge left
+/// behind by a previous application crash.
+fn sam3_pid_file() -> PathBuf {
+    std::env::temp_dir()
+        .join("moshdither-studio")
+        .join("sam3_bridge.pid")
+}
+
+fn write_sam3_pid(child: &std::process::Child) {
+    let path = sam3_pid_file();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, child.id().to_string());
+}
+
+fn remove_sam3_pid() {
+    let _ = std::fs::remove_file(sam3_pid_file());
+}
+
+/// Reap any orphaned SAM3 bridge from a previous run. We only target processes
+/// whose executable name contains "python" so we do not accidentally kill an
+/// unrelated process referenced by a stale PID file.
+fn cleanup_stale_sam3_bridge() {
+    let pid_path = sam3_pid_file();
+    let raw = match std::fs::read_to_string(&pid_path) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let pid = match raw.trim().parse::<usize>() {
+        Ok(p) => p,
+        Err(_) => {
+            let _ = std::fs::remove_file(&pid_path);
+            return;
+        }
+    };
+
+    let s = System::new_all();
+    if let Some(process) = s.process(Pid::from(pid)) {
+        let name = process.name().to_string_lossy().to_lowercase();
+        if name.contains("python") {
+            eprintln!("[SAM3] Killing orphaned bridge process {} ({})", pid, name);
+            if !process.kill() {
+                eprintln!("[SAM3] Failed to kill orphaned bridge process {}", pid);
+            }
+        } else {
+            eprintln!(
+                "[SAM3] Stale PID file points to non-python process {} ({}), skipping",
+                pid, name
+            );
+        }
+    }
+    let _ = std::fs::remove_file(&pid_path);
+}
 
 pub struct Sam3Engine {
     child: Mutex<Option<std::process::Child>>,
@@ -133,6 +190,10 @@ impl Sam3Engine {
             )));
         }
 
+        // Reap any zombie bridge left by a crashed previous session before we
+        // start a new one and overwrite the PID file.
+        cleanup_stale_sam3_bridge();
+
         let mut child = Command::new(&python)
             .arg(&bridge)
             .stdin(Stdio::piped())
@@ -142,6 +203,8 @@ impl Sam3Engine {
             .map_err(|e| {
                 crate::error::AppError::Generic(format!("Failed to spawn SAM3 bridge: {}", e))
             })?;
+
+        write_sam3_pid(&child);
 
         let mut stdin = child
             .stdin
@@ -253,19 +316,32 @@ impl Sam3Engine {
         stdin.flush()?;
         drop(stdin);
 
-        // Use recv_timeout so a hung Python process doesn't freeze the UI forever.
-        const IPC_TIMEOUT: Duration = Duration::from_secs(30);
+        // Commands like video prediction can legitimately take minutes, while
+        // lightweight mask operations should return in seconds.
+        let timeout = Self::command_timeout(&req.cmd);
         let rx = self.rx.lock();
-        let line = rx.recv_timeout(IPC_TIMEOUT).map_err(|e| {
+        let line = rx.recv_timeout(timeout).map_err(|e| {
             crate::error::AppError::Sam3Timeout(format!(
-                "SAM3 IPC timed out after {:?}: {}",
-                IPC_TIMEOUT, e
+                "SAM3 IPC timed out after {:?} for command '{}': {}",
+                timeout, req.cmd, e
             ))
         })?;
         drop(rx);
 
         let resp: Sam3Response = serde_json::from_str(&line)?;
         Ok(resp)
+    }
+
+    /// Per-command timeout budget. Video prediction is given the most time
+    /// because it processes every frame through the SAM model.
+    fn command_timeout(cmd: &str) -> Duration {
+        match cmd {
+            "video_predictor" => Duration::from_secs(600),
+            "load_image" => Duration::from_secs(60),
+            "text_prompt" | "point_prompt" | "box_prompt" | "auto_mask" | "refine_mask"
+            | "postprocess_mask" => Duration::from_secs(120),
+            _ => Duration::from_secs(30),
+        }
     }
 
     pub fn load_image(&self, image_b64: String) -> crate::error::Result<(u32, u32)> {
@@ -568,7 +644,9 @@ impl Sam3Engine {
     }
 
     pub fn shutdown(&self) -> crate::error::Result<()> {
-        let _ = self.send(Sam3Request {
+        // Best-effort graceful shutdown; do not abort the whole operation if the
+        // bridge is already dead.
+        if let Err(e) = self.send(Sam3Request {
             cmd: "shutdown".into(),
             auth_token: None,
             image_b64: None,
@@ -586,20 +664,38 @@ impl Sam3Engine {
             feather: None,
             fill_holes: None,
             frames: None,
-        });
-        if let Some(mut child) = self.child.lock().take() {
-            let _ = child.kill();
-            let _ = child.wait();
+        }) {
+            eprintln!("[SAM3] Graceful shutdown request failed: {}", e);
         }
+        let mut child = self.child.lock().take();
+        Self::kill_child(&mut child)
+    }
+
+    /// Kill and reap the bridge child process with a bounded wait so we never
+    /// hang waiting for a Python process that refuses to exit.
+    fn kill_child(child: &mut Option<std::process::Child>) -> crate::error::Result<()> {
+        let Some(child) = child else {
+            return Ok(());
+        };
+        if let Err(e) = child.kill() {
+            eprintln!("[SAM3] Failed to kill bridge child: {}", e);
+        }
+        match child.wait_timeout(Duration::from_secs(5)) {
+            Ok(status) => eprintln!("[SAM3] Bridge child exited with status {:?}", status.code()),
+            Err(e) => {
+                eprintln!("[SAM3] Bridge child wait error: {}", e);
+                // Attempt one final reap.
+                let _ = child.wait();
+            }
+        }
+        remove_sam3_pid();
         Ok(())
     }
 }
 
 impl Drop for Sam3Engine {
     fn drop(&mut self) {
-        if let Some(mut child) = self.child.lock().take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+        let mut child = self.child.lock().take();
+        let _ = Sam3Engine::kill_child(&mut child);
     }
 }

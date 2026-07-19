@@ -61,7 +61,7 @@ impl Effect for SaltPepperNoise {
                 .wrapping_mul(374761393)
                 .wrapping_add(668265263);
             let idx = ((seed as usize) % (data.len() / 4)) * 4;
-            let is_salt = (seed >> 16) % 2 == 0;
+            let is_salt = (seed >> 16).is_multiple_of(2);
             data[idx] = if is_salt { 255 } else { 0 };
             data[idx + 1] = if is_salt { 255 } else { 0 };
             data[idx + 2] = if is_salt { 255 } else { 0 };

@@ -13,12 +13,12 @@ pub mod spout;
 pub mod utils;
 
 use commands::{
-    apply_effect, apply_effect_stack, apply_ffglitch, export_video, generate_proxy_command,
-    get_frame_data, get_media_info, get_media_metadata, list_effects, list_effects_by_category,
-    load_media, load_media_from_base64, prepare_custom_lut, read_file, sam3_auto_mask,
-    sam3_box_prompt, sam3_clear, sam3_init, sam3_load_image, sam3_point_prompt,
-    sam3_postprocess_mask, sam3_refine_mask, sam3_shutdown, sam3_text_prompt, sam3_video_predictor,
-    save_file, save_media, test_all_functions, verify_effects, AppState,
+    apply_effect, apply_effect_stack, apply_ffglitch, cancel_export, check_update, export_video,
+    generate_proxy_command, get_frame_data, get_media_info, get_media_metadata, install_update,
+    list_effects, list_effects_by_category, load_media, load_media_from_base64, prepare_custom_lut,
+    read_file, sam3_auto_mask, sam3_box_prompt, sam3_clear, sam3_init, sam3_load_image,
+    sam3_point_prompt, sam3_postprocess_mask, sam3_refine_mask, sam3_shutdown, sam3_text_prompt,
+    sam3_video_predictor, save_file, save_media, test_all_functions, verify_effects, AppState,
 };
 use environment::{get_environment_status, install_local_environment};
 use tauri::Manager;
@@ -31,6 +31,7 @@ pub fn run() {
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::default())
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
@@ -51,6 +52,9 @@ pub fn run() {
             apply_effect,
             apply_effect_stack,
             apply_ffglitch,
+            cancel_export,
+            check_update,
+            install_update,
             get_frame_data,
             save_media,
             export_video,

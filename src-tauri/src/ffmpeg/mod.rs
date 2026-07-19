@@ -8,7 +8,7 @@ use crate::error::{AppError, Result};
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Locate a binary by name. Tries bundled sidecar first, then dev path, then PATH.
 fn locate_binary(base: &str) -> Result<String> {
@@ -59,7 +59,7 @@ pub fn generate_proxy(source_path: &str, max_width: u32, crf: u32) -> Result<Str
 
     let scale_height = (orig_height as f64 * (max_width as f64 / orig_width as f64)).round() as u32;
     // Ensure even dimensions (required by some codecs)
-    let scale_height = if scale_height % 2 != 0 {
+    let scale_height = if !scale_height.is_multiple_of(2) {
         scale_height + 1
     } else {
         scale_height
@@ -387,6 +387,8 @@ pub fn encode_video(
     trim_end: Option<f64>,
     output_width: Option<u32>,
     output_height: Option<u32>,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+    timeout: Option<std::time::Duration>,
 ) -> Result<()> {
     if segment.frames.is_empty() {
         return Err(AppError::Ffmpeg("No frames to encode".to_string()));
@@ -574,7 +576,7 @@ pub fn encode_video(
     // yuv420p requires even dimensions. Append a pad filter as the final step
     // so the encoded output has even width/height without changing the source
     // frame dimensions when they are already even.
-    if w % 2 != 0 || h % 2 != 0 {
+    if !w.is_multiple_of(2) || !h.is_multiple_of(2) {
         let pad_filter = "pad=ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2:black".to_string();
         eprintln!("[export] DEBUG: ensuring even dimensions for {}x{}", w, h);
         if let Some(vf_pos) = args.iter().position(|a| a == "-vf") {
@@ -613,30 +615,109 @@ pub fn encode_video(
         .spawn()
         .map_err(|e| AppError::Ffmpeg(format!("Failed to spawn FFmpeg: {}", e)))?;
 
+    // Drain stderr in a separate thread so a chatty FFmpeg cannot deadlock
+    // on a full stderr pipe while we are still feeding it frames.
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| AppError::Ffmpeg("Failed to open FFmpeg stderr".to_string()))?;
+    let stderr_buf = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut stderr_thread: Option<std::thread::JoinHandle<()>> = Some({
+        let stderr_buf = Arc::clone(&stderr_buf);
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut reader = std::io::BufReader::new(stderr);
+            let mut buf = Vec::new();
+            // Best-effort read; the pipe will close when FFmpeg exits.
+            let _ = reader.read_to_end(&mut buf);
+            if let Ok(mut guard) = stderr_buf.lock() {
+                *guard = buf;
+            }
+        })
+    });
+
     {
+        use std::io::Write;
+        use std::sync::atomic::Ordering;
         let mut stdin = child
             .stdin
             .take()
             .ok_or_else(|| AppError::Ffmpeg("Failed to open FFmpeg stdin".to_string()))?;
         let total = segment.frames.len();
         for (i, frame) in segment.frames.iter().enumerate() {
+            if let Some(c) = cancel {
+                if c.load(Ordering::Relaxed) {
+                    eprintln!("[export] FFmpeg encode cancelled by user");
+                    let _ = stdin.flush();
+                    drop(stdin);
+                    let _ = child.kill();
+                    let _ = child.wait_timeout(std::time::Duration::from_secs(10));
+                    if let Some(t) = stderr_thread.take() {
+                        let _ = t.join();
+                    }
+                    return Err(AppError::Ffmpeg("Export cancelled by user".to_string()));
+                }
+            }
             if i % 50 == 0 || i == total - 1 {
                 eprintln!("[export] Writing frame {}/{} to FFmpeg stdin", i + 1, total);
             }
-            std::io::Write::write_all(&mut stdin, &frame.data).map_err(AppError::Io)?;
+            stdin.write_all(&frame.data).map_err(AppError::Io)?;
         }
         // Close stdin so FFmpeg sees EOF and can finish encoding the final frames.
         drop(stdin);
         eprintln!("[export] FFmpeg stdin closed (EOF sent), waiting for encode to finish...");
     }
 
-    let output = child.wait_with_output().map_err(AppError::Io)?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    // Wait for the child with an optional timeout. If it expires, kill it
+    // so a hung encode cannot run forever.
+    use child_wait_timeout::ChildWT;
+    use std::io::ErrorKind;
+    let status = if let Some(t) = timeout {
+        match child.wait_timeout(t) {
+            Ok(status) => status,
+            Err(e) if e.kind() == ErrorKind::TimedOut => {
+                eprintln!(
+                    "[export] FFmpeg encode timed out after {:?}, killing process",
+                    t
+                );
+                let _ = child.kill();
+                let _ = child.wait_timeout(std::time::Duration::from_secs(10));
+                if let Some(t) = stderr_thread.take() {
+                    let _ = t.join();
+                }
+                return Err(AppError::Ffmpeg(format!(
+                    "FFmpeg encode timed out after {:?}",
+                    t
+                )));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                if let Some(t) = stderr_thread.take() {
+                    let _ = t.join();
+                }
+                return Err(AppError::Io(e));
+            }
+        }
+    } else {
+        let result = child.wait().map_err(AppError::Io);
+        if result.is_err() {
+            if let Some(t) = stderr_thread.take() {
+                let _ = t.join();
+            }
+        }
+        result?
+    };
+
+    if let Some(t) = stderr_thread.take() {
+        let _ = t.join();
+    }
+    let stderr_bytes = stderr_buf.lock().map(|g| g.clone()).unwrap_or_default();
+    if !status.success() {
+        let stderr = String::from_utf8_lossy(&stderr_bytes);
         eprintln!("[export] FFmpeg FAILED. stderr:\n{}", stderr);
         return Err(AppError::Ffmpeg(format!(
             "FFmpeg encode failed (exit {}): {}",
-            output.status.code().unwrap_or(-1),
+            status.code().unwrap_or(-1),
             stderr.chars().take(2000).collect::<String>()
         )));
     }

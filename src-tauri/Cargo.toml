@@ -6,7 +6,7 @@ authors = ["MoshDither Studio Contributors"]
 license = "MIT"
 repository = ""
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.88"
 default-run = "moshdither-studio"
 
 [lib]
@@ -30,6 +30,8 @@ base64 = "0.22"
 parking_lot = "0.12"
 hmac = "0.12"
 sha2 = "0.10"
+child_wait_timeout = "0.1.0"
+sysinfo = "0.38"
 
 [features]
 default = ["custom-protocol"]
@@ -43,3 +45,6 @@ custom-protocol = ["tauri/custom-protocol"]
 [[bin]]
 name = "mosh-verify"
 path = "src/bin/mosh_verify.rs"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2.0.0"

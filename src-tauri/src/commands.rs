@@ -17,8 +17,11 @@ use serde_json::json;
 use std::io::Cursor;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tauri::{Emitter, State};
+use tauri_plugin_updater::UpdaterExt;
 
 /// Maximum number of pixels kept in the in-memory preview frame. Very large
 /// still images are downscaled on load so that preview/effect processing does
@@ -66,6 +69,7 @@ pub struct AppState {
     pub current_frame: Mutex<Option<Frame>>,
     pub sam3: Mutex<Option<Sam3Engine>>,
     pub frame_cache: Mutex<EffectCache>,
+    pub export_cancel: Arc<AtomicBool>,
 }
 
 impl Default for AppState {
@@ -75,6 +79,7 @@ impl Default for AppState {
             current_frame: Mutex::new(None),
             sam3: Mutex::new(None),
             frame_cache: Mutex::new(EffectCache::default()),
+            export_cancel: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -596,6 +601,8 @@ pub async fn export_video(
     let validated_source = validate_io_path(&source_path, true)?;
     let validated_output = validate_io_path(&output_path, false)?;
     let registry = state.registry.clone();
+    let cancel = state.export_cancel.clone();
+    cancel.store(false, Ordering::Relaxed);
 
     let source_path = validated_source.to_string_lossy().into_owned();
     let output_path = validated_output.to_string_lossy().into_owned();
@@ -619,6 +626,7 @@ pub async fn export_video(
             format,
             quality,
             include_audio,
+            cancel,
         )
     })
     .await
@@ -643,6 +651,7 @@ fn export_video_blocking(
     format: Option<String>,
     quality: Option<String>,
     include_audio: Option<bool>,
+    cancel: Arc<AtomicBool>,
 ) -> std::result::Result<String, String> {
     // Parse optional trim suffix from output filename (e.g. name_trim_0.5-2.3.mp4)
     let (mut trim_start, mut trim_end) = (trim_start, trim_end);
@@ -885,6 +894,10 @@ fn export_video_blocking(
     // If include_audio is set, skip audio bake (we'll copy source audio directly)
     let effective_include_audio = include_audio.unwrap_or(false) && !has_audio_bake;
 
+    // Cap a single encode at 30 minutes. This is generous for high-resolution
+    // exports while preventing a hung FFmpeg process from blocking indefinitely.
+    const ENCODE_TIMEOUT: Duration = Duration::from_secs(1800);
+
     encode_video(
         &segment,
         &output_path,
@@ -898,6 +911,8 @@ fn export_video_blocking(
         trim_end,
         width,
         height,
+        Some(cancel.as_ref()),
+        Some(ENCODE_TIMEOUT),
     )
     .map_err(|e| e.to_string())?;
     let _ = app_handle.emit(
@@ -906,6 +921,14 @@ fn export_video_blocking(
     );
 
     Ok(output_path)
+}
+
+/// Request cancellation of an in-progress export. The export command polls
+/// this flag while feeding frames to FFmpeg and aborts early if it is set.
+#[tauri::command]
+pub fn cancel_export(state: State<'_, AppState>) -> std::result::Result<(), String> {
+    state.export_cancel.store(true, Ordering::Relaxed);
+    Ok(())
 }
 
 /// Get metadata for a media file.
@@ -1922,6 +1945,51 @@ pub async fn prepare_custom_lut(path: String) -> std::result::Result<String, Str
     std::fs::copy(&validated, &dest).map_err(|e| e.to_string())?;
 
     Ok(dest.to_string_lossy().into_owned())
+}
+
+/// Information about an available updater release.
+#[derive(serde::Serialize)]
+pub struct UpdateInfo {
+    pub version: String,
+    pub date: Option<String>,
+    pub body: Option<String>,
+    pub url: String,
+    pub signature: String,
+}
+
+/// Check whether a newer signed release is available from the configured
+/// updater endpoint.
+#[tauri::command]
+pub async fn check_update(
+    app: tauri::AppHandle,
+) -> std::result::Result<Option<UpdateInfo>, String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    match updater.check().await.map_err(|e| e.to_string())? {
+        Some(update) => Ok(Some(UpdateInfo {
+            version: update.version,
+            date: update.date.map(|d| d.to_string()),
+            body: update.body,
+            url: update.download_url.to_string(),
+            signature: update.signature,
+        })),
+        None => Ok(None),
+    }
+}
+
+/// Download, verify, and install the latest signed update, then restart the app.
+#[tauri::command]
+pub async fn install_update(app: tauri::AppHandle) -> std::result::Result<String, String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    match updater.check().await.map_err(|e| e.to_string())? {
+        Some(update) => {
+            update
+                .download_and_install(|_chunk, _total| {}, || {})
+                .await
+                .map_err(|e| e.to_string())?;
+            app.restart();
+        }
+        None => Ok("up to date".to_string()),
+    }
 }
 
 /// Locate the Python mosh_cli.py bridge script.
