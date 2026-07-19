@@ -8,6 +8,7 @@ use crate::ffmpeg::{
     decode_video, encode_video, ffedit_binary, ffgac_binary, ffmpeg_binary, generate_proxy,
     probe_metadata,
 };
+use crate::path_guard::validate_io_path;
 use crate::sam3_engine::Sam3Engine;
 use crate::utils::image_io::{load_image, load_image_from_memory, save_image};
 use image::ImageFormat;
@@ -18,6 +19,15 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, State};
+
+/// Maximum number of pixels kept in the in-memory preview frame. Very large
+/// still images are downscaled on load so that preview/effect processing does
+/// not consume unbounded RAM.
+const MAX_PREVIEW_PIXELS: u64 = 32_000_000; // ~8K x 4K or 4K x 8K
+
+/// Soft memory budget for the effect preview cache. Each cache entry stores a
+/// full RGBA frame, so the cache is trimmed to stay under this limit.
+const MAX_CACHE_BYTES: usize = 256 * 1024 * 1024; // 256 MiB
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,6 +79,36 @@ impl Default for AppState {
     }
 }
 
+/// Trim cached intermediate frames so the total byte size stays under budget.
+/// Oldest entries are evicted first.
+fn trim_cache_to_budget(entries: &mut Vec<CacheEntry>, budget: usize) {
+    let mut total: usize = entries.iter().map(|e| e.output_frame.data.len()).sum();
+    while total > budget && !entries.is_empty() {
+        let removed = entries.remove(0);
+        total = total.saturating_sub(removed.output_frame.data.len());
+    }
+}
+
+/// Downscale a Frame so it fits within a pixel budget while preserving aspect ratio.
+fn fit_to_preview_budget(frame: Frame) -> Frame {
+    let pixels = frame.width as u64 * frame.height as u64;
+    if pixels <= MAX_PREVIEW_PIXELS {
+        return frame;
+    }
+    let scale = (MAX_PREVIEW_PIXELS as f64 / pixels as f64).sqrt();
+    let new_w = ((frame.width as f64 * scale) as u32).max(1);
+    let new_h = ((frame.height as f64 * scale) as u32).max(1);
+    let img = image::RgbaImage::from_raw(frame.width, frame.height, frame.data)
+        .expect("frame buffer should match dimensions");
+    let resized =
+        image::imageops::resize(&img, new_w, new_h, image::imageops::FilterType::Triangle);
+    Frame {
+        width: new_w,
+        height: new_h,
+        data: resized.into_raw(),
+    }
+}
+
 /// Load an image or video file into the app.
 #[tauri::command]
 pub async fn load_media(
@@ -76,31 +116,38 @@ pub async fn load_media(
     path: String,
 ) -> std::result::Result<String, String> {
     let path_clone = path.clone();
-    let frame = tauri::async_runtime::spawn_blocking(move || {
-        let ext = Path::new(&path_clone)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
+    let frame =
+        tauri::async_runtime::spawn_blocking(move || -> std::result::Result<Frame, String> {
+            validate_io_path(&path_clone, true)?;
 
-        let video_exts = [
-            "mp4", "avi", "mov", "mkv", "webm", "m4v", "flv", "wmv", "mpeg", "mpg",
-        ];
+            let ext = Path::new(&path_clone)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
 
-        if video_exts.contains(&ext.as_str()) {
-            // Decode first frame of video
-            let segment = decode_video(&path_clone, Some(1)).map_err(|e| e.to_string())?;
-            segment
-                .frames
-                .into_iter()
-                .next()
-                .ok_or("No frames decoded".to_string())
-        } else {
-            load_image(&path_clone).map_err(|e| e.to_string())
-        }
-    })
-    .await
-    .map_err(|e| format!("Task failed: {}", e))??;
+            let video_exts = [
+                "mp4", "avi", "mov", "mkv", "webm", "m4v", "flv", "wmv", "mpeg", "mpg",
+            ];
+
+            let raw_frame = if video_exts.contains(&ext.as_str()) {
+                // Decode first frame of video
+                let segment = decode_video(&path_clone, Some(1)).map_err(|e| e.to_string())?;
+                segment
+                    .frames
+                    .into_iter()
+                    .next()
+                    .ok_or("No frames decoded".to_string())?
+            } else {
+                load_image(&path_clone).map_err(|e| e.to_string())?
+            };
+
+            // Keep the in-memory preview frame within a sane pixel budget so that
+            // giant stills do not blow up RAM and the effect cache.
+            Ok(fit_to_preview_budget(raw_frame))
+        })
+        .await
+        .map_err(|e| format!("Task failed: {}", e))??;
 
     *state
         .current_frame
@@ -415,6 +462,7 @@ pub fn apply_effect_stack(
         cache_lock.scale = preview_scale;
         cache_lock.global_mask_b64 = mask_b64;
         cache_lock.entries = new_cache;
+        trim_cache_to_budget(&mut cache_lock.entries, MAX_CACHE_BYTES);
     }
 
     // Upscale back to original resolution if we downscaled
@@ -509,6 +557,7 @@ pub fn save_media(
     format: Option<String>,
     quality: Option<u8>,
 ) -> std::result::Result<String, String> {
+    validate_io_path(&path, false)?;
     let frame_lock = state
         .current_frame
         .lock()
@@ -542,7 +591,12 @@ pub async fn export_video(
     quality: Option<String>,
     include_audio: Option<bool>,
 ) -> std::result::Result<String, String> {
+    let validated_source = validate_io_path(&source_path, true)?;
+    let validated_output = validate_io_path(&output_path, false)?;
     let registry = state.registry.clone();
+
+    let source_path = validated_source.to_string_lossy().into_owned();
+    let output_path = validated_output.to_string_lossy().into_owned();
 
     tauri::async_runtime::spawn_blocking(move || {
         export_video_blocking(
@@ -855,6 +909,7 @@ fn export_video_blocking(
 /// Get metadata for a media file.
 #[tauri::command]
 pub fn get_media_metadata(path: String) -> std::result::Result<serde_json::Value, String> {
+    validate_io_path(&path, true)?;
     let meta = probe_metadata(&path).map_err(|e| e.to_string())?;
     Ok(json!(meta))
 }
@@ -1889,6 +1944,11 @@ pub async fn apply_ffglitch(
     mode: String,
     params: serde_json::Value,
 ) -> std::result::Result<String, String> {
+    let validated_input = validate_io_path(&input_path, true)?;
+    let validated_output = validate_io_path(&output_path, false)?;
+    let input_path = validated_input.to_string_lossy().into_owned();
+    let output_path = validated_output.to_string_lossy().into_owned();
+
     let python = find_python()
         .ok_or("Python interpreter not found. Install sam3_env or add python to PATH")?;
 
@@ -1994,7 +2054,8 @@ pub async fn generate_proxy_command(
     max_width: u32,
     crf: u32,
 ) -> std::result::Result<String, String> {
-    let path = source_path.clone();
+    let validated = validate_io_path(&source_path, true)?;
+    let path = validated.to_string_lossy().into_owned();
     tauri::async_runtime::spawn_blocking(move || {
         generate_proxy(&path, max_width, crf).map_err(|e| e.to_string())
     })

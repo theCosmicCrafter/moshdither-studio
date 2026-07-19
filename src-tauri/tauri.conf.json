@@ -28,7 +28,17 @@
     ],
     "security": {
       "csp": "default-src 'self'; img-src 'self' data: blob: asset: tauri:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'",
-      "capabilities": ["default"]
+      "capabilities": ["default"],
+      "assetProtocol": {
+        "enable": true,
+        "scope": {
+          "allow": [
+            "$TEMP/moshdither-studio/**",
+            "$APPDATA/com.moshdither.studio/**",
+            "$APPCONFIG/com.moshdither.studio/**"
+          ]
+        }
+      }
     }
   },
   "bundle": {

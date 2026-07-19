@@ -8,11 +8,6 @@
       "identifier": "core:default",
       "scope": {
         "allow": [
-          { "path": "$DESKTOP/**" },
-          { "path": "$DOCUMENT/**" },
-          { "path": "$PICTURE/**" },
-          { "path": "$VIDEO/**" },
-          { "path": "$DOWNLOAD/**" },
           { "path": "$TEMP/moshdither-studio/**" },
           { "path": "$APPDATA/com.moshdither.studio/**" },
           { "path": "$APPCONFIG/com.moshdither.studio/**" }
