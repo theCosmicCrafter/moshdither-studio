@@ -1,6 +1,6 @@
 # MoshDither Studio — Implementation Status Report
 
-**Date:** June 2026
+**Date:** July 2026
 **Audited by:** Code-level verification against Tauri v2 codebase
 **Build:** `npm run build` passes, `cargo check --lib` passes, `cargo test --lib` passes
 
@@ -208,7 +208,7 @@
 
 | #   | Item          | Why                     | Notes                                |
 | --- | ------------- | ----------------------- | ------------------------------------ |
-| 1   | E2E tests     | No automated UI testing | **Done** — Playwright + 20 E2E tests |
+| 1   | E2E tests     | No automated UI testing | **Done** — Playwright + 68 E2E tests |
 | 2   | Auto-updater  | Not configured          | Tauri updater plugin                 |
 | 3   | Plugin system | Not started             | Sandboxed extension architecture     |
 | 4   | Cloud sync    | Not in Tauri version    | Local folder sync                    |
@@ -229,13 +229,25 @@
 | 6   | FFmpeg encode default timeout          | `src-tauri/src/ffmpeg/mod.rs`                     | `encode_video` defaults to a 10-minute bound instead of waiting forever           |
 | 7   | SAM3 bridge shutdown error propagation | `src-tauri/src/sam3_engine.rs`                    | `kill_child` now returns non-success/non-timeout exit statuses as `AppError`      |
 
+### Completed in follow-up pass
+
+| #   | Item                                                 | Verified                                                                  | Notes                                                                                 |
+| --- | ---------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| 1   | Tauri updater config + release workflow placeholders | `.github/workflows/release.yml`, `src-tauri/tauri.conf.json`              | Public key, endpoints, and tauri-action matrix configured; signing certs still needed |
+| 2   | PreviewViewport Zustand selector optimization        | `src/components/PreviewViewport.tsx`                                      | Grouped related store reads with `useShallow` to reduce playback re-renders           |
+| 3   | Build-time external binary validation                | `scripts/verify-external-bins.mjs`, `package.json` `prebuild`             | Asserts `ffmpeg`, `ffprobe`, FFglitch, and SAM3 Python env before build               |
+| 4   | Material Symbols font subsetting                     | `public/fonts/material-symbols-subset.css`, `subset-material-symbols.mjs` | Bundle font reduced from 3.96 MB to ~112 KB                                           |
+| 5   | GTK3 warning triage and gtk4 migration plan          | `docs/adr/0005-gtk3-gtk4-migration.md`                                    | Documents transitive GTK3 `cargo audit` warnings and migration path                   |
+| 6   | E2E export and SAM3 mask smoke tests                 | `tests/e2e/export-flow.spec.ts`, `tests/e2e/sam3-mask-flow.spec.ts`       | Playwright tests with mocked Tauri backend commands                                   |
+
 ### Verification
 
-- `cargo clippy` — clean
+- `cargo clippy --all-targets --all-features -- -D warnings` — clean
 - `cargo test --lib` — 441 tests passing
 - `cargo check --bin mosh-verify` — clean
 - `npm run lint` — clean
 - `npm run test` — 1,024 tests passing
+- `npx playwright test` — 68 E2E tests passing (`CI=1` for reliable server lifecycle)
 - `npm run build` — clean
 - `npm audit` — 0 vulnerabilities
 - `cargo audit` — 18 allowed unmaintained/unsound warnings (GTK3, paste, proc-macro-error, unic, glib), all transitive and not actionable without upstream migrations
@@ -243,11 +255,10 @@
 
 ### Remaining architecture-review work
 
-The prior architecture-review report still has items that are larger or require external assets. The next pass should tackle, in order:
+All items from the prior review pass are now complete. Recommended next steps for a public "1.0" release:
 
-1. **Release CI / signing / updater** — add Tauri updater config, code-signing placeholders, and a `publish.yml` workflow using `tauri-action` (requires certificates/secrets).
-2. **PreviewViewport store selector optimization** — split large `subscribe`/`useAppStore` reads into focused selectors to reduce re-renders.
-3. **External binary validation at build time** — add a build script that asserts `ffmpeg`, `ffprobe`, and SAM3 Python env are present and version-compatible.
-4. **Material Symbols font self-hosting / subsetting** — replace the 4 MB `material-symbols-outlined` font with a subset to shrink bundle.
-5. **Dependency GTK3 warning triage** — document the transitive GTK3 `cargo audit` warnings and evaluate `gtk4` migration path.
-6. **E2E coverage expansion** — add Playwright smoke tests for export flow and SAM3 mask generation.
+1. **Obtain code-signing certificates** and wire real signing secrets into `.github/workflows/release.yml`.
+2. **Real backend E2E tests** — run export and SAM3 smoke tests against an actual built Tauri binary instead of the current Vite mock.
+3. **Bundle size audit** — further split `vendor.js` and `index.js` chunks; evaluate lazy loading for heavy panels.
+4. **Accessibility pass** — add ARIA labels, keyboard handlers, and visible focus rings to transport and dock controls.
+5. **Dependency refresh** — pin `ort` to a stable release and plan GTK4 migration when upstream crates support it.

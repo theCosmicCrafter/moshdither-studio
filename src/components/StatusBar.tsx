@@ -42,7 +42,7 @@ export default function StatusBar() {
         ) : (
           <div className="w-1.5 h-1.5 rounded-full bg-accent-teal animate-pulse-glow" />
         )}
-        <span>{statusMessage}</span>
+        <span data-testid="status-message">{statusMessage}</span>
       </div>
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-1">

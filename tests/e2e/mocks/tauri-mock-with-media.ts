@@ -1,19 +1,19 @@
 /**
- * Tauri API mock for E2E tests.
- * Injected via Playwright page.addInitScript() to stub out @tauri-apps/api
- * so the frontend runs without the Rust backend.
+ * Tauri API mock pre-loaded with test media for E2E flow tests.
+ * Use this variant when a test needs to exercise export, SAM3 mask, or other
+ * features that require a loaded media file.
  */
 
-export const tauriMockScript = `
+export const tauriMockWithMediaScript = `
 (() => {
-  // Dismiss onboarding modal and clear auto-save before app renders
   try {
     localStorage.setItem("onboardingDismissed", "true");
     localStorage.removeItem("moshdither_autosave_v1");
     localStorage.removeItem("moshdither_recent_projects_v1");
   } catch (e) {}
 
-  // Mock invoke — returns canned data per command
+  const tinyPng = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
   const mockResponses = {
     list_effects: [
       { id: "dithering.bayer", name: "Bayer Dither", category: "dithering", media_type: "image", parameters: [] },
@@ -29,7 +29,8 @@ export const tauriMockScript = `
       ];
       return all.filter(e => e.category === args.category);
     },
-    get_media_info: { width: 1920, height: 1080, loaded: false },
+    get_media_info: { width: 1920, height: 1080, loaded: true },
+    get_media_metadata: {},
     get_environment_status: {
       mode: "portable",
       python_ok: true,
@@ -37,17 +38,28 @@ export const tauriMockScript = `
       pip_ok: true,
       ffmpeg_ok: true,
       ffprobe_ok: true,
-      ffglitch_ok: false,
+      ffglitch_ok: true,
     },
     sam3_init: "SAM3 engine initialized",
-    load_media: () => {},
-    get_frame_data: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
-    apply_effect: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
-    apply_effect_stack: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+    sam3_load_image: { width: 1920, height: 1080 },
+    sam3_auto_mask: { count: 2, masks: [tinyPng, tinyPng], scores: [0.95, 0.82] },
+    sam3_text_prompt: { count: 1, masks: [tinyPng], scores: [0.91] },
+    sam3_point_prompt: { count: 1, masks: [tinyPng], scores: [0.88] },
+    sam3_box_prompt: { count: 1, masks: [tinyPng], scores: [0.9] },
+    sam3_postprocess_mask: tinyPng,
+    sam3_clear: "cleared",
+    load_media: { loaded: true, width: 1920, height: 1080 },
+    load_media_from_base64: { loaded: true, width: 1920, height: 1080 },
+    get_frame_data: tinyPng,
+    apply_effect: tinyPng,
+    apply_effect_stack: tinyPng,
+    export_video: "C:/tmp/moshdither-export/test_export.mp4",
+    apply_ffglitch: "C:/tmp/moshdither-export/test_ffglitch.mp4",
+    save_media: "C:/tmp/moshdither-export/test_save.png",
+    process_frame: tinyPng,
     generate_proxy_command: "C:/tmp/moshdither-proxy/test_proxy_1280p.mp4",
   };
 
-  // Mock window object for @tauri-apps/api/window
   const mockWindow = {
     label: "main",
     isFullscreen: () => Promise.resolve(false),
@@ -69,8 +81,8 @@ export const tauriMockScript = `
       console.log('[TAURI MOCK] invoke:', command, args);
       if (command === 'plugin:event|listen') return Promise.resolve(1);
       if (command === 'plugin:event|unlisten') return Promise.resolve();
-      if (command === 'plugin:dialog|open') return Promise.resolve(null);
-      if (command === 'plugin:dialog|save') return Promise.resolve(null);
+      if (command === 'plugin:dialog|open') return Promise.resolve("C:/tmp/moshdither/test_clip.mp4");
+      if (command === 'plugin:dialog|save') return Promise.resolve("C:/tmp/moshdither-export/test_export.mp4");
       const response = mockResponses[command];
       if (typeof response === 'function') return Promise.resolve(response(args));
       if (response !== undefined) return Promise.resolve(response);
@@ -94,7 +106,6 @@ export const tauriMockScript = `
     emit() {},
   };
 
-  // Mock @tauri-apps/api/core
   window.__TAURI_API__ = {
     core: {
       invoke: (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args),
@@ -102,22 +113,19 @@ export const tauriMockScript = `
     },
   };
 
-  // Mock @tauri-apps/api/window — getCurrentWindow returns a mock window
   window.__TAURI_WINDOW__ = {
     getCurrentWindow: () => mockWindow,
   };
 
-  // Mock @tauri-apps/api/webview — getCurrentWebview returns a mock webview
   window.__TAURI_WEBVIEW__ = {
     getCurrentWebview: () => ({
       onDragDropEvent: () => Promise.resolve(() => {}),
     }),
   };
 
-  // Mock @tauri-apps/plugin-dialog
   window.__TAURI_DIALOG__ = {
-    open: () => Promise.resolve(null),
-    save: () => Promise.resolve(null),
+    open: () => Promise.resolve("C:/tmp/moshdither/test_clip.mp4"),
+    save: () => Promise.resolve("C:/tmp/moshdither-export/test_export.mp4"),
   };
 })();
 `;

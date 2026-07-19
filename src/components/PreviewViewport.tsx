@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import {
   convertFileSrc,
   generateProxy,
@@ -63,52 +64,120 @@ function screenToImageCoords(
   };
 }
 
-export default function PreviewViewport({ isDropTarget = false }: Props) {
-  const mediaLoaded = useAppStore((s) => s.mediaLoaded);
-  const previewDataUrl = useAppStore((s) => s.previewDataUrl);
-  const originalDataUrl = useAppStore((s) => s.originalDataUrl);
-  const mediaInfo = useAppStore((s) => s.mediaInfo);
-  const showBeforeAfter = useAppStore((s) => s.showBeforeAfter);
-  const zoom = useAppStore((s) => s.zoom);
-  // Structural signature: only changes when effects are added/removed/reordered/toggled
-  // Param value changes (e.g. from keyframes) won't trigger a render-loop rebuild
-  const stackSignature = useAppStore((s) =>
-    s.effectStack.map((e) => `${e.id}:${e.enabled}`).join("|")
+function PreviewViewport({ isDropTarget = false }: Props) {
+  // Group read-only state into shallow-equal slices so reference-stable objects
+  // (arrays/objects) don't force re-renders when their contents are unchanged.
+  const {
+    mediaLoaded,
+    previewDataUrl,
+    originalDataUrl,
+    mediaInfo,
+    showBeforeAfter,
+    zoom,
+    isPlaying,
+    useCpuPreview,
+    audioEnabled,
+    proxyUrl,
+    isVideo,
+    filePath: fileName,
+  } = useAppStore(
+    useShallow((s) => ({
+      mediaLoaded: s.mediaLoaded,
+      previewDataUrl: s.previewDataUrl,
+      originalDataUrl: s.originalDataUrl,
+      mediaInfo: s.mediaInfo,
+      showBeforeAfter: s.showBeforeAfter,
+      zoom: s.zoom,
+      isPlaying: s.isPlaying,
+      useCpuPreview: s.useCpuPreview,
+      audioEnabled: s.audioEnabled,
+      proxyUrl: s.proxyUrl,
+      isVideo: s.isVideo,
+      filePath: s.filePath,
+    }))
   );
-  // Full signature including params + mask + maskB64 — used to re-trigger CPU preview on param/mask changes
-  const cpuRenderSignature = useAppStore((s) =>
-    s.effectStack.map((e) => `${e.id}:${e.enabled}:${JSON.stringify(e.params)}:${e.maskId}:${e.maskMode}`).join("|") + `|${s.maskRevision}`
+
+  const {
+    activeMask,
+    maskVisible,
+    sam3Ready,
+    sam3Mode,
+    sam3Points,
+    maskTab,
+    sam3HoverMask,
+    sam3FrameMasks,
+    sam3OverlayOpacity,
+    sam3OverlayColor,
+  } = useAppStore(
+    useShallow((s) => ({
+      activeMask: s.activeMask,
+      maskVisible: s.maskVisible,
+      sam3Ready: s.sam3Ready,
+      sam3Mode: s.sam3Mode,
+      sam3Points: s.sam3Points,
+      maskTab: s.maskTab,
+      sam3HoverMask: s.sam3HoverMask,
+      sam3FrameMasks: s.sam3FrameMasks,
+      sam3OverlayOpacity: s.sam3OverlayOpacity,
+      sam3OverlayColor: s.sam3OverlayColor,
+    }))
   );
-  const stackCount = useAppStore((s) => s.effectStack.length);
-  const isPlaying = useAppStore((s) => s.isPlaying);
-  const useCpuPreview = useAppStore((s) => s.useCpuPreview);
-  const isApproximatePreview = useAppStore((s) => stackHasApproximatePreview(s.effectStack));
-  const audioEnabled = useAppStore((s) => s.audioEnabled);
-  const activeMask = useAppStore((s) => s.activeMask);
-  const maskVisible = useAppStore((s) => s.maskVisible);
-  const sam3Ready = useAppStore((s) => s.sam3Ready);
-  const sam3Mode = useAppStore((s) => s.sam3Mode);
-  const sam3Points = useAppStore((s) => s.sam3Points);
-  const maskTab = useAppStore((s) => s.maskTab);
-  const sam3HoverMask = useAppStore((s) => s.sam3HoverMask);
-  const sam3FrameMasks = useAppStore((s) => s.sam3FrameMasks);
-  const sam3OverlayOpacity = useAppStore((s) => s.sam3OverlayOpacity);
-  const sam3OverlayColor = useAppStore((s) => s.sam3OverlayColor);
-  const setMediaLoaded = useAppStore((s) => s.setMediaLoaded);
-  const setMediaInfo = useAppStore((s) => s.setMediaInfo);
-  const setPreviewDataUrl = useAppStore((s) => s.setPreviewDataUrl);
-  const setOriginalDataUrl = useAppStore((s) => s.setOriginalDataUrl);
-  const setStatusMessage = useAppStore((s) => s.setStatusMessage);
-  const setUseCpuPreview = useAppStore((s) => s.setUseCpuPreview);
-  const setSam3Masks = useAppStore((s) => s.setSam3Masks);
-  const addSam3Point = useAppStore((s) => s.addSam3Point);
-  const clearSam3Points = useAppStore((s) => s.clearSam3Points);
-  const setSam3HoverMask = useAppStore((s) => s.setSam3HoverMask);
-  const setFilePath = useAppStore((s) => s.setFilePath);
-  const setProxyUrl = useAppStore((s) => s.setProxyUrl);
-  const setIsVideo = useAppStore((s) => s.setIsVideo);
-  const proxyUrl = useAppStore((s) => s.proxyUrl);
-  const isVideo = useAppStore((s) => s.isVideo);
+
+  const { effectStack, maskRevision } = useAppStore(
+    useShallow((s) => ({ effectStack: s.effectStack, maskRevision: s.maskRevision }))
+  );
+
+  // Heavy signature computation is memoised against the (immutable) effect stack.
+  const stackSignature = useMemo(
+    () => effectStack.map((e) => `${e.id}:${e.enabled}`).join("|"),
+    [effectStack]
+  );
+  const cpuRenderSignature = useMemo(
+    () =>
+      effectStack
+        .map((e) => `${e.id}:${e.enabled}:${JSON.stringify(e.params)}:${e.maskId}:${e.maskMode}`)
+        .join("|") + `|${maskRevision}`,
+    [effectStack, maskRevision]
+  );
+  const stackCount = effectStack.length;
+  const isApproximatePreview = useMemo(
+    () => stackHasApproximatePreview(effectStack),
+    [effectStack]
+  );
+
+  // Actions are stable references in the Zustand store, but selecting them as a
+  // single object with shallow equality reduces subscription hook overhead.
+  const {
+    setMediaLoaded,
+    setMediaInfo,
+    setPreviewDataUrl,
+    setOriginalDataUrl,
+    setStatusMessage,
+    setUseCpuPreview,
+    setSam3Masks,
+    addSam3Point,
+    clearSam3Points,
+    setSam3HoverMask,
+    setFilePath,
+    setProxyUrl,
+    setIsVideo,
+  } = useAppStore(
+    useShallow((s) => ({
+      setMediaLoaded: s.setMediaLoaded,
+      setMediaInfo: s.setMediaInfo,
+      setPreviewDataUrl: s.setPreviewDataUrl,
+      setOriginalDataUrl: s.setOriginalDataUrl,
+      setStatusMessage: s.setStatusMessage,
+      setUseCpuPreview: s.setUseCpuPreview,
+      setSam3Masks: s.setSam3Masks,
+      addSam3Point: s.addSam3Point,
+      clearSam3Points: s.clearSam3Points,
+      setSam3HoverMask: s.setSam3HoverMask,
+      setFilePath: s.setFilePath,
+      setProxyUrl: s.setProxyUrl,
+      setIsVideo: s.setIsVideo,
+    }))
+  );
 
   const containerRef = useRef<HTMLDivElement>(null);
   const previewImgRef = useRef<HTMLImageElement>(null);
@@ -1022,8 +1091,6 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
 
   const showDropOverlay = isDropTarget || isHtmlDropTarget;
 
-  const fileName = useAppStore((s) => s.filePath);
-
   return (
     <div
       data-testid="preview-viewport"
@@ -1281,3 +1348,5 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
     </div>
   );
 }
+
+export default memo(PreviewViewport);
