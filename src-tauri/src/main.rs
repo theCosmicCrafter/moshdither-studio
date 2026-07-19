@@ -2,5 +2,5 @@
 
 fn main() {
     println!("Starting app...");
-    moshdither_studio::run();
+    moshdither_studio_lib::run();
 }

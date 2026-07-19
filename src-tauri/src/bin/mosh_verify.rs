@@ -12,10 +12,10 @@
 use std::env;
 use std::process::ExitCode;
 
-use moshdither_studio::effects::types::{Frame, Mask, MediaType, ParameterDef, VideoSegment};
-use moshdither_studio::effects::{functional_tests, verification, EffectRegistry};
-use moshdither_studio::ffmpeg;
-use moshdither_studio::utils::image_io;
+use moshdither_studio_lib::effects::types::{Frame, Mask, MediaType, ParameterDef, VideoSegment};
+use moshdither_studio_lib::effects::{functional_tests, verification, EffectRegistry};
+use moshdither_studio_lib::ffmpeg;
+use moshdither_studio_lib::utils::image_io;
 
 fn print_usage() {
     eprintln!("mosh-verify — MoshDither Studio effect verification CLI");

@@ -10,7 +10,7 @@ rust-version = "1.75"
 default-run = "moshdither-studio"
 
 [lib]
-name = "moshdither_studio"
+name = "moshdither_studio_lib"
 crate-type = ["rlib", "staticlib", "cdylib"]
 
 [build-dependencies]
