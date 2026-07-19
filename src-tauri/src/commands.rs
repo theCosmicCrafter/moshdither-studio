@@ -1877,6 +1877,51 @@ pub async fn read_file(path: String) -> std::result::Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
+/// Maximum size for a user-supplied custom LUT (PNG or .cube).
+const LUT_MAX_SIZE: u64 = 50 * 1024 * 1024;
+const ALLOWED_LUT_EXTS: &[&str] = &["png", "cube"];
+
+/// Copies a user-selected custom LUT into the app's temporary LUT directory.
+///
+/// The Tauri asset protocol is scoped to `$TEMP/moshdither-studio/**`, so files
+/// outside that directory cannot be previewed directly from the webview.
+/// This command validates the source path and copies it into the allowed scope,
+/// returning the destination path to use for both WebGL preview and the Rust
+/// export pipeline.
+#[tauri::command]
+pub async fn prepare_custom_lut(path: String) -> std::result::Result<String, String> {
+    let validated = validate_io_path(&path, true)?;
+
+    let ext = validated
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    if !ALLOWED_LUT_EXTS.contains(&ext.as_str()) {
+        return Err(format!("Unsupported LUT extension: .{}", ext));
+    }
+
+    let meta = std::fs::metadata(&validated).map_err(|e| e.to_string())?;
+    if meta.len() > LUT_MAX_SIZE {
+        return Err(format!(
+            "LUT file too large: {} bytes (max {} bytes)",
+            meta.len(),
+            LUT_MAX_SIZE
+        ));
+    }
+
+    let file_name = validated
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| "Invalid LUT file name".to_string())?;
+    let dest_dir = std::env::temp_dir().join("moshdither-studio").join("luts");
+    std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
+    let dest = dest_dir.join(file_name);
+    std::fs::copy(&validated, &dest).map_err(|e| e.to_string())?;
+
+    Ok(dest.to_string_lossy().into_owned())
+}
+
 /// Locate the Python mosh_cli.py bridge script.
 /// Tries workspace root (dev), then executable directory (production).
 fn locate_mosh_cli() -> Option<std::path::PathBuf> {

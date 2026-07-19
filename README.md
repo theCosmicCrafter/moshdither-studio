@@ -48,6 +48,28 @@ npm install -g @tauri-apps/cli
 npm run tauri:dev
 ```
 
+### LUT setup
+
+MoshDither Studio ships with a bundled LUT library. Custom LUTs can be loaded at runtime through the **LUT Library** panel.
+
+**Supported formats:**
+
+- **512×512 PNG LUTs** — standard 64×64 tile layout (8×8 grid of blue slices, x=red, y=green).
+- **.cube 3D LUTs** — Adobe / Resolve format (`LUT_3D_SIZE`, optional `DOMAIN_MIN`/`DOMAIN_MAX`, up to size 256).
+
+**Adding bundled presets:**
+
+1. For local development, copy PNG LUTs into `public/lut/`.
+2. For production installers, place them in `src-tauri/resources/lut/` (or the `resources/lut/` folder next to the built executable).
+3. Add a new entry to `src/engine/lut/loader.ts` `LUT_PRESETS`.
+
+**Loading custom LUTs:**
+
+1. Open the app and import an image or video.
+2. In the left sidebar, click **LUT Library** → **Load Custom LUT…**.
+3. Select a `.png` or `.cube` file. The app copies it into a scoped temporary directory so the WebGL preview can access it.
+4. The LUT is applied immediately and is also used when exporting.
+
 ### Build
 
 ```bash

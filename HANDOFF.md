@@ -1,6 +1,44 @@
 # Handoff Notes — MoshDither Studio
 
 **Session Date:** 2026-07-19
+**Phase:** Review + harden custom LUT loading and add setup docs
+**Status:**
+
+- `cargo clippy --all-targets --all-features -- -D warnings` PASS
+- `cargo test --lib` PASS (438/438)
+- `cargo fmt -- --check` PASS
+- `cargo audit` PASS (0 vulnerabilities; 18 unmaintained-crate warnings)
+- `npm audit` PASS (0 vulnerabilities)
+- `npm run lint` PASS (0 warnings)
+- `npx tsc --noEmit` PASS
+- `npm run test` PASS (1024/1024)
+- `mosh-verify verify-all` PASS (98/98)
+
+## Custom LUT Review / UX Hardening Session (2026-07-19)
+
+### Changes
+
+- **Secure custom LUT loading:**
+  - Added `prepare_custom_lut` Rust command (`src-tauri/src/commands.rs`) that validates a user-selected LUT path with `path_guard::validate_io_path`, checks the extension (`.png`/`.cube`) and size, then copies the file into `$TEMP/moshdither-studio/luts/` (inside the Tauri asset-protocol scope).
+  - `LUTPanel` now calls `prepare_custom_lut` before generating the preview, so custom LUTs preview correctly without broadening the asset scope.
+- **Rust LUT path validation:**
+  - `lut_grading.rs` `locate_lut_file()` now runs absolute paths through `validate_io_path()` before reading, closing an arbitrary-file-read path from frontend effect parameters.
+- **.cube robustness:**
+  - `MAX_CUBE_SIZE` guard (256) in both Rust and `parseLut.ts` to avoid runaway allocation from malicious files.
+  - `apply_cube()` clamps sampled LUT values to `[0, 1]` before blending.
+- **User documentation:**
+  - `README.md` added a **LUT setup** section explaining bundled preset folders (`public/lut/` and `resources/lut/`) and how to load custom `.png`/`.cube` LUTs.
+  - `LUTPanel` now shows an inline help paragraph with the same instructions.
+
+### Review findings addressed
+
+- Custom LUT preview failed outside `$TEMP/moshdither-studio/**` because the asset protocol scope was too narrow.
+- `lut_grading.rs` accepted absolute paths without validation, allowing a compromised frontend to request reads of arbitrary files.
+- `.cube` parser and `apply_cube` lacked safeguards for oversized/out-of-range data.
+
+---
+
+**Session Date:** 2026-07-19
 **Phase:** LUT / palette / VHS semantic correctness follow-up
 **Status:**
 

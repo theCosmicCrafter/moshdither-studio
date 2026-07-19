@@ -1,8 +1,13 @@
 use crate::effects::types::*;
 use crate::effects::Effect;
 use crate::error::Result;
+use crate::path_guard::validate_io_path;
 use serde_json::json;
 use std::path::{Path, PathBuf};
+
+/// Largest 3D LUT size the parser will accept. 256^3 entries ≈ 200 MB, which is
+/// more than enough for real-world .cube files and prevents runaway allocation.
+const MAX_CUBE_SIZE: usize = 256;
 
 /// 3D LUT color grading using a 512x512 LUT PNG.
 /// LUT layout: 8x8 grid of 64x64 tiles. Each tile = one blue slice.
@@ -33,12 +38,17 @@ impl Default for LutGrading {
 /// (or `/lut/amatorka.png`). On disk they live in:
 /// - dev: `<repo>/public/lut/*.png` (cwd is `src-tauri` under `tauri dev`)
 /// - prod: `<exe_dir>/lut/*.png` (bundled via tauri.conf.json resources)
-/// - absolute paths are honored as-is (custom user LUTs)
-fn locate_lut_file(lut_path: &str) -> Option<PathBuf> {
+/// - absolute paths are validated with the standard path guard before use.
+fn locate_lut_file(lut_path: &str) -> Result<Option<PathBuf>> {
     let cleaned = lut_path.trim_start_matches(['/', '\\']);
     let direct = Path::new(lut_path);
-    if direct.is_absolute() && direct.exists() {
-        return Some(direct.to_path_buf());
+    if direct.is_absolute() {
+        // Custom user LUTs must pass the same security validation as any
+        // frontend-supplied file path.
+        return Ok(Some(
+            validate_io_path(lut_path, true)
+                .map_err(|e| crate::error::AppError::Generic(e.to_string()))?,
+        ));
     }
 
     let mut candidates: Vec<PathBuf> = vec![
@@ -52,7 +62,7 @@ fn locate_lut_file(lut_path: &str) -> Option<PathBuf> {
             candidates.push(dir.join("resources").join(cleaned));
         }
     }
-    candidates.into_iter().find(|c| c.exists())
+    Ok(candidates.into_iter().find(|c| c.exists()))
 }
 
 /// A decoded 3D LUT, loaded once and applied to many frames.
@@ -65,7 +75,7 @@ enum LoadedLut {
 
 impl LoadedLut {
     fn load(lut_path: &str) -> Result<Self> {
-        let resolved = locate_lut_file(lut_path).ok_or_else(|| {
+        let resolved = locate_lut_file(lut_path)?.ok_or_else(|| {
             crate::error::AppError::Generic(format!("LUT file not found: {}", lut_path))
         })?;
 
@@ -187,6 +197,12 @@ impl LoadedLut {
                 "LUT_3D_SIZE must be > 0".to_string(),
             ));
         }
+        if size > MAX_CUBE_SIZE {
+            return Err(crate::error::AppError::Generic(format!(
+                "LUT_3D_SIZE {} exceeds maximum supported {}",
+                size, MAX_CUBE_SIZE
+            )));
+        }
 
         let expected = size * size * size;
         if values.len() != expected {
@@ -277,7 +293,7 @@ impl LoadedLut {
             let g_in = chunk[1] as f32 / 255.0;
             let b_in = chunk[2] as f32 / 255.0;
 
-            let sample = sample_trilinear(data, size, r_in, g_in, b_in);
+            let sample = sample_trilinear(data, size, r_in, g_in, b_in).map(|c| c.clamp(0.0, 1.0));
 
             chunk[0] = ((r_in * (1.0 - amount) + sample[0] * amount) * 255.0) as u8;
             chunk[1] = ((g_in * (1.0 - amount) + sample[1] * amount) * 255.0) as u8;

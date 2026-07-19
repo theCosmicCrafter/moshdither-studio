@@ -13,6 +13,9 @@ export interface ParsedLut {
   data: Float32Array;
 }
 
+// Cap the frontend parser to the same limit as the Rust backend.
+const MAX_CUBE_SIZE = 256;
+
 export function parseCubeLut(text: string): ParsedLut {
   const lines = text.split(/\r?\n/);
 
@@ -68,6 +71,9 @@ export function parseCubeLut(text: string): ParsedLut {
 
   if (size === 0) {
     throw new Error("LUT_3D_SIZE not found in .cube file");
+  }
+  if (size > MAX_CUBE_SIZE) {
+    throw new Error(`LUT_3D_SIZE ${size} exceeds the maximum supported size of ${MAX_CUBE_SIZE}`);
   }
 
   const expected = size * size * size * 3;

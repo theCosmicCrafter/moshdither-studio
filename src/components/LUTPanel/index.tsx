@@ -1,6 +1,7 @@
 import { useAppStore } from "../../store";
 import { LUT_PRESETS, loadCustomLUT } from "../../engine/lut/loader";
 import { open } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
 import { isTauriAvailable } from "../../lib/browserFallback";
 
 export default function LUTPanel() {
@@ -27,9 +28,12 @@ export default function LUTPanel() {
     if (!selected || Array.isArray(selected)) return;
 
     try {
-      const { previewUrl, filePath } = await loadCustomLUT(selected);
+      // Copy the user-selected LUT into the app's allowed temporary directory so
+      // the webview can preview it through the asset protocol.
+      const preparedPath = (await invoke("prepare_custom_lut", { path: selected })) as string;
+      const { previewUrl, filePath } = await loadCustomLUT(preparedPath);
       addLUTEffect(previewUrl, filePath);
-      setStatusMessage(`Custom LUT loaded: ${selected.split(/[/\\]/).pop()}`);
+      setStatusMessage(`Custom LUT loaded: ${preparedPath.split(/[/\\]/).pop()}`);
     } catch (err) {
       setStatusMessage(
         `Custom LUT failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -70,6 +74,13 @@ export default function LUTPanel() {
           </span>
           Load Custom LUT…
         </button>
+        <p className="mt-2 px-1 text-label-sm text-on-surface-variant opacity-70 leading-relaxed">
+          Click above to import a custom LUT. Supports 512×512 PNG LUTs and standard
+          Adobe / Resolve .cube 3D LUTs. Bundled presets live in{" "}
+          <code className="bg-surface/40 px-1 rounded">public/lut/</code> for dev builds
+          and <code className="bg-surface/40 px-1 rounded">resources/lut/</code> for
+          production installers.
+        </p>
       </div>
 
       {/* LUT list */}
