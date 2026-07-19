@@ -15,7 +15,7 @@ export default defineConfig({
   build: {
     target: "es2022",
     minify: !process.env.TAURI_DEBUG ? "esbuild" : false,
-    sourcemap: !!process.env.TAURI_DEBUG,
+    sourcemap: process.env.TAURI_DEBUG ? "inline" : false,
     rollupOptions: {
       output: {
         manualChunks(id) {

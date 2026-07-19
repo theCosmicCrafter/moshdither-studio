@@ -24,6 +24,7 @@ export default function AudioPanel() {
   const setAudioEnabled = useAppStore((s) => s.setAudioEnabled);
   const setAudioVolume = useAppStore((s) => s.setAudioVolume);
   const setAudioFilePath = useAppStore((s) => s.setAudioFilePath);
+  const setStatusMessage = useAppStore((s) => s.setStatusMessage);
 
   const {
     loadAudioFile,
@@ -40,9 +41,16 @@ export default function AudioPanel() {
       audioFileRef.current = file;
       setAudioEnabled(true);
       setAudioFilePath(file.name);
-      await loadAudioFile(file);
+      try {
+        await loadAudioFile(file);
+      } catch (err) {
+        console.error("Audio file load failed:", err);
+        setStatusMessage(
+          `Audio load failed: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
     },
-    [loadAudioFile, setAudioEnabled, setAudioFilePath]
+    [loadAudioFile, setAudioEnabled, setAudioFilePath, setStatusMessage]
   );
 
   const handleDrop = useCallback(
@@ -53,14 +61,20 @@ export default function AudioPanel() {
       audioFileRef.current = file;
       setAudioEnabled(true);
       setAudioFilePath(file.name);
-      await loadAudioFile(file);
+      try {
+        await loadAudioFile(file);
+      } catch (err) {
+        console.error("Audio file load failed:", err);
+        setStatusMessage(
+          `Audio load failed: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
     },
-    [loadAudioFile, setAudioEnabled, setAudioFilePath]
+    [loadAudioFile, setAudioEnabled, setAudioFilePath, setStatusMessage]
   );
 
   const selectedStackId = useAppStore((s) => s.selectedStackId);
   const setKeyframesForTrack = useAppStore((s) => s.setKeyframesForTrack);
-  const setStatusMessage = useAppStore((s) => s.setStatusMessage);
 
   const handleAnalyzeBeats = useCallback(async () => {
     const file = audioFileRef.current;
@@ -89,7 +103,8 @@ export default function AudioPanel() {
       }
     } catch (err) {
       console.error("Beat detection failed:", err);
-      setStatusMessage("Beat detection failed");
+      const detail = err instanceof Error ? err.message : String(err);
+      setStatusMessage(`Beat detection failed: ${detail}`);
     }
   }, [selectedStackId, setKeyframesForTrack, setStatusMessage]);
 

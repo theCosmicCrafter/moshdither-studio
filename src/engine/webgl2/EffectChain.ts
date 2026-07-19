@@ -1,7 +1,7 @@
-import { WebGLContext } from "./WebGLContext";
+import { LUTLoader } from "../lut/loader";
 import { FullscreenQuad } from "./FullscreenQuad";
 import { EffectShader, RenderPass } from "./types";
-import { LUTLoader } from "../lut/loader";
+import { WebGLContext } from "./WebGLContext";
 
 const MASK_MODE_MAP: Record<string, number> = {
   inside: 0,
@@ -28,7 +28,22 @@ export class EffectChain {
     this.height = height;
   }
 
-  private async getMaskTexture(maskB64: string): Promise<WebGLTexture> {
+  /**
+   * Drop cached mask textures and force FBO recreation. Called when the WebGL
+   * context is restored so stale resources are not reused.
+   */
+  reset() {
+    this.maskTextureCache.clear();
+    this.savedPreviousTex = null;
+    this.initialized = false;
+    this.quad.reset();
+    this.lutLoader.clearCache();
+  }
+
+  private async getMaskTexture(maskB64: string): Promise<WebGLTexture | null> {
+    if (this.gl.isContextLost()) {
+      return null;
+    }
     const cached = this.maskTextureCache.get(maskB64);
     if (cached) return cached;
     const img = new Image();
@@ -69,6 +84,11 @@ export class EffectChain {
     passes: RenderPass[],
     shaders: Map<string, EffectShader>
   ) {
+    if (this.gl.isContextLost()) {
+      console.warn("[EffectChain] render skipped: WebGL context lost");
+      return;
+    }
+
     if (passes.length === 0) {
       // No effects, just blit source to screen
       this.blit(sourceTexture);

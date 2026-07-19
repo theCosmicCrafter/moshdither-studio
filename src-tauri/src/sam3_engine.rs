@@ -672,7 +672,8 @@ impl Sam3Engine {
     }
 
     /// Kill and reap the bridge child process with a bounded wait so we never
-    /// hang waiting for a Python process that refuses to exit.
+    /// hang waiting for a Python process that refuses to exit. Returns any
+    /// terminal error so callers can report it to the UI/logs.
     fn kill_child(child: &mut Option<std::process::Child>) -> crate::error::Result<()> {
         let Some(child) = child else {
             return Ok(());
@@ -680,15 +681,31 @@ impl Sam3Engine {
         if let Err(e) = child.kill() {
             eprintln!("[SAM3] Failed to kill bridge child: {}", e);
         }
-        match child.wait_timeout(Duration::from_secs(5)) {
-            Ok(status) => eprintln!("[SAM3] Bridge child exited with status {:?}", status.code()),
+        let wait_result = child.wait_timeout(Duration::from_secs(5));
+        let status = match wait_result {
+            Ok(status) => {
+                eprintln!("[SAM3] Bridge child exited with status {:?}", status.code());
+                Some(status)
+            }
             Err(e) => {
                 eprintln!("[SAM3] Bridge child wait error: {}", e);
-                // Attempt one final reap.
+                // Attempt one final reap; do not swallow unexpected IO errors.
                 let _ = child.wait();
+                return Err(crate::error::AppError::Generic(format!(
+                    "SAM3 bridge shutdown failed: {}",
+                    e
+                )));
+            }
+        };
+        remove_sam3_pid();
+        if let Some(status) = status {
+            if !status.success() && status.code() != Some(137) {
+                return Err(crate::error::AppError::Generic(format!(
+                    "SAM3 bridge exited with status {:?}",
+                    status.code()
+                )));
             }
         }
-        remove_sam3_pid();
         Ok(())
     }
 }

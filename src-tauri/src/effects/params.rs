@@ -75,8 +75,8 @@ mod tests {
         params.insert("amount".to_string(), json!(5.0));
         params.insert("count".to_string(), json!(-10.0));
 
-        clamp_value(&mut params.get_mut("amount").unwrap(), 0.0, 1.0);
-        clamp_value(&mut params.get_mut("count").unwrap(), 1.0, 100.0);
+        clamp_value(params.get_mut("amount").unwrap(), 0.0, 1.0);
+        clamp_value(params.get_mut("count").unwrap(), 1.0, 100.0);
 
         assert_eq!(params["amount"].as_f64(), Some(1.0));
         assert_eq!(params["count"].as_f64(), Some(1.0));

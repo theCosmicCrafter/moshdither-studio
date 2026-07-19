@@ -694,44 +694,35 @@ pub fn encode_video(
         eprintln!("[export] FFmpeg stdin closed (EOF sent), waiting for encode to finish...");
     }
 
-    // Wait for the child with an optional timeout. If it expires, kill it
-    // so a hung encode cannot run forever.
+    // Wait for the child with a bounded timeout (default 10 minutes). If it
+    // expires, kill it so a hung encode cannot run forever.
     use child_wait_timeout::ChildWT;
     use std::io::ErrorKind;
-    let status = if let Some(t) = timeout {
-        match child.wait_timeout(t) {
-            Ok(status) => status,
-            Err(e) if e.kind() == ErrorKind::TimedOut => {
-                eprintln!(
-                    "[export] FFmpeg encode timed out after {:?}, killing process",
-                    t
-                );
-                let _ = child.kill();
-                let _ = child.wait_timeout(std::time::Duration::from_secs(10));
-                if let Some(t) = stderr_thread.take() {
-                    let _ = t.join();
-                }
-                return Err(AppError::Ffmpeg(format!(
-                    "FFmpeg encode timed out after {:?}",
-                    t
-                )));
-            }
-            Err(e) => {
-                let _ = child.kill();
-                if let Some(t) = stderr_thread.take() {
-                    let _ = t.join();
-                }
-                return Err(AppError::Io(e));
-            }
-        }
-    } else {
-        let result = child.wait().map_err(AppError::Io);
-        if result.is_err() {
+    let timeout = timeout.unwrap_or(std::time::Duration::from_secs(600));
+    let status = match child.wait_timeout(timeout) {
+        Ok(status) => status,
+        Err(e) if e.kind() == ErrorKind::TimedOut => {
+            eprintln!(
+                "[export] FFmpeg encode timed out after {:?}, killing process",
+                timeout
+            );
+            let _ = child.kill();
+            let _ = child.wait_timeout(std::time::Duration::from_secs(10));
             if let Some(t) = stderr_thread.take() {
                 let _ = t.join();
             }
+            return Err(AppError::Ffmpeg(format!(
+                "FFmpeg encode timed out after {:?}",
+                timeout
+            )));
         }
-        result?
+        Err(e) => {
+            let _ = child.kill();
+            if let Some(t) = stderr_thread.take() {
+                let _ = t.join();
+            }
+            return Err(AppError::Io(e));
+        }
     };
 
     if let Some(t) = stderr_thread.take() {

@@ -3,7 +3,7 @@
  * Tests render behavior, key interactions, and store integration.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, within } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, within, waitFor } from "@testing-library/react";
 import { useAppStore, type EffectMeta } from "../../store";
 
 // ── Mock external dependencies ──────────────────────────────
@@ -1016,6 +1016,10 @@ describe("Component Test Suite", () => {
       fireEvent.click(screen.getByText("Run Verification"));
       // The button should show "Running..." while the async call is in flight
       expect(screen.getByText("Running...")).toBeInTheDocument();
+      // Wait for the mocked async call to settle so state updates are flushed
+      await waitFor(() =>
+        expect(screen.queryByText("Running...")).not.toBeInTheDocument()
+      );
     });
 
     it("shows pass rate after verification completes", async () => {

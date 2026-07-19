@@ -1,39 +1,40 @@
 # Python Backend Dependencies for MoshDither Studio
+# Pinned to compatible-release specifiers to avoid surprise breakages and
+# supply-chain drift (see architecture review #19).
 
 # Image processing (used by dither_cli.py reference)
-Pillow>=12.2.0
+Pillow>=12.2.0,<13
 
 # Terminal UI (used by dither_cli.py reference)
-rich>=13.0.0
+rich>=13.0.0,<14
 
 # JWT verification for RPC session tokens (AUD-009 hardening)
-PyJWT>=2.8.0
+PyJWT>=2.8.0,<3
 
 # SAM 3 (Meta Segment Anything Model 3)
-torch>=2.0.0
-torchvision>=0.15.0
-timm>=1.0.17
+torch>=2.0.0,<3
+torchvision>=0.15.0,<1
+timm>=1.0.17,<2
 numpy>=1.26,<2
-tqdm
+tqdm>=4.65.0,<5
 ftfy==6.1.1
-regex
-iopath>=0.1.10
-huggingface_hub
-pillow
+regex>=2023.0.0
+iopath>=0.1.10,<1
+huggingface_hub>=0.20.0,<1
 
 # GroundingDINO text detection → SAM segmentation
-transformers>=4.36.0
+transformers>=4.36.0,<5
 
 # SAM PRO mode post-processing (connected components, morph ops)
-opencv-python>=4.8.0
+opencv-python>=4.8.0,<5
 
 # Background removal
-rembg>=2.0.50
-onnxruntime>=1.15.0
+rembg>=2.0.50,<3
+onnxruntime>=1.15.0,<2
 
 # SAM 3 additional runtime deps (not in core pyproject.toml but required at import)
-einops
-triton-windows; platform_system=="Windows"
-pycocotools
-psutil
-scikit-image
+einops>=0.7.0,<1
+triton-windows>=2.1.0; platform_system=="Windows"
+pycocotools>=2.0.7,<3
+psutil>=5.9.0,<6
+scikit-image>=0.21.0,<1

@@ -99,6 +99,7 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
   const setPreviewDataUrl = useAppStore((s) => s.setPreviewDataUrl);
   const setOriginalDataUrl = useAppStore((s) => s.setOriginalDataUrl);
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
+  const setUseCpuPreview = useAppStore((s) => s.setUseCpuPreview);
   const setSam3Masks = useAppStore((s) => s.setSam3Masks);
   const addSam3Point = useAppStore((s) => s.addSam3Point);
   const clearSam3Points = useAppStore((s) => s.clearSam3Points);
@@ -583,13 +584,32 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
   useEffect(() => {
     if (!webglCanvasRef.current) return;
     try {
-      const ctx = new WebGLContext(webglCanvasRef.current);
+      const ctx = new WebGLContext(webglCanvasRef.current, {
+        onContextLost: () => {
+          console.error("[Preview] WebGL context lost");
+          setStatusMessage(
+            "WebGL context lost — switched to CPU preview fallback"
+          );
+          setUseCpuPreview(true);
+        },
+        onContextRestored: () => {
+          console.log("[Preview] WebGL context restored");
+          setStatusMessage("WebGL context restored — reinitializing preview");
+          retireSourceTexture();
+          chainRef.current?.reset();
+          setUseCpuPreview(false);
+        },
+      });
       glCtxRef.current = ctx;
       uploaderRef.current = new MediaUploader(ctx);
       chainRef.current = new EffectChain(ctx, 1024, 1024);
-      console.log('[Preview] WebGL2 context initialized OK');
+      console.log("[Preview] WebGL2 context initialized OK");
     } catch (e) {
-      console.error('[Preview] WebGL2 not available:', e);
+      console.error("[Preview] WebGL2 not available:", e);
+      setStatusMessage(
+        `WebGL2 unavailable: ${e instanceof Error ? e.message : String(e)}`
+      );
+      setUseCpuPreview(true);
     }
     return () => {
       retireSourceTexture();
@@ -600,7 +620,12 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
       uploaderRef.current = null;
       chainRef.current = null;
     };
-  }, [deleteRetiredSourceTextures, retireSourceTexture]);
+  }, [
+    deleteRetiredSourceTextures,
+    retireSourceTexture,
+    setStatusMessage,
+    setUseCpuPreview,
+  ]);
 
   // Invalidate texture when original image changes
   useEffect(() => {
