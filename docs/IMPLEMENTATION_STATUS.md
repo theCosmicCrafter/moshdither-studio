@@ -212,3 +212,42 @@
 | 2   | Auto-updater  | Not configured          | Tauri updater plugin                 |
 | 3   | Plugin system | Not started             | Sandboxed extension architecture     |
 | 4   | Cloud sync    | Not in Tauri version    | Local folder sync                    |
+
+---
+
+## Production-Readiness Remediation (2026-07-19)
+
+### Completed in this pass
+
+| #   | Item                                   | Verified                                          | Notes                                                                             |
+| --- | -------------------------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------- |
+| 1   | React Error Boundary                   | `src/components/ErrorBoundary.tsx`, `src/App.tsx` | Root boundary with fallback UI and status-message reporting                       |
+| 2   | WebGL context-loss recovery            | `src/engine/webgl2/WebGLContext.ts`               | Listeners prevent default, clear cached resources, and trigger chain reset        |
+| 3   | Python dependency pinning              | `packages/python-backend/requirements.txt`        | Compatible-release specifiers for all runtime deps                                |
+| 4   | Audio error surfacing                  | `src/components/AudioPanel/index.tsx`             | `loadAudioFile`/`handleAnalyzeBeats` now report `Error.message` to the status bar |
+| 5   | Test `act` warnings                    | `src/components/__tests__/*.test.tsx`             | Wrapped store mutations and async settle points                                   |
+| 6   | FFmpeg encode default timeout          | `src-tauri/src/ffmpeg/mod.rs`                     | `encode_video` defaults to a 10-minute bound instead of waiting forever           |
+| 7   | SAM3 bridge shutdown error propagation | `src-tauri/src/sam3_engine.rs`                    | `kill_child` now returns non-success/non-timeout exit statuses as `AppError`      |
+
+### Verification
+
+- `cargo clippy` — clean
+- `cargo test --lib` — 441 tests passing
+- `cargo check --bin mosh-verify` — clean
+- `npm run lint` — clean
+- `npm run test` — 1,024 tests passing
+- `npm run build` — clean
+- `npm audit` — 0 vulnerabilities
+- `cargo audit` — 18 allowed unmaintained/unsound warnings (GTK3, paste, proc-macro-error, unic, glib), all transitive and not actionable without upstream migrations
+- `../tools/scan-gate.ps1` — 0 issues
+
+### Remaining architecture-review work
+
+The prior architecture-review report still has items that are larger or require external assets. The next pass should tackle, in order:
+
+1. **Release CI / signing / updater** — add Tauri updater config, code-signing placeholders, and a `publish.yml` workflow using `tauri-action` (requires certificates/secrets).
+2. **PreviewViewport store selector optimization** — split large `subscribe`/`useAppStore` reads into focused selectors to reduce re-renders.
+3. **External binary validation at build time** — add a build script that asserts `ffmpeg`, `ffprobe`, and SAM3 Python env are present and version-compatible.
+4. **Material Symbols font self-hosting / subsetting** — replace the 4 MB `material-symbols-outlined` font with a subset to shrink bundle.
+5. **Dependency GTK3 warning triage** — document the transitive GTK3 `cargo audit` warnings and evaluate `gtk4` migration path.
+6. **E2E coverage expansion** — add Playwright smoke tests for export flow and SAM3 mask generation.
