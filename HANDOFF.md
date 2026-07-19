@@ -14,6 +14,38 @@
 - `npx playwright test tests/e2e/app-launch.spec.ts` PASS (4/4; one flaky failure in full suite rerun passed individually)
 - `npm audit` PASS (0 vulnerabilities)
 
+---
+
+**Session Date:** 2026-07-19 (evening)
+**Phase:** Dither effects hardening + Audio Dither parity + UI filename fix
+**Status:**
+
+- `cargo test` PASS (408/408)
+- `cargo clippy` clean
+- `mosh-verify verify-all --filter dither` PASS (20/20)
+- `npm run lint` PASS (0 warnings)
+- `npx tsc --noEmit` PASS
+- `npm run test` PASS (1017/1017)
+
+## Dither / Audio Dither / UI Filename Fixes Session (2026-07-19)
+
+### Changes
+
+- Added shared `error_diffusion.rs` helper and converted Floyd-Steinberg, Atkinson, Burkes, Sierra, Stucki, Jarvis-Judice-Ninke, Riemersma, `error_diffusion_variants`, and `ordered_dither_variants` from per-channel RGB thresholding to luminance-based grayscale error diffusion.
+- Fixed `custom_matrix` ordered dither producing solid white output.
+- Fixed `random_noise` dither producing washed-out saturated noise; now uses signed random-threshold dither on luminance.
+- Fixed `bayer` `matrix_size` parameter being used as an array index instead of the actual matrix size.
+- Renamed `audio_dither` effect to "Audio Reactive Dither", aligned Rust parameter `palette_size` to `levels`, and wired preview shader uniforms (`u_threshold`, `u_intensity`, `u_levels`, `u_bass`).
+- Fixed `effectConverter.ts` transform for `audio_reactive.audio_dither` that was comparing `_k` against a shader uniform name instead of the Rust parameter name.
+- Added `src/utils/fileName.ts` `getFileName()` helper and updated `Timeline` and `AudioPanel` to display audio file basenames with full-path tooltips.
+- Added `Timeline.test.tsx` regression test for full Windows audio paths.
+
+### Remaining follow-ups
+
+- Investigate `dithering.random_noise` `amount` parameter mismatch between frontend (`effectConverter.ts` / shader) and Rust backend, which currently has no `amount` parameter.
+- Consider hardening `sanitize_filename` in `src-tauri/src/bin/mosh_verify.rs` if effect IDs gain characters beyond `.`, `/`, or `\`.
+- Continue monitoring `vercel-labs/native` for future greenfield native desktop / media / AI-agent projects; no action for MoshDither.
+
 ## Hardening Session (2026-07-19)
 
 ### Changes
