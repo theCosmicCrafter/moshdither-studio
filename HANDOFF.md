@@ -29,7 +29,7 @@
 
 ## Dither / Audio Dither / UI Filename Fixes Session (2026-07-19)
 
-### Changes
+### Changes (dither / audio / filename fixes)
 
 - Added shared `error_diffusion.rs` helper and converted Floyd-Steinberg, Atkinson, Burkes, Sierra, Stucki, Jarvis-Judice-Ninke, Riemersma, `error_diffusion_variants`, and `ordered_dither_variants` from per-channel RGB thresholding to luminance-based grayscale error diffusion.
 - Fixed `custom_matrix` ordered dither producing solid white output.
@@ -40,7 +40,7 @@
 - Added `src/utils/fileName.ts` `getFileName()` helper and updated `Timeline` and `AudioPanel` to display audio file basenames with full-path tooltips.
 - Added `Timeline.test.tsx` regression test for full Windows audio paths.
 
-### Remaining follow-ups
+### Remaining follow-ups (dither / audio / filename fixes)
 
 - Investigate `dithering.random_noise` `amount` parameter mismatch between frontend (`effectConverter.ts` / shader) and Rust backend, which currently has no `amount` parameter.
 - Consider hardening `sanitize_filename` in `src-tauri/src/bin/mosh_verify.rs` if effect IDs gain characters beyond `.`, `/`, or `\`.
@@ -48,7 +48,7 @@
 
 ## Hardening Session (2026-07-19)
 
-### Changes
+### Changes (production hardening)
 
 - Tightened `src-tauri/capabilities/default.json` filesystem scope.
 - Removed unused `tauri-plugin-shell` from backend.
@@ -60,7 +60,7 @@
 - Fixed `src/lib/mediaLoading.e2e.test.ts` `Image` mock for Vitest 4.
 - Updated `SECURITY.md` skill path reference to `.codeium/windsurf/skills/security/`.
 
-### Remaining follow-ups
+### Remaining follow-ups (production hardening)
 
 - Verify Tauri desktop app bundle (`npx tauri build`) on target platforms.
 - Revalidate full Playwright suite under CI with retries enabled.
