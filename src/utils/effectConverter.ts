@@ -234,11 +234,10 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "dithering.bayer": {
     shaderId: "bayer_dither",
     paramMap: { matrix_size: "scale" },
-    // Rust param is an index (0-3) into [2,4,8,16]; shader uses scale as block size
+    // Rust param is the actual Bayer matrix size (2, 4, 8, 16)
     transform: (_k, v) => {
-      const idx = typeof v === "number" ? Math.floor(v) : 1;
-      const sizes = [2, 4, 8, 16];
-      return sizes[Math.max(0, Math.min(3, idx))];
+      const size = typeof v === "number" ? v : 4;
+      return Math.max(2, Math.min(16, size));
     },
   },
   "dithering.palette": {
@@ -435,10 +434,16 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   },
   "audio_reactive.audio_dither": {
     shaderId: "audioReactiveDither",
-    paramMap: { base_threshold: "u_intensity", modulation: "u_levels" },
-    transform: (_k, v) => {
-      if (_k === "u_levels") return typeof v === "number" ? v : 4;
-      return typeof v === "number" ? v / 100 : 0.5;
+    paramMap: {
+      base_threshold: "u_threshold",
+      modulation: "u_intensity",
+      levels: "u_levels",
+    },
+    transform: (rustParam, v) => {
+      if (rustParam === "base_threshold") return typeof v === "number" ? v / 255.0 : 0.5;
+      if (rustParam === "modulation") return typeof v === "number" ? v : 0.5;
+      if (rustParam === "levels") return typeof v === "number" ? v : 4;
+      return typeof v === "number" ? v : 0;
     },
   },
 
