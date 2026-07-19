@@ -238,6 +238,16 @@ describe("Timeline", () => {
       expect(screen.getByText("song.mp3")).toBeInTheDocument();
     });
 
+    it("shows only the file name, not the full path", () => {
+      useAppStore.getState().setAudioFilePath("C:\\Users\\richk\\Music\\song.mp3");
+      render(<Timeline />);
+      expect(screen.getByText("song.mp3")).toBeInTheDocument();
+      expect(
+        screen.queryByText("C:\\Users\\richk\\Music\\song.mp3")
+      ).not.toBeInTheDocument();
+      expect(screen.getByTitle("C:\\Users\\richk\\Music\\song.mp3")).toBeInTheDocument();
+    });
+
     it("does not show audio file name when null", () => {
       render(<Timeline />);
       expect(screen.queryByText("song.mp3")).not.toBeInTheDocument();

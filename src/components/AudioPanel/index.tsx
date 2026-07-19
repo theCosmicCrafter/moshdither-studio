@@ -4,6 +4,7 @@ import { useAudioEngine } from "../../hooks/useAudioEngine";
 import { STANDARD_BANDS } from "../../engine/audio/types";
 import { detectBeats, decodeAudioFile } from "../../utils/beatDetection";
 import { generateBeatKeyframes } from "../../utils/beatKeyframeGenerator";
+import { getFileName } from "../../utils/fileName";
 
 export default function AudioPanel() {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -123,6 +124,7 @@ export default function AudioPanel() {
             onDrop={handleDrop}
             onDragOver={(e) => e.preventDefault()}
             onClick={() => fileInputRef.current?.click()}
+            title={audioFilePath ?? undefined}
             style={{
               border: "2px dashed var(--surface-bright)",
               borderRadius: 4,
@@ -133,7 +135,7 @@ export default function AudioPanel() {
               color: audioFilePath ? "var(--accent-teal)" : "var(--text-muted)",
             }}
           >
-            {audioFilePath || "Drop audio file or click to browse"}
+            {getFileName(audioFilePath) || "Drop audio file or click to browse"}
           </div>
           <input
             ref={fileInputRef}

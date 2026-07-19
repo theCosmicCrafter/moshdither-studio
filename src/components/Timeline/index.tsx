@@ -1,5 +1,6 @@
 import React, { useRef, useCallback } from "react";
 import { useAppStore } from "../../store";
+import { getFileName } from "../../utils/fileName";
 
 export default function Timeline() {
   const currentTime = useAppStore((s) => s.currentTime);
@@ -188,7 +189,7 @@ export default function Timeline() {
             className="font-data-micro text-data-micro text-accent-teal max-w-[120px] overflow-hidden text-ellipsis whitespace-nowrap ml-2"
             title={audioFilePath}
           >
-            {audioFilePath}
+            {getFileName(audioFilePath)}
           </div>
         )}
       </div>
