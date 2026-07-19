@@ -32,71 +32,15 @@ impl Effect for FloydSteinbergDither {
         &self,
         input: &Frame,
         _mask: Option<&Mask>,
-        _params: &ParameterValues,
+        params: &ParameterValues,
     ) -> Result<Frame> {
-        let w = input.width as usize;
-        let h = input.height as usize;
-        let mut data = input.data.clone();
-        // Convert to f32 for error accumulation
-        let mut buf: Vec<f32> = data.iter().map(|&v| v as f32).collect();
-
-        for y in 0..h {
-            let reverse = y % 2 == 1; // Serpentine
-            let x_range: Vec<usize> = if reverse {
-                (0..w).rev().collect()
-            } else {
-                (0..w).collect()
-            };
-
-            for &x in &x_range {
-                let idx = (y * w + x) * 4;
-                let old_r = buf[idx];
-                let old_g = buf[idx + 1];
-                let old_b = buf[idx + 2];
-
-                // Quantize to black/white
-                let new_r = if old_r > 127.0 { 255.0 } else { 0.0 };
-                let new_g = if old_g > 127.0 { 255.0 } else { 0.0 };
-                let new_b = if old_b > 127.0 { 255.0 } else { 0.0 };
-
-                buf[idx] = new_r;
-                buf[idx + 1] = new_g;
-                buf[idx + 2] = new_b;
-
-                let err_r = old_r - new_r;
-                let err_g = old_g - new_g;
-                let err_b = old_b - new_b;
-
-                // Distribute error
-                let distribute = |buf: &mut [f32], nx: isize, ny: isize, factor: f32| {
-                    if nx >= 0 && nx < w as isize && ny >= 0 && ny < h as isize {
-                        let nidx = (ny as usize * w + nx as usize) * 4;
-                        buf[nidx] += err_r * factor;
-                        buf[nidx + 1] += err_g * factor;
-                        buf[nidx + 2] += err_b * factor;
-                    }
-                };
-
-                if reverse {
-                    distribute(&mut buf, x as isize - 1, y as isize, 7.0 / 16.0);
-                    distribute(&mut buf, x as isize + 1, y as isize + 1, 3.0 / 16.0);
-                    distribute(&mut buf, x as isize, y as isize + 1, 5.0 / 16.0);
-                    distribute(&mut buf, x as isize - 1, y as isize + 1, 1.0 / 16.0);
-                } else {
-                    distribute(&mut buf, x as isize + 1, y as isize, 7.0 / 16.0);
-                    distribute(&mut buf, x as isize - 1, y as isize + 1, 3.0 / 16.0);
-                    distribute(&mut buf, x as isize, y as isize + 1, 5.0 / 16.0);
-                    distribute(&mut buf, x as isize + 1, y as isize + 1, 1.0 / 16.0);
-                }
-            }
-        }
-
-        data = buf.iter().map(|&v| v.clamp(0.0, 255.0) as u8).collect();
-        Ok(Frame {
-            width: input.width,
-            height: input.height,
-            data,
-        })
+        let kernel = &[
+            (1, 0, 7.0 / 16.0),
+            (-1, 1, 3.0 / 16.0),
+            (0, 1, 5.0 / 16.0),
+            (1, 1, 1.0 / 16.0),
+        ];
+        super::error_diffusion::apply(input, kernel, 2, true, params)
     }
 
     fn process_video(

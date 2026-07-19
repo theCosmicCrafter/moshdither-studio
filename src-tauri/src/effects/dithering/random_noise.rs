@@ -42,15 +42,27 @@ impl Effect for RandomNoiseDither {
         for y in 0..h {
             for x in 0..w {
                 let idx = (y * w + x) * 4;
+                let lum = 0.299 * data[idx] as f32
+                    + 0.587 * data[idx + 1] as f32
+                    + 0.114 * data[idx + 2] as f32;
+
+                // Deterministic per-pixel noise [0, 255]
                 let seed = x
                     .wrapping_mul(374761393usize)
                     .wrapping_add(y.wrapping_mul(668265263usize))
                     .wrapping_add(time.wrapping_mul(982451653usize));
                 let noise = ((seed.wrapping_mul(1203246503usize) >> 24) & 0xFF) as u8;
-                for c in 0..3 {
-                    let v = data[idx + c] as u16 + noise as u16;
-                    data[idx + c] = if v > 255 { 255 } else { v as u8 };
-                }
+                let threshold = noise as f32 / 255.0;
+
+                // Random-threshold dither: perturb luminance by ±half a step,
+                // then quantise to black/white.
+                let step = 255.0;
+                let dithered = lum + (threshold - 0.5) * step;
+                let color = if dithered > 127.5 { 255 } else { 0 };
+
+                data[idx] = color;
+                data[idx + 1] = color;
+                data[idx + 2] = color;
             }
         }
 

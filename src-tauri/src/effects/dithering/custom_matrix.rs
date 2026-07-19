@@ -88,21 +88,23 @@ impl Effect for CustomMatrixDither {
         let h = input.height as usize;
         let mut data = input.data.clone();
 
+        let step = 255.0 / (levels - 1) as f32;
+        let max_f = max_val.max(1) as f32;
+
         for y in 0..h {
             for x in 0..w {
-                let threshold = (matrix[y % rows][x % cols] * 255 / max_val) as u8;
                 let idx = (y * w + x) * 4;
-                let gray = (0.299 * data[idx] as f32
+                let gray = 0.299 * data[idx] as f32
                     + 0.587 * data[idx + 1] as f32
-                    + 0.114 * data[idx + 2] as f32) as u8;
-                let quantized =
-                    ((gray as u32 * (levels - 1) / 255) as f32 * 255.0 / (levels - 1) as f32) as u8;
-                let adjusted = ((gray as u32 + threshold as u32) / 2).min(255) as u8;
-                let final_val = if adjusted > quantized {
-                    (quantized as u16 + 255u16 / (levels - 1) as u16).min(255) as u8
-                } else {
-                    quantized
-                };
+                    + 0.114 * data[idx + 2] as f32;
+
+                // Normalised ordered-dither threshold [0, 1]
+                let threshold = matrix[y % rows][x % cols] as f32 / max_f;
+                let dithered = gray + (threshold - 0.5) * step;
+
+                let q = (dithered / step).round().clamp(0.0, (levels - 1) as f32) as u32;
+                let final_val = (q as f32 * step).clamp(0.0, 255.0) as u8;
+
                 data[idx] = final_val;
                 data[idx + 1] = final_val;
                 data[idx + 2] = final_val;

@@ -4,6 +4,7 @@ pub mod bayer;
 pub mod blue_noise;
 pub mod burkes;
 pub mod custom_matrix;
+pub mod error_diffusion;
 pub mod error_diffusion_variants;
 pub mod floyd_steinberg;
 pub mod halftone;

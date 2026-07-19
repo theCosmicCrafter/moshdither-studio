@@ -80,11 +80,6 @@ impl Effect for ErrorDiffusionDither {
             .and_then(|v| v.as_i64())
             .unwrap_or(2)
             .max(2) as u32;
-        let quantize = |v: f32| {
-            let step = 255.0 / (levels - 1) as f32;
-            let idx = (v / step).round();
-            (idx * step).clamp(0.0, 255.0)
-        };
 
         let kernel: &[(isize, isize, f32)] = match algorithm {
             "simple2d" => &[(1, 0, 0.5), (0, 1, 0.5)],
@@ -163,44 +158,7 @@ impl Effect for ErrorDiffusionDither {
             ],
         };
 
-        let w = input.width as usize;
-        let h = input.height as usize;
-        let mut buf: Vec<f32> = input.data.iter().map(|&v| v as f32).collect();
-
-        for y in 0..h {
-            let reverse = y % 2 == 1;
-            let dir: isize = if reverse { -1 } else { 1 };
-            let x_range: Vec<usize> = if reverse {
-                (0..w).rev().collect()
-            } else {
-                (0..w).collect()
-            };
-
-            for x in x_range {
-                let idx = (y * w + x) * 4;
-                for c in 0..3 {
-                    let old = buf[idx + c];
-                    let new = quantize(old);
-                    let err = old - new;
-                    buf[idx + c] = new;
-
-                    for (dx, dy, factor) in kernel {
-                        let nx = x as isize + dx * dir;
-                        let ny = y as isize + dy;
-                        if nx >= 0 && nx < w as isize && ny >= 0 && ny < h as isize {
-                            buf[(ny as usize * w + nx as usize) * 4 + c] += err * factor;
-                        }
-                    }
-                }
-            }
-        }
-
-        let data = buf.iter().map(|&v| v.clamp(0.0, 255.0) as u8).collect();
-        Ok(Frame {
-            width: input.width,
-            height: input.height,
-            data,
-        })
+        super::error_diffusion::apply(input, kernel, levels, true, params)
     }
 
     fn process_video(

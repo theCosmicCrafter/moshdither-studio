@@ -104,13 +104,23 @@ impl Effect for BayerDither {
         let w = input.width as usize;
         let h = input.height as usize;
 
-        let matrix_size_idx = params
+        let matrix_size = params
             .get("matrix_size")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(1) as usize;
-        let ms_values = [2, 4, 8, 16];
-        let ms = ms_values[matrix_size_idx % 4] as usize;
-        let matrix = Self::generate_bayer_matrix(ms as u32);
+            .and_then(|v| v.as_u64().map(|n| n as u32))
+            .or_else(|| {
+                params
+                    .get("matrix_size")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse().ok())
+            })
+            .unwrap_or(4);
+        let ms = [2u32, 4, 8, 16]
+            .iter()
+            .copied()
+            .find(|&v| v >= matrix_size)
+            .unwrap_or(16)
+            .min(16);
+        let matrix = Self::generate_bayer_matrix(ms);
 
         for y in 0..h {
             for x in 0..w {
@@ -118,8 +128,8 @@ impl Effect for BayerDither {
                 let r = input.data[idx];
                 let g = input.data[idx + 1];
                 let b = input.data[idx + 2];
-                let threshold = matrix[y % ms][x % ms];
-                let (dr, dg, db) = Self::dither_pixel_static(r, g, b, threshold, ms);
+                let threshold = matrix[y % ms as usize][x % ms as usize];
+                let (dr, dg, db) = Self::dither_pixel_static(r, g, b, threshold, ms as usize);
                 output.data[idx] = dr;
                 output.data[idx + 1] = dg;
                 output.data[idx + 2] = db;
