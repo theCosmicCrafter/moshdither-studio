@@ -88,6 +88,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Frame manipulation datamoshing (reverse, sort by size, hold)
 - I-frame removal variants for datamoshing
 - Slice size variability and repeat slices (SliceShiftAdvanced)
+- Reset `UNPACK_FLIP_Y_WEBGL` before LUT texture upload in
+  `src/engine/lut/loader.ts` to prevent LUT images from being flipped by
+  leftover pixel-store state (port of the old `feature/production-audit-fixes`
+  fix to the current WebGL2 engine).
 
 ## [0.1.0] - 2026-06-15
 

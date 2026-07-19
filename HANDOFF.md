@@ -1,23 +1,85 @@
 # Handoff Notes — MoshDither Studio
 
-**Session Date:** 2026-07-12
-**Phase:** Production audit — Rust panic hardening, debug-log cleanup, frontend `any` cleanup, adversarial tests
-**Status:** clippy clean (`-D warnings`), lint clean (0 warnings), tsc clean, cargo 408/408, vitest 1015/1015, effect verification 98/98
+**Session Date:** 2026-07-18
+**Phase:** True E2E audit — build and execute the Tauri desktop app, branch review, dependency audit
+**Status:** clippy clean (`-D warnings`), lint clean (0 warnings), tsc clean, cargo 408/408, vitest 1016/1016, Playwright E2E 66/66, effect verification 98/98, desktop app launched and exercised via CDP with 0 console errors
+
+---
+
+## E2E Audit Session (2026-07-18)
+
+### Verification results
+
+| Check                                                      | Status                                                                            |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `cargo clippy --all-targets --all-features -- -D warnings` | PASS (clean)                                                                      |
+| `cargo test`                                               | 408/408 PASS                                                                      |
+| `cargo run --bin mosh-verify -- verify-all`                | 98/98 effects PASS                                                                |
+| `npm run lint` (`--max-warnings 0`)                        | PASS (0 warnings)                                                                 |
+| `npx tsc --noEmit`                                         | PASS                                                                              |
+| `npx vitest run`                                           | 1016/1016 PASS                                                                    |
+| `npx playwright test`                                      | 66/66 PASS                                                                        |
+| Desktop app build (`npx tauri build --debug`)              | Rust compiled + exe produced; MSI bundler failed with file-lock error (non-fatal) |
+| Desktop app execute + CDP-driven audit                     | PASS — app launched, loaded image, applied effects, 0 console errors              |
+
+### Desktop E2E execution
+
+Built and launched `src-tauri/target/debug/moshdither-studio.exe` with WebView2 remote debugging enabled (`--remote-debugging-port=9222`). Connected via Playwright over CDP and exercised the live IPC surface:
+
+- `load_media_from_base64` with a 128x128 PNG → `loaded`
+- `get_media_info` → `{ width: 128, height: 128, loaded: true }`
+- `get_frame_data` → base64 PNG, ~13 KB
+- `apply_effect` (`dithering.bayer`) → base64 PNG, ~4.8 KB
+- `apply_effect_stack` (`dithering.floyd_steinberg`) → base64 PNG, ~25 KB
+- Captured screenshots `e2e-audit-output/00-launch.png`, `01-after-onboarding.png`, `02-after-backend-calls.png`
+- No unexpected console errors or warnings
+
+### Branch review
+
+- `origin/feature/production-audit-fixes` (last commit 2026-06-22, `b8e2714`) is stale. It targets the old `packages/desktop-gui/src/components/canvas/WebGLCanvas.tsx` which was removed when the code moved to `src/engine/webgl2`. The `lutCache.clear()` cleanup is already present in current `EffectChain.destroy()` via `LUTLoader.clearCache()`. The `UNPACK_FLIP_Y_WEBGL` defense around LUT upload was **not** present in the current `src/engine/lut/loader.ts` and has been ported as a defensive reset.
+- `origin/add-features-doc` currently points to the same commit as `origin/master` (`89be2fc`) — nothing to merge.
+- `local 4bb0d5ff` is an old local branch at `86ffebb` (TruffleHog pre-commit hook) which is already in `master`.
+
+### Dependency / security audit
+
+`npm audit` reports 4 dev-dependency vulnerabilities:
+
+- `esbuild` — moderate (dev-server cross-origin request)
+- `vite` — high (path traversal in optimized deps `.map` handling)
+- `vite-node` — moderate
+- `vitest` — critical (arbitrary file read/execute when Vitest UI server is listening)
+
+These require major-version dependency bumps (`vite` 5 → 8, `vitest` 1 → 4, `esbuild` 0.21 → ≥0.24.2) and were not changed in this pass to avoid test/build breakage.
+
+### E2E Changes
+
+1. **LUT upload defense (`src/engine/lut/loader.ts`)**: reset `UNPACK_FLIP_Y_WEBGL` to `false` before uploading LUT image textures, preventing accidental vertical flip if a previous texture upload left the pixel-store flag set.
+
+### Known issues / follow-ups
+
+- `src-tauri/capabilities/default.json` still grants broad filesystem scope (`$HOME/**`, `$APPDATA/**`, etc.). This was previously flagged as a Medium finding; narrow to the actual media/project directories the app touches.
+- `npm audit` dev-dependency vulnerabilities need a dedicated dependency upgrade pass with full test coverage.
+- Tauri debug MSI bundler can fail with `os error 32` when the target exe is held open; ensure the process is closed before bundling.
+- Stale remote branches (`origin/feature/production-audit-fixes`, `origin/add-features-doc`) should be pruned once confirmed obsolete.
 
 ---
 
 ## Production Audit Session (2026-07-12)
 
+**Session Date:** 2026-07-12
+**Phase:** Production audit — Rust panic hardening, debug-log cleanup, frontend `any` cleanup, adversarial tests
+**Status:** clippy clean (`-D warnings`), lint clean (0 warnings), tsc clean, cargo 408/408, vitest 1015/1015, effect verification 98/98
+
 ### Verification results (Step 1 / Step 7 catalog)
 
-| Check                                                    | Status                 |
-| -------------------------------------------------------- | ---------------------- |
-| `cargo clippy --all-targets --all-features -- -D warnings` | PASS (clean)           |
-| `cargo test`                                             | 408/408 PASS           |
-| `cargo run --bin mosh-verify -- verify-all`              | 98/98 effects PASS     |
-| `npm run lint` (`--max-warnings 0`)                      | PASS (0 warnings)      |
-| `npx tsc --noEmit`                                       | PASS                   |
-| `npx vitest run`                                         | 1015/1015 PASS         |
+| Check                                                      | Status             |
+| ---------------------------------------------------------- | ------------------ |
+| `cargo clippy --all-targets --all-features -- -D warnings` | PASS (clean)       |
+| `cargo test`                                               | 408/408 PASS       |
+| `cargo run --bin mosh-verify -- verify-all`                | 98/98 effects PASS |
+| `npm run lint` (`--max-warnings 0`)                        | PASS (0 warnings)  |
+| `npx tsc --noEmit`                                         | PASS               |
+| `npx vitest run`                                           | 1015/1015 PASS     |
 
 ### Changes
 
