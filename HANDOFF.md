@@ -1,6 +1,46 @@
 # Handoff Notes — MoshDither Studio
 
 **Session Date:** 2026-07-19
+**Phase:** LUT / palette / VHS semantic correctness follow-up
+**Status:**
+
+- `cargo clippy --all-targets --all-features -- -D warnings` PASS
+- `cargo test --lib` PASS (438/438)
+- `cargo fmt -- --check` PASS
+- `cargo audit` PASS (0 vulnerabilities; 18 unmaintained-crate warnings)
+- `npm audit` PASS (0 vulnerabilities)
+- `npm run lint` PASS (0 warnings)
+- `npx tsc --noEmit` PASS
+- `npm run test` PASS (1024/1024)
+- `mosh-verify verify-all` PASS (98/98)
+
+## LUT / Palette / VHS Follow-Up Session (2026-07-19)
+
+### Changes
+
+- **.cube LUT support:**
+  - `src-tauri/src/effects/color/lut_grading.rs` now detects `.cube` files and parses the standard Adobe / Resolve 3D LUT format, including `DOMAIN_MIN`/`DOMAIN_MAX` normalization and trilinear interpolation.
+  - `src/utils/parseLut.ts` gained `parseCubeLut`, `sampleCubeLut`, and `cubeToFlatLutImageData` for frontend parsing and 512×512 preview-texture generation.
+  - `src/engine/lut/loader.ts` added `loadCustomLUT()` to load `.png` or `.cube` files from disk and produce a preview URL.
+- **Custom LUT file picker:**
+  - `src/components/LUTPanel/index.tsx` now has a "Load Custom LUT…" button that uses the Tauri file dialog and supports `.png` and `.cube` files.
+  - `src/store/index.ts` `addLUTEffect()` takes an optional `filePath` argument so custom user LUTs pass the absolute disk path to the Rust export path while keeping a preview URL for WebGL.
+- **Historical palettes:**
+  - `src-tauri/src/effects/color/historical_palettes.rs`: `CGA` is now the classic 4-color CGA Mode 4/5 Palette 1 instead of a duplicate of the 16-color EGA default.
+  - Added tests for CGA (4-color) and EGA16 (16-color).
+- **VHS effect improvements:**
+  - `src-tauri/src/effects/analog/vhs.rs` rewritten around YCbCr processing with separate controls for luma noise, chroma delay (vertical), chroma bleed, chroma offset, and head-switching noise bands.
+  - `src/engine/shaders/vhsCrt.ts` and `src/utils/effectConverter.ts` updated with matching uniforms so the WebGL preview reflects the same parameters.
+
+### Remaining follow-ups
+
+- Add a `.cube` import flow for bundled preset LUTs (store in `public/lut` and reference with a relative `lut_path`).
+- Validate the VHS WebGL shader against the Rust output with parity tests; current preview is an approximation.
+- Continue monitoring the 18 `cargo audit` unmaintained-crate warnings.
+
+---
+
+**Session Date:** 2026-07-19
 **Phase:** Production hardening pass — Tauri capability scoping, dependency upgrade, Rust formatting, supply-chain audit config
 **Status:**
 

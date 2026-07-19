@@ -74,7 +74,14 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   },
   "analog.vhs": {
     shaderId: "vhs_crt",
-    paramMap: { tracking: "amount", noise: "amount" },
+    paramMap: {
+      tracking: "amount",
+      noise: "noise",
+      head_switching: "headSwitching",
+      chroma_delay: "chromaDelay",
+      chroma_bleed: "chromaBleed",
+      chroma_offset: "chromaOffset",
+    },
   },
   "analog.hue_shift": {
     shaderId: "hue_saturation",

@@ -55,9 +55,12 @@ fn locate_lut_file(lut_path: &str) -> Option<PathBuf> {
     candidates.into_iter().find(|c| c.exists())
 }
 
-/// A decoded 512x512 3D LUT, loaded once and applied to many frames.
-struct LoadedLut {
-    rgba: image::RgbaImage,
+/// A decoded 3D LUT, loaded once and applied to many frames.
+enum LoadedLut {
+    /// 512x512 PNG LUT stored as an 8×8 grid of 64×64 tiles (blue slices).
+    Png { rgba: image::RgbaImage },
+    /// Adobe/Iridas .cube 3D LUT parsed into a regular 3D RGB array.
+    Cube { data: Vec<[f32; 3]>, size: usize },
 }
 
 impl LoadedLut {
@@ -65,6 +68,14 @@ impl LoadedLut {
         let resolved = locate_lut_file(lut_path).ok_or_else(|| {
             crate::error::AppError::Generic(format!("LUT file not found: {}", lut_path))
         })?;
+
+        if resolved
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("cube"))
+        {
+            return Self::load_cube(&resolved);
+        }
+
         let lut_img = image::open(&resolved)
             .map_err(|e| crate::error::AppError::Generic(format!("Failed to load LUT: {}", e)))?;
         let rgba = lut_img.to_rgba8();
@@ -75,11 +86,140 @@ impl LoadedLut {
                 rgba.height()
             )));
         }
-        Ok(Self { rgba })
+        Ok(Self::Png { rgba })
+    }
+
+    fn load_cube(path: &Path) -> Result<Self> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| crate::error::AppError::Generic(format!("Failed to read .cube: {}", e)))?;
+
+        let mut size: Option<usize> = None;
+        let mut domain_min = [0.0f32; 3];
+        let mut domain_max = [1.0f32; 3];
+        let mut values: Vec<[f32; 3]> = Vec::new();
+
+        for (line_no, raw) in text.lines().enumerate() {
+            let line = raw.split('#').next().unwrap_or("").trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            if line.eq_ignore_ascii_case("LUT_1D_SIZE") || line.starts_with("LUT_1D_SIZE ") {
+                return Err(crate::error::AppError::Generic(
+                    "1D .cube LUTs are not supported; use a 3D LUT".to_string(),
+                ));
+            }
+
+            if line.eq_ignore_ascii_case("LUT_3D_SIZE") || line.starts_with("LUT_3D_SIZE ") {
+                let mut parts = line.split_whitespace();
+                parts.next();
+                let s = parts.next().ok_or_else(|| {
+                    crate::error::AppError::Generic("Missing LUT_3D_SIZE value".to_string())
+                })?;
+                size = Some(s.parse().map_err(|_| {
+                    crate::error::AppError::Generic(format!(
+                        "Invalid LUT_3D_SIZE at line {}",
+                        line_no + 1
+                    ))
+                })?);
+                continue;
+            }
+
+            if line.starts_with("DOMAIN_MIN") {
+                let mut parts = line.split_whitespace().skip(1);
+                for slot in domain_min.iter_mut() {
+                    let v = parts.next().ok_or_else(|| {
+                        crate::error::AppError::Generic("Incomplete DOMAIN_MIN".to_string())
+                    })?;
+                    *slot = v.parse().map_err(|_| {
+                        crate::error::AppError::Generic(format!(
+                            "Invalid DOMAIN_MIN at line {}",
+                            line_no + 1
+                        ))
+                    })?;
+                }
+                continue;
+            }
+
+            if line.starts_with("DOMAIN_MAX") {
+                let mut parts = line.split_whitespace().skip(1);
+                for slot in domain_max.iter_mut() {
+                    let v = parts.next().ok_or_else(|| {
+                        crate::error::AppError::Generic("Incomplete DOMAIN_MAX".to_string())
+                    })?;
+                    *slot = v.parse().map_err(|_| {
+                        crate::error::AppError::Generic(format!(
+                            "Invalid DOMAIN_MAX at line {}",
+                            line_no + 1
+                        ))
+                    })?;
+                }
+                continue;
+            }
+
+            // Skip other keywords (TITLE, etc.)
+            if line.chars().next().is_some_and(|c| c.is_alphabetic()) {
+                continue;
+            }
+
+            // Data line: R G B
+            let mut parts = line.split_whitespace();
+            let mut rgb = [0.0f32; 3];
+            for slot in rgb.iter_mut() {
+                let v = parts.next().ok_or_else(|| {
+                    crate::error::AppError::Generic(format!("Incomplete data line {}", line_no + 1))
+                })?;
+                *slot = v.parse().map_err(|_| {
+                    crate::error::AppError::Generic(format!(
+                        "Invalid float at line {}",
+                        line_no + 1
+                    ))
+                })?;
+            }
+            values.push(rgb);
+        }
+
+        let size = size.ok_or_else(|| {
+            crate::error::AppError::Generic("Missing LUT_3D_SIZE in .cube file".to_string())
+        })?;
+        if size == 0 {
+            return Err(crate::error::AppError::Generic(
+                "LUT_3D_SIZE must be > 0".to_string(),
+            ));
+        }
+
+        let expected = size * size * size;
+        if values.len() != expected {
+            return Err(crate::error::AppError::Generic(format!(
+                ".cube expects {} data lines, found {}",
+                expected,
+                values.len()
+            )));
+        }
+
+        // Normalize output values to 0..1 using the declared output domain.
+        let domain_range: [f32; 3] = [
+            (domain_max[0] - domain_min[0]).max(1e-6),
+            (domain_max[1] - domain_min[1]).max(1e-6),
+            (domain_max[2] - domain_min[2]).max(1e-6),
+        ];
+        for v in values.iter_mut() {
+            for i in 0..3 {
+                v[i] = (v[i] - domain_min[i]) / domain_range[i];
+            }
+        }
+
+        Ok(Self::Cube { data: values, size })
     }
 
     fn apply(&self, input: &Frame, amount: f32) -> Frame {
-        let lut_rgba = &self.rgba;
+        match self {
+            Self::Png { rgba } => Self::apply_png(rgba, input, amount),
+            Self::Cube { data, size } => Self::apply_cube(data, *size, input, amount),
+        }
+    }
+
+    fn apply_png(lut_rgba: &image::RgbaImage, input: &Frame, amount: f32) -> Frame {
         let lut_w = lut_rgba.width();
         let lut_h = lut_rgba.height();
         let tile_count = 8u32;
@@ -126,6 +266,28 @@ impl LoadedLut {
             width: input.width,
             height: input.height,
             data,
+        }
+    }
+
+    fn apply_cube(data: &[[f32; 3]], size: usize, input: &Frame, amount: f32) -> Frame {
+        let _n = size as f32;
+        let mut output = input.data.clone();
+        for chunk in output.chunks_exact_mut(4) {
+            let r_in = chunk[0] as f32 / 255.0;
+            let g_in = chunk[1] as f32 / 255.0;
+            let b_in = chunk[2] as f32 / 255.0;
+
+            let sample = sample_trilinear(data, size, r_in, g_in, b_in);
+
+            chunk[0] = ((r_in * (1.0 - amount) + sample[0] * amount) * 255.0) as u8;
+            chunk[1] = ((g_in * (1.0 - amount) + sample[1] * amount) * 255.0) as u8;
+            chunk[2] = ((b_in * (1.0 - amount) + sample[2] * amount) * 255.0) as u8;
+        }
+
+        Frame {
+            width: input.width,
+            height: input.height,
+            data: output,
         }
     }
 }
@@ -291,4 +453,132 @@ fn sample_bilinear(lut: &image::RgbaImage, w: u32, h: u32, x: f32, y: f32) -> [f
             + v11 * fx * fy;
     }
     out
+}
+
+/// Trilinear interpolation over a regular 3D .cube LUT.
+/// `data` is ordered with red fastest, then green, then blue (standard .cube layout).
+fn sample_trilinear(data: &[[f32; 3]], size: usize, r: f32, g: f32, b: f32) -> [f32; 3] {
+    let _n = size as f32;
+    let max_idx = (size - 1) as f32;
+
+    let r_pos = (r.clamp(0.0, 1.0) * max_idx).min(max_idx);
+    let g_pos = (g.clamp(0.0, 1.0) * max_idx).min(max_idx);
+    let b_pos = (b.clamp(0.0, 1.0) * max_idx).min(max_idx);
+
+    let r0 = r_pos.floor() as usize;
+    let g0 = g_pos.floor() as usize;
+    let b0 = b_pos.floor() as usize;
+    let r1 = (r0 + 1).min(size - 1);
+    let g1 = (g0 + 1).min(size - 1);
+    let b1 = (b0 + 1).min(size - 1);
+
+    let fr = r_pos - r0 as f32;
+    let fg = g_pos - g0 as f32;
+    let fb = b_pos - b0 as f32;
+
+    let idx = |r, g, b| (b * size + g) * size + r;
+
+    let c000 = data[idx(r0, g0, b0)];
+    let c100 = data[idx(r1, g0, b0)];
+    let c010 = data[idx(r0, g1, b0)];
+    let c110 = data[idx(r1, g1, b0)];
+    let c001 = data[idx(r0, g0, b1)];
+    let c101 = data[idx(r1, g0, b1)];
+    let c011 = data[idx(r0, g1, b1)];
+    let c111 = data[idx(r1, g1, b1)];
+
+    let mut out = [0.0f32; 3];
+    for c in 0..3 {
+        let c00 = c000[c] * (1.0 - fr) + c100[c] * fr;
+        let c10 = c010[c] * (1.0 - fr) + c110[c] * fr;
+        let c01 = c001[c] * (1.0 - fr) + c101[c] * fr;
+        let c11 = c011[c] * (1.0 - fr) + c111[c] * fr;
+
+        let c0 = c00 * (1.0 - fg) + c10 * fg;
+        let c1 = c01 * (1.0 - fg) + c11 * fg;
+
+        out[c] = c0 * (1.0 - fb) + c1 * fb;
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::effects::{Effect, Frame};
+    use std::io::Write;
+
+    fn write_identity_cube(path: &Path, size: usize) {
+        let mut file = std::fs::File::create(path).unwrap();
+        writeln!(file, "TITLE \"Identity\"").unwrap();
+        writeln!(file, "LUT_3D_SIZE {}", size).unwrap();
+        writeln!(file, "DOMAIN_MIN 0.0 0.0 0.0").unwrap();
+        writeln!(file, "DOMAIN_MAX 1.0 1.0 1.0").unwrap();
+        for b in 0..size {
+            for g in 0..size {
+                for r in 0..size {
+                    let rf = r as f32 / (size - 1).max(1) as f32;
+                    let gf = g as f32 / (size - 1).max(1) as f32;
+                    let bf = b as f32 / (size - 1).max(1) as f32;
+                    writeln!(file, "{:.6} {:.6} {:.6}", rf, gf, bf).unwrap();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cube_identity_returns_input() {
+        let tmp = std::env::temp_dir().join("mosh_identity.cube");
+        write_identity_cube(&tmp, 8);
+
+        let fx = LutGrading::new(1.0, tmp.to_string_lossy().to_string());
+        let input = Frame {
+            width: 4,
+            height: 1,
+            data: (0..4)
+                .flat_map(|i| [i * 64, 128, 255 - i * 64, 255])
+                .collect(),
+        };
+        let output = fx
+            .process_frame(&input, None, &ParameterValues::default())
+            .unwrap();
+
+        for (i, chunk) in output.data.chunks_exact(4).enumerate() {
+            let expected_r = (i * 64) as u8;
+            let expected_g = 128u8;
+            let expected_b = (255 - i * 64) as u8;
+            assert!(
+                (chunk[0] as i16 - expected_r as i16).abs() <= 2,
+                "R mismatch at {}: got {} expected {}",
+                i,
+                chunk[0],
+                expected_r
+            );
+            assert!(
+                (chunk[1] as i16 - expected_g as i16).abs() <= 2,
+                "G mismatch at {}: got {} expected {}",
+                i,
+                chunk[1],
+                expected_g
+            );
+            assert!(
+                (chunk[2] as i16 - expected_b as i16).abs() <= 2,
+                "B mismatch at {}: got {} expected {}",
+                i,
+                chunk[2],
+                expected_b
+            );
+        }
+
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn cube_bad_data_count_errors() {
+        let tmp = std::env::temp_dir().join("mosh_bad.cube");
+        std::fs::write(&tmp, "LUT_3D_SIZE 2\n1.0 0.0 0.0\n").unwrap();
+        let result = LoadedLut::load(tmp.to_string_lossy().as_ref());
+        assert!(result.is_err());
+        std::fs::remove_file(&tmp).ok();
+    }
 }

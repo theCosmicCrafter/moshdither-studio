@@ -299,7 +299,7 @@ export interface AppState {
   setActiveCategory: (cat: string) => void;
   setSearchQuery: (q: string) => void;
   addToStack: (effect: EffectMeta) => void;
-  addLUTEffect: (url: string) => void;
+  addLUTEffect: (previewUrl: string, filePath?: string) => void;
   removeFromStack: (id: string) => void;
   moveStackItem: (fromIndex: number, toIndex: number) => void;
   updateStackParams: (id: string, params: Record<string, unknown>) => void;
@@ -578,7 +578,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
 
-  addLUTEffect: (url) => {
+  addLUTEffect: (previewUrl, filePath) => {
     const state = get();
     const effect = state.allEffects.find((e) => e.id === "color.lut_grading");
     const defaults: Record<string, unknown> = { amount: 1.0 };
@@ -587,14 +587,16 @@ export const useAppStore = create<AppState>((set, get) => ({
         defaults[p.id] = p.default;
       }
     }
+    // filePath is used by the Rust export path; for bundled presets it is the
+    // web-style URL with the leading slash removed. Custom user LUTs pass the
+    // absolute disk path instead.
+    const lut_path = filePath ?? previewUrl.replace(/^\//, "");
     instanceIdCounter += 1;
     const entry: StackEntry = {
       id: `stack-${instanceIdCounter}`,
       effectId: "color.lut_grading",
       effectName: effect?.name ?? "LUT Color Grading",
-      // tLUT drives the WebGL preview texture; lut_path drives the Rust
-      // CPU/export pipeline (same file, resolved on disk by the backend).
-      params: { ...defaults, tLUT: url, lut_path: url.replace(/^\//, "") },
+      params: { ...defaults, tLUT: previewUrl, lut_path },
       enabled: true,
       maskId: null,
       maskB64: null,
