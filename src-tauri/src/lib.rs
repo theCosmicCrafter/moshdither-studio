@@ -7,10 +7,8 @@ pub mod dsp;
 pub mod effects;
 pub mod environment;
 pub mod ffmpeg;
-pub mod optical_flow;
 pub mod path_guard;
 pub mod sam3_engine;
-pub mod segmentation;
 pub mod spout;
 pub mod utils;
 

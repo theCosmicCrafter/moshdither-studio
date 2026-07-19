@@ -3,7 +3,7 @@ use crate::effects::Effect;
 use crate::error::Result;
 use crate::path_guard::validate_io_path;
 use serde_json::json;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Largest 3D LUT size the parser will accept. 256^3 entries ≈ 200 MB, which is
 /// more than enough for real-world .cube files and prevents runaway allocation.
@@ -49,6 +49,30 @@ fn locate_lut_file(lut_path: &str) -> Result<Option<PathBuf>> {
             validate_io_path(lut_path, true)
                 .map_err(|e| crate::error::AppError::Generic(e.to_string()))?,
         ));
+    }
+
+    // Bundled presets are referenced as e.g. `lut/amatorka.png`. Reject any
+    // path traversal or paths outside the `lut/` subtree so a compromised
+    // frontend cannot read arbitrary files through a relative LUT path.
+    let cleaned_path = Path::new(cleaned);
+    let mut components = cleaned_path.components();
+    let Some(Component::Normal(first)) = components.next() else {
+        return Err(crate::error::AppError::Generic(
+            "Relative LUT path must start with a directory name".to_string(),
+        ));
+    };
+    if first.to_string_lossy().to_lowercase() != "lut" {
+        return Err(crate::error::AppError::Generic(format!(
+            "Relative LUT path must be inside the lut/ directory, got: {}",
+            cleaned
+        )));
+    }
+    for c in cleaned_path.components() {
+        if matches!(c, Component::ParentDir) {
+            return Err(crate::error::AppError::Generic(
+                "Path traversal is not allowed in relative LUT paths".to_string(),
+            ));
+        }
     }
 
     let mut candidates: Vec<PathBuf> = vec![

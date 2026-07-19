@@ -21,6 +21,7 @@ export default {
         destructive: "var(--danger)",
 
         // Cyber-Urban design tokens
+        "accent-cyan": "#00f4fe",
         surface: "#131314",
         "surface-main": "#0a0a0b",
         "surface-dim": "#131314",
@@ -90,6 +91,7 @@ export default {
         "headline-md": ["Geist Variable", "system-ui", "sans-serif"],
         "headline-lg": ["Geist Variable", "system-ui", "sans-serif"],
         "body-md": ["Geist Variable", "system-ui", "sans-serif"],
+        "body-sm": ["Geist Variable", "system-ui", "sans-serif"],
         "data-micro": ["Geist Variable", "system-ui", "sans-serif"],
       },
       fontSize: {
@@ -99,6 +101,7 @@ export default {
         "headline-md": ["20px", { lineHeight: "26px", fontWeight: "600" }],
         "headline-lg": ["28px", { lineHeight: "36px", letterSpacing: "0.05em", fontWeight: "800" }],
         "body-md": ["14px", { lineHeight: "20px", fontWeight: "400" }],
+        "body-sm": ["12px", { lineHeight: "16px", fontWeight: "400" }],
         "data-micro": ["8px", { lineHeight: "10px", fontWeight: "700" }],
       },
       spacing: {

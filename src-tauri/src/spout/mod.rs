@@ -18,6 +18,7 @@
 //! ```
 
 use crate::error::{AppError, Result};
+use std::sync::{Mutex, OnceLock};
 
 /// Spout sender state.
 #[allow(dead_code)]
@@ -59,38 +60,44 @@ impl SpoutSender {
 }
 
 /// Global sender instance (managed by Tauri state).
-static mut SPOUT_SENDER: Option<SpoutSender> = None;
+static SENDER: OnceLock<Mutex<Option<SpoutSender>>> = OnceLock::new();
+
+fn global_sender() -> &'static Mutex<Option<SpoutSender>> {
+    SENDER.get_or_init(|| Mutex::new(None))
+}
 
 /// Create a new Spout sender.
 pub fn create_spout_sender(name: &str, width: u32, height: u32) -> Result<()> {
     let mut sender = SpoutSender::new(name, width, height);
     sender.initialize()?;
-    unsafe {
-        SPOUT_SENDER = Some(sender);
-    }
+    let mut guard = global_sender()
+        .lock()
+        .map_err(|e| AppError::Generic(format!("Spout sender lock poisoned: {}", e)))?;
+    *guard = Some(sender);
     Ok(())
 }
 
 /// Send the current framebuffer to Spout.
 pub fn spout_send_frame() -> Result<()> {
-    unsafe {
-        if let Some(ref sender) = SPOUT_SENDER {
-            // In production: read the active WebGL FBO texture ID
-            // and pass it to sender.send_texture(texture_id)
-            sender.send_texture(0)?;
-            Ok(())
-        } else {
-            Err(AppError::Ffmpeg("Spout sender not initialized".to_string()))
-        }
+    let guard = global_sender()
+        .lock()
+        .map_err(|e| AppError::Generic(format!("Spout sender lock poisoned: {}", e)))?;
+    if let Some(ref sender) = *guard {
+        // In production: read the active WebGL FBO texture ID
+        // and pass it to sender.send_texture(texture_id)
+        sender.send_texture(0)?;
+        Ok(())
+    } else {
+        Err(AppError::Ffmpeg("Spout sender not initialized".to_string()))
     }
 }
 
 /// Destroy the Spout sender.
 pub fn destroy_spout_sender() {
-    unsafe {
-        if let Some(ref mut sender) = SPOUT_SENDER {
+    if let Ok(mut guard) = global_sender().lock() {
+        if let Some(ref mut sender) = guard.as_mut() {
             sender.release();
         }
-        SPOUT_SENDER = None;
+        *guard = None;
     }
 }

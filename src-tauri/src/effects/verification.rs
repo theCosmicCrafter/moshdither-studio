@@ -157,6 +157,7 @@ fn check_mask_blend(original: &Frame, processed: &Frame, mask: &Mask, mode: &str
 /// meaningful output from a single still-frame check. They are expected to pass the no-crash
 /// and mask-safety checks; the other checks are informational only.
 const NEEDS_INPUT_EFFECTS: &[&str] = &[
+    "audio_reactive.audio_dither",
     "audio_reactive.bass_pulse",
     "audio_reactive.beat_glitch",
     "audio_reactive.spectral_shift",

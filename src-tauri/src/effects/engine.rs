@@ -83,21 +83,23 @@ impl EffectStack {
     }
 
     /// Process a slice of frames in parallel (for export pipelines that
-    /// split work across chunks).
+    /// split work across chunks). Temporal effects are not supported here
+    /// because they require cross-frame context; callers must route those
+    /// through `process_video` instead.
     pub fn process_frames_parallel(&self, frames: Vec<Frame>) -> crate::error::Result<Vec<Frame>> {
         if self.effects.is_empty() {
             return Ok(frames);
+        }
+        if self.effects.iter().any(|(e, _, _)| e.is_temporal()) {
+            return Err(crate::error::AppError::Generic(
+                "process_frames_parallel does not support temporal effects".to_string(),
+            ));
         }
         frames
             .par_iter()
             .map(|frame| {
                 let mut working = frame.clone();
                 for (effect, params, mask) in &self.effects {
-                    if effect.is_temporal() {
-                        // Temporal effects can't be parallelized per-frame;
-                        // fall through to sequential processing below.
-                        continue;
-                    }
                     working = effect.process_frame(&working, mask.as_ref(), params)?;
                 }
                 Ok(working)

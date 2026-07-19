@@ -90,23 +90,25 @@ fn trim_cache_to_budget(entries: &mut Vec<CacheEntry>, budget: usize) {
 }
 
 /// Downscale a Frame so it fits within a pixel budget while preserving aspect ratio.
-fn fit_to_preview_budget(frame: Frame) -> Frame {
+fn fit_to_preview_budget(frame: Frame) -> crate::error::Result<Frame> {
     let pixels = frame.width as u64 * frame.height as u64;
     if pixels <= MAX_PREVIEW_PIXELS {
-        return frame;
+        return Ok(frame);
     }
     let scale = (MAX_PREVIEW_PIXELS as f64 / pixels as f64).sqrt();
     let new_w = ((frame.width as f64 * scale) as u32).max(1);
     let new_h = ((frame.height as f64 * scale) as u32).max(1);
-    let img = image::RgbaImage::from_raw(frame.width, frame.height, frame.data)
-        .expect("frame buffer should match dimensions");
+    let img =
+        image::RgbaImage::from_raw(frame.width, frame.height, frame.data).ok_or_else(|| {
+            crate::error::AppError::Generic("frame buffer does not match dimensions".to_string())
+        })?;
     let resized =
         image::imageops::resize(&img, new_w, new_h, image::imageops::FilterType::Triangle);
-    Frame {
+    Ok(Frame {
         width: new_w,
         height: new_h,
         data: resized.into_raw(),
-    }
+    })
 }
 
 /// Load an image or video file into the app.
@@ -144,7 +146,7 @@ pub async fn load_media(
 
             // Keep the in-memory preview frame within a sane pixel budget so that
             // giant stills do not blow up RAM and the effect cache.
-            Ok(fit_to_preview_budget(raw_frame))
+            fit_to_preview_budget(raw_frame).map_err(|e| e.to_string())
         })
         .await
         .map_err(|e| format!("Task failed: {}", e))??;
