@@ -116,7 +116,7 @@ These require major-version dependency bumps (`vite` 5 → 8, `vitest` 1 → 4, 
 | `npx tsc --noEmit`                                         | PASS               |
 | `npx vitest run`                                           | 1015/1015 PASS     |
 
-### Changes
+### Production Audit Changes (2026-07-12)
 
 1. **Rust panic hardening (Step 2).** Replaced all 29 `.lock().unwrap()` in
    `commands.rs` and both in `ffmpeg/mod.rs` with `.lock().map_err(|e| ..)?`,

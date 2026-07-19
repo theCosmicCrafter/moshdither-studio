@@ -52,6 +52,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Export pipeline parallelizes non-temporal effect application and mask blending
 - Zustand store extended with theme, overlay, aspect ratio, proxy media, and multi-track state
 - Preview viewport HUD with toggleable overlays (crosshairs, scanlines, pixel grid, histograms, OSD stats, safe area, grid)
+- Upgraded build toolchain: `vite` 5.3.3 → 8.1.5, `vitest` 1.6.0 → 4.1.10,
+  `@vitejs/plugin-react` 4.3.1 → 6.0.3, and added `esbuild` as an explicit dev
+  dependency. This resolves `npm audit` HIGH/CRITICAL findings and brings the
+  project onto the current Vite 8 / Rolldown build pipeline.
+- Added `[lib]` crate-type declaration to `src-tauri/Cargo.toml` for Tauri v2
+  mobile/desktop parity (`rlib`, `staticlib`, `cdylib`).
+- Bumped pre-commit hook versions via `pre-commit autoupdate`:
+  `gitleaks` 8.21.2 → 8.30.0, `semgrep` 1.82.0 → 1.165.0, `bandit` 1.8.3 →
+  1.9.4, `pip-audit` 2.8.0 → 2.10.1.
 
 ### Security
 
@@ -103,21 +112,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `src/engine/lut/loader.ts` to prevent LUT images from being flipped by
   leftover pixel-store state (port of the old `feature/production-audit-fixes`
   fix to the current WebGL2 engine).
-
-### Changed
-
-- Upgraded build toolchain: `vite` 5.3.3 → 8.1.5, `vitest` 1.6.0 → 4.1.10,
-  `@vitejs/plugin-react` 4.3.1 → 6.0.3, and added `esbuild` as an explicit dev
-  dependency. This resolves `npm audit` HIGH/CRITICAL findings and brings the
-  project onto the current Vite 8 / Rolldown build pipeline.
-- Added `[lib]` crate-type declaration to `src-tauri/Cargo.toml` for Tauri v2
-  mobile/desktop parity (`rlib`, `staticlib`, `cdylib`).
-- Bumped pre-commit hook versions via `pre-commit autoupdate`:
-  `gitleaks` 8.21.2 → 8.30.0, `semgrep` 1.82.0 → 1.165.0, `bandit` 1.8.3 →
-  1.9.4, `pip-audit` 2.8.0 → 2.10.1.
-
-### Fixed
-
 - `vite.config.ts` `manualChunks` converted from an object to a function to
   satisfy Vite 8 / Rolldown output option validation.
 - `vite.config.ts` build `target` changed from per-platform `chrome105`/`safari13`
