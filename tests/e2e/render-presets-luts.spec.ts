@@ -43,9 +43,7 @@ test.skip(
   `prereqs missing — BIN=${BIN} exists=${existsSync(BIN)}, IMAGE exists=${existsSync(TEST_IMAGE)}`
 );
 
-test.use({
-  timeout: 300_000, // 5 min — LUT rendering is fast but presets can be heavy
-});
+test.setTimeout(300_000); // 5 min — LUT rendering is fast but presets can be heavy
 
 function runVerify(
   args: string[],
