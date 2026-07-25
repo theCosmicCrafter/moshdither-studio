@@ -253,7 +253,7 @@ export default function ExportPanel() {
     >
       {/* Format */}
       <div className="space-y-1">
-        <label style={{ fontSize: 10, color: "var(--text-muted)" }}>Format</label>
+        <span style={{ fontSize: 10, color: "var(--text-muted)" }}>Format</span>
         <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
           {(["mp4", "webm", "gif", "png_seq"] as const).map((f) => (
             <button
@@ -277,7 +277,7 @@ export default function ExportPanel() {
 
       {/* Quality */}
       <div className="space-y-1">
-        <label style={{ fontSize: 10, color: "var(--text-muted)" }}>Quality</label>
+        <span style={{ fontSize: 10, color: "var(--text-muted)" }}>Quality</span>
         <div style={{ display: "flex", gap: 2 }}>
           {(["draft", "good", "best"] as const).map((q) => (
             <button
@@ -303,7 +303,7 @@ export default function ExportPanel() {
 
       {/* FPS */}
       <div className="space-y-1">
-        <label style={{ fontSize: 10, color: "var(--text-muted)" }}>Frame Rate</label>
+        <span style={{ fontSize: 10, color: "var(--text-muted)" }}>Frame Rate</span>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <input
             aria-label="FPS"
@@ -323,14 +323,14 @@ export default function ExportPanel() {
 
       {/* Include audio */}
       {audioEnabled && audioFilePath && (
-        <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 11 }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 11 }}>
           <input
             type="checkbox"
             checked={includeAudio}
             onChange={(e) => setIncludeAudio(e.target.checked)}
           />
           Include audio track
-        </label>
+        </span>
       )}
 
       {/* Audio bake status */}
@@ -346,10 +346,10 @@ export default function ExportPanel() {
       {/* Active effects count */}
       {/* Resolution */}
       <div className="space-y-1">
-        <label style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
+        <span style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
           <span className="material-symbols-outlined" style={{ fontSize: 10 }}>monitor</span>
           Resolution
-        </label>
+        </span>
         <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
           {RESOLUTIONS.map((r) => (
             <button
@@ -376,7 +376,7 @@ export default function ExportPanel() {
           "Auto" picks the largest resolution that fits the adaptive memory
           budget. Lower this if exports OOM on 4K source. */}
       <div className="space-y-1">
-        <label
+        <span
           style={{
             fontSize: 10,
             color: "var(--text-muted)",
@@ -390,7 +390,7 @@ export default function ExportPanel() {
             memory
           </span>
           Processing
-        </label>
+        </span>
         <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
           {PROCESSING_SCALES.map((s) => (
             <button
@@ -425,7 +425,7 @@ export default function ExportPanel() {
 
       {/* Aspect Ratio Lock */}
       <div className="space-y-1">
-        <label style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
+        <span style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
           <input
             type="checkbox"
             checked={aspectRatioLock}
@@ -434,7 +434,7 @@ export default function ExportPanel() {
           />
           <span className="material-symbols-outlined" style={{ fontSize: 10 }}>aspect_ratio</span>
           Lock Aspect Ratio
-        </label>
+        </span>
         {aspectRatioLock && (
           <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
             {[
@@ -467,10 +467,10 @@ export default function ExportPanel() {
 
       {/* Codec */}
       <div className="space-y-1">
-        <label style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
+        <span style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
           <span className="material-symbols-outlined" style={{ fontSize: 10 }}>videocam</span>
           Codec
-        </label>
+        </span>
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           {CODECS.map((c) => (
             <button
@@ -688,7 +688,7 @@ export default function ExportPanel() {
                 }}
               />
             )}
-            <label style={{ fontSize: 10, color: "var(--text-muted)", display: "block" }}>
+            <span style={{ fontSize: 10, color: "var(--text-muted)", display: "block" }}>
               Position
               <select
                 value={watermark.position}
@@ -711,7 +711,7 @@ export default function ExportPanel() {
                 <option value="bottom-right">Bottom Right</option>
                 <option value="center">Center</option>
               </select>
-            </label>
+            </span>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <label style={{ fontSize: 10, color: "var(--text-muted)", minWidth: 42 }} htmlFor="wm-opacity">
                 Opacity
