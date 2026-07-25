@@ -31,19 +31,16 @@ const BIN =
   join(process.cwd(), "src-tauri", "target", "release", "mosh-verify") +
     (process.platform === "win32" ? ".exe" : "");
 
-const TEST_IMAGE =
-  process.env.MOSHDITHER_TEST_IMAGE ??
-  "C:\\Users\\richk\\Downloads\\Sunset Through Turret Arch _ Arches National Park, Moab, Utah _ Rick Berk Fine Art Photography\\Turret-Arch.jpg";
+const TEST_IMAGE = process.env.MOSHDITHER_TEST_IMAGE ?? "";
 
 const PRESETS_JSON = join(process.cwd(), "scripts", "presets.json");
 const LUT_DIR = join(process.cwd(), "public", "lut");
 
-const canRun = existsSync(BIN) && existsSync(TEST_IMAGE);
+const canRun = BIN.length > 0 && existsSync(BIN) && TEST_IMAGE.length > 0 && existsSync(TEST_IMAGE);
 
 test.skip(
   !canRun,
-  () =>
-    `prereqs missing — BIN=${BIN} exists=${existsSync(BIN)}, IMAGE exists=${existsSync(TEST_IMAGE)}`
+  `prereqs missing — BIN=${BIN} exists=${existsSync(BIN)}, IMAGE exists=${existsSync(TEST_IMAGE)}`
 );
 
 test.use({
