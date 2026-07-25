@@ -89,7 +89,7 @@ export default function ExportPanel() {
 
   const exportTriggerId = useAppStore((s) => s.exportTriggerId);
   const lastTriggerId = useRef(0);
-  const handleExportRef = useRef<() => void>(() => {});
+  const handleExportRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   const activeEffects = effectStack.filter((e) => e.enabled);
   const resolution = RESOLUTIONS.find((r) => r.id === resolutionId)!;
@@ -206,7 +206,7 @@ export default function ExportPanel() {
   useEffect(() => {
     if (exportTriggerId > 0 && exportTriggerId !== lastTriggerId.current) {
       lastTriggerId.current = exportTriggerId;
-      handleExportRef.current();
+      void handleExportRef.current();
     }
   }, [exportTriggerId]);
 
@@ -312,7 +312,7 @@ export default function ExportPanel() {
             max={60}
             step={1}
             value={fps}
-            onChange={(e) => setFps(parseInt(e.target.value))}
+            onChange={(e) => setFps(Number.parseInt(e.target.value))}
             style={{ flex: 1 }}
           />
           <span style={{ minWidth: 28, textAlign: "right", fontFamily: "var(--font-mono)", color: "var(--text-primary)" }}>

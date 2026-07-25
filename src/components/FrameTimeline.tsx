@@ -56,7 +56,7 @@ export default function FrameTimeline() {
 
     try {
       // For video predictor, we send the base64 frames
-      const result = await sam3VideoPredictor(extracted, undefined);
+      const result = await sam3VideoPredictor(extracted);
       if (result.status === "ok") {
         const maskMap: Record<number, string> = {};
         result.frame_masks.forEach((masks: string[], i: number) => {
@@ -118,9 +118,11 @@ export default function FrameTimeline() {
       <div className="flex gap-1 overflow-x-auto pb-2 h-16 items-center">
         {frames.length > 0 ? (
           frames.map((frame, i) => (
-            <div
-              key={i}
-              className={`relative flex-shrink-0 cursor-pointer border-2 frame-thumb ${
+            <button
+              key={`frame-thumb-${i}`}
+              type="button"
+              aria-label={`Select frame ${i + 1}`}
+              className={`relative flex-shrink-0 cursor-pointer border-2 frame-thumb p-0 bg-transparent ${
                 i === currentFrameIndex ? "border-[var(--accent-teal)]" : "border-transparent"
               }`}
               onClick={() => setCurrentTime(i / 10)}
@@ -129,7 +131,7 @@ export default function FrameTimeline() {
               {sam3FrameMasks[i] && (
                 <div className="absolute inset-0 bg-green-500/30" />
               )}
-            </div>
+            </button>
           ))
         ) : (
           <div className="text-xs text-[var(--text-dim)]">

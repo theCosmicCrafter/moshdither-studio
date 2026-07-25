@@ -13,7 +13,7 @@ import { getCommands } from "../utils/commands";
 import { X, RotateCcw, Check, ChevronDown } from "lucide-react";
 
 interface KeyboardShortcutsEditorProps {
-  onClose: () => void;
+  readonly onClose: () => void;
 }
 
 export default function KeyboardShortcutsEditor({ onClose }: KeyboardShortcutsEditorProps) {
