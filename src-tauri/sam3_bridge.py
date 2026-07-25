@@ -63,8 +63,20 @@ try:
     logging.info("Triton %s available.", triton.__version__)
 except ImportError:
     logging.warning("Triton not installed — SageAttention CUDA kernels will be unavailable.")
-# Add the cloned repo to path (append, not insert, to avoid overriding stdlib)
-SAM3_REPO = Path(__file__).parent.parent / "sam3_repo"
+# Resolve the sam3_repo location. The Rust side sets SAM3_REPO for both dev
+# (pointing at packages/python-backend/sam3_repo) and production sidecars.
+# PyInstaller bundles extract to a temporary _MEIPASS directory.
+def _resolve_sam3_repo() -> Path:
+    if repo := os.environ.get("SAM3_REPO"):
+        return Path(repo)
+    if hasattr(sys, "_MEIPASS"):
+        # In a PyInstaller one-file bundle, the repo was added at the bundle root.
+        return Path(sys._MEIPASS)
+    # Dev layout: src-tauri/sam3_bridge.py -> project-root/sam3_repo
+    return Path(__file__).parent.parent / "sam3_repo"
+
+
+SAM3_REPO = _resolve_sam3_repo()
 sys.path.append(str(SAM3_REPO))
 
 from sam3.model.sam3_image_processor import Sam3Processor

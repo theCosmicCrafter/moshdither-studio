@@ -169,6 +169,9 @@ export interface AppState {
   audioManifestProgress: number;
   /** Manifest analysis phase description. */
   audioManifestPhase: string;
+  /** True when the loaded video's audio is silent or missing. The UI shows
+   *  a warning banner so the user knows audio-reactive effects won't respond. */
+  audioIsSilent: boolean;
 
   // Mask / Segmentation
   activeMask: string | null; // base64 PNG of current mask
@@ -350,6 +353,7 @@ export interface AppState {
   setAudioBakeData: (data: AudioBakeData | null) => void;
   setAudioManifest: (manifest: AudioManifest | null) => void;
   setAudioManifestProgress: (progress: number, phase: string) => void;
+  setAudioIsSilent: (silent: boolean) => void;
 
   // Keyframe actions
   addKeyframe: (stackId: string, paramId: string, keyframe: Keyframe) => void;
@@ -460,6 +464,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   audioManifest: null,
   audioManifestProgress: 0,
   audioManifestPhase: "",
+  audioIsSilent: false,
   isProcessing: false,
   showBeforeAfter: false,
   zoom: 1,
@@ -1103,6 +1108,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setAudioManifest: (manifest) => set({ audioManifest: manifest }),
   setAudioManifestProgress: (progress, phase) =>
     set({ audioManifestProgress: progress, audioManifestPhase: phase }),
+  setAudioIsSilent: (silent) => set({ audioIsSilent: silent }),
 
   addKeyframe: (stackId, paramId, keyframe) =>
     set((state) => {

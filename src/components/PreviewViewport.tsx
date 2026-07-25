@@ -12,6 +12,7 @@ import {
   applyEffectStack,
 } from "../lib/tauri";
 import { useAppStore } from "../store";
+import { logger } from "../utils/logger";
 import { WebGLContext, MediaUploader, EffectChain } from "../engine/webgl2";
 import { stackToRenderPasses, buildShaderMap, stackToRustPayload, stackHasApproximatePreview } from "../utils/effectConverter";
 import ManualMaskOverlay from "./ManualMaskOverlay";
@@ -662,7 +663,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
           setUseCpuPreview(true);
         },
         onContextRestored: () => {
-          console.log("[Preview] WebGL context restored");
+          logger.log("Preview", "WebGL context restored");
           setStatusMessage("WebGL context restored — reinitializing preview");
           retireSourceTexture();
           chainRef.current?.reset();
@@ -672,9 +673,9 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       glCtxRef.current = ctx;
       uploaderRef.current = new MediaUploader(ctx);
       chainRef.current = new EffectChain(ctx, 1024, 1024);
-      console.log("[Preview] WebGL2 context initialized OK");
+      logger.log("Preview", "WebGL2 context initialized OK");
     } catch (e) {
-      console.error("[Preview] WebGL2 not available:", e);
+      logger.error("Preview", "WebGL2 not available", { err: e });
       setStatusMessage(
         `WebGL2 unavailable: ${e instanceof Error ? e.message : String(e)}`
       );

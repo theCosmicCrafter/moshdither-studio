@@ -243,6 +243,28 @@ export async function getMediaMetadata(path: string): Promise<Record<string, unk
   return invoke("get_media_metadata", { path });
 }
 
+/**
+ * Extract the audio track from a loaded video to a temp WAV file.
+ *
+ * Returns the absolute path to the extracted WAV, or throws if the video
+ * has no audio stream. Used by the auto-audio-extraction path so
+ * audio-reactive effects work when a user loads a video with built-in
+ * audio (no manual audio load required). Mirrors the TouchDesigner
+ * `Audio Movie CHOP` pattern.
+ *
+ * @param videoPath Absolute path to the source video
+ * @param maxDurationSecs Optional trim limit in seconds (matches export trim)
+ */
+export async function extractAudioFromVideo(
+  videoPath: string,
+  maxDurationSecs?: number
+): Promise<string> {
+  return invoke("extract_audio_from_video", {
+    videoPath,
+    maxDurationSecs: maxDurationSecs ?? null,
+  });
+}
+
 export async function getFrameData(): Promise<string> {
   if (!isTauriAvailable()) {
     if (!browserMedia) throw new Error("No media loaded");
@@ -309,6 +331,11 @@ export async function exportVideo(
     format?: string;
     quality?: string;
     includeAudio?: boolean;
+    /** Max dimension (px) for internal decode + effect processing.
+     * `undefined` = auto (backend picks largest resolution that fits
+     * memory budget). `number` = explicit cap (e.g. 1080 for 1080p).
+     * Final encode still scales to `width`/`height`. */
+    processingScale?: number;
   } = {}
 ): Promise<string> {
   const path = await save({
@@ -337,6 +364,7 @@ export async function exportVideo(
     format: options.format ?? null,
     quality: options.quality ?? null,
     includeAudio: options.includeAudio ?? null,
+    processingScale: options.processingScale ?? null,
   });
 }
 

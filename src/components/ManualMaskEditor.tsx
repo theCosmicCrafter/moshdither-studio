@@ -93,16 +93,16 @@ export default function ManualMaskEditor() {
 
   if (width === 0 || height === 0) {
     return (
-      <div style={{ padding: 12, color: "#888", fontSize: 11, textAlign: "center" }}>
+      <div className="p-3 text-on-surface-variant text-[11px] text-center">
         Load media to use manual mask drawing
       </div>
     );
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: 8 }}>
+    <div className="flex flex-col gap-2 p-2">
       {/* Toolbar */}
-      <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
+      <div className="flex gap-0.5 flex-wrap">
         <ToolButton
           icon="edit"
           label="Brush"
@@ -133,7 +133,7 @@ export default function ManualMaskEditor() {
           active={maskTool === "polygon"}
           onClick={() => setMaskTool("polygon")}
         />
-        <div style={{ width: 1, background: "#444", margin: "0 4px" }} />
+        <div className="w-px bg-outline-variant mx-1" />
         <ToolButton
           icon="flip"
           label="Invert"
@@ -150,8 +150,8 @@ export default function ManualMaskEditor() {
 
       {/* Brush size */}
       {(maskTool === "brush" || maskTool === "eraser") && (
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ fontSize: 10, color: "#888", minWidth: 50 }}>Size: {brushSize}px</span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] text-on-surface-variant min-w-[50px]">Size: {brushSize}px</span>
           <input
             aria-label="Brush size"
             type="range"
@@ -159,39 +159,26 @@ export default function ManualMaskEditor() {
             max={200}
             value={brushSize}
             onChange={(e) => setBrushSize(parseInt(e.target.value))}
-            style={{ flex: 1 }}
+            className="flex-1"
           />
         </div>
       )}
 
       {/* Polygon hint */}
       {maskTool === "polygon" && (
-        <div style={{ fontSize: 10, color: "#888", padding: "0 4px" }}>
+        <div className="text-[10px] text-on-surface-variant px-1">
           Click on the preview to add points. Double-click to close.
         </div>
       )}
 
       {/* Thumbnail preview of the current mask */}
       {activeMask && (
-        <div
-          style={{
-            border: "1px solid #444",
-            borderRadius: 4,
-            overflow: "hidden",
-            maxHeight: 160,
-            background: "#111",
-          }}
-        >
+        <div className="border border-outline-variant rounded overflow-hidden max-h-40 bg-surface-main">
           <img
             src={activeMask}
             alt="Mask preview"
-            style={{
-              width: "100%",
-              height: "100%",
-              objectFit: "contain",
-              display: "block",
-              filter: "invert(1)",
-            }}
+            className="w-full h-full object-contain block"
+            style={{ filter: "invert(1)" }}
           />
         </div>
       )}
@@ -214,20 +201,13 @@ function ToolButton({
     <button
       onClick={onClick}
       title={label}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 3,
-        padding: "4px 8px",
-        fontSize: 10,
-        borderRadius: 3,
-        border: "none",
-        background: active ? "rgba(74, 144, 217, 0.25)" : "#2a2a2a",
-        color: active ? "#6cf" : "#aaa",
-        cursor: "pointer",
-      }}
+      className={`flex items-center gap-[3px] px-2 py-1 text-[10px] rounded-sm border-none cursor-pointer ${
+        active
+          ? "bg-accent-teal/25 text-accent-teal"
+          : "bg-surface-container-high text-on-surface-variant hover:text-on-surface"
+      }`}
     >
-      <span className="material-symbols-outlined" style={{ fontSize: 14 }}>{icon}</span>
+      <span className="material-symbols-outlined text-[14px]">{icon}</span>
       {label}
     </button>
   );

@@ -99,6 +99,12 @@ const EXTRA_ICONS = new Set([
   "cut",
   "file_export",
   "graphic_eq",
+
+  // Window controls (used in WindowControls.tsx; ternary expressions can be missed by regex extraction)
+  "minimize",
+  "maximize",
+  "filter_none",
+  "fullscreen_exit",
 ]);
 
 async function* walk(dir) {

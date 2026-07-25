@@ -35,15 +35,19 @@ jobs:
       matrix:
         include:
           - platform: "macos-latest"
+            target: "aarch64-apple-darwin"
             args: "--target aarch64-apple-darwin"
             rust-targets: "aarch64-apple-darwin"
-          - platform: "macos-latest"
+          - platform: "macos-13"
+            target: "x86_64-apple-darwin"
             args: "--target x86_64-apple-darwin"
             rust-targets: "x86_64-apple-darwin"
           - platform: "ubuntu-22.04"
+            target: "x86_64-unknown-linux-gnu"
             args: ""
             rust-targets: ""
           - platform: "windows-latest"
+            target: "x86_64-pc-windows-msvc"
             args: ""
             rust-targets: ""
 
@@ -76,23 +80,61 @@ jobs:
       - name: install frontend dependencies
         run: npm ci
 
-      - name: Disable updater artifacts if signing key missing
+      - name: setup Python for SAM3 sidecar build
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: cache SAM3 build environment
+        id: cache-sam3-env
+        uses: actions/cache@v4
+        with:
+          path: sam3_env
+          key: ${{ runner.os }}-${{ matrix.target }}-sam3-env-${{ hashFiles('packages/python-backend/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-sam3-env-
+            ${{ runner.os }}-sam3-env-
+
+      - name: build SAM3 environment
+        run: npm run setup:sam3-env
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          SAM3_CUDA: ${{ vars.SAM3_CUDA }}
+
+      - name: verify HuggingFace token is configured
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         shell: bash
         run: |
-          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
-            node -e "
-              const fs = require('fs');
-              const path = 'src-tauri/tauri.conf.json';
-              const c = JSON.parse(fs.readFileSync(path, 'utf8'));
-              c.bundle.createUpdaterArtifacts = false;
-              fs.writeFileSync(path, JSON.stringify(c, null, 2));
-              console.log('createUpdaterArtifacts disabled because TAURI_SIGNING_PRIVATE_KEY is not set');
-            "
-          else
-            echo "TAURI_SIGNING_PRIVATE_KEY is configured - updater artifacts will be signed"
+          if [ -z "$HF_TOKEN" ]; then
+            echo "::error::HF_TOKEN secret is required to download the gated SAM3 checkpoint."
+            exit 1
           fi
+
+      - name: download SAM3 checkpoint
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: npm run download:sam3-checkpoint
+
+      - name: cache SAM3 sidecar
+        id: cache-sam3-sidecar
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/bin/sam3-bridge-*
+          key: ${{ runner.os }}-${{ matrix.target }}-sam3-sidecar-${{ hashFiles('src-tauri/sam3_bridge.py', 'packages/python-backend/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-sam3-sidecar-
+            ${{ runner.os }}-sam3-sidecar-
+
+      - name: build SAM3 sidecar
+        if: steps.cache-sam3-sidecar.outputs.cache-hit != 'true'
+        env:
+          TAURI_TARGET_TRIPLE: ${{ matrix.target }}
+        run: npm run build:sam3-sidecar -- --target ${{ matrix.target }}
+
+      - name: generate release Tauri config overlay
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: node scripts/enable-sam3-sidecar.mjs --release
 
       - name: Enable Windows code signing
         if: matrix.platform == 'windows-latest'
@@ -130,4 +172,4 @@ jobs:
           releaseBody: "See the assets below to download this version."
           releaseDraft: true
           prerelease: false
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json

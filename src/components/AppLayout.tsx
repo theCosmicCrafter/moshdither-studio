@@ -8,6 +8,8 @@ import { usePlaybackEngine } from "../hooks/usePlaybackEngine";
 import { useProjectSession } from "../hooks/useProjectSession";
 import { useSoundManager } from "../hooks/useSoundManager";
 import { useSam3IdleShutdown } from "../hooks/useSam3IdleShutdown";
+import { useAutoAudioExtract } from "../hooks/useAutoAudioExtract";
+import { logger } from "../utils/logger";
 import DockLayout from "./DockSystem/DockLayout";
 import Toolbar from "./Toolbar";
 import StatusBar from "./StatusBar";
@@ -19,6 +21,7 @@ export default function AppLayout() {
   useKeyframePlayback();
   usePlaybackEngine();
   useSam3IdleShutdown();
+  useAutoAudioExtract();
   const { attachSounds } = useSoundManager();
   const { autoSave, recentProjects, restoreSession, clearAutoSave } = useProjectSession();
   const [showRecovery, setShowRecovery] = useState(!!autoSave);
@@ -91,11 +94,11 @@ export default function AppLayout() {
       try {
         // Guard: Tauri APIs are only available inside the desktop app
         if (typeof globalThis !== "undefined" && !(globalThis as Record<string, unknown>).__TAURI_INTERNALS__) {
-          console.log("[drag-drop] Running outside Tauri, skipping webview drag-drop");
+          logger.log("drag-drop", "Running outside Tauri, skipping webview drag-drop");
           return;
         }
         const webview = getCurrentWebview();
-        console.log("[drag-drop] Webview obtained:", webview);
+        logger.debug("drag-drop", "Webview obtained");
 
         unlisten = await webview.onDragDropEvent((event) => {
           const payload = event.payload;
@@ -106,7 +109,7 @@ export default function AppLayout() {
           } else if (payload.type === "drop") {
             setIsDropTarget(false);
             const path = payload.paths[0];
-            console.log("[drag-drop] Dropped file:", path);
+            logger.log("drag-drop", "Dropped file", { path });
             if (path) {
               setStatusMessage(`Loading ${path}...`);
               setFilePath(path);
@@ -123,9 +126,9 @@ export default function AppLayout() {
             }
           }
         });
-        console.log("[drag-drop] Listener registered successfully");
+        logger.log("drag-drop", "Listener registered successfully");
       } catch (err) {
-        console.error("[drag-drop] Failed to register listener:", err);
+        logger.error("drag-drop", "Failed to register listener", { err });
       }
     };
 
@@ -133,7 +136,7 @@ export default function AppLayout() {
 
     return () => {
       if (unlisten) {
-        console.log("[drag-drop] Cleaning up listener");
+        logger.log("drag-drop", "Cleaning up listener");
         unlisten();
       }
     };
@@ -158,9 +161,17 @@ export default function AppLayout() {
 
       {/* Auto-save Recovery Dialog */}
       {showRecovery && autoSave && (
-        <div className="fixed inset-0 flex items-center justify-center z-[100] bg-black/60 backdrop-blur-sm">
+        <div
+          className="fixed inset-0 flex items-center justify-center z-[100] bg-black/60 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="recovery-dialog-title"
+        >
           <div className="neo-flat rounded-lg p-5 min-w-[320px] max-w-[420px] bg-surface/60 backdrop-blur-md text-on-surface">
-            <h3 className="font-headline-md text-headline-md solar-text filigree-header mb-2">
+            <h3
+              id="recovery-dialog-title"
+              className="font-headline-md text-headline-md solar-text filigree-header mb-2"
+            >
               Recover Session?
             </h3>
             <p className="font-label-sm text-label-sm text-on-surface-variant mb-4">
@@ -182,6 +193,7 @@ export default function AppLayout() {
                   setShowRecovery(false);
                 }}
                 className="neo-btn rounded-md px-3 py-1.5 font-label-sm text-label-sm text-on-surface-variant hover:text-accent-pink transition-colors"
+                aria-label="Discard recovered session"
               >
                 Discard
               </button>
@@ -191,6 +203,8 @@ export default function AppLayout() {
                   setShowRecovery(false);
                 }}
                 className="neo-btn rounded-md px-3 py-1.5 font-label-sm text-label-sm text-on-surface bg-accent-pink/20 hover:bg-accent-pink/30 transition-colors"
+                aria-label="Restore recovered session"
+                autoFocus
               >
                 Restore Session
               </button>

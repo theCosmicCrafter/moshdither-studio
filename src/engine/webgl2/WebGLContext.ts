@@ -1,3 +1,5 @@
+import { logger } from "../../utils/logger";
+
 export interface WebGLContextCallbacks {
   onContextLost?: () => void;
   onContextRestored?: () => void;
@@ -34,13 +36,13 @@ export class WebGLContext {
     e.preventDefault();
     if (this.contextLost) return;
     this.contextLost = true;
-    console.error("[WebGLContext] WebGL context lost");
+    logger.error("WebGLContext", "WebGL context lost");
     this.onContextLost?.();
   };
 
   private handleContextRestored = () => {
     this.contextLost = false;
-    console.log("[WebGLContext] WebGL context restored — reinitializing state");
+    logger.log("WebGLContext", "Context restored — reinitializing state");
     this.reset();
     this.onContextRestored?.();
   };

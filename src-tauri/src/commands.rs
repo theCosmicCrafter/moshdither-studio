@@ -5,8 +5,8 @@ use crate::effects::{
     EffectCategory, EffectMeta, EffectRegistry, Frame,
 };
 use crate::ffmpeg::{
-    decode_video, encode_video, ffedit_binary, ffgac_binary, ffmpeg_binary, generate_proxy,
-    probe_metadata,
+    decode_video, encode_video, extract_audio_to_wav, ffedit_binary, ffgac_binary, ffmpeg_binary,
+    generate_proxy, has_audio_stream, probe_metadata,
 };
 use crate::path_guard::validate_io_path;
 use crate::sam3_engine::Sam3Engine;
@@ -582,6 +582,13 @@ pub fn save_media(
 /// Audio-reactive effects receive per-frame audio params when `audio_bake_json` is provided.
 /// Temporal effects (datamoshing) use `process_video` for cross-frame correctness.
 /// Non-temporal effects are processed frame-by-frame with audio params injected.
+///
+/// `processing_scale`: optional max dimension (px) for the internal decode
+/// and effect-processing pipeline. `None` means "auto" — the backend picks
+/// the largest resolution that fits in the adaptive memory budget. The
+/// final encode is scaled to `width`/`height` (or source dimensions if
+/// unspecified) regardless of the processing scale, so a 4K export can
+/// still process at 1080p internally and upscale on output.
 #[tauri::command]
 pub async fn export_video(
     state: State<'_, AppState>,
@@ -601,6 +608,7 @@ pub async fn export_video(
     format: Option<String>,
     quality: Option<String>,
     include_audio: Option<bool>,
+    processing_scale: Option<usize>,
 ) -> std::result::Result<String, String> {
     let validated_source = validate_io_path(&source_path, true)?;
     let validated_output = validate_io_path(&output_path, false)?;
@@ -639,6 +647,7 @@ pub async fn export_video(
             format,
             quality,
             include_audio,
+            processing_scale,
             cancel,
         )
     })
@@ -664,6 +673,7 @@ fn export_video_blocking(
     format: Option<String>,
     quality: Option<String>,
     include_audio: Option<bool>,
+    processing_scale: Option<usize>,
     cancel: Arc<AtomicBool>,
 ) -> std::result::Result<String, String> {
     // Parse optional trim suffix from output filename (e.g. name_trim_0.5-2.3.mp4)
@@ -688,13 +698,52 @@ fn export_video_blocking(
         }
     }
 
+    // Plan the decode: pick a processing scale that fits the adaptive
+    // memory budget. This runs BEFORE decode so we don't silently truncate.
+    // `processing_scale = None` means "auto" — the backend picks the
+    // largest resolution that fits. `Some(n)` means the user explicitly
+    // chose n px on the longest side.
+    eprintln!(
+        "[export] Planning decode for source: {} (preferred scale: {:?})",
+        source_path, processing_scale
+    );
+    let _ = app_handle.emit(
+        "export-progress",
+        serde_json::json!({"stage": "planning", "progress": 0}),
+    );
+    let (decode_scale, budget_bytes) =
+        crate::ffmpeg::plan_decode(&source_path, processing_scale).map_err(|e| e.to_string())?;
+    let budget_mb = budget_bytes as f64 / (1024.0 * 1024.0);
+    eprintln!(
+        "[export] Decode plan: scale={:?}, memory budget={:.0} MB",
+        decode_scale, budget_mb
+    );
+    if let Some(s) = decode_scale {
+        let message = format!(
+            "Source exceeds memory budget at native resolution; \
+             processing at {}p. Final encode will scale to target dimensions.",
+            s
+        );
+        eprintln!("[export] {}", message);
+        let _ = app_handle.emit(
+            "export-progress",
+            serde_json::json!({
+                "stage": "planning",
+                "progress": 0,
+                "warning": message,
+                "downscaled_to": s
+            }),
+        );
+    }
+
     // Decode the full source video
     eprintln!("[export] Decoding source: {}", source_path);
     let _ = app_handle.emit(
         "export-progress",
         serde_json::json!({"stage": "decoding", "progress": 0}),
     );
-    let mut segment = decode_video(&source_path, None).map_err(|e| e.to_string())?;
+    let mut segment = crate::ffmpeg::decode_video_with_options(&source_path, None, decode_scale)
+        .map_err(|e| e.to_string())?;
     eprintln!(
         "[export] Decoded {} frames, {}x{}, fps={}",
         segment.frames.len(),
@@ -703,33 +752,24 @@ fn export_video_blocking(
         segment.fps
     );
 
-    // Memory guard: reject exports that would likely OOM
+    // Post-decode memory report. The budget is already enforced inside
+    // decode_video_with_options (it truncates frame count to fit), so this
+    // is informational only — but we still warn loudly if the clip was
+    // truncated so the user knows to lower the processing scale or trim.
     if let Some(first) = segment.frames.first() {
         let frame_mb = (first.data.len() as f64) / (1024.0 * 1024.0);
         let total_mb = frame_mb * segment.frames.len() as f64;
         eprintln!(
-            "[export] Memory estimate: {:.1} MB per frame, {:.1} MB total for {} frames",
+            "[export] Memory estimate: {:.1} MB per frame, {:.1} MB total for {} frames (budget {:.0} MB)",
             frame_mb,
             total_mb,
-            segment.frames.len()
+            segment.frames.len(),
+            budget_mb
         );
-        if total_mb > 4000.0 {
-            let msg = format!(
-                "Video too large to export safely: {:.0} MB for {} frames. Try trimming the range or lowering resolution.",
-                total_mb,
-                segment.frames.len()
-            );
-            eprintln!("[export] REJECTED: {}", msg);
-            let _ = app_handle.emit(
-                "export-progress",
-                serde_json::json!({"stage": "error", "message": msg}),
-            );
-            return Err(msg);
-        }
-        if total_mb > 2000.0 {
+        if total_mb > budget_mb * 0.95 {
             eprintln!(
-                "[export] WARNING: Large memory usage ({:.0} MB). May cause OOM crash.",
-                total_mb
+                "[export] WARNING: decode used >=95% of memory budget. If the clip \
+                 was truncated, lower the processing resolution or trim the range."
             );
         }
     }
@@ -955,6 +995,48 @@ pub fn get_media_metadata(path: String) -> std::result::Result<serde_json::Value
     Ok(json!(meta))
 }
 
+/// Extract the audio track from a loaded video to a temp WAV file.
+///
+/// Returns the path to the extracted WAV, or an error if the video has no
+/// audio stream. The frontend uses this to auto-bake `AudioBakeData` for
+/// audio-reactive effects when a video is loaded — matching the
+/// TouchDesigner `Audio Movie CHOP` pattern where audio is auto-extracted
+/// from the loaded video, no separate load required.
+///
+/// `max_duration_secs` optionally limits extraction to the first N seconds
+/// (used to match the export trim range).
+#[tauri::command]
+pub fn extract_audio_from_video(
+    video_path: String,
+    max_duration_secs: Option<f64>,
+) -> std::result::Result<String, String> {
+    let validated = validate_io_path(&video_path, true)?;
+    let video_path = validated.to_string_lossy().into_owned();
+
+    // Fast path: if there's no audio stream, fail fast with a clear message
+    // so the frontend can show a "no audio" warning instead of a generic error.
+    if !has_audio_stream(&video_path).map_err(|e| e.to_string())? {
+        return Err("Source video has no audio stream".to_string());
+    }
+
+    // Write to a per-video temp file so repeated loads overwrite cleanly.
+    // Hash the path to keep filenames stable across calls for the same video.
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    video_path.hash(&mut hasher);
+    let hash = format!("{:016x}", hasher.finish());
+    let out_dir = std::env::temp_dir()
+        .join("moshdither-studio")
+        .join("extracted-audio");
+    std::fs::create_dir_all(&out_dir).map_err(|e| format!("Failed to create temp dir: {e}"))?;
+    let out_path = out_dir.join(format!("{hash}.wav"));
+
+    extract_audio_to_wav(&video_path, &out_path.to_string_lossy(), max_duration_secs)
+        .map_err(|e| e.to_string())?;
+    Ok(out_path.to_string_lossy().into_owned())
+}
+
 /// Get the current image dimensions.
 #[tauri::command]
 pub fn get_media_info(
@@ -976,13 +1058,16 @@ pub fn get_media_info(
 
 /// ── SAM3 Segmentation Commands ─────────────────────────────
 #[tauri::command]
-pub fn sam3_init(state: State<'_, AppState>) -> std::result::Result<String, String> {
+pub fn sam3_init(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> std::result::Result<String, String> {
     let mut sam3_lock = state
         .sam3
         .lock()
         .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
     if sam3_lock.is_none() {
-        match Sam3Engine::new() {
+        match Sam3Engine::new(&app) {
             Ok(engine) => {
                 *sam3_lock = Some(engine);
                 Ok("SAM3 engine initialized".into())

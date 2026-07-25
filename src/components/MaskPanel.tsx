@@ -358,7 +358,7 @@ export default function MaskPanel() {
                     <div className="flex items-center gap-2">
                       <span
                         className="w-2 h-2 rounded-full"
-                        style={{ background: p.label === 1 ? "#22c55e" : "#ef4444" }}
+                        style={{ background: p.label === 1 ? "var(--success, #22c55e)" : "var(--danger, #ef4444)" }}
                       />
                       <span className="text-[var(--text-primary)]">
                         ({p.x}, {p.y})
@@ -367,7 +367,7 @@ export default function MaskPanel() {
                         className="text-[10px] px-1 rounded"
                         style={{
                           background: p.label === 1 ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.15)",
-                          color: p.label === 1 ? "#22c55e" : "#ef4444",
+                          color: p.label === 1 ? "var(--success, #22c55e)" : "var(--danger, #ef4444)",
                         }}
                       >
                         {p.label === 1 ? "include" : "exclude"}

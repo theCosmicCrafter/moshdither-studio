@@ -20,6 +20,7 @@ export default function AudioPanel() {
   const audioFilePath = useAppStore((s) => s.audioFilePath);
   const audioManifestProgress = useAppStore((s) => s.audioManifestProgress);
   const audioManifestPhase = useAppStore((s) => s.audioManifestPhase);
+  const audioIsSilent = useAppStore((s) => s.audioIsSilent);
 
   const setAudioEnabled = useAppStore((s) => s.setAudioEnabled);
   const setAudioVolume = useAppStore((s) => s.setAudioVolume);
@@ -127,6 +128,31 @@ export default function AudioPanel() {
         />
         <span>Enable audio reactive</span>
       </label>
+
+      {audioEnabled && audioIsSilent && (
+        <div
+          role="alert"
+          style={{
+            padding: "6px 8px",
+            fontSize: 10,
+            borderRadius: 3,
+            background: "rgba(255, 180, 0, 0.15)",
+            border: "1px solid rgba(255, 180, 0, 0.4)",
+            color: "var(--accent-gold, #ffb400)",
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+          }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 12 }}>
+            warning
+          </span>
+          <span>
+            Source audio is silent or missing. Audio-reactive effects won't respond.
+            Load a separate audio file below to drive them.
+          </span>
+        </div>
+      )}
 
       {!audioEnabled ? (
         <div style={{ color: "var(--text-muted)", textAlign: "center", padding: "12px 0" }}>

@@ -154,7 +154,7 @@ describe("CommandPalette", () => {
       // "clr" should match "Clear effect stack" or "Clear in/out points"
       fireEvent.change(input, { target: { value: "clr" } });
       // Should find at least one clear-related command
-      const commands = screen.getAllByRole("button");
+      const commands = screen.getAllByRole("option");
       // Filter out the ones that are just navigation
       const commandButtons = commands.filter((b) => b.textContent && !b.textContent.includes("navigate"));
       expect(commandButtons.length).toBeGreaterThan(0);
@@ -170,7 +170,7 @@ describe("CommandPalette", () => {
       fireEvent.keyDown(input, { key: "ArrowDown" });
       // selectedIndex should be 1 — we can verify by checking the highlighted button
       // The selected button has a specific background style
-      const buttons = screen.getAllByRole("button").filter(
+      const buttons = screen.getAllByRole("option").filter(
         (b) => b.textContent && !b.textContent.includes("navigate") && !b.textContent.includes("No commands")
       );
       // The second button should be highlighted (selectedIndex = 1)
@@ -186,7 +186,7 @@ describe("CommandPalette", () => {
       fireEvent.keyDown(input, { key: "ArrowDown" });
       // Move up once
       fireEvent.keyDown(input, { key: "ArrowUp" });
-      const buttons = screen.getAllByRole("button").filter(
+      const buttons = screen.getAllByRole("option").filter(
         (b) => b.textContent && !b.textContent.includes("navigate") && !b.textContent.includes("No commands")
       );
       // selectedIndex should be 1
@@ -197,7 +197,7 @@ describe("CommandPalette", () => {
       render(<CommandPalette />);
       fireEvent.keyDown(window, { key: "p", ctrlKey: true, shiftKey: true });
       const input = screen.getByPlaceholderText("Type a command...");
-      const buttons = screen.getAllByRole("button").filter(
+      const buttons = screen.getAllByRole("option").filter(
         (b) => b.textContent && !b.textContent.includes("navigate") && !b.textContent.includes("No commands")
       );
       const count = buttons.length;
@@ -215,7 +215,7 @@ describe("CommandPalette", () => {
       const input = screen.getByPlaceholderText("Type a command...");
       // Try to go up from index 0
       fireEvent.keyDown(input, { key: "ArrowUp" });
-      const buttons = screen.getAllByRole("button").filter(
+      const buttons = screen.getAllByRole("option").filter(
         (b) => b.textContent && !b.textContent.includes("navigate") && !b.textContent.includes("No commands")
       );
       // First button should still be highlighted (index 0)
@@ -237,7 +237,7 @@ describe("CommandPalette", () => {
     it("mouse enter updates selected index", () => {
       render(<CommandPalette />);
       fireEvent.keyDown(window, { key: "p", ctrlKey: true, shiftKey: true });
-      const buttons = screen.getAllByRole("button").filter(
+      const buttons = screen.getAllByRole("option").filter(
         (b) => b.textContent && !b.textContent.includes("navigate") && !b.textContent.includes("No commands")
       );
       // Hover over the third button

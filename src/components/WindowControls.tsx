@@ -81,11 +81,12 @@ export default function WindowControls() {
   };
 
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-1" role="toolbar" aria-label="Window controls">
       <button
         onClick={handleMinimize}
         className="material-symbols-outlined text-on-surface-variant hover:text-accent-teal transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full"
         title="Minimize"
+        aria-label="Minimize window"
         style={{ fontSize: 18 }}
       >
         minimize
@@ -94,6 +95,8 @@ export default function WindowControls() {
         onClick={handleMaximize}
         className="material-symbols-outlined text-on-surface-variant hover:text-accent-teal transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full"
         title={isMaximized ? "Restore" : "Maximize"}
+        aria-label={isMaximized ? "Restore window" : "Maximize window"}
+        aria-pressed={isMaximized}
         style={{ fontSize: 18 }}
       >
         {isMaximized ? "filter_none" : "maximize"}
@@ -102,6 +105,8 @@ export default function WindowControls() {
         onClick={handleFullscreen}
         className={`material-symbols-outlined transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full ${isFullscreen ? "text-accent-pink neo-pressed" : "text-on-surface-variant hover:text-accent-teal"}`}
         title={isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
+        aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+        aria-pressed={isFullscreen}
         style={{ fontSize: 18 }}
       >
         {isFullscreen ? "fullscreen_exit" : "fullscreen"}
@@ -110,6 +115,7 @@ export default function WindowControls() {
         onClick={handleClose}
         className="material-symbols-outlined text-on-surface-variant hover:text-accent-pink transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full"
         title="Close"
+        aria-label="Close window"
         style={{ fontSize: 18 }}
       >
         close

@@ -21,6 +21,20 @@ const RESOLUTIONS = [
   { id: "480p", label: "480p", w: 854, h: 480 },
 ];
 
+// Processing resolution = internal decode + effect-processing scale.
+// "auto" lets the backend pick the largest resolution that fits the
+// adaptive memory budget (4K source → 1440p/1080p depending on clip
+// length). The final encode still scales to the output RESOLUTIONS above.
+// This matters for 4K source video — processing at native 4K would OOM
+// on most systems, but the user can still export at 4K by setting the
+// output resolution to "4K UHD" while processing at "Auto" or "1080p".
+const PROCESSING_SCALES = [
+  { id: "auto", label: "Auto", scale: undefined as number | undefined },
+  { id: "1080", label: "≤1080p", scale: 1080 },
+  { id: "720", label: "≤720p", scale: 720 },
+  { id: "480", label: "≤480p", scale: 480 },
+];
+
 const FFGITCH_MODES = [
   { id: "classic", label: "Classic" },
   { id: "classic2", label: "Classic 2" },
@@ -65,6 +79,7 @@ export default function ExportPanel() {
   const [format, setFormat] = useState<"mp4" | "webm" | "gif" | "png_seq">("mp4");
   const [codec, setCodec] = useState("h264");
   const [resolutionId, setResolutionId] = useState("source");
+  const [processingScaleId, setProcessingScaleId] = useState("auto");
   const [quality, setQuality] = useState<"draft" | "good" | "best">("good");
   const [fps, setFps] = useState(30);
   const [includeAudio, setIncludeAudio] = useState(true);
@@ -135,6 +150,9 @@ export default function ExportPanel() {
 
     const width = resolution.w === 0 ? undefined : resolution.w;
     const height = resolution.h === 0 ? undefined : resolution.h;
+    const processingScale = PROCESSING_SCALES.find(
+      (s) => s.id === processingScaleId
+    )?.scale;
 
     const audioBakeJson = audioBakeData ? JSON.stringify(audioBakeData) : null;
 
@@ -155,6 +173,7 @@ export default function ExportPanel() {
         format,
         quality,
         includeAudio,
+        processingScale,
       });
 
       const unlisten = await unlistenPromise;
@@ -348,6 +367,57 @@ export default function ExportPanel() {
               }}
             >
               {r.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Processing resolution — internal decode + effect-processing scale.
+          "Auto" picks the largest resolution that fits the adaptive memory
+          budget. Lower this if exports OOM on 4K source. */}
+      <div className="space-y-1">
+        <label
+          style={{
+            fontSize: 10,
+            color: "var(--text-muted)",
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+          }}
+          title="Internal processing resolution. Auto picks the largest that fits memory. Lower this if 4K exports run out of memory."
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 10 }}>
+            memory
+          </span>
+          Processing
+        </label>
+        <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
+          {PROCESSING_SCALES.map((s) => (
+            <button
+              key={s.id}
+              onClick={() => setProcessingScaleId(s.id)}
+              title={
+                s.scale
+                  ? `Downscale source so longest side ≤ ${s.scale}px during processing`
+                  : "Pick largest resolution that fits memory budget (recommended)"
+              }
+              style={{
+                padding: "2px 6px",
+                fontSize: 10,
+                borderRadius: 3,
+                border: "none",
+                cursor: "pointer",
+                background:
+                  processingScaleId === s.id
+                    ? "rgba(184, 211, 0, 0.25)"
+                    : "var(--surface-container-low)",
+                color:
+                  processingScaleId === s.id
+                    ? "var(--accent-gold)"
+                    : "var(--text-muted)",
+              }}
+            >
+              {s.label}
             </button>
           ))}
         </div>
@@ -764,7 +834,7 @@ export default function ExportPanel() {
           }}
         >
           {queue.length === 0 ? (
-            <div style={{ color: "#666", textAlign: "center", fontSize: 11 }}>Queue empty</div>
+            <div style={{ color: "var(--text-muted, #666)", textAlign: "center", fontSize: 11 }}>Queue empty</div>
           ) : (
             queue.map((job) => (
               <div

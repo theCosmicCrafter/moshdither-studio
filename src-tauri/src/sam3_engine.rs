@@ -4,11 +4,12 @@ use parking_lot::Mutex;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, Command, Stdio};
 use std::sync::mpsc::{channel, Receiver};
 use std::time::Duration;
 use sysinfo::{Pid, System};
+use tauri::{AppHandle, Manager};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Sam3Request {
@@ -91,9 +92,10 @@ fn remove_sam3_pid() {
     let _ = std::fs::remove_file(sam3_pid_file());
 }
 
-/// Reap any orphaned SAM3 bridge from a previous run. We only target processes
-/// whose executable name contains "python" so we do not accidentally kill an
-/// unrelated process referenced by a stale PID file.
+/// Reap any orphaned SAM3 bridge from a previous run. We only kill the process
+/// if the command line or executable path proves it is the bridge or the dev
+/// Python bridge script, preventing a stale PID from killing an unrelated
+/// process.
 fn cleanup_stale_sam3_bridge() {
     let pid_path = sam3_pid_file();
     let raw = match std::fs::read_to_string(&pid_path) {
@@ -111,14 +113,27 @@ fn cleanup_stale_sam3_bridge() {
     let s = System::new_all();
     if let Some(process) = s.process(Pid::from(pid)) {
         let name = process.name().to_string_lossy().to_lowercase();
-        if name.contains("python") {
+        let exe = process
+            .exe()
+            .map(|p| p.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        let cmd = process
+            .cmd()
+            .iter()
+            .map(|s| s.to_string_lossy().to_lowercase())
+            .collect::<Vec<_>>()
+            .join(" ");
+        if exe.contains("sam3-bridge") || exe.contains("sam3_bridge")
+            || cmd.contains("sam3_bridge.py")
+            || cmd.contains("sam3-bridge")
+        {
             eprintln!("[SAM3] Killing orphaned bridge process {} ({})", pid, name);
             if !process.kill() {
                 eprintln!("[SAM3] Failed to kill orphaned bridge process {}", pid);
             }
         } else {
             eprintln!(
-                "[SAM3] Stale PID file points to non-python process {} ({}), skipping",
+                "[SAM3] Stale PID file points to non-bridge process {} ({}), skipping",
                 pid, name
             );
         }
@@ -133,69 +148,159 @@ pub struct Sam3Engine {
     auth_token: String,
 }
 
+/// Locate the SAM3 bridge sidecar binary. Tauri strips the target-triple suffix
+/// when it bundles `externalBin` entries, so the production filename is just
+/// `sam3-bridge` (or `sam3-bridge.exe` on Windows). Dev builds can also pick up
+/// a target-prefixed binary from `src-tauri/bin`.
+fn locate_sam3_binary() -> Option<PathBuf> {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(PathBuf::from))?;
+
+    // Production: Tauri places the sidecar next to the executable without the target suffix.
+    for name in ["sam3-bridge.exe", "sam3-bridge"] {
+        let candidate = exe_dir.join(name);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    // Dev: target-prefixed binaries in src-tauri/bin.
+    let bin_dir = Path::new("bin");
+    for name in [
+        "sam3-bridge-x86_64-pc-windows-msvc.exe",
+        "sam3-bridge-aarch64-apple-darwin",
+        "sam3-bridge-x86_64-apple-darwin",
+        "sam3-bridge-x86_64-unknown-linux-gnu",
+        "sam3-bridge.exe",
+        "sam3-bridge",
+    ] {
+        let candidate = bin_dir.join(name);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
+/// Resolve the project root for dev-mode Python fallback. Probes the directory
+/// above the executable (target/{debug,release}), then CARGO_MANIFEST_DIR, then cwd.
+fn dev_project_root() -> Option<PathBuf> {
+    if let Ok(exe) = std::env::current_exe() {
+        let exe_dir = exe.parent()?;
+        let rel = exe_dir.join("..").join("..").join("..");
+        if rel.join("src-tauri").join("tauri.conf.json").exists() {
+            return rel.canonicalize().ok();
+        }
+    }
+    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        let p = PathBuf::from(manifest_dir);
+        if p.join("tauri.conf.json").exists() {
+            return p.parent().map(PathBuf::from);
+        }
+    }
+    std::env::current_dir().ok()
+}
+
+/// Resolve the SAM3 checkpoint path. Prefers a bundled Tauri resource, then a
+/// dev `models/sam3/sam3.pt` directory, then falls back to the bridge script's
+/// own default (which expects `~/.moshdither/models/sam3/sam3.pt`).
+fn resolve_checkpoint_path(app: &AppHandle) -> Option<PathBuf> {
+    // Bundled resource, if present.
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let bundled = resource_dir.join("models").join("sam3").join("sam3.pt");
+        if bundled.exists() {
+            return Some(bundled);
+        }
+    }
+    // Dev layout: project-root/models/sam3/sam3.pt.
+    if let Some(root) = dev_project_root() {
+        let dev = root.join("models").join("sam3").join("sam3.pt");
+        if dev.exists() {
+            return Some(dev);
+        }
+    }
+    None
+}
+
+/// Resolve the SAM3 repo path (the directory containing the `sam3` package).
+fn resolve_sam3_repo(app: &AppHandle) -> Option<PathBuf> {
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let bundled = resource_dir
+            .join("packages")
+            .join("python-backend")
+            .join("sam3_repo");
+        if bundled.exists() {
+            return Some(bundled);
+        }
+    }
+    if let Some(root) = dev_project_root() {
+        let dev = root
+            .join("packages")
+            .join("python-backend")
+            .join("sam3_repo");
+        if dev.exists() {
+            return Some(dev);
+        }
+    }
+    None
+}
+
 impl Sam3Engine {
-    pub fn new() -> crate::error::Result<Self> {
-        let exe_dir = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(PathBuf::from))
-            .unwrap_or_else(|| PathBuf::from("."));
-
-        // Resolve project root by probing likely locations, avoiding hardcoded paths.
-        let project_root = 'root: {
-            if exe_dir.join("sam3_env").exists() {
-                break 'root exe_dir.clone();
-            }
-            // Dev mode fallback: exe is typically in target/debug or target/release
-            let rel = exe_dir.join("..").join("..").join("..");
-            if rel.join("sam3_env").exists() {
-                break 'root rel.canonicalize().unwrap_or(rel);
-            }
-            // Cargo manifest directory is available when running via `cargo run` / `tauri dev`
-            if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-                let p = PathBuf::from(manifest_dir);
-                if p.join("sam3_env").exists() {
-                    break 'root p;
-                }
-            }
-            // Final fallback: current working directory
-            if let Ok(cwd) = std::env::current_dir() {
-                if cwd.join("sam3_env").exists() {
-                    break 'root cwd;
-                }
-            }
-            // If nothing matches, warn and fall back to cwd rather than a hardcoded path.
-            eprintln!(
-                "[WARN] Could not auto-resolve project root for SAM3 bridge. Searched: {:?}, {:?}, CARGO_MANIFEST_DIR, cwd. Falling back to cwd.",
-                exe_dir, rel
-            );
-            std::env::current_dir().unwrap_or_else(|_| exe_dir.clone())
-        };
-
-        let python = project_root
-            .join("sam3_env")
-            .join("Scripts")
-            .join("python.exe");
-        let bridge = project_root.join("src-tauri").join("sam3_bridge.py");
-
-        if !python.exists() {
-            return Err(crate::error::AppError::Generic(format!(
-                "Python not found at {}",
-                python.display()
-            )));
-        }
-        if !bridge.exists() {
-            return Err(crate::error::AppError::Generic(format!(
-                "Bridge script not found at {}",
-                bridge.display()
-            )));
-        }
-
+    pub fn new(app: &AppHandle) -> crate::error::Result<Self> {
         // Reap any zombie bridge left by a crashed previous session before we
         // start a new one and overwrite the PID file.
         cleanup_stale_sam3_bridge();
 
-        let mut child = Command::new(&python)
-            .arg(&bridge)
+        // Try the packaged sidecar first (production / Option A).
+        let mut command = if let Some(sidecar) = locate_sam3_binary() {
+            let mut cmd = Command::new(&sidecar);
+            // Point the sidecar at the Tauri resources for the model and the sam3 package.
+            if let Some(repo) = resolve_sam3_repo(app) {
+                cmd.env("SAM3_REPO", repo.as_os_str());
+            }
+            if let Some(checkpoint) = resolve_checkpoint_path(app) {
+                cmd.env("SAM3_CHECKPOINT", checkpoint.as_os_str());
+            }
+            cmd
+        } else {
+            // Dev fallback: use a local sam3_env Python interpreter.
+            let root = dev_project_root().ok_or_else(|| {
+                crate::error::AppError::Generic(
+                    "Could not resolve project root for SAM3 dev environment.".into(),
+                )
+            })?;
+            let python = if cfg!(windows) {
+                root.join("sam3_env").join("Scripts").join("python.exe")
+            } else {
+                root.join("sam3_env").join("bin").join("python")
+            };
+            let bridge = root.join("src-tauri").join("sam3_bridge.py");
+            if !python.exists() {
+                return Err(crate::error::AppError::Generic(format!(
+                    "SAM3 Python not found at {}. Build the sidecar with `npm run build:sam3-sidecar` or create a sam3_env.",
+                    python.display()
+                )));
+            }
+            if !bridge.exists() {
+                return Err(crate::error::AppError::Generic(format!(
+                    "SAM3 bridge script not found at {}",
+                    bridge.display()
+                )));
+            }
+            let mut cmd = Command::new(&python);
+            cmd.arg(&bridge);
+            if let Some(repo) = resolve_sam3_repo(app) {
+                cmd.env("SAM3_REPO", repo.as_os_str());
+            }
+            if let Some(checkpoint) = resolve_checkpoint_path(app) {
+                cmd.env("SAM3_CHECKPOINT", checkpoint.as_os_str());
+            }
+            cmd
+        };
+
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

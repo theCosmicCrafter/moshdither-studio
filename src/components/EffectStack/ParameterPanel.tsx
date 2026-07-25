@@ -358,10 +358,10 @@ function KeyframeButton({
         border: "none",
         cursor: "pointer",
         padding: 2,
-        color: existing ? "var(--accent)" : "#666",
+        color: existing ? "var(--accent)" : "var(--text-muted, #666)",
       }}
     >
-      <span className="material-symbols-outlined" style={{ fontSize: 10, color: existing ? "var(--accent)" : "#666", fontVariationSettings: existing ? "'FILL' 1" : "'FILL' 0" }}>diamond</span>
+      <span className="material-symbols-outlined" style={{ fontSize: 10, color: existing ? "var(--accent)" : "var(--text-muted, #666)", fontVariationSettings: existing ? "'FILL' 1" : "'FILL' 0" }}>diamond</span>
     </button>
   );
 }
@@ -427,14 +427,14 @@ function AudioBindingControl({
             border: "none",
             cursor: "pointer",
             background: isBound ? "rgba(74, 144, 217, 0.25)" : "transparent",
-            color: isBound ? "#6cf" : "#888",
+            color: isBound ? "var(--accent-teal, #6cf)" : "var(--text-muted, #888)",
           }}
         >
           <span className="material-symbols-outlined" style={{ fontSize: 10 }}>audio</span>
           {isBound ? "Audio Bound" : "Bind Audio"}
         </button>
         {isBound && (
-          <span style={{ fontSize: 10, color: "#6cf", fontFamily: "var(--font-mono)" }}>
+          <span style={{ fontSize: 10, color: "var(--accent-teal, #6cf)", fontFamily: "var(--font-mono)" }}>
             {live.toFixed(3)}
           </span>
         )}
@@ -463,7 +463,7 @@ function AudioBindingControl({
           </select>
 
           <div className="flex gap-1 items-center">
-            <span style={{ fontSize: 9, color: "#888", minWidth: 30 }}>In</span>
+            <span style={{ fontSize: 9, color: "var(--text-muted, #888)", minWidth: 30 }}>In</span>
             <input
               aria-label="Input min"
               type="number"
@@ -479,7 +479,7 @@ function AudioBindingControl({
                 color: "var(--text-primary)",
               }}
             />
-            <span style={{ fontSize: 9, color: "#666" }}>to</span>
+            <span style={{ fontSize: 9, color: "var(--text-muted, #666)" }}>to</span>
             <input
               aria-label="Input max"
               type="number"
@@ -498,7 +498,7 @@ function AudioBindingControl({
           </div>
 
           <div className="flex gap-1 items-center">
-            <span style={{ fontSize: 9, color: "#888", minWidth: 30 }}>Out</span>
+            <span style={{ fontSize: 9, color: "var(--text-muted, #888)", minWidth: 30 }}>Out</span>
             <input
               aria-label="Output min"
               type="number"
@@ -514,7 +514,7 @@ function AudioBindingControl({
                 color: "var(--text-primary)",
               }}
             />
-            <span style={{ fontSize: 9, color: "#666" }}>to</span>
+            <span style={{ fontSize: 9, color: "var(--text-muted, #666)" }}>to</span>
             <input
               aria-label="Output max"
               type="number"
@@ -533,7 +533,7 @@ function AudioBindingControl({
           </div>
 
           <div className="flex gap-2 items-center">
-            <label style={{ fontSize: 9, color: "#888", display: "flex", alignItems: "center", gap: 2 }}>
+            <label style={{ fontSize: 9, color: "var(--text-muted, #888)", display: "flex", alignItems: "center", gap: 2 }}>
               <input
                 type="checkbox"
                 checked={binding.gateEnabled}
@@ -543,7 +543,7 @@ function AudioBindingControl({
               />
               Gate
             </label>
-            <label style={{ fontSize: 9, color: "#888", display: "flex", alignItems: "center", gap: 2 }}>
+            <label style={{ fontSize: 9, color: "var(--text-muted, #888)", display: "flex", alignItems: "center", gap: 2 }}>
               <input
                 type="checkbox"
                 checked={binding.invert}

@@ -1,11 +1,1 @@
-{
-  "mcpServers": {
-    "mosh-verify": {
-      "command": "node",
-      "args": ["./mcp-servers/mosh-verify/index.js"],
-      "env": {
-        "MOSH_VERIFY_BIN": "./src-tauri/target/debug/mosh-verify.exe"
-      }
-    }
-  }
-}
+{}
