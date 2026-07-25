@@ -14,7 +14,7 @@ import KeyboardShortcutsEditor from "./KeyboardShortcutsEditor";
 import { PANEL_REGISTRY } from "./DockSystem/panelRegistry";
 
 interface Props {
-  onFileLoaded: () => Promise<boolean>;
+  readonly onFileLoaded: () => Promise<boolean>;
 }
 
 export default function Toolbar({ onFileLoaded }: Props) {
@@ -477,7 +477,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                     max={1}
                     step={0.05}
                     value={panelOpacity}
-                    onChange={(e) => setPanelOpacity(parseFloat(e.target.value))}
+                    onChange={(e) => setPanelOpacity(Number.parseFloat(e.target.value))}
                     className="w-full accent-[var(--accent-teal)]"
                     title="Panel opacity"
                     aria-label="Panel opacity"
@@ -568,7 +568,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
             step="1"
             value={currentTime}
             onChange={(e) => {
-              setCurrentTime(parseInt(e.target.value));
+              setCurrentTime(Number.parseInt(e.target.value));
               handleProcess();
             }}
             className="slider-thumb w-20"
@@ -583,7 +583,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
             max="30"
             step="1"
             value={fps}
-            onChange={(e) => setFps(parseInt(e.target.value))}
+            onChange={(e) => setFps(Number.parseInt(e.target.value))}
             className="slider-thumb w-16"
             title={`${fps} FPS`}
           />
@@ -591,7 +591,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
         </div>
         <select
           value={playbackSpeed}
-          onChange={(e) => setPlaybackSpeed(parseFloat(e.target.value))}
+          onChange={(e) => setPlaybackSpeed(Number.parseFloat(e.target.value))}
           className="themed-select text-label-sm font-label-sm cursor-pointer"
           title="Playback speed"
         >
