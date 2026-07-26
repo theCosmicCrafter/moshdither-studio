@@ -55,34 +55,74 @@ fixed.
 
 ---
 
-## 2. Unpinned model downloads — **MEDIUM**
+## 2. Unpinned model downloads — **FIXED 2026-07-26**
 
-**3 findings, bandit `B615`.** In `packages/python-backend/sam3_service.py`.
+**Was 3 findings, bandit `B615`, in `packages/python-backend/sam3_service.py`.**
 
-Hugging Face model loads without a pinned `revision`, so the code fetches
-whatever the remote repository currently points at. If the upstream model
-repository is compromised or force-pushed, this pulls the replacement silently.
+`snapshot_download("IDEA-Research/grounding-dino-tiny")` carried no `revision`,
+so it fetched whatever the repository pointed at that day.
 
-**Fix.** Pass an explicit `revision="<commit sha>"` to each `from_pretrained` /
-`hf_hub_download` call.
+**This was the delivery vector for §3.** PYSEC-2026-2289 executes arbitrary code
+from a repository named in a model's `config.json` `_attn_implementation_internal`
+field during `from_pretrained()`. Unpinned + vulnerable transformers is the
+whole chain: force-push upstream, and the next launch runs the attacker's code.
+Neither finding is remarkable alone; together they are a working path.
+
+**Fixed three ways:**
+
+- `revision` pinned to `a2bb814dd30d776dcf7e30523b00659f4f141c71`, the
+  repository head as of 2024-05-12 and unchanged since.
+- `allow_patterns` restricts the download to JSON/text/safetensors. The
+  repository also ships `pytorch_model.bin`, a pickle, which executes arbitrary
+  code on load by design and was being downloaded for no reason.
+- `local_files_only=True` and `trust_remote_code=False` stated explicitly on
+  both `from_pretrained()` calls, so neither can silently reach the network and
+  enabling remote code becomes a deliberate edit rather than an omission.
+
+Those two `from_pretrained()` calls still carry `# nosec B615`: they read the
+local cache directory, never the Hub, so `revision` has no meaning for them.
+The pin lives on the `snapshot_download()` that actually contacts the Hub.
+`bandit -ll packages/python-backend/sam3_service.py` now reports no issues.
 
 ---
 
-## 3. `transformers` 4.57.6 — 4 advisories
+## 3. `transformers` 4.57.6 — 4 advisories, 1 that matters
 
-`PYSEC-2025-217`, `PYSEC-2026-2288`, `PYSEC-2026-2289`, `PYSEC-2026-2290`.
+Triaged rather than treated as four equal items:
 
-Every fix is in `transformers` 5.x. `requirements.txt` pins `>=4.36.0,<5`, so
-clearing these is a **major-version migration**, not a bump — 5.x has breaking
-API changes and the SAM3 / GroundingDINO integration would need revalidating.
+| ID | Vector | Reachable here? |
+|---|---|---|
+| `PYSEC-2025-217` | X-CLIP **checkpoint conversion** RCE | No — this app never converts checkpoints |
+| `PYSEC-2026-2288` | `Trainer._load_rng_state` RCE | No — this app does not train |
+| `PYSEC-2026-2290` | **LightGlue** model loading | No — LightGlue is not used |
+| `PYSEC-2026-2289` | `from_pretrained()` executes code named in `config.json`'s `_attn_implementation_internal` | **Yes** |
 
-Suppressed by ID in `.pre-commit-config.yaml`. A new advisory against
-`transformers` still fails the gate, because the suppression is per-ID and never
-blanket.
+Only the last is reachable: `sam3_service.py` calls
+`AutoModelForZeroShotObjectDetection.from_pretrained()`.
+
+**Its delivery vector is closed** — the model download is now pinned to an exact
+commit and restricted to safetensors, so an attacker would have to compromise a
+specific historical commit rather than force-push `main`. See §2.
+
+The library fix still requires **transformers 5.x**, and `requirements.txt` pins
+`>=4.36.0,<5`. That is a major-version migration which also drags
+`huggingface_hub` from 0.x to 1.x (violating its own `<1` pin). The API surface
+this project uses is small and stable — `AutoProcessor`,
+`AutoModelForZeroShotObjectDetection`, `snapshot_download`, all present in 5.x —
+so the upgrade is plausible, but it **cannot be verified on this machine**: the
+SAM3 checkpoint is not present locally, so no real segmentation can be run.
+
+**To do it safely:** obtain the checkpoint (`scripts/download-sam3-checkpoint.py`),
+upgrade `transformers>=5.3,<6` and `huggingface_hub>=1,<2`, then run a text-prompt
+segmentation end to end and compare masks against the current output. Shipping it
+without that is exactly the untested change this document argues against.
+
+Suppressed by ID, never blanket, so a new `transformers` advisory still fails
+the gate.
 
 ---
 
-## 4. `rembg` 2.0.69 — 2 advisories
+## 4. `rembg` 2.0.69 — **FIXED 2026-07-26**
 
 `PYSEC-2026-2274`, `GHSA-55v6-g8pm-pw4c`. Fixed in 2.0.75.
 
@@ -95,9 +135,34 @@ and numpy<2 and >=1.26 because these package versions have conflicting
 dependencies.  ResolutionImpossible
 ```
 
-`rembg >= 2.0.75` requires `numpy >= 2`, and the project pins `numpy < 2`.
-Clearing this advisory therefore means a **numpy 2.x migration** across `torch`,
-`opencv-python`, `scikit-image` and `pycocotools`. Suppressed by ID until then.
+`rembg >= 2.0.75` requires `numpy >= 2`, and the project pinned `numpy < 2`.
+
+**The numpy 2 migration turned out to be already done in everything but the
+pin.** Verified rather than assumed:
+
+- The project's own numpy usage is numpy-2 clean. Every symbol it touches
+  (`np.float32`, `np.uint8`, `np.int32`, `np.ndarray`, `np.fft`, …) survives in
+  numpy 2. None of the bare aliases numpy 2 removed — `np.float`, `np.int`,
+  `np.bool` — appear anywhere.
+- Every pinned dependency already supported numpy 2 at its installed version:
+  torch 2.11, opencv 4.11, scikit-image 0.26, transformers 4.57.
+- A dry-run resolve in the live `sam3_env` showed the upgrade touches exactly
+  three packages — `numpy 2.4.6`, `rembg 2.0.77`, `scipy 1.18.0` — and leaves
+  `torch 2.11.0+cu128` alone, so the CUDA build is preserved.
+- After upgrading: torch, opencv, scikit-image, transformers and `sam3` all
+  import, `torch.cuda.is_available()` is still `True`, and the numpy-heavy mask
+  helpers in `sam3_bridge.py` (`mask_to_base64`, `mask_iou`,
+  `deduplicate_masks`, `cmd_postprocess_mask`) all produce correct results —
+  `mask_iou` returns exactly 0.25 on geometry constructed to give 0.25.
+
+`requirements.txt` now pins `numpy>=2.0,<3` and `rembg>=2.0.75,<3`, and the
+pip-audit suppressions for both rembg advisories are **removed** rather than
+kept.
+
+> One loose end: the vendored `sam3` package's own metadata still declares
+> `numpy<2`, so pip prints a dependency-conflict warning. It is a defensive
+> upstream pin, not a real incompatibility — `sam3` imports and runs fine on
+> numpy 2.4.6, as verified above.
 
 ---
 
@@ -136,9 +201,9 @@ Everything currently keeping a gate green, so it can be audited in one place.
 
 | What | Where | Reason | Removable when |
 |---|---|---|---|
-| `packages/python-backend/` | bandit `exclude` | 17 legacy findings, §1 and §2 | §1 and §2 fixed |
+| `packages/python-backend/` | bandit `exclude` | 15 legacy `shell=True` findings, §1 | §1 fixed |
 | 4 × `PYSEC` IDs | pip-audit `--ignore-vuln` | transformers 5.x migration, §3 | transformers upgraded |
-| 2 × rembg IDs | pip-audit `--ignore-vuln` | numpy 2.x migration, §4 | numpy upgraded |
+| 2 × `# nosec B615` | `sam3_service.py` | `from_pretrained()` on a local path; the pin is on `snapshot_download()` | never — structural |
 | `.secrets.baseline` | `.gitleaks.toml` | Stored SHAs read as high-entropy secrets | never — structural |
 | Vendored trees | all scanners | Third-party code, ~6.5 GB | never — structural |
 | njsscan | removed from config | Ships no `.pre-commit-hooks.yaml` at any tag | upstream adds one |

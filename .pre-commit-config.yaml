@@ -138,11 +138,4 @@ repos:
           - 'PYSEC-2026-2289'
           - '--ignore-vuln'
           - 'PYSEC-2026-2290'
-          # rembg 2.0.69. The fix (2.0.75) requires numpy >= 2 while this project
-          # pins numpy < 2, so it is a numpy 2.x migration across torch,
-          # opencv-python and scikit-image -- not a version bump.
-          - '--ignore-vuln'
-          - 'PYSEC-2026-2274'
-          - '--ignore-vuln'
-          - 'GHSA-55v6-g8pm-pw4c'
         pass_filenames: false
