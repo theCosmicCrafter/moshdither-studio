@@ -156,20 +156,26 @@ fn check_mask_blend(original: &Frame, processed: &Frame, mask: &Mask, mode: &str
 /// Effects that require external input, non-neutral defaults, or a video stream to produce
 /// meaningful output from a single still-frame check. They are expected to pass the no-crash
 /// and mask-safety checks; the other checks are informational only.
+/// Effects exempt from the `non_empty_output` check because they genuinely
+/// cannot produce output from the resources verification supplies.
+///
+/// This is the one place a broken effect could hide behind a green report, so
+/// it is kept minimal and `allowlist_tests` pins it to measured behaviour in
+/// both directions — an entry that does produce output fails the test as
+/// over-broad, and an effect producing nothing while absent fails as unexplained.
+///
+/// Each entry needs a reason. "It was failing" is not one.
 const NEEDS_INPUT_EFFECTS: &[&str] = &[
-    "audio_reactive.audio_dither",
+    // Need an audio feature stream; there is no audio in a still-frame harness.
     "audio_reactive.bass_pulse",
     "audio_reactive.beat_glitch",
     "audio_reactive.spectral_shift",
-    "color.brightness_contrast",
+    // Identity at its default parameters, which is the correct behaviour for a
+    // grading effect with no LUT loaded.
     "color.lut_grading",
+    // Needs a second image via `overlay_path`; compositing nothing onto a frame
+    // correctly returns the frame.
     "composite.overlay",
-    "datamoshing.cross_video",
-    "datamoshing.frame_hold",
-    "datamoshing.frame_reverse",
-    "datamoshing.frame_sort_by_size",
-    "datamoshing.iframe_removal_advanced",
-    "datamoshing.stop",
 ];
 
 /// Build default params for an effect, applying stronger-than-default values for subtle effects
@@ -721,5 +727,68 @@ mod tests {
             }
         }
         println!("=== END REPORT ===\n");
+    }
+}
+
+#[cfg(test)]
+mod allowlist_tests {
+    use super::*;
+
+    /// `NEEDS_INPUT_EFFECTS` exempts effects from the `non_empty_output`
+    /// requirement, so it is the one place a genuinely broken effect could hide
+    /// behind a green 94/94. This pins it to reality in both directions.
+    ///
+    /// * An entry that *does* produce output is over-broad: it silently drops
+    ///   the strongest check for an effect that does not need the exemption.
+    /// * An effect producing no output while *absent* from the list is either
+    ///   broken or newly needs external input, and must be looked at rather
+    ///   than quietly added here.
+    #[test]
+    fn needs_input_allowlist_matches_actual_behaviour() {
+        let registry = EffectRegistry::new();
+        let report = verify_all_effects(&registry);
+
+        let mut over_broad = Vec::new();
+        let mut missing = Vec::new();
+
+        for result in &report.results {
+            let listed = NEEDS_INPUT_EFFECTS.contains(&result.effect_id.as_str());
+            match (listed, result.checks.non_empty_output) {
+                (true, true) => over_broad.push(result.effect_id.clone()),
+                (false, false) => missing.push(result.effect_id.clone()),
+                _ => {}
+            }
+        }
+
+        assert!(
+            over_broad.is_empty(),
+            "these effects produce output and do not need the non_empty_output \
+             exemption — remove them from NEEDS_INPUT_EFFECTS so the check \
+             applies to them again:\n  {}",
+            over_broad.join("\n  ")
+        );
+        assert!(
+            missing.is_empty(),
+            "these effects produced no output and are not on NEEDS_INPUT_EFFECTS. \
+             Do not add them without establishing which external input they need \
+             — the alternative explanation is that they are broken:\n  {}",
+            missing.join("\n  ")
+        );
+    }
+
+    /// Every allowlisted ID must exist. A rename leaves a dead entry behind,
+    /// which silently stops exempting anything and equally silently stops
+    /// documenting why the effect was there.
+    #[test]
+    fn needs_input_allowlist_has_no_stale_entries() {
+        let registry = EffectRegistry::new();
+        let unknown: Vec<_> = NEEDS_INPUT_EFFECTS
+            .iter()
+            .filter(|id| registry.get(id).is_none())
+            .collect();
+        assert!(
+            unknown.is_empty(),
+            "NEEDS_INPUT_EFFECTS names effects that are not registered: {unknown:?}"
+        );
     }
 }

@@ -55,15 +55,58 @@ function withDefaults(userPresets: Preset[]): Preset[] {
   return merged;
 }
 
-function parsePresets(json: string): Preset[] {
+/**
+ * Schema version of the preset file.
+ *
+ * The library is a portable file now — users copy it between machines and send
+ * it to each other — so a version field is the difference between being able to
+ * migrate an old library and having to guess at its shape. Effect IDs are the
+ * likely thing to move: an unknown ID is a hard error in Rust (`Effect '...'
+ * not found` aborts the whole render), which is exactly the wall the overlay
+ * guides hit. This gives that migration somewhere to hook in.
+ *
+ * Version 1 is the first versioned format. A bare array is version 0, written
+ * before this existed, and is still read.
+ */
+export const PRESET_SCHEMA_VERSION = 1;
+
+interface PresetFile {
+  version: number;
+  presets: Preset[];
+}
+
+function isValidPreset(p: unknown): p is Preset {
+  const preset = p as Preset | null;
+  return !!preset && !!preset.id && !!preset.name && Array.isArray(preset.stack);
+}
+
+/**
+ * Read a preset library, accepting both the versioned envelope and the bare
+ * array written before versioning existed.
+ */
+export function parsePresets(json: string): Preset[] {
   if (!json.trim()) return [];
   try {
-    const parsed = JSON.parse(json) as Preset[];
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((p) => p && p.id && p.name && Array.isArray(p.stack));
+    const parsed = JSON.parse(json) as PresetFile | Preset[];
+
+    // Version 0: the file was a bare array.
+    if (Array.isArray(parsed)) return parsed.filter(isValidPreset);
+
+    if (!parsed || !Array.isArray(parsed.presets)) return [];
+
+    // A file from a future version may contain fields this build does not
+    // understand. Reading it is still better than discarding the user's
+    // library, so load what parses and leave the rest alone.
+    return parsed.presets.filter(isValidPreset);
   } catch {
     return [];
   }
+}
+
+/** Serialise a preset library in the current schema version. */
+export function serialisePresets(presets: Preset[]): string {
+  const file: PresetFile = { version: PRESET_SCHEMA_VERSION, presets };
+  return JSON.stringify(file, null, 2);
 }
 
 /** Generate a simple gradient thumbnail based on preset effects. */
@@ -168,7 +211,7 @@ export function usePresets() {
         initial = legacy;
         migratedCount = legacy.length;
         try {
-          await savePresetsFile(JSON.stringify(legacy, null, 2));
+          await savePresetsFile(serialisePresets(legacy));
         } catch (err) {
           if (!cancelled) setStatusMessage(`Preset migration failed: ${String(err)}`);
         }
@@ -204,7 +247,7 @@ export function usePresets() {
     // copy into the user's file and make them undeletable.
     const userPresets = presets.filter((p) => !p.id.startsWith("default-preset-"));
     if (isTauriAvailable()) {
-      savePresetsFile(JSON.stringify(userPresets, null, 2)).catch((err) => {
+      savePresetsFile(serialisePresets(userPresets)).catch((err) => {
         setStatusMessage(`Failed to save presets: ${String(err)}`);
       });
     } else {
@@ -266,7 +309,7 @@ export function usePresets() {
   const exportPresets = useCallback(
     (ids?: string[]) => {
       const toExport = ids ? presets.filter((p) => ids.includes(p.id)) : presets;
-      const blob = new Blob([JSON.stringify(toExport, null, 2)], { type: "application/json" });
+      const blob = new Blob([serialisePresets(toExport)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -283,9 +326,10 @@ export function usePresets() {
       const reader = new FileReader();
       reader.onload = () => {
         try {
-          const imported = JSON.parse(reader.result as string) as Preset[];
-          if (!Array.isArray(imported)) throw new Error("Invalid file format");
-          const valid = imported.filter((p) => p.id && p.name && Array.isArray(p.stack));
+          // parsePresets accepts both the versioned envelope and the bare
+          // array, so a file exported by any version of the app imports.
+          const valid = parsePresets(reader.result as string);
+          if (valid.length === 0) throw new Error("No presets in file");
           setPresets((prev) => {
             const existingIds = new Set(prev.map((p) => p.id));
             const newPresets = valid.filter((p) => !existingIds.has(p.id));

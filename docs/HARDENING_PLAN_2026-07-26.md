@@ -322,6 +322,27 @@ twice and requires identical bytes, so this cannot regress silently.
 would be a security defect; the call site is commented so a future sweep does not
 "fix" it.
 
+### 3.7 Verification allowlist was over-broad — **DONE 2026-07-26**
+
+`verification::NEEDS_INPUT_EFFECTS` exempts effects from the
+`non_empty_output` check, which makes it the one place a genuinely broken effect
+could hide behind a green report. It listed 13 effects; **8 of them produce
+output perfectly well** and had been silently exempt from the strongest check
+for no reason — including all six `datamoshing` frame-sequence effects, which
+the harness already exercises correctly through `process_video`.
+
+The list is now the five that genuinely cannot produce output from the resources
+verification supplies (three `audio_reactive.*` needing an audio stream,
+`color.lut_grading` which is correctly identity with no LUT loaded, and
+`composite.overlay` which needs a second image), each with its reason recorded.
+
+`verification::allowlist_tests` pins the list to measured behaviour in both
+directions, so it cannot drift again: an entry that does produce output fails as
+over-broad, and an effect producing nothing while absent from the list fails as
+unexplained rather than being quietly added.
+
+94/94 still passes — but now eight more effects are actually being checked.
+
 ---
 
 ## 4. Workstream B — shader quality audit
