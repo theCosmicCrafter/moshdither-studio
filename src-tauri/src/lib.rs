@@ -9,7 +9,6 @@ pub mod environment;
 pub mod ffmpeg;
 pub mod path_guard;
 pub mod sam3_engine;
-pub mod spout;
 pub mod utils;
 
 use commands::{
@@ -27,8 +26,28 @@ use tauri::Manager;
 pub fn run() {
     println!("Initializing Tauri Builder...");
     tauri::Builder::default()
-        .setup(|_app| {
+        .setup(|app| {
             println!("Tauri setup running...");
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let state = app_handle.state::<AppState>();
+                let lock_res = state.sam3.lock();
+                if let Ok(mut sam3_lock) = lock_res {
+                    if sam3_lock.is_none() {
+                        match sam3_engine::Sam3Engine::new(&app_handle) {
+                            Ok(engine) => {
+                                println!(
+                                    "[SAM3] Auto-started SAM3 engine in background successfully."
+                                );
+                                *sam3_lock = Some(engine);
+                            }
+                            Err(e) => {
+                                eprintln!("[SAM3] Background auto-start notice: {}", e);
+                            }
+                        }
+                    }
+                }
+            });
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())

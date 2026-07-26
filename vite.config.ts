@@ -26,26 +26,23 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
+          const normalizedId = id.replace(/\\/g, "/");
           // Vendor chunk: framework + state management libraries.
           const vendor = ["react", "react-dom", "zustand", "lucide-react"];
-          if (vendor.some((module) => id.includes(`node_modules/${module}`))) {
+          if (vendor.some((module) => normalizedId.includes(`node_modules/${module}/`))) {
             return "vendor";
           }
-          // Panel-level code splitting: each heavy panel gets its own chunk
-          // so the initial bundle only loads the panels the user actually
-          // opens. The panelRegistry uses React.lazy() for these imports,
-          // so they are already dynamic — naming the chunks here keeps the
-          // network tab readable and lets the browser cache them
-          // independently across releases.
-          const panelMatch = id.match(
-            /[\\/]components[\\/](EffectBrowser|EffectStack|AudioPanel|ExportPanel|PresetPanel|MaskPanel|LUTPanel|ProxyPanel|TrackPanel|VerificationPanel)[\\/]/
+          // Panel-level code splitting: each heavy panel gets its own chunk.
+          // Handles both directory-style panels (e.g. components/AudioPanel/...)
+          // and flat file panels (e.g. components/MaskPanel.tsx).
+          const panelMatch = normalizedId.match(
+            /\/components\/(EffectBrowser|EffectStack|AudioPanel|ExportPanel|PresetPanel|MaskPanel|LUTPanel|ProxyPanel|TrackPanel|VerificationPanel)(\/|\.(?:tsx?|jsx?)|$)/
           );
           if (panelMatch) {
             return `panel-${panelMatch[1].toLowerCase()}`;
           }
-          // Engine chunk: WebGL2 renderer, shaders, LUT loader — heavy and
-          // only needed once media is loaded.
-          if (id.includes("/engine/webgl2/") || id.includes("\\engine\\webgl2\\")) {
+          // Engine chunk: WebGL2 renderer, shaders, LUT loader
+          if (normalizedId.includes("/engine/webgl2/")) {
             return "engine-webgl2";
           }
         },
@@ -57,5 +54,18 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
     include: ["src/**/*.{test,spec}.{ts,tsx}", "tests/**/*.{test,spec}.{ts,tsx}"],
+    exclude: ["tests/e2e/**", "node_modules/**"],
+    // Pin NODE_ENV for the test run. React's entrypoint dispatches on
+    // process.env.NODE_ENV at import time; if the ambient environment has
+    // NODE_ENV=production (common on CI runners and build agents) React
+    // resolves to react.production.min.js, where act() throws and every
+    // @testing-library render fails. Pinning it here makes the suite
+    // hermetic instead of dependent on the shell it was launched from.
+    env: { NODE_ENV: "test" },
+  },
+  define: {
+    // Belt-and-braces: ensure any bare `process.env.NODE_ENV` reference that
+    // survives into a test bundle also sees a non-production value.
+    ...(process.env.VITEST ? { "process.env.NODE_ENV": JSON.stringify("test") } : {}),
   },
 });

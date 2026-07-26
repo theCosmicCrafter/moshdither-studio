@@ -32,6 +32,28 @@ pub fn validate_io_path(path: &str, must_exist: bool) -> Result<PathBuf, String>
         return Err(format!("Path must be absolute: {}", path));
     }
 
+    for component in p.components() {
+        if let Component::Prefix(prefix) = component {
+            #[cfg(target_os = "windows")]
+            {
+                use std::path::Prefix;
+                match prefix.kind() {
+                    Prefix::UNC(_, _) | Prefix::VerbatimUNC(_, _) => {
+                        return Err(format!(
+                            "Access denied: UNC network paths are not allowed: {}",
+                            path
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = prefix;
+            }
+        }
+    }
+
     let normalized = normalize_path(p);
     if !normalized.is_absolute() {
         return Err(format!(
@@ -239,5 +261,11 @@ mod tests {
         let temp = env::temp_dir();
         let out = temp.join("nonexistent_subdir/output.mp4");
         assert!(validate_io_path(out.to_string_lossy().as_ref(), false).is_err());
+    }
+
+    #[test]
+    fn test_rejects_unc_paths() {
+        assert!(validate_io_path(r"\\attacker\share\payload.mp4", false).is_err());
+        assert!(validate_io_path(r"\\?\UNC\attacker\share\payload.mp4", false).is_err());
     }
 }

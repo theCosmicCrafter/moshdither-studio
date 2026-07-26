@@ -78,3 +78,6 @@ test_*.txt
 # IDE/docs artifacts
 /recycling/
 /desktop.png
+
+# Scratch/output directory used by audit and export tooling
+/outputs/

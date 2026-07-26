@@ -1056,6 +1056,55 @@ pub fn get_media_info(
     }
 }
 
+fn with_sam3<F, R>(
+    app: &tauri::AppHandle,
+    state: &State<'_, AppState>,
+    f: F,
+) -> std::result::Result<R, String>
+where
+    F: Fn(&Sam3Engine) -> crate::error::Result<R>,
+{
+    let mut sam3_lock = state
+        .sam3
+        .lock()
+        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
+
+    if sam3_lock.is_none() {
+        match Sam3Engine::new(app) {
+            Ok(engine) => {
+                *sam3_lock = Some(engine);
+            }
+            Err(e) => return Err(format!("Failed to start SAM3 engine: {e}")),
+        }
+    }
+
+    let engine = sam3_lock.as_ref().unwrap();
+    match f(engine) {
+        Ok(res) => Ok(res),
+        Err(e) => {
+            let err_str = e.to_string();
+            // If the sidecar IPC pipe broke or died, drop the dead engine lock and attempt auto-restart
+            if err_str.contains("pipe")
+                || err_str.contains("closed")
+                || err_str.contains("os error")
+            {
+                eprintln!(
+                    "[SAM3 Engine] Pipe error detected ({err_str}), auto-restarting SAM3 engine..."
+                );
+                *sam3_lock = None;
+                if let Ok(new_engine) = Sam3Engine::new(app) {
+                    if let Ok(retry_res) = f(&new_engine) {
+                        *sam3_lock = Some(new_engine);
+                        return Ok(retry_res);
+                    }
+                    *sam3_lock = Some(new_engine);
+                }
+            }
+            Err(err_str)
+        }
+    }
+}
+
 /// ── SAM3 Segmentation Commands ─────────────────────────────
 #[tauri::command]
 pub fn sam3_init(
@@ -1082,34 +1131,22 @@ pub fn sam3_init(
 /// Load an image into SAM3 for segmentation.
 #[tauri::command]
 pub fn sam3_load_image(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     image_b64: String,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
-    let engine = sam3_lock
-        .as_ref()
-        .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
-    let (w, h) = engine.load_image(image_b64).map_err(|e| e.to_string())?;
+    let (w, h) = with_sam3(&app, &state, |engine| engine.load_image(image_b64.clone()))?;
     Ok(json!({ "width": w, "height": h }))
 }
 
 /// Run a text prompt on the currently loaded SAM3 image.
 #[tauri::command]
 pub fn sam3_text_prompt(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     prompt: String,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
-    let engine = sam3_lock
-        .as_ref()
-        .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
-    let masks = engine.text_prompt(prompt).map_err(|e| e.to_string())?;
+    let masks = with_sam3(&app, &state, |engine| engine.text_prompt(prompt.clone()))?;
     let count = masks.len();
     let (mask_b64s, scores): (Vec<String>, Vec<f64>) = masks.into_iter().unzip();
     Ok(json!({
@@ -1122,24 +1159,19 @@ pub fn sam3_text_prompt(
 /// Run a point-click prompt on the currently loaded SAM3 image.
 #[tauri::command]
 pub fn sam3_point_prompt(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     points: Vec<[f64; 2]>,
     labels: Option<Vec<i32>>,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
-    let engine = sam3_lock
-        .as_ref()
-        .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
     let f32_points: Vec<[f32; 2]> = points
         .into_iter()
         .map(|[x, y]| [x as f32, y as f32])
         .collect();
-    let masks = engine
-        .point_prompt(f32_points, labels)
-        .map_err(|e| e.to_string())?;
+    let labels_clone = labels.clone();
+    let masks = with_sam3(&app, &state, |engine| {
+        engine.point_prompt(f32_points.clone(), labels_clone.clone())
+    })?;
     let count = masks.len();
     let (mask_b64s, scores): (Vec<String>, Vec<f64>) = masks.into_iter().unzip();
     Ok(json!({
@@ -1152,21 +1184,15 @@ pub fn sam3_point_prompt(
 /// Run a box prompt on the currently loaded SAM3 image.
 #[tauri::command]
 pub fn sam3_box_prompt(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     boxes: Vec<[f64; 4]>,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
-    let engine = sam3_lock
-        .as_ref()
-        .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
     let f32_boxes: Vec<[f32; 4]> = boxes
         .into_iter()
         .map(|[x1, y1, x2, y2]| [x1 as f32, y1 as f32, x2 as f32, y2 as f32])
         .collect();
-    let masks = engine.box_prompt(f32_boxes).map_err(|e| e.to_string())?;
+    let masks = with_sam3(&app, &state, |engine| engine.box_prompt(f32_boxes.clone()))?;
     let count = masks.len();
     let (mask_b64s, scores): (Vec<String>, Vec<f64>) = masks.into_iter().unzip();
     Ok(json!({
@@ -1179,21 +1205,15 @@ pub fn sam3_box_prompt(
 /// Run auto-mask grid generation on the currently loaded SAM3 image.
 #[tauri::command]
 pub fn sam3_auto_mask(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     grid_size: u32,
     iou_threshold: f32,
     min_mask_region_area: u32,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
-    let engine = sam3_lock
-        .as_ref()
-        .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
-    let masks = engine
-        .auto_mask(grid_size, iou_threshold, min_mask_region_area)
-        .map_err(|e| e.to_string())?;
+    let masks = with_sam3(&app, &state, |engine| {
+        engine.auto_mask(grid_size, iou_threshold, min_mask_region_area)
+    })?;
     let count = masks.len();
     let (mask_b64s, scores): (Vec<String>, Vec<f64>) = masks.into_iter().unzip();
     Ok(json!({
@@ -1232,25 +1252,25 @@ pub fn sam3_video_predictor(
 /// refined candidate masks sorted by IoU with the input mask.
 #[tauri::command]
 pub fn sam3_refine_mask(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     mask_b64: String,
     points: Vec<[f64; 2]>,
     labels: Option<Vec<i32>>,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
-    let engine = sam3_lock
-        .as_ref()
-        .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
     let f32_points: Vec<[f32; 2]> = points
         .into_iter()
         .map(|[x, y]| [x as f32, y as f32])
         .collect();
-    let masks = engine
-        .refine_mask(mask_b64, f32_points, labels)
-        .map_err(|e| e.to_string())?;
+    let mask_b64_clone = mask_b64.clone();
+    let labels_clone = labels.clone();
+    let masks = with_sam3(&app, &state, |engine| {
+        engine.refine_mask(
+            mask_b64_clone.clone(),
+            f32_points.clone(),
+            labels_clone.clone(),
+        )
+    })?;
     let count = masks.len();
     let (mask_b64s, scores): (Vec<String>, Vec<f64>) = masks.into_iter().unzip();
     Ok(json!({
@@ -1264,6 +1284,7 @@ pub fn sam3_refine_mask(
 /// Post-process a single mask (grow/shrink/feather/fill holes).
 #[tauri::command]
 pub fn sam3_postprocess_mask(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     mask_b64: String,
     grow: i32,
@@ -1271,16 +1292,10 @@ pub fn sam3_postprocess_mask(
     feather: i32,
     fill_holes: bool,
 ) -> std::result::Result<String, String> {
-    let sam3_lock = state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
-    let engine = sam3_lock
-        .as_ref()
-        .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
-    engine
-        .postprocess_mask(mask_b64, grow, shrink, feather, fill_holes)
-        .map_err(|e| e.to_string())
+    let mask_b64_clone = mask_b64.clone();
+    with_sam3(&app, &state, |engine| {
+        engine.postprocess_mask(mask_b64_clone.clone(), grow, shrink, feather, fill_holes)
+    })
 }
 
 /// Clear SAM3 state (image + masks).
@@ -1903,16 +1918,24 @@ const PROJECT_FILE_MAX_SIZE: usize = 10 * 1024 * 1024;
 const ALLOWED_PROJECT_EXTS: &[&str] = &["moshdither", "json"];
 
 /// Validate that a file path is safe for project read/write operations.
-/// Blocks system directories and enforces allowed extensions.
-fn validate_project_path(path: &str, is_write: bool) -> std::result::Result<(), String> {
-    let p = std::path::Path::new(path);
+/// Delegates to path_guard for canonicalization, UNC blocking, and system path checks,
+/// and enforces allowed project extensions.
+fn validate_project_path(
+    path: &str,
+    is_write: bool,
+) -> std::result::Result<std::path::PathBuf, String> {
+    let resolved = crate::path_guard::validate_io_path(path, !is_write)?;
 
-    let file_name = p
+    let file_name = resolved
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| "Invalid path: no file name".to_string())?;
 
-    let ext = p
+    if file_name.starts_with('.') {
+        return Err("Access denied: hidden files are not allowed".to_string());
+    }
+
+    let ext = resolved
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
@@ -1926,50 +1949,7 @@ fn validate_project_path(path: &str, is_write: bool) -> std::result::Result<(), 
         ));
     }
 
-    let canonical = p
-        .canonicalize()
-        .or_else(|_| {
-            if is_write {
-                if let Some(parent) = p.parent() {
-                    return parent.canonicalize().map(|_| p.to_path_buf());
-                }
-            }
-            Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "Path not found",
-            ))
-        })
-        .map_err(|e| format!("Cannot resolve path: {}", e))?;
-
-    let canonical_str = canonical.to_string_lossy().to_lowercase();
-    let blocked_prefixes: &[&str] = &[
-        "c:\\windows\\",
-        "c:\\program files\\",
-        "c:\\program files (x86)\\",
-        "c:\\programdata\\",
-        "/etc/",
-        "/usr/",
-        "/bin/",
-        "/sbin/",
-        "/boot/",
-        "/sys/",
-        "/proc/",
-    ];
-
-    for prefix in blocked_prefixes {
-        if canonical_str.starts_with(prefix) {
-            return Err(format!(
-                "Access denied: path '{}' is in a protected system directory",
-                canonical.display()
-            ));
-        }
-    }
-
-    if file_name.starts_with('.') {
-        return Err("Access denied: hidden files are not allowed".to_string());
-    }
-
-    Ok(())
+    Ok(resolved)
 }
 
 /// Save a JSON string to a file path.
@@ -1983,16 +1963,16 @@ pub async fn save_file(path: String, contents: String) -> std::result::Result<()
             PROJECT_FILE_MAX_SIZE
         ));
     }
-    validate_project_path(&path, true)?;
-    std::fs::write(&path, contents).map_err(|e| e.to_string())
+    let valid_path = validate_project_path(&path, true)?;
+    std::fs::write(&valid_path, contents).map_err(|e| e.to_string())
 }
 
 /// Read a file as a string.
 /// Validates path safety and enforces a maximum file size.
 #[tauri::command]
 pub async fn read_file(path: String) -> std::result::Result<String, String> {
-    validate_project_path(&path, false)?;
-    let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    let valid_path = validate_project_path(&path, false)?;
+    let meta = std::fs::metadata(&valid_path).map_err(|e| e.to_string())?;
     if meta.len() as usize > PROJECT_FILE_MAX_SIZE {
         return Err(format!(
             "File too large: {} bytes (max {} bytes)",
@@ -2000,7 +1980,7 @@ pub async fn read_file(path: String) -> std::result::Result<String, String> {
             PROJECT_FILE_MAX_SIZE
         ));
     }
-    std::fs::read_to_string(&path).map_err(|e| e.to_string())
+    std::fs::read_to_string(&valid_path).map_err(|e| e.to_string())
 }
 
 /// Maximum size for a user-supplied custom LUT (PNG or .cube).
@@ -2277,4 +2257,105 @@ pub async fn generate_proxy_command(
     })
     .await
     .map_err(|e| format!("Task failed: {}", e))?
+}
+
+#[cfg(test)]
+mod project_path_tests {
+    use super::*;
+    use std::fs;
+
+    fn temp_project(name: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(name);
+        fs::write(&p, b"{}").expect("write temp project file");
+        p
+    }
+
+    #[test]
+    fn accepts_allowed_project_extensions() {
+        for name in [
+            "mosh_guard_ok.moshdither",
+            "mosh_guard_ok.json",
+            "mosh_guard_ok.JSON",
+        ] {
+            let p = temp_project(name);
+            let result = validate_project_path(p.to_string_lossy().as_ref(), false);
+            let _ = fs::remove_file(&p);
+            assert!(result.is_ok(), "{} should be accepted: {:?}", name, result);
+        }
+    }
+
+    #[test]
+    fn rejects_disallowed_extensions() {
+        // The extension allowlist is the main thing limiting the blast radius
+        // of read_file/save_file, so it needs direct coverage.
+        for name in [
+            "mosh_guard_bad.exe",
+            "mosh_guard_bad.dll",
+            "mosh_guard_bad.txt",
+            "mosh_guard_bad",
+        ] {
+            let p = temp_project(name);
+            let result = validate_project_path(p.to_string_lossy().as_ref(), false);
+            let _ = fs::remove_file(&p);
+            assert!(result.is_err(), "{} should be rejected", name);
+        }
+    }
+
+    #[test]
+    fn rejects_hidden_files() {
+        let p = temp_project(".mosh_guard_hidden.json");
+        let result = validate_project_path(p.to_string_lossy().as_ref(), false);
+        let _ = fs::remove_file(&p);
+        assert!(
+            result.is_err(),
+            "hidden files should be rejected: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn rejects_relative_paths() {
+        assert!(validate_project_path("project.json", false).is_err());
+        assert!(validate_project_path("../project.json", true).is_err());
+    }
+
+    #[test]
+    fn rejects_system_directories() {
+        // Regression guard: the previous implementation compared against
+        // lowercase "c:\\windows\\" prefixes, but std::fs::canonicalize returns
+        // verbatim paths like \\?\C:\Windows\..., so the check never fired on
+        // the primary target platform.
+        #[cfg(target_os = "windows")]
+        {
+            assert!(validate_project_path(r"C:\Windows\System32\config.json", true).is_err());
+            assert!(validate_project_path(r"C:\ProgramData\secrets.json", true).is_err());
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(validate_project_path("/etc/config.json", true).is_err());
+            assert!(validate_project_path("/usr/share/app.json", true).is_err());
+        }
+    }
+
+    #[test]
+    fn returns_canonicalized_path_for_io() {
+        // save_file/read_file must operate on the returned PathBuf rather than
+        // the caller-supplied string, so the returned value has to be usable.
+        let p = temp_project("mosh_guard_roundtrip.json");
+        let resolved = validate_project_path(p.to_string_lossy().as_ref(), false)
+            .expect("temp project file should validate");
+        assert!(resolved.is_absolute());
+        assert_eq!(
+            resolved.extension().and_then(|e| e.to_str()),
+            Some("json"),
+            "extension should survive canonicalization"
+        );
+        let _ = fs::remove_file(&p);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn rejects_unc_project_paths() {
+        assert!(validate_project_path(r"\\attacker\share\project.json", true).is_err());
+    }
 }

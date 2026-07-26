@@ -34,38 +34,69 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   },
   "pixel_geo.wave_distort": {
     shaderId: "wave_distort",
-    paramMap: { amount: "amount", frequency: "frequency" },
+    // Rust: amplitude in pixels [0, 50]; frequency multiplies pixel-space y [0, 0.2].
+    // Shader: uv.x += sin(uv.y * frequency + t) * amount * 0.05, in UV space.
+    paramMap: { amplitude: "amount", frequency: "frequency" },
+    transform: (k, v) => {
+      const n = typeof v === "number" ? v : 0;
+      if (k === "amplitude") return n / 50; // px -> normalized shader amount
+      return n * 200; // pixel-space frequency -> UV-space cycles
+    },
   },
   "pixel_geo.slice_shift_advanced": {
     shaderId: "slice_shift",
-    paramMap: { min_slice_size: "sliceHeight", max_slice_size: "sliceHeight", amount: "amount" },
-    transform: (_k, v) => (typeof v === "number" ? v : 8),
+    // direction / repeat / mirror have no shader equivalent -> approximate.
+    paramMap: { max_slice_size: "sliceHeight", shift_amount: "amount" },
+    transform: (k, v) => {
+      const n = typeof v === "number" ? v : 0;
+      if (k === "shift_amount") return Math.abs(n) / 64;
+      return Math.max(1, n);
+    },
+    accurate: false,
   },
   "pixel_geo.mirror_slices": {
     shaderId: "mirror",
-    paramMap: { mode: "mode" },
-    transform: (_k, v) => {
-      const mode = typeof v === "number" ? v : 0;
-      return Math.floor(mode);
-    },
+    // Rust exposes only slice_height; the mirror shader exposes only a discrete
+    // mode. There is no meaningful mapping between them, so the preview is a
+    // fixed approximation and the parameter is honestly reported as unmapped.
+    paramMap: {},
+    accurate: false,
   },
   "pixel_geo.anaglyph": {
     shaderId: "anaglyph",
-    paramMap: { amount: "amount" },
+    // Rust: shift in pixels [0, 50]. Shader: offset = amount * 0.03 in UV space.
+    paramMap: { shift: "amount" },
+    transform: (_k, v) => (typeof v === "number" ? v / 30 : 0.2),
   },
   "pixel_geo.block_shift": {
     shaderId: "block_shift",
-    paramMap: { block_size: "blockSize", amount: "amount" },
+    // Rust: max_shift in pixels [0, 32]. Shader: amount scales blockSize offsets.
+    paramMap: { block_size: "blockSize", max_shift: "amount" },
+    transform: (k, v) => {
+      const n = typeof v === "number" ? v : 0;
+      if (k === "max_shift") return n / 32;
+      return Math.max(2, n);
+    },
   },
   "pixel_geo.pixel_sort": {
     shaderId: "pixel_sort",
-    paramMap: { threshold: "threshold", amount: "amount" },
+    // Rust threshold is 0-255 luma; shader compares against normalized luma.
+    paramMap: { threshold: "threshold" },
+    transform: (_k, v) => (typeof v === "number" ? v / 255 : 0.5),
   },
 
   // Analog
   "analog.scanlines": {
     shaderId: "scanlines",
-    paramMap: { intensity: "amount" },
+    // Rust 'gap' is the row period in pixels; the shader's lineCount is the
+    // number of half-cycles across the (normalized) height. lineCount = 2H/gap,
+    // evaluated at a nominal 480px height so gap=2 lands on the shader default.
+    paramMap: { intensity: "amount", gap: "lineCount" },
+    transform: (k, v) => {
+      const n = typeof v === "number" ? v : 0;
+      if (k === "gap") return 480 / Math.max(1, n);
+      return n;
+    },
   },
   "analog.chromatic_aberration": {
     shaderId: "chromatic_aberration",
@@ -74,6 +105,10 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   },
   "analog.vhs": {
     shaderId: "vhs_crt",
+    // slice_size drives the number of tracking bars in the shader. The Rust
+    // effect additionally models tracking_error, scan_curve and
+    // glitch_probability, for which vhsCrt.ts declares no uniforms — so the
+    // preview is deliberately an approximation of the export.
     paramMap: {
       tracking: "amount",
       noise: "noise",
@@ -81,7 +116,14 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
       chroma_delay: "chromaDelay",
       chroma_bleed: "chromaBleed",
       chroma_offset: "chromaOffset",
+      slice_size: "bars",
     },
+    transform: (k, v) => {
+      const n = typeof v === "number" ? v : 0;
+      if (k === "slice_size") return Math.max(1, Math.round(24 / Math.max(1, n)));
+      return n;
+    },
+    accurate: false,
   },
   "analog.hue_shift": {
     shaderId: "hue_saturation",
@@ -93,7 +135,13 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   },
   "analog.tv_glitch": {
     shaderId: "tv_glitch",
-    paramMap: { amount: "amount" },
+    // The Rust effect is a full NTSC model (subcarrier, pre-emphasis, chroma
+    // phase noise, chroma loss, scanlines). The shader exposes a single
+    // 'amount'. Drive it from video_noise as the closest proxy for overall
+    // severity and report the preview as approximate.
+    paramMap: { video_noise: "amount" },
+    transform: (_k, v) => (typeof v === "number" ? Math.min(1, v / 500) : 0.2),
+    accurate: false,
   },
   "analog.color_bleed": {
     shaderId: "color_bleed",
@@ -101,11 +149,19 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   },
   "analog.ghosting": {
     shaderId: "ghosting",
-    paramMap: { amount: "amount" },
+    // Rust 'intensity' is [0,1] and maps directly. Rust 'offset' (ghost
+    // displacement in pixels) has no shader uniform -> approximate.
+    paramMap: { intensity: "amount" },
+    accurate: false,
   },
   "analog.scan_drift": {
     shaderId: "scan_drift",
-    paramMap: { amount: "amount" },
+    // Rust 'amplitude' is drift in pixels [0, 30]. The shader's spatial
+    // frequency is hard-coded at 20.0, so Rust 'frequency' cannot be
+    // forwarded -> approximate.
+    paramMap: { amplitude: "amount" },
+    transform: (_k, v) => (typeof v === "number" ? v / 30 : 0.17),
+    accurate: false,
   },
 
   // Color
@@ -127,6 +183,9 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
       // brightness and saturation map directly
       return n;
     },
+    // colorGrade.ts has no gamma uniform, so the Rust 'gamma' parameter cannot
+    // be previewed -> approximate.
+    accurate: false,
   },
   "color.historical_palettes": {
     shaderId: "pass_through",
@@ -135,15 +194,23 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   },
   "color.lut_grading": {
     shaderId: "lut_color_grading",
-    paramMap: { amount: "amount", tLUT: "tLUT" },
+    // 'lut_path' carries the LUT texture URL; stackToRenderPasses preserves
+    // string values verbatim for sampler2D uniforms. The previous key ("tLUT")
+    // was not a Rust parameter, so the selected LUT never reached the shader
+    // and the preview always used the bundled default lookup.png.
+    paramMap: { amount: "amount", lut_path: "tLUT" },
   },
   "color.rgb_shift": {
     shaderId: "rgb_shift",
+    // The shader models a single radial shift magnitude plus an angle, so the
+    // three independent Rust channel offsets cannot be represented exactly.
+    // Drive magnitude from the widest channel separation -> approximate.
     paramMap: { r_shift: "amount" },
     transform: (_k, v) => {
       const shift = typeof v === "number" ? v : 0;
-      return Math.abs(shift) * 0.5;
+      return Math.min(1, Math.abs(shift) / 20);
     },
+    accurate: false,
   },
   "color.channel_swap": {
     shaderId: "channel_swap",
@@ -175,11 +242,17 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   // Artistic
   "artistic.posterize": {
     shaderId: "posterize",
-    paramMap: { levels: "levels" },
+    // Rust quantises to 'bits' [1, 8] bits per channel; the shader quantises to
+    // a level count. levels = 2^bits.
+    paramMap: { bits: "levels" },
+    transform: (_k, v) => {
+      const bits = typeof v === "number" ? v : 3;
+      return Math.pow(2, Math.max(1, Math.min(8, Math.round(bits))));
+    },
   },
   "artistic.grayscale": {
     shaderId: "grayscale",
-    paramMap: {},
+    paramMap: { intensity: "amount" },
   },
   "artistic.solarize": {
     shaderId: "solarize",
@@ -187,17 +260,25 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   },
   "artistic.vaporwave": {
     shaderId: "vaporwave",
-    paramMap: { amount: "amount" },
+    // The Rust effect exposes no parameters; the shader keeps its own default.
+    paramMap: {},
   },
 
   // Noise
   "noise.uniform": {
     shaderId: "noise_grain",
-    paramMap: { amount: "amount" },
+    // Rust 'range' is peak noise amplitude in 0-255 units; the shader adds
+    // (rand - 0.5) * amount in normalized colour space.
+    paramMap: { range: "amount" },
+    transform: (_k, v) => (typeof v === "number" ? v / 255 : 0.08),
   },
   "noise.gaussian": {
     shaderId: "noise_grain",
-    paramMap: { amount: "amount" },
+    // Rust 'std_dev' is in 0-255 units; noise_grain is uniform rather than
+    // gaussian, so the distribution differs -> approximate.
+    paramMap: { std_dev: "amount" },
+    transform: (_k, v) => (typeof v === "number" ? v / 255 : 0.06),
+    accurate: false,
   },
   "noise.salt_pepper": {
     shaderId: "noise_grain",
@@ -205,38 +286,31 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   },
   "noise.fractal": {
     shaderId: "fractal_noise",
-    paramMap: { amount: "amount", scale: "scale", octaves: "octaves" },
-    transform: (_k, v) => {
-      if (_k === "octaves") return typeof v === "number" ? Math.floor(v) : 4;
-      return typeof v === "number" ? v : 0;
+    // Rust 'amount' is [0, 10]; the shader expects a normalized blend weight.
+    // Rust 'persistence' has no shader uniform (the shader's octave falloff is
+    // fixed) and the shader's 'scale' has no Rust counterpart -> approximate.
+    paramMap: { amount: "amount", octaves: "octaves" },
+    transform: (k, v) => {
+      if (k === "octaves") return typeof v === "number" ? Math.floor(v) : 4;
+      return typeof v === "number" ? v / 20 : 0.25;
     },
+    accurate: false,
   },
 
   // Dithering
   "dithering.halftone": {
     shaderId: "dither_halftone",
-    paramMap: {
-      dot_size: "scale",
-      col_light: "colLight",
-      col_dark: "colDark",
-      col_white: "colWhite",
-      amount: "amount",
-    },
+    // The Rust effect exposes dot_size and screen_angle only. The previous
+    // col_light / col_dark / col_white keys were not Rust parameters, and the
+    // colour branch of the transform below tested uniform names against the
+    // rustParam argument, so it could never fire. dither_halftone.ts declares
+    // no screen-angle uniform, so rotation is not previewed -> approximate.
+    paramMap: { dot_size: "scale" },
     transform: (_k, v) => {
-      if (_k === "colLight" || _k === "colDark" || _k === "colWhite") {
-        // Rust stores colors as hex strings; shader expects [r,g,b] 0-1
-        if (typeof v === "string") {
-          const hex = v.replace("#", "");
-          const r = parseInt(hex.substring(0, 2), 16) / 255;
-          const g = parseInt(hex.substring(2, 4), 16) / 255;
-          const b = parseInt(hex.substring(4, 6), 16) / 255;
-          return [r, g, b];
-        }
-        return [1, 1, 1];
-      }
       const dot = typeof v === "number" ? v : 8.0;
       return Math.max(2.0, Math.min(32.0, dot));
     },
+    accurate: false,
   },
   "dithering.bayer": {
     shaderId: "bayer_dither",
@@ -246,6 +320,7 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
       const size = typeof v === "number" ? v : 4;
       return Math.max(2, Math.min(16, size));
     },
+    accurate: false,
   },
   "dithering.palette": {
     shaderId: "palette_dither",
@@ -262,7 +337,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   },
   "dithering.random_noise": {
     shaderId: "random_dither",
-    paramMap: { amount: "amount" },
+    // The Rust effect exposes no parameters; the shader keeps its own default.
+    paramMap: {},
   },
   "dithering.blue_noise": {
     shaderId: "blue_noise_dither",
@@ -272,45 +348,49 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   },
   // Error diffusion algorithms — cannot be done in parallel pixel shaders.
   // All marked accurate: false to use CPU fallback for correct results.
+  // The error-diffusion effects below expose no Rust parameters, so their
+  // paramMaps are empty and each shader keeps its declared 'amount' default.
   "dithering.atkinson": {
     shaderId: "atkinson_dither",
-    paramMap: { amount: "amount" },
+    paramMap: {},
     accurate: false,
   },
   "dithering.burkes": {
     shaderId: "burkes_dither",
-    paramMap: { amount: "amount" },
+    paramMap: {},
     accurate: false,
   },
   "dithering.floyd_steinberg": {
     shaderId: "floyd_steinberg_dither",
-    paramMap: { amount: "amount" },
+    paramMap: {},
     accurate: false,
   },
   "dithering.jarvis_judice_ninke": {
     shaderId: "jarvis_dither",
-    paramMap: { amount: "amount" },
+    paramMap: {},
     accurate: false,
   },
   "dithering.sierra": {
     shaderId: "sierra_dither",
-    paramMap: { amount: "amount" },
+    paramMap: {},
     accurate: false,
   },
   "dithering.stucki": {
     shaderId: "stucki_dither",
-    paramMap: { amount: "amount" },
+    paramMap: {},
     accurate: false,
   },
   "dithering.riemersma": {
     shaderId: "riemersma_dither",
-    paramMap: { amount: "amount" },
+    paramMap: {},
     accurate: false,
   },
   // Error diffusion variants — Rust-only, no WebGL shader can do error diffusion
   "dithering.error_diffusion_variants": {
     shaderId: "pass_through",
-    paramMap: { algorithm: "amount", levels: "amount" },
+    // pass_through declares no uniforms; 'algorithm' and 'levels' were being
+    // written into a uniform that does not exist. Export applies them.
+    paramMap: {},
     accurate: false,
   },
   // Ordered dither variants — Rust-only (various ordered matrices)
@@ -348,7 +428,14 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   // file bytes. The WebGL shaders are visual approximations, not real corruption.
   "glitch.slice_shift": {
     shaderId: "slice_shift",
-    paramMap: { slice_height: "sliceHeight", amount: "amount" },
+    // Rust 'max_shift' is a pixel displacement in [0, 100]; the shader's
+    // 'amount' is a normalized displacement scale.
+    paramMap: { slice_height: "sliceHeight", max_shift: "amount" },
+    transform: (k, v) => {
+      const n = typeof v === "number" ? v : 0;
+      if (k === "max_shift") return Math.min(1, n / 100);
+      return Math.max(1, n);
+    },
   },
   "glitch.databend": {
     shaderId: "databend",
@@ -384,22 +471,27 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   },
   "glitch.byte_reverse": {
     shaderId: "byte_reverse",
-    paramMap: { amount: "amount" },
+    // Rust exposes 'chunk_size' only, which byte_reverse.ts does not model.
+    paramMap: {},
     accurate: false,
   },
   "glitch.sorting_glitch": {
     shaderId: "sortingGlitch",
+    // Rust also exposes u_sort_mode ("brightness" | …); sortingGlitch.ts sorts
+    // by luma only and declares no mode uniform -> approximate.
     paramMap: {
       u_threshold: "u_threshold",
       u_intensity: "u_intensity",
       u_direction: "u_direction",
     },
+    accurate: false,
   },
   "glitch.macroblock_glitch": {
     shaderId: "macroblockGlitch",
+    // 'u_blockSize' is a shader-only uniform with no Rust counterpart; it keeps
+    // its declared default rather than being mapped from a non-existent param.
     paramMap: {
       u_intensity: "u_intensity",
-      u_blockSize: "u_blockSize",
       u_seed: "u_seed",
     },
   },
@@ -426,8 +518,13 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   // Audio-Reactive
   "audio_reactive.bass_pulse": {
     shaderId: "audioBassPulse",
+    // Rust 'sensitivity' is a multiplier in [0.1, 5] and the shader's
+    // u_intensity is the same kind of multiplier, so it passes through
+    // unscaled. The previous /100 divisor pinned the preview at ~0.01 and made
+    // the effect invisible. Rust 'block_size' has no shader uniform.
     paramMap: { sensitivity: "u_intensity" },
-    transform: (_k, v) => (typeof v === "number" ? v / 100 : 1),
+    transform: (_k, v) => (typeof v === "number" ? v : 1),
+    accurate: false,
   },
   "audio_reactive.beat_glitch": {
     shaderId: "audioGlitchBeat",
@@ -632,15 +729,25 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   },
 
   // Segmentation
+  // NOTE: this id has no `<category>.` prefix, unlike every other effect.
+  // It is kept as-is because saved projects and presets serialize effect ids
+  // verbatim; renaming it to `segmentation.mask_isolate` needs a migration.
   mask_isolate: {
     shaderId: "pass_through",
+    // The WebGL path applies masks via the maskBlend pass rather than by
+    // isolating inside this shader, so the preview cannot represent 'invert'.
     paramMap: {},
+    accurate: false,
   },
 
   // Composite (Rust-only, requires external overlay image — pass-through for preview)
   "composite.overlay": {
     shaderId: "pass_through",
+    // Compositing a second image is not implemented in the WebGL path, so the
+    // preview is a no-op while the export applies opacity and blend_mode.
+    // Marked approximate so the viewport badge tells the user that.
     paramMap: {},
+    accurate: false,
   },
 
   // Datamoshing — temporal/video-only effects with no meaningful single-frame preview
@@ -821,7 +928,8 @@ export function stackRequiresCpuPreview(stack: StackEntry[]): boolean {
     if (!e.enabled) return false;
     const mapping = rustToWebGL[e.effectId];
     if (!mapping) return true; // No WebGL mapping → CPU only
-    return false; // Has WebGL mapping → use GPU preview even if approximate
+    if (mapping.accurate === false) return true; // Approximate WebGL shader → use CPU preview for exact output match!
+    return false;
   });
 }
 
@@ -852,7 +960,7 @@ export function resolveMaskId(
   if (!maskId) return null;
   if (maskId === "active") return activeMask;
   if (maskId.startsWith("sam3-")) {
-    const idx = parseInt(maskId.replace("sam3-", ""), 10);
+    const idx = Number.parseInt(maskId.replace("sam3-", ""), 10);
     return sam3Masks[idx] ?? null;
   }
   return null;

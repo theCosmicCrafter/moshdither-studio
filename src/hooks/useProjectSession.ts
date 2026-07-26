@@ -1,12 +1,14 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { useAppStore, type StackEntry, type KeyframeTrack, type AudioBinding } from "../store";
+import { loadMediaFromPath, loadMediaFromBase64 } from "../lib/tauri";
 
 const AUTO_SAVE_KEY = "moshdither_autosave_v1";
 const RECENT_PROJECTS_KEY = "moshdither_recent_projects_v1";
-const AUTO_SAVE_INTERVAL_MS = 30000; // 30 seconds
+const AUTO_SAVE_INTERVAL_MS = 5000; // 5 seconds for reliable autosave
 
 export interface ProjectSession {
   filePath: string | null;
+  mediaDataUrl?: string | null;
   effectStack: StackEntry[];
   currentTime: number;
   keyframes: Record<string, KeyframeTrack>;
@@ -32,7 +34,19 @@ function loadAutoSave(): ProjectSession | null {
 }
 
 function saveAutoSave(session: ProjectSession) {
-  localStorage.setItem(AUTO_SAVE_KEY, JSON.stringify(session));
+  try {
+    localStorage.setItem(AUTO_SAVE_KEY, JSON.stringify(session));
+  } catch {
+    // If base64 media exceeds localStorage quota, save session without mediaDataUrl
+    if (session.mediaDataUrl) {
+      try {
+        const fallback = { ...session, mediaDataUrl: null };
+        localStorage.setItem(AUTO_SAVE_KEY, JSON.stringify(fallback));
+      } catch {
+        // Quota still exceeded
+      }
+    }
+  }
 }
 
 function loadRecentProjects(): RecentProject[] {
@@ -58,6 +72,7 @@ export function useProjectSession() {
     effectStack: useAppStore.getState().effectStack,
     currentTime: useAppStore.getState().currentTime,
     filePath: useAppStore.getState().filePath,
+    previewDataUrl: useAppStore.getState().previewDataUrl,
     keyframes: useAppStore.getState().keyframes,
     audioFilePath: useAppStore.getState().audioFilePath,
     audioBindings: useAppStore.getState().audioBindings,
@@ -69,6 +84,7 @@ export function useProjectSession() {
       stateRef.current.effectStack = s.effectStack;
       stateRef.current.currentTime = s.currentTime;
       stateRef.current.filePath = s.filePath;
+      stateRef.current.previewDataUrl = s.previewDataUrl;
       stateRef.current.keyframes = s.keyframes;
       stateRef.current.audioFilePath = s.audioFilePath;
       stateRef.current.audioBindings = s.audioBindings;
@@ -81,18 +97,30 @@ export function useProjectSession() {
   // Auto-save interval — set up once, reads from refs
   useEffect(() => {
     autoSaveTimerRef.current = setInterval(() => {
-      const { effectStack, currentTime, filePath, keyframes, audioFilePath, audioBindings } =
-        stateRef.current;
-      const session: ProjectSession = {
-        filePath,
-        effectStack: JSON.parse(JSON.stringify(effectStack)),
+      const {
+        effectStack,
         currentTime,
-        keyframes: JSON.parse(JSON.stringify(keyframes)),
+        filePath,
+        previewDataUrl,
+        keyframes,
         audioFilePath,
-        audioBindings: JSON.parse(JSON.stringify(audioBindings)),
-        savedAt: new Date().toISOString(),
-      };
-      saveAutoSave(session);
+        audioBindings,
+      } = stateRef.current;
+
+      // Only save if there is content to save
+      if (filePath || previewDataUrl || effectStack.length > 0 || audioFilePath) {
+        const session: ProjectSession = {
+          filePath,
+          mediaDataUrl: previewDataUrl,
+          effectStack: JSON.parse(JSON.stringify(effectStack)),
+          currentTime,
+          keyframes: JSON.parse(JSON.stringify(keyframes)),
+          audioFilePath,
+          audioBindings: JSON.parse(JSON.stringify(audioBindings)),
+          savedAt: new Date().toISOString(),
+        };
+        saveAutoSave(session);
+      }
     }, AUTO_SAVE_INTERVAL_MS);
 
     return () => {
@@ -113,36 +141,54 @@ export function useProjectSession() {
   }, []);
 
   const restoreSession = useCallback(
-    (session: ProjectSession) => {
+    async (session: ProjectSession, onRefreshPreview?: () => Promise<boolean>) => {
       const store = useAppStore.getState();
-      if (session.effectStack) {
-        // Clear and rebuild stack
+
+      // 1. Restore effect stack directly
+      if (session.effectStack && session.effectStack.length > 0) {
+        store.setEffectStack(session.effectStack);
+      } else {
         store.clearStack();
-        setTimeout(() => {
-          const s = useAppStore.getState();
-          for (const entry of session.effectStack) {
-            const effect = s.allEffects.find((e) => e.id === entry.effectId);
-            if (!effect) continue;
-            s.addToStack(effect);
-            const last = s.effectStack[s.effectStack.length - 1];
-            if (last && last.effectId === entry.effectId) {
-              s.updateStackParams(last.id, entry.params);
-              if (!entry.enabled) s.toggleStackItem(last.id);
-              if (entry.maskId !== undefined) s.setStackItemMask(last.id, entry.maskId);
-            }
-          }
-        }, 0);
       }
+
+      // 2. Restore timeline time, keyframes, audio
       if (session.currentTime !== undefined) store.setCurrentTime(session.currentTime);
-      if (session.filePath !== undefined) store.setFilePath(session.filePath);
-      if (session.keyframes !== undefined) {
-        store.setKeyframes(session.keyframes);
-      }
+      if (session.keyframes !== undefined) store.setKeyframes(session.keyframes);
       if (session.audioFilePath !== undefined) store.setAudioFilePath(session.audioFilePath);
-      if (session.audioBindings !== undefined) {
-        store.setAudioBindings(session.audioBindings);
+      if (session.audioBindings !== undefined) store.setAudioBindings(session.audioBindings);
+
+      // 3. Reload media file or base64 data into memory
+      let mediaRestored = false;
+      if (session.filePath) {
+        store.setFilePath(session.filePath);
+        try {
+          await loadMediaFromPath(session.filePath);
+          if (onRefreshPreview) {
+            await onRefreshPreview();
+          }
+          mediaRestored = true;
+        } catch (err) {
+          console.error("[useProjectSession] Failed to load media from filePath:", err);
+        }
       }
-      setStatusMessage("Session restored");
+
+      if (!mediaRestored && session.mediaDataUrl) {
+        try {
+          await loadMediaFromBase64(session.mediaDataUrl);
+          if (onRefreshPreview) {
+            await onRefreshPreview();
+          }
+          mediaRestored = true;
+        } catch (err) {
+          console.error("[useProjectSession] Failed to load media from base64:", err);
+        }
+      }
+
+      setStatusMessage(
+        mediaRestored
+          ? `Session restored (${session.effectStack?.length ?? 0} effects)`
+          : "Session restored"
+      );
     },
     [setStatusMessage]
   );
@@ -162,3 +208,4 @@ export function useProjectSession() {
     clearAutoSave,
   };
 }
+
