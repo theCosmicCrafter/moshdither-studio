@@ -50,7 +50,6 @@ describe("WebGL Shader Registry E2E", () => {
     const requiredShaders = [
       "pass_through",
       "bayer_dither",
-      "floyd_steinberg_dither",
       "scanlines",
       "vhs_crt",
       "chromatic_aberration",

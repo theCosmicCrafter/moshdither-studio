@@ -109,26 +109,14 @@ export { randomDitherShader } from "./randomDither";
 import { blueNoiseDitherShader } from "./blueNoiseDither";
 export { blueNoiseDitherShader } from "./blueNoiseDither";
 
-import { atkinsonDitherShader } from "./atkinsonDither";
-export { atkinsonDitherShader } from "./atkinsonDither";
-
-import { burkesDitherShader } from "./burkesDither";
-export { burkesDitherShader } from "./burkesDither";
-
-import { floydSteinbergDitherShader } from "./floydSteinbergDither";
-export { floydSteinbergDitherShader } from "./floydSteinbergDither";
-
-import { jarvisDitherShader } from "./jarvisDither";
-export { jarvisDitherShader } from "./jarvisDither";
-
-import { sierraDitherShader } from "./sierraDither";
-export { sierraDitherShader } from "./sierraDither";
-
-import { stuckiDitherShader } from "./stuckiDither";
-export { stuckiDitherShader } from "./stuckiDither";
-
-import { riemersmaDitherShader } from "./riemersmaDither";
-export { riemersmaDitherShader } from "./riemersmaDither";
+// Error-diffusion dithers (Floyd-Steinberg, Atkinson, Burkes, Jarvis, Sierra,
+// Stucki, Riemersma) have no WebGL shader. Error diffusion is sequential — each
+// pixel's quantisation error feeds its not-yet-processed neighbours — which a
+// fragment shader cannot express. Their previews route to the Rust CPU backend
+// via `accurate: false` in effectConverter. The seven approximation shaders that
+// used to live here were white-noise threshold dithers, identical to each other
+// apart from a hash seed, and were never rendered. See
+// recycling/2026-07-26_dead_dither_shaders/.
 
 import { ghostingShader } from "./ghosting";
 export { ghostingShader } from "./ghosting";
@@ -242,13 +230,6 @@ shaderRegistry.register(byteReverseShader);
 shaderRegistry.register(thresholdDitherShader);
 shaderRegistry.register(randomDitherShader);
 shaderRegistry.register(blueNoiseDitherShader);
-shaderRegistry.register(atkinsonDitherShader);
-shaderRegistry.register(burkesDitherShader);
-shaderRegistry.register(floydSteinbergDitherShader);
-shaderRegistry.register(jarvisDitherShader);
-shaderRegistry.register(sierraDitherShader);
-shaderRegistry.register(stuckiDitherShader);
-shaderRegistry.register(riemersmaDitherShader);
 shaderRegistry.register(ghostingShader);
 shaderRegistry.register(pixelSortShader);
 shaderRegistry.register(audioBassPulseShader);

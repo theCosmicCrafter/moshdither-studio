@@ -347,41 +347,43 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
     accurate: false,
   },
   // Error diffusion algorithms — cannot be done in parallel pixel shaders.
-  // All marked accurate: false to use CPU fallback for correct results.
-  // The error-diffusion effects below expose no Rust parameters, so their
-  // paramMaps are empty and each shader keeps its declared 'amount' default.
+  // Error diffusion is inherently sequential — a pixel's quantisation error is
+  // pushed into neighbours that have not been processed yet — so no fragment
+  // shader can implement it. These map to pass_through and rely on
+  // accurate: false to route the preview through the Rust CPU backend, the same
+  // arrangement as dithering.error_diffusion_variants below.
   "dithering.atkinson": {
-    shaderId: "atkinson_dither",
+    shaderId: "pass_through",
     paramMap: {},
     accurate: false,
   },
   "dithering.burkes": {
-    shaderId: "burkes_dither",
+    shaderId: "pass_through",
     paramMap: {},
     accurate: false,
   },
   "dithering.floyd_steinberg": {
-    shaderId: "floyd_steinberg_dither",
+    shaderId: "pass_through",
     paramMap: {},
     accurate: false,
   },
   "dithering.jarvis_judice_ninke": {
-    shaderId: "jarvis_dither",
+    shaderId: "pass_through",
     paramMap: {},
     accurate: false,
   },
   "dithering.sierra": {
-    shaderId: "sierra_dither",
+    shaderId: "pass_through",
     paramMap: {},
     accurate: false,
   },
   "dithering.stucki": {
-    shaderId: "stucki_dither",
+    shaderId: "pass_through",
     paramMap: {},
     accurate: false,
   },
   "dithering.riemersma": {
-    shaderId: "riemersma_dither",
+    shaderId: "pass_through",
     paramMap: {},
     accurate: false,
   },
@@ -917,11 +919,16 @@ export function hasWebGLPreview(rustEffectId: string): boolean {
 
 /**
  * Check if any enabled effect in the stack requires CPU preview rendering.
- * Returns true if:
- * - An effect has NO WebGL mapping at all (Rust-only effect with no shader)
- * In that case, the preview must use the Rust CPU backend.
- * Effects marked accurate: false still use WebGL for preview (approximate but instant).
- * The accurate CPU backend is only used for final export.
+ * Returns true if either:
+ * - an effect has NO WebGL mapping at all (Rust-only effect with no shader), or
+ * - an effect is mapped but marked `accurate: false`, meaning its shader is an
+ *   approximation (or a pass_through stand-in) that would misrepresent output.
+ *
+ * In both cases the preview is rendered by the Rust CPU backend so that what
+ * the user sees matches what export writes.
+ *
+ * Note this is stack-level: one CPU-only effect sends the whole stack through
+ * the CPU path, including effects that do have accurate shaders.
  */
 export function stackRequiresCpuPreview(stack: StackEntry[]): boolean {
   return stack.some((e) => {
