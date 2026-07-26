@@ -5,8 +5,10 @@
 //! generated animation curves from driving effects into out-of-range values that
 //! can allocate unbounded memory, loop forever, or produce nonsense output.
 //!
-//! `Select` parameters are additionally resolved from index to option string —
-//! see [`clamp_params`] for why the two sides of the IPC boundary disagreed.
+//! `Select` parameters are additionally normalised into the representation each
+//! effect reads — see [`clamp_params`] for why the two sides of the IPC boundary
+//! disagreed, and [`resolve_select`] for why that is not simply "convert to a
+//! string".
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -23,27 +25,27 @@ fn ranges() -> &'static HashMap<String, Vec<ParameterDef>> {
 }
 
 /// Normalise `params` for the given effect: clamp numeric values to their
-/// declared min/max, and resolve `Select` parameters to their option string.
+/// declared min/max, and put `Select` values in the representation the effect
+/// actually reads.
 ///
-/// The `Select` step exists because the two sides disagree on representation.
-/// The UI control in `ParameterPanel.tsx` writes the option's **index**:
+/// The `Select` step exists because the two sides of the IPC boundary disagree.
+/// The UI control in `ParameterPanel.tsx` always writes the option's **index**:
 ///
 /// ```text
 /// const idx = param.options!.indexOf(e.target.value);
 /// updateStackParams(entry.id, { [param.id]: idx });
 /// ```
 ///
-/// while every effect reads its selection as a string
+/// while most effects read the option *name*
 /// (`params.get("algorithm").and_then(|v| v.as_str())`). A number never matches
 /// `as_str()`, so the read silently fell through to the effect's hardcoded
-/// default and the control did nothing — across all 14 `Select` parameters in
-/// the registry.
+/// default and the control did nothing — across every `Select` parameter in the
+/// registry.
 ///
-/// Resolving here rather than in each effect fixes every one at once, and keeps
-/// working whichever representation arrives: an index is mapped through
-/// `options`, a string is passed through untouched. Out-of-range indices are
-/// left alone so the effect falls back to its own default rather than picking an
-/// arbitrary option.
+/// Normalising here rather than in each effect fixes them all at once. See
+/// [`resolve_select`] for why the conversion is driven by the declared default
+/// rather than always producing a string: a minority of effects read the index
+/// instead, and converting those would break them the same way.
 pub fn clamp_params(effect_id: &str, params: &ParameterValues) -> ParameterValues {
     let mut out = params.clone();
     if let Some(defs) = ranges().get(effect_id) {
@@ -53,7 +55,7 @@ pub fn clamp_params(effect_id: &str, params: &ParameterValues) -> ParameterValue
             }
             if matches!(def.param_type, ParamType::Select) {
                 if let (Some(options), Some(v)) = (def.options.as_ref(), out.get_mut(&def.id)) {
-                    resolve_select(v, options);
+                    resolve_select(v, options, &def.default);
                 }
             }
         }
@@ -61,16 +63,42 @@ pub fn clamp_params(effect_id: &str, params: &ParameterValues) -> ParameterValue
     out
 }
 
-/// Replace a numeric `Select` value with the option string it indexes.
-fn resolve_select(v: &mut Value, options: &[String]) {
-    let Some(idx) = v.as_f64() else {
-        return; // already a string, or an unusable type — leave it for the effect
-    };
-    if idx < 0.0 || idx.fract() != 0.0 {
-        return;
-    }
-    if let Some(option) = options.get(idx as usize) {
-        *v = Value::String(option.clone());
+/// Normalise a `Select` value to the representation its effect reads.
+///
+/// The registry uses two conventions, and both are legitimate:
+///
+/// * **By name** — `default: json!("jarvis_judice_ninke")`, read with
+///   `as_str()`. Most effects.
+/// * **By index** — `default: json!(0)`, read with `as_u64()`. Used where the
+///   option list maps onto a numeric mode, such as `composite.overlay`'s
+///   `blend_mode`.
+///
+/// The UI writes an index either way, so converting everything to a string
+/// would fix the first group and break the second. The declared `default` says
+/// which representation the effect expects, so normalise toward that: an index
+/// is mapped through `options` when the default is a string, and a name is
+/// mapped back to its index when the default is a number.
+///
+/// A value that cannot be resolved is left untouched, so the effect falls back
+/// to its own default rather than silently acting on an arbitrary option.
+fn resolve_select(v: &mut Value, options: &[String], default: &Value) {
+    match default {
+        Value::String(_) => {
+            let Some(idx) = v.as_f64() else { return };
+            if idx < 0.0 || idx.fract() != 0.0 {
+                return;
+            }
+            if let Some(option) = options.get(idx as usize) {
+                *v = Value::String(option.clone());
+            }
+        }
+        Value::Number(_) => {
+            let Some(name) = v.as_str() else { return };
+            if let Some(idx) = options.iter().position(|o| o.eq_ignore_ascii_case(name)) {
+                *v = Value::Number(idx.into());
+            }
+        }
+        _ => {}
     }
 }
 
@@ -130,11 +158,16 @@ mod tests {
         assert_eq!(v.as_f64(), Some(0.5));
     }
 
+    fn opts() -> Vec<String> {
+        vec!["Horizontal".to_string(), "Vertical".to_string()]
+    }
+
+    // --- effects that read the option name (declared default is a string) ---
+
     #[test]
     fn resolves_a_select_index_to_its_option_string() {
-        let options = vec!["Horizontal".to_string(), "Vertical".to_string()];
         let mut v = json!(1);
-        resolve_select(&mut v, &options);
+        resolve_select(&mut v, &opts(), &json!("Horizontal"));
         assert_eq!(v.as_str(), Some("Vertical"));
     }
 
@@ -142,29 +175,69 @@ mod tests {
     fn resolves_a_select_index_serialised_as_a_float() {
         let options = vec!["a".to_string(), "b".to_string(), "c".to_string()];
         let mut v = json!(2.0);
-        resolve_select(&mut v, &options);
+        resolve_select(&mut v, &options, &json!("a"));
         assert_eq!(v.as_str(), Some("c"));
     }
 
     #[test]
-    fn leaves_a_select_string_untouched() {
-        let options = vec!["Horizontal".to_string(), "Vertical".to_string()];
+    fn leaves_a_select_string_untouched_when_the_effect_reads_names() {
         let mut v = json!("Vertical");
-        resolve_select(&mut v, &options);
+        resolve_select(&mut v, &opts(), &json!("Horizontal"));
         assert_eq!(v.as_str(), Some("Vertical"));
     }
 
     #[test]
     fn leaves_an_out_of_range_select_index_for_the_effect_default() {
-        let options = vec!["a".to_string(), "b".to_string()];
         for bad in [json!(7), json!(-1), json!(0.5)] {
             let mut v = bad.clone();
-            resolve_select(&mut v, &options);
+            resolve_select(&mut v, &opts(), &json!("Horizontal"));
             assert_eq!(
                 v, bad,
                 "{bad} should be left alone, not mapped to an option"
             );
         }
+    }
+
+    // --- effects that read the index (declared default is a number) ---
+    //
+    // composite.overlay's blend_mode is the live example: ParamType::Select with
+    // `default: json!(0)`, read via as_u64(). Converting it to a string would
+    // make the control silently do nothing — the same bug this normalisation
+    // exists to prevent, in the other direction.
+
+    #[test]
+    fn leaves_a_select_index_untouched_when_the_effect_reads_indices() {
+        let mut v = json!(1);
+        resolve_select(&mut v, &opts(), &json!(0));
+        assert_eq!(v.as_u64(), Some(1));
+    }
+
+    #[test]
+    fn resolves_a_select_name_to_its_index_when_the_effect_reads_indices() {
+        let mut v = json!("Vertical");
+        resolve_select(&mut v, &opts(), &json!(0));
+        assert_eq!(v.as_u64(), Some(1));
+    }
+
+    #[test]
+    fn an_unknown_select_name_is_left_for_the_effect_default() {
+        let mut v = json!("Diagonal");
+        resolve_select(&mut v, &opts(), &json!(0));
+        assert_eq!(v.as_str(), Some("Diagonal"));
+    }
+
+    #[test]
+    fn index_reading_effects_survive_the_pipeline() {
+        // End-to-end against the real registry: composite.overlay must still
+        // receive blend_mode as a number it can read with as_u64().
+        let mut params = ParameterValues::new();
+        params.insert("blend_mode".to_string(), json!(2));
+        let out = clamp_params("composite.overlay", &params);
+        assert_eq!(
+            out["blend_mode"].as_u64(),
+            Some(2),
+            "blend_mode must stay numeric — composite.overlay reads it with as_u64()"
+        );
     }
 
     /// End-to-end through the real registry: the Select control writes an index,
