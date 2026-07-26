@@ -28,3 +28,6 @@ pub use engine::blend_mask;
 pub use params::{clamp_for_effect, clamp_params};
 pub use registry::EffectRegistry;
 pub use types::*;
+
+#[cfg(test)]
+mod conformance_tests;
