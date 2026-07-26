@@ -266,7 +266,7 @@ impl Default for HistoricalPalettes {
 
 impl Effect for HistoricalPalettes {
     fn meta(&self) -> EffectMeta {
-        let palette_names: Vec<String> = PALETTES.iter().map(|p| p.name.to_string()).collect();
+        let palette_names = palette_names();
         EffectMeta {
             id: "color.historical_palettes".to_string(),
             name: "Historical Palettes".to_string(),
@@ -347,6 +347,24 @@ impl Effect for HistoricalPalettes {
             fps: input.fps,
         })
     }
+}
+
+/// Names of every bundled palette, in declaration order.
+///
+/// Shared with the dithering effects so the palette list cannot drift between
+/// the two places it is offered.
+pub fn palette_names() -> Vec<String> {
+    PALETTES.iter().map(|p| p.name.to_string()).collect()
+}
+
+/// Look up a bundled palette by name. Falls back to the first palette so a
+/// stale or unknown name degrades to a working palette rather than an error.
+pub fn palette_by_name(name: &str) -> &'static [(u8, u8, u8)] {
+    PALETTES
+        .iter()
+        .find(|p| p.name.eq_ignore_ascii_case(name))
+        .unwrap_or(&PALETTES[0])
+        .colors
 }
 
 fn nearest_palette_color(r: u8, g: u8, b: u8, palette: &[(u8, u8, u8)]) -> (u8, u8, u8) {

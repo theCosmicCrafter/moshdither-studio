@@ -38,7 +38,12 @@ impl Centroid {
 }
 
 /// Run K-Means clustering on pixel data and return K centroids.
-fn kmeans(data: &[u8], k: usize, max_iters: usize) -> Vec<Centroid> {
+/// k-means over the pixels of `data`.
+///
+/// `seed` makes the k-means++ initialisation reproducible. Without it the
+/// palette differs on every call, so the preview and the export disagree and
+/// two renders of the same project produce different files.
+fn kmeans(data: &[u8], k: usize, max_iters: usize, seed: u64) -> Vec<Centroid> {
     // Collect non-transparent pixels, subsample for performance
     let mut pixels: Vec<(f64, f64, f64)> = Vec::new();
     for chunk in data.chunks_exact(4) {
@@ -55,7 +60,7 @@ fn kmeans(data: &[u8], k: usize, max_iters: usize) -> Vec<Centroid> {
     }
 
     // Initialize centroids using k-means++ seeding
-    let mut centroids = kmeans_plus_plus_init(&pixels, k);
+    let mut centroids = kmeans_plus_plus_init(&pixels, k, seed);
 
     for _ in 0..max_iters {
         let mut next = vec![Centroid::default(); k];
@@ -97,9 +102,9 @@ fn kmeans(data: &[u8], k: usize, max_iters: usize) -> Vec<Centroid> {
     centroids
 }
 
-fn kmeans_plus_plus_init(pixels: &[(f64, f64, f64)], k: usize) -> Vec<Centroid> {
+fn kmeans_plus_plus_init(pixels: &[(f64, f64, f64)], k: usize, seed: u64) -> Vec<Centroid> {
     use rand::Rng;
-    let mut rng = rand::thread_rng();
+    let mut rng = crate::effects::rng::seeded_rng(seed);
     let mut centroids: Vec<Centroid> = Vec::with_capacity(k);
 
     // Pick first centroid randomly
@@ -242,7 +247,8 @@ impl Effect for KMeansDither {
             .unwrap_or(10) as usize;
 
         let k = k.clamp(2, 256);
-        let centroids = kmeans(&input.data, k, max_iters);
+        let seed = crate::effects::rng::frame_seed(input, params);
+        let centroids = kmeans(&input.data, k, max_iters, seed);
 
         let w = input.width as usize;
         let h = input.height as usize;
@@ -348,9 +354,15 @@ impl Effect for KMeansDither {
 
 /// Extract a palette from a frame using K-Means and return the colors as RGB tuples.
 /// Public API for the palette-extraction feature (#23).
+/// Derive a `k`-colour palette from `frame`.
+///
+/// Deterministic for a given frame: the k-means seeding is keyed off the frame
+/// content, so the same image always yields the same palette and a preview
+/// matches its export.
 pub fn extract_kmeans_palette(frame: &Frame, k: usize) -> Vec<(u8, u8, u8)> {
     let k = k.clamp(2, 256);
-    let centroids = kmeans(&frame.data, k, 10);
+    let seed = crate::effects::rng::frame_seed(frame, &ParameterValues::new());
+    let centroids = kmeans(&frame.data, k, 10, seed);
     centroids
         .iter()
         .map(|c| {

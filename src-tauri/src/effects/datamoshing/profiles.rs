@@ -62,7 +62,7 @@ impl Effect for GlitchProfile {
             .get("intensity")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.7) as f32;
-        let mut rng = rand::thread_rng();
+        let mut rng = crate::effects::rng::frame_rng(input, params);
         let mut out = input.data.clone();
         let len = out.len();
 
@@ -454,7 +454,7 @@ impl Effect for ExtremeProfile {
             .get("aggression")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.9) as f32;
-        let mut rng = rand::thread_rng();
+        let mut rng = crate::effects::rng::frame_rng(input, params);
         let mut out = input.data.clone();
         let len = out.len();
 
@@ -683,7 +683,7 @@ impl Effect for RainbowProfile {
         }
 
         // Databend-style row shifting
-        let mut rng = rand::thread_rng();
+        let mut rng = crate::effects::rng::frame_rng(input, params);
         let bend_count = (hue_speed * 5.0) as usize;
         for _ in 0..bend_count {
             let row = rng.gen_range(0..h);

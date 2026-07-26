@@ -198,6 +198,49 @@ fn single_frame_noops_are_the_expected_set() {
     );
 }
 
+/// Every effect must produce identical output from identical input.
+///
+/// This is the invariant `rand::thread_rng()` violated across nine call sites.
+/// For a passive render tool, non-determinism is a correctness bug rather than a
+/// stylistic choice: the preview and the export run the effect separately, so
+/// they disagree and the user grades against something the exported file will
+/// never contain; and re-exporting the same project produces a different file,
+/// so a render cannot be reproduced or verified.
+///
+/// Randomness itself is fine — `effects::rng` seeds it from the frame content
+/// and an optional `seed` parameter, so patterns still vary between images and
+/// remain under the user's control while staying reproducible.
+#[test]
+fn every_effect_is_deterministic() {
+    let reg = EffectRegistry::new();
+    let frame = detail_frame();
+    let empty = serde_json::Map::new();
+
+    let mut nondeterministic = Vec::new();
+    for meta in reg.list() {
+        let Some(effect) = reg.get(&meta.id) else {
+            continue;
+        };
+        let (Ok(first), Ok(second)) = (
+            effect.process_frame(&frame, None, &empty),
+            effect.process_frame(&frame, None, &empty),
+        ) else {
+            continue;
+        };
+        if first.data != second.data {
+            nondeterministic.push(meta.id.clone());
+        }
+    }
+
+    assert!(
+        nondeterministic.is_empty(),
+        "these effects produced different output from identical input — preview \
+         and export will disagree, and a render cannot be reproduced. Use \
+         effects::rng instead of rand::thread_rng():\n  {}",
+        nondeterministic.join("\n  ")
+    );
+}
+
 /// Effect pairs known to produce identical output, with a reason.
 const ALLOWED_DUPLICATES: &[(&str, &str, &str)] = &[
     (

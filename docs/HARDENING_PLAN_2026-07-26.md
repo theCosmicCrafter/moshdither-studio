@@ -231,7 +231,7 @@ that Floyd-Steinberg differs from Atkinson. Add:
 - **Serpentine test** — assert odd rows scan right-to-left.
 - **Determinism test** — same input twice, identical output.
 
-### 3.5 Add colour error diffusion — **(a) DONE 2026-07-26, (b) still open**
+### 3.5 Add colour error diffusion — **DONE 2026-07-26 (all three modes)**
 
 Extend `error_diffusion::apply` to diffuse per-channel against a palette rather
 than collapsing to luminance. Scope options:
@@ -258,10 +258,31 @@ parameter values. `effects::dithering::output_stability_tests` pins the default
 output of all eight effects by hash to keep it that way; a future change to the
 default is a decision that test forces someone to make explicitly.
 
-**Still open — (b) palette-quantised.** Needs a palette *source* decision that
-RGB mode did not: fixed preset, k-means-derived from the frame
-(`dithering::kmeans` already exists), or user-selected. Until that is settled,
-`color_mode` has two options rather than three.
+**(b) palette-quantised — delivered 2026-07-26.** `color_mode` now offers
+grayscale / rgb / palette, with `palette_source` selecting between a k-means
+palette derived from the frame (default) and one of the bundled historical
+palettes via `palette`. `palette_size` (2–64) controls the k-means case.
+
+k-means is the default because a fixed palette forces the user to know which one
+suits an image before they can see anything good, whereas a derived one always
+lands somewhere reasonable — the same choice `references/dither_pie` makes.
+Palette colours are shared with `color::historical_palettes` through new
+`palette_names()` / `palette_by_name()` accessors, so the two places a palette is
+offered cannot drift apart.
+
+Palette mode is genuinely a different operation from RGB mode, not a
+reparameterisation: RGB quantises each channel on its own grid, so reachable
+output is a cube; palette mode quantises the colour as a whole and carries the
+full three-dimensional error forward. A test asserts output contains *only*
+palette colours, which RGB mode cannot satisfy.
+
+An unresolvable palette (fewer distinct colours than requested) degrades to RGB
+rather than failing — a dither against an empty palette has no meaning.
+
+**This work surfaced a bug that mattered more than the feature.**
+`dithering::kmeans` seeded k-means++ with `rand::thread_rng()`, so the derived
+palette differed on every call. Eight other effects had the same defect. See
+§3.6.
 
 > **Note on scope:** `dithering.riemersma` was deliberately excluded. It does not
 > use `error_diffusion::apply` — it has its own Hilbert-curve traversal with a
@@ -269,6 +290,37 @@ RGB mode did not: fixed preset, k-means-derived from the frame
 > changing its quantiser and therefore its output at defaults. `serpentine` is
 > meaningless for curve-order traversal. It keeps zero parameters, and a test
 > asserts that, so nobody advertises controls it cannot honour.
+
+### 3.6 Effect output was not reproducible — **DONE 2026-07-26**
+
+Nine effects drew randomness from `rand::thread_rng()`, which is seeded from the
+OS: `dithering::kmeans`, `datamoshing::iframe_removal`, two in
+`datamoshing::mv_effects`, three in `datamoshing::profiles`,
+`glitch::png_chunk`, and `audio_reactive`.
+
+For a passive render tool this is a correctness bug, not a stylistic choice:
+
+- The preview and the export run the effect separately, so they disagree. The
+  user grades against something the exported file will never contain — which
+  undercuts the entire preview-accuracy goal this plan is built around.
+- Re-exporting the same project produces a different file, so a render cannot be
+  reproduced or verified.
+- Video output flickers, because every frame re-rolls instead of continuing a
+  stable pattern.
+
+The fix keeps the randomness and makes it reproducible. `effects::rng` derives a
+seed from the frame content plus an optional user-facing `seed` parameter, so the
+same image and seed always give the same result, a different image gives a
+different pattern with no user action, and the user can dial the seed to explore
+variations and have the chosen one survive an export.
+
+`effects::conformance_tests::every_effect_is_deterministic` runs all 94 effects
+twice and requires identical bytes, so this cannot regress silently.
+
+**One deliberate exception.** `sam3_engine.rs` keeps `thread_rng()` for its
+32-byte auth handshake token. That is a CSPRNG use where a predictable value
+would be a security defect; the call site is commented so a future sweep does not
+"fix" it.
 
 ---
 

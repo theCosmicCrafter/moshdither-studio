@@ -209,7 +209,7 @@ impl Effect for BeatGlitch {
             return Ok(input.clone());
         }
 
-        let mut rng = rand::thread_rng();
+        let mut rng = crate::effects::rng::frame_rng(input, params);
         let mut out = input.data.clone();
         let len = out.len();
 

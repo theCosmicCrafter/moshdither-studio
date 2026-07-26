@@ -17,6 +17,7 @@ pub mod functional_tests;
 pub mod params;
 pub mod preview;
 pub mod registry;
+pub mod rng;
 #[cfg(test)]
 pub mod semantic_tests;
 pub mod test_helpers;

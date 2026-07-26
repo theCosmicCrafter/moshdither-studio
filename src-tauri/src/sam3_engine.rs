@@ -344,7 +344,12 @@ impl Sam3Engine {
             }
         });
 
-        // Generate a random 32-byte token for auth handshake
+        // Generate a random 32-byte token for auth handshake.
+        //
+        // thread_rng() is deliberate and must NOT be replaced with the seeded
+        // RNG in effects::rng. That module exists to make *effect output*
+        // reproducible; a predictable auth token would be a security defect.
+        // thread_rng is a CSPRNG, which is what this needs.
         let auth_token: String = {
             let mut rng = rand::thread_rng();
             let bytes: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
