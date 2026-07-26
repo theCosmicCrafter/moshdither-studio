@@ -30,9 +30,17 @@ subprocess.call(f'"{ffgac}" -i "{input_video}" -an -mpv_flags +nopimb+forcemv '
                 shell=True)
 ```
 
-**This code is live.** `src-tauri/src/commands.rs:2160` resolves and invokes
-`packages/python-backend/mosh_cli.py`, so the path runs whenever the FFglitch
-effects are used.
+**This code is live, and the chain is now traced end to end.** The app spawns
+exactly two Python entry points — `mosh_cli.py` (4 call sites in `commands.rs`)
+and `sam3_bridge.py` (2). And `mosh_cli.py:30` imports the two offending modules
+directly:
+
+```python
+from DatamoshLib.FFG_effects import basic_modes, external_script
+```
+
+So every one of the 15 `shell=True` calls is reachable from a running app.
+**This is the highest-priority item in this document.**
 
 **Why it matters.** This is a desktop application that opens files the user
 chooses. A filename containing a double quote followed by shell metacharacters
@@ -97,8 +105,20 @@ Triaged rather than treated as four equal items:
 | `PYSEC-2026-2290` | **LightGlue** model loading | No — LightGlue is not used |
 | `PYSEC-2026-2289` | `from_pretrained()` executes code named in `config.json`'s `_attn_implementation_internal` | **Yes** |
 
-Only the last is reachable: `sam3_service.py` calls
-`AutoModelForZeroShotObjectDetection.from_pretrained()`.
+Only the last is reachable *in principle* — and on tracing it, **not even that
+one is reachable in the shipped app**.
+
+The single `from_pretrained()` call lives in `sam3_service.py`. That file is
+imported only by `packages/python-backend/main.py`, and `main.py` is never
+spawned: the app runs `mosh_cli.py` and `sam3_bridge.py` and nothing else.
+Neither of those touches transformers, and the `sam3` package itself
+(`sam3_repo/sam3`) contains no `transformers` import and no `from_pretrained`
+call anywhere.
+
+transformers is therefore installed but only reachable through two layers of
+dead code. The hardening in §2 is still worth having — if `sam3_service.py` is
+ever revived it should be safe by default — but the practical exposure today is
+nil.
 
 **Its delivery vector is closed** — the model download is now pinned to an exact
 commit and restricted to safetensors, so an attacker would have to compromise a
@@ -112,10 +132,12 @@ this project uses is small and stable — `AutoProcessor`,
 so the upgrade is plausible, but it **cannot be verified on this machine**: the
 SAM3 checkpoint is not present locally, so no real segmentation can be run.
 
-**To do it safely:** obtain the checkpoint (`scripts/download-sam3-checkpoint.py`),
-upgrade `transformers>=5.3,<6` and `huggingface_hub>=1,<2`, then run a text-prompt
-segmentation end to end and compare masks against the current output. Shipping it
-without that is exactly the untested change this document argues against.
+**Recommendation: do not upgrade — delete instead.** Since the only consumer is
+dead code, upgrading transformers 4→5 (which also forces `huggingface_hub` 0→1)
+buys nothing and carries real breakage risk. The cheaper and more honest move is
+to recycle `sam3_service.py` and `main.py` and drop `transformers` from
+`requirements.txt` entirely, which removes the advisory surface rather than
+managing it. That is a scope decision, so it is recorded here rather than done.
 
 Suppressed by ID, never blanket, so a new `transformers` advisory still fails
 the gate.
@@ -158,6 +180,21 @@ pin.** Verified rather than assumed:
 `requirements.txt` now pins `numpy>=2.0,<3` and `rembg>=2.0.75,<3`, and the
 pip-audit suppressions for both rembg advisories are **removed** rather than
 kept.
+
+**Verified end to end with the real model.** The checkpoint is present at
+`~/.moshdither/models/sam3/sam3.pt` (3.21 GB) — an earlier draft of this document
+wrongly said it was unavailable, having looked in the repo's `models/` directory,
+which holds only a `.gitkeep`. Under numpy 2.4.6 the full path works:
+
+```
+model loaded in 7.1s
+text_prompt "a red circle" in 1.2s -> status=ok
+mask coverage: 0.1749
+```
+
+The test image is a 120px-diameter circle on a 256x256 field, so the true area
+fraction is pi*60^2/256^2 = 0.1726. The mask matches it to within 1.3%, which
+means the segmentation is not merely running but producing correct geometry.
 
 > One loose end: the vendored `sam3` package's own metadata still declares
 > `numpy<2`, so pip prints a dependency-conflict warning. It is a defensive
