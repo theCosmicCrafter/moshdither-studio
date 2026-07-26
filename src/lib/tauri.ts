@@ -481,3 +481,27 @@ export async function generateProxy(
 ): Promise<string> {
   return invoke("generate_proxy_command", { sourcePath, maxWidth, crf });
 }
+
+/**
+ * Absolute path to the preset library file, for showing the user where their
+ * presets live. Returns null outside Tauri, where there is no filesystem.
+ */
+export async function getPresetsPath(): Promise<string | null> {
+  if (!isTauriAvailable()) return null;
+  return invoke<string>("get_presets_path");
+}
+
+/**
+ * Read the preset library JSON. Empty string means "no library file yet",
+ * which is the normal first-run state rather than an error.
+ */
+export async function loadPresetsFile(): Promise<string> {
+  if (!isTauriAvailable()) return "";
+  return invoke<string>("load_presets");
+}
+
+/** Write the preset library JSON. The Rust side validates and writes atomically. */
+export async function savePresetsFile(json: string): Promise<void> {
+  if (!isTauriAvailable()) return;
+  await invoke("save_presets", { json });
+}

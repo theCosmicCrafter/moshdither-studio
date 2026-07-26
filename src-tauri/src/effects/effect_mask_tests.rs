@@ -1585,7 +1585,6 @@ mod tests {
             let result = run_effect_with_mask(&Overlay::default(), &frame, Some(&mask), "inside");
             assert_pixel_unchanged(&result, &frame, 2, 0, "unmasked should be original");
         }
-
     }
 
     // ── Advanced dithering effects ─────────────────────────────

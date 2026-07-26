@@ -2,7 +2,15 @@ import { useState, useRef } from "react";
 import { usePresets } from "../../hooks/usePresets";
 
 export default function PresetPanel() {
-  const { presets, savePreset, loadPreset, deletePreset, exportPresets, importPresets } = usePresets();
+  const {
+    presets,
+    presetsPath,
+    savePreset,
+    loadPreset,
+    deletePreset,
+    exportPresets,
+    importPresets,
+  } = usePresets();
   const [name, setName] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -34,6 +42,26 @@ export default function PresetPanel() {
         fontFamily: "var(--font-body)",
       }}
     >
+      {/* Where the library lives. Presets are a plain JSON file in Documents so
+          they can be found, backed up and shared — showing the path is most of
+          what makes that useful. */}
+      {presetsPath && (
+        <div
+          title={presetsPath}
+          style={{
+            fontSize: 10,
+            opacity: 0.6,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            direction: "rtl",
+            textAlign: "left",
+          }}
+        >
+          {presetsPath}
+        </div>
+      )}
+
       {/* Save new */}
       <div style={{ display: "flex", gap: 4 }}>
         <input

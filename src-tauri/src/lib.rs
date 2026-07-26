@@ -8,6 +8,7 @@ pub mod effects;
 pub mod environment;
 pub mod ffmpeg;
 pub mod path_guard;
+pub mod presets;
 pub mod sam3_engine;
 pub mod utils;
 
@@ -65,6 +66,9 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            presets::get_presets_path,
+            presets::load_presets,
+            presets::save_presets,
             load_media,
             load_media_from_base64,
             list_effects,

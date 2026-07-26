@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore, type StackEntry } from "../store";
 import { migrateOverlayGuides } from "../utils/migrateOverlayGuides";
+import { getPresetsPath, loadPresetsFile, savePresetsFile } from "../lib/tauri";
+import { isTauriAvailable } from "../lib/browserFallback";
 import { DEFAULT_PRESETS } from "./defaultPresets";
 
 export interface Preset {
@@ -11,28 +13,57 @@ export interface Preset {
   thumbnail?: string; // base64 PNG data URL
 }
 
-const STORAGE_KEY = "moshdither_presets_v2";
+/**
+ * Legacy home for the preset library.
+ *
+ * Presets now live in a JSON file under Documents (see `src-tauri/src/presets.rs`)
+ * so users can find, back up, move and share them — none of which is possible
+ * with webview storage, which is also wiped whenever the webview's data is
+ * cleared. This key is still read once to migrate an existing library, and is
+ * deliberately **not** deleted afterwards: it costs nothing to leave and is the
+ * only fallback if the migration write fails.
+ */
+const LEGACY_STORAGE_KEY = "moshdither_presets_v2";
 
-function loadPresets(): Preset[] {
+function readLegacyPresets(): Preset[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    const userPresets: Preset[] = raw ? (JSON.parse(raw) as Preset[]) : [];
-    // Merge default presets (avoid duplicates by id)
-    const existingIds = new Set(userPresets.map((p) => p.id));
-    const merged = [...userPresets];
-    for (const preset of DEFAULT_PRESETS) {
-      if (!existingIds.has(preset.id)) {
-        merged.push({ ...preset, thumbnail: generateThumbnail(preset.stack) });
-      }
-    }
-    return merged;
+    const raw = localStorage.getItem(LEGACY_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as Preset[]) : [];
   } catch {
-    return DEFAULT_PRESETS.map((p) => ({ ...p, thumbnail: generateThumbnail(p.stack) }));
+    return [];
   }
 }
 
-function savePresets(presets: Preset[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(presets));
+function writeLegacyPresets(presets: Preset[]) {
+  try {
+    localStorage.setItem(LEGACY_STORAGE_KEY, JSON.stringify(presets));
+  } catch {
+    // Quota or a privacy mode that blocks storage. In Tauri the file is the
+    // real store, so this is a best-effort mirror and not worth surfacing.
+  }
+}
+
+/** Merge the bundled presets in, skipping any the user already has by id. */
+function withDefaults(userPresets: Preset[]): Preset[] {
+  const existing = new Set(userPresets.map((p) => p.id));
+  const merged = [...userPresets];
+  for (const preset of DEFAULT_PRESETS) {
+    if (!existing.has(preset.id)) {
+      merged.push({ ...preset, thumbnail: generateThumbnail(preset.stack) });
+    }
+  }
+  return merged;
+}
+
+function parsePresets(json: string): Preset[] {
+  if (!json.trim()) return [];
+  try {
+    const parsed = JSON.parse(json) as Preset[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((p) => p && p.id && p.name && Array.isArray(p.stack));
+  } catch {
+    return [];
+  }
 }
 
 /** Generate a simple gradient thumbnail based on preset effects. */
@@ -86,15 +117,100 @@ function generateThumbnail(stack: StackEntry[]): string {
 }
 
 export function usePresets() {
-  const [presets, setPresets] = useState<Preset[]>(loadPresets);
+  const [presets, setPresets] = useState<Preset[]>([]);
+  const [presetsPath, setPresetsPath] = useState<string | null>(null);
+  /**
+   * Guards the persist effect. Loading the library is asynchronous now, so
+   * without this the first render would persist the initial empty array and
+   * wipe the file before the real contents ever arrived.
+   */
+  const loadedRef = useRef(false);
+  const [loaded, setLoaded] = useState(false);
+
   const effectStack = useAppStore((s) => s.effectStack);
   const replaceStack = useAppStore((s) => s.replaceStack);
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
 
-  // Persist whenever presets change
+  // Initial load, plus one-time migration off localStorage.
   useEffect(() => {
-    savePresets(presets);
-  }, [presets]);
+    let cancelled = false;
+
+    (async () => {
+      if (!isTauriAvailable()) {
+        // Browser build: no filesystem, so localStorage remains the store.
+        if (!cancelled) {
+          setPresets(withDefaults(readLegacyPresets()));
+          loadedRef.current = true;
+          setLoaded(true);
+        }
+        return;
+      }
+
+      let fromFile: Preset[] = [];
+      try {
+        fromFile = parsePresets(await loadPresetsFile());
+      } catch (err) {
+        // A read failure must not silently present an empty library — that
+        // would look like data loss and the next write would make it real.
+        if (!cancelled) {
+          setStatusMessage(`Could not read presets file: ${String(err)}`);
+        }
+        return;
+      }
+
+      const legacy = readLegacyPresets();
+      let initial = fromFile;
+      let migratedCount = 0;
+
+      if (fromFile.length === 0 && legacy.length > 0) {
+        // First run after the move to a file. Adopt the localStorage library
+        // and write it out; localStorage is left in place as a fallback.
+        initial = legacy;
+        migratedCount = legacy.length;
+        try {
+          await savePresetsFile(JSON.stringify(legacy, null, 2));
+        } catch (err) {
+          if (!cancelled) setStatusMessage(`Preset migration failed: ${String(err)}`);
+        }
+      }
+
+      if (cancelled) return;
+      setPresets(withDefaults(initial));
+      loadedRef.current = true;
+      setLoaded(true);
+
+      try {
+        const path = await getPresetsPath();
+        if (!cancelled) setPresetsPath(path);
+      } catch {
+        // Path is display-only; failing to resolve it is not worth an error.
+      }
+
+      if (migratedCount > 0 && !cancelled) {
+        setStatusMessage(`Moved ${migratedCount} presets to your Documents folder`);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [setStatusMessage]);
+
+  // Persist whenever presets change — but never before the initial load has
+  // populated them.
+  useEffect(() => {
+    if (!loadedRef.current) return;
+    // Bundled defaults are regenerated on load; writing them back would bake a
+    // copy into the user's file and make them undeletable.
+    const userPresets = presets.filter((p) => !p.id.startsWith("default-preset-"));
+    if (isTauriAvailable()) {
+      savePresetsFile(JSON.stringify(userPresets, null, 2)).catch((err) => {
+        setStatusMessage(`Failed to save presets: ${String(err)}`);
+      });
+    } else {
+      writeLegacyPresets(userPresets);
+    }
+  }, [presets, setStatusMessage]);
 
   const savePreset = useCallback(
     (name: string) => {
@@ -185,5 +301,14 @@ export function usePresets() {
     [setStatusMessage]
   );
 
-  return { presets, savePreset, loadPreset, deletePreset, exportPresets, importPresets };
+  return {
+    presets,
+    presetsPath,
+    loaded,
+    savePreset,
+    loadPreset,
+    deletePreset,
+    exportPresets,
+    importPresets,
+  };
 }
