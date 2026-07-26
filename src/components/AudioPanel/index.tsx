@@ -1,10 +1,10 @@
 import React, { useRef, useCallback } from "react";
 import { useAppStore } from "../../store";
 import { useAudioEngine } from "../../hooks/useAudioEngine";
-import { STANDARD_BANDS } from "../../engine/audio/types";
 import { detectBeats, decodeAudioFile } from "../../utils/beatDetection";
 import { generateBeatKeyframes } from "../../utils/beatKeyframeGenerator";
 import { getFileName } from "../../utils/fileName";
+import AudioVisualizer from "../common/AudioVisualizer";
 
 export default function AudioPanel() {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -314,45 +314,7 @@ export default function AudioPanel() {
 }
 
 function SpectrumBars() {
-  const audioBandEnergies = useAppStore((s) => s.audioBandEnergies);
-  const bandColors = [
-    "#ff4444",
-    "#ff8844",
-    "#ffcc44",
-    "#44ff44",
-    "#44ffcc",
-    "#4488ff",
-    "#cc44ff",
-  ];
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "flex-end",
-        gap: 2,
-        height: 48,
-        padding: "4px 0",
-      }}
-    >
-      {STANDARD_BANDS.map((band, i) => {
-        const val = audioBandEnergies[band.name] ?? 0;
-        return (
-          <div
-            key={band.name}
-            style={{
-              flex: 1,
-              height: `${Math.max(2, val * 100)}%`,
-              background: bandColors[i],
-              borderRadius: 2,
-              transition: "height 60ms linear",
-              opacity: 0.85,
-            }}
-            title={`${band.name}: ${(val * 100).toFixed(1)}%`}
-          />
-        );
-      })}
-    </div>
-  );
+  return <AudioVisualizer variant="spectrum" className="h-12 py-1" />;
 }
 
 function TransportButton({

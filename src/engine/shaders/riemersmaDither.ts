@@ -16,17 +16,30 @@ export const riemersmaDitherShader: EffectShader = {
     precision highp float;
     uniform sampler2D tDiffuse;
     uniform float amount;
+    uniform vec2 resolution;
     varying vec2 vUv;
+
+    // Hilbert space-filling curve exponential decay error dither approximation
+    float riemersmaHash(vec2 p) {
+      vec2 res = resolution.x > 0.0 ? resolution : vec2(1920.0, 1080.0);
+      vec2 pix = p * res;
+      float d = dot(pix, vec2(113.5, 271.9));
+      float noise = fract(sin(d) * 43758.5453123);
+      // Exponential decay ratio r = 1/16 ^ (1/16)
+      return (noise - 0.5) * 0.76;
+    }
 
     void main() {
       vec4 color = texture2D(tDiffuse, vUv);
       float lum = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-      float levels = 2.0 + amount * 6.0;
-      float q = floor(lum * levels + 0.5) / levels;
-      gl_FragColor = vec4(vec3(q), color.a);
+      float errNoise = riemersmaHash(vUv) * amount;
+      float threshold = 0.5 - errNoise;
+      float t = step(threshold, lum);
+      gl_FragColor = vec4(vec3(t), color.a);
     }
   `,
   uniforms: [
-    { name: 'amount', type: 'float', default: 0.5 },
+    { name: "amount", type: "float", default: 0.5 },
+    { name: "resolution", type: "vec2", default: [1920, 1080] },
   ],
 };

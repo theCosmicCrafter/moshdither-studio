@@ -236,7 +236,6 @@ export interface AppState {
   setDockGroupSize: (groupId: string, size: number) => void;
   /** Atomically resize two adjacent groups — grows one, shrinks the other by the same delta */
   setDockGroupSizes: (groupIdA: string, sizeA: number, groupIdB: string, sizeB: number) => void;
-  toggleBottomDock: () => void;
   getDockedPanelIds: () => Set<string>;
 
   // Floating windows
@@ -302,6 +301,7 @@ export interface AppState {
   setActiveCategory: (cat: string) => void;
   setSearchQuery: (q: string) => void;
   addToStack: (effect: EffectMeta) => void;
+  setEffectStack: (stack: StackEntry[]) => void;
   addLUTEffect: (previewUrl: string, filePath?: string) => void;
   removeFromStack: (id: string) => void;
   moveStackItem: (fromIndex: number, toIndex: number) => void;
@@ -629,6 +629,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       };
     }),
 
+  setEffectStack: (stack) =>
+    set((state) => ({
+      pastStacks: [...state.pastStacks, state.effectStack],
+      futureStacks: [],
+      effectStack: stack,
+      selectedStackId: stack.length > 0 ? stack[stack.length - 1].id : null,
+    })),
+
   moveStackItem: (fromIndex, toIndex) =>
     set((state) => {
       if (
@@ -671,7 +679,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (maskId === "active") {
         maskB64 = state.activeMask;
       } else if (maskId && maskId.startsWith("sam3-")) {
-        const idx = parseInt(maskId.replace("sam3-", ""), 10);
+        const idx = Number.parseInt(maskId.replace("sam3-", ""), 10);
         maskB64 = state.sam3Masks[idx] ?? null;
       }
       return {
@@ -826,14 +834,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       return { dockLayout: layout };
     }),
-
-  toggleBottomDock: () =>
-    set((state) => ({
-      dockLayout: {
-        ...state.dockLayout,
-        bottomVisible: !state.dockLayout.bottomVisible,
-      },
-    })),
 
   setLeftZoneWidth: (width) => set({ leftZoneWidth: Math.max(180, Math.min(600, width)) }),
 
@@ -1016,7 +1016,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setAspectRatio: (ratio) => set({ aspectRatio: ratio }),
   setInPoint: (t) =>
     set((state) => {
-      const val = t === null ? null : clampFinite(t, 0, 99, 0);
+      const val = t === null ? null : clampFinite(t, 0, state.duration, 0);
       return {
         inPoint: val,
         outPoint:
@@ -1025,7 +1025,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }),
   setOutPoint: (t) =>
     set((state) => {
-      const val = t === null ? null : clampFinite(t, 0, 99, 0);
+      const val = t === null ? null : clampFinite(t, 0, state.duration, 0);
       return {
         outPoint: val,
         inPoint:

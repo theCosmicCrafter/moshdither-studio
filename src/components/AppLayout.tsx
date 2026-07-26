@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useAppStore } from "../store";
-import { listEffects, getFrameData, getMediaInfo, loadMediaFromPath } from "../lib/tauri";
+import { listEffects, getFrameData, getMediaInfo, loadMediaFromPath, sam3Init, sam3LoadImage } from "../lib/tauri";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { useKeyframePlayback } from "../hooks/useKeyframePlayback";
@@ -47,7 +47,22 @@ export default function AppLayout() {
     return cleanup;
   }, [attachSounds]);
 
-  // Load effects on mount
+  // Guard window close with unsaved changes prompt
+  const effectStackLength = useAppStore((s) => s.effectStack.length);
+  const mediaLoaded = useAppStore((s) => s.mediaLoaded);
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (mediaLoaded && effectStackLength > 0) {
+        e.preventDefault();
+        e.returnValue = "You have unsaved changes in your project session.";
+        return e.returnValue;
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [mediaLoaded, effectStackLength]);
+
+  // Load effects and auto-start SAM3 in tandem on mount
   useEffect(() => {
     listEffects()
       .then((effects) => {
@@ -55,15 +70,17 @@ export default function AppLayout() {
         setStatusMessage(`${effects.length} effects loaded`);
       })
       .catch((err) => setStatusMessage(`Error: ${err}`));
+
+    sam3Init()
+      .then(() => {
+        useAppStore.getState().setSam3Ready(true);
+      })
+      .catch((err) => {
+        console.warn("[AppLayout] SAM3 background auto-start notice:", err);
+      });
   }, [setAllEffects, setStatusMessage]);
 
-  // SAM3 is initialized lazily on first use (see MaskPanel's ensureSam3Ready).
-  // Auto-initializing at startup loaded a ~6 GB model before the user asked for
-  // segmentation, delaying app readiness and holding RAM/VRAM for nothing.
-
   // Refresh preview on demand (called after file load / effect apply).
-  // NOT polled — polling every 500 ms held the Rust frame mutex continuously
-  // and starved SAM3 commands, causing freezes.
   const refreshPreview = useCallback(async (): Promise<boolean> => {
     try {
       const info = await getMediaInfo();
@@ -75,6 +92,11 @@ export default function AppLayout() {
         const frame = await getFrameData();
         setPreviewDataUrl(frame);
         setOriginalDataUrl(frame);
+
+        // Pre-feed frame to SAM3 background engine in tandem so AI tools are instant
+        if (frame) {
+          sam3LoadImage(frame).catch(() => {});
+        }
         return true;
       }
       return false;
@@ -199,8 +221,10 @@ export default function AppLayout() {
               </button>
               <button
                 onClick={() => {
-                  restoreSession(autoSave);
-                  setShowRecovery(false);
+                  void (async () => {
+                    await restoreSession(autoSave, refreshPreview);
+                    setShowRecovery(false);
+                  })();
                 }}
                 className="neo-btn rounded-md px-3 py-1.5 font-label-sm text-label-sm text-on-surface bg-accent-pink/20 hover:bg-accent-pink/30 transition-colors"
                 aria-label="Restore recovered session"

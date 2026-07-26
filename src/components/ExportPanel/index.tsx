@@ -733,15 +733,22 @@ export default function ExportPanel() {
           </div>
         )}
       </div>
-
-      {/* In/Out range */}
-      {(inPoint !== null || outPoint !== null) && (
-        <div style={{ fontSize: 10, color: "var(--text-muted)", fontFamily: "var(--font-mono)", display: "flex", gap: 6, alignItems: "center" }}>
-          <span style={{ color: "var(--success)" }}>IN {inPoint ?? 0}s</span>
-          <span>→</span>
-          <span style={{ color: "var(--danger)" }}>OUT {outPoint ?? "end"}s</span>
+      {/* Frame Range Selection */}
+      <div className="space-y-1" style={{ borderTop: "1px solid var(--outline-variant)", paddingTop: 8 }}>
+        <div style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", justifyContent: "space-between" }}>
+          <span>Frame Range</span>
+          <span>
+            {inPoint !== null || outPoint !== null ? "Custom In/Out" : "Full Media"}
+          </span>
         </div>
-      )}
+        {inPoint !== null || outPoint !== null ? (
+          <div style={{ fontSize: 10, display: "flex", gap: 8, color: "var(--text-secondary)" }}>
+            <span style={{ color: "var(--success)" }}>IN {inPoint ?? 0}s</span>
+            <span>→</span>
+            <span style={{ color: "var(--danger)" }}>OUT {outPoint ?? "end"}s</span>
+          </div>
+        ) : null}
+      </div>
 
       {/* Export button */}
       {!exportIsRunning && (
@@ -763,7 +770,7 @@ export default function ExportPanel() {
             color: "var(--on-primary)",
           }}
         >
-          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>download_for_offline</span>
+          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>movie_export</span>
           Export Video
         </button>
       )}
@@ -799,7 +806,7 @@ export default function ExportPanel() {
             cursor: "pointer",
           }}
         >
-          <span className="material-symbols-outlined" style={{ fontSize: 11 }}>add</span>
+          <span className="material-symbols-outlined" style={{ fontSize: 11 }}>add_circle</span>
           Add to Queue
         </button>
         <button
@@ -818,7 +825,7 @@ export default function ExportPanel() {
             cursor: "pointer",
           }}
         >
-          <span className="material-symbols-outlined" style={{ fontSize: 11 }}>list</span>
+          <span className="material-symbols-outlined" style={{ fontSize: 11 }}>view_timeline</span>
           {queue.length}
         </button>
       </div>

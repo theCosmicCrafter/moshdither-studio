@@ -1,13 +1,13 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { useAppStore } from "../store";
+import { stackToRustPayload } from "./effectConverter";
 import {
   DEFAULT_WATERMARK,
+  appendTextWatermarkToVf,
   buildDrawtextFilter,
   buildImageOverlayFilter,
-  appendTextWatermarkToVf,
   buildWatermarkArgs,
 } from "./watermark";
-import { stackToRustPayload } from "./effectConverter";
 
 describe("Export Pipeline Edge Cases", () => {
   beforeEach(() => {
@@ -442,11 +442,12 @@ describe("Export Pipeline Edge Cases", () => {
       expect(useAppStore.getState().inPoint).toBeNull();
     });
 
-    it("in/out points clamped to 0-99 range", () => {
+    it("in/out points clamped to 0-duration range", () => {
+      useAppStore.getState().setDuration(200);
       useAppStore.getState().setInPoint(-5);
       expect(useAppStore.getState().inPoint).toBe(0);
-      useAppStore.getState().setOutPoint(200);
-      expect(useAppStore.getState().outPoint).toBe(99);
+      useAppStore.getState().setOutPoint(300);
+      expect(useAppStore.getState().outPoint).toBe(200);
     });
 
     it("clearInOut resets both to null", () => {

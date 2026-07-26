@@ -1,6 +1,4 @@
 use super::types::*;
-use super::Effect;
-use rayon::prelude::*;
 
 /// Blend an effect-processed frame with the original using a mask.
 ///
@@ -60,79 +58,6 @@ pub fn blend_mask(
     }
 
     Ok(())
-}
-
-/// The linear effect stack. Applies effects in order.
-#[derive(Default)]
-pub struct EffectStack {
-    pub effects: Vec<(Box<dyn Effect>, ParameterValues, Option<Mask>)>,
-}
-
-impl EffectStack {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn push(&mut self, effect: Box<dyn Effect>, params: ParameterValues, mask: Option<Mask>) {
-        self.effects.push((effect, params, mask));
-    }
-
-    /// Run the stack on a single frame.
-    pub fn process_frame(&self, mut frame: Frame) -> crate::error::Result<Frame> {
-        for (effect, params, mask) in &self.effects {
-            let params = super::clamp_for_effect(effect.as_ref(), params);
-            frame = effect.process_frame(&frame, mask.as_ref(), &params)?;
-        }
-        Ok(frame)
-    }
-
-    /// Run the stack on a full video segment.
-    /// Temporal effects use sequential `process_video`; non-temporal effects
-    /// are applied frame-by-frame in parallel via rayon.
-    pub fn process_video(&self, mut segment: VideoSegment) -> crate::error::Result<VideoSegment> {
-        for (effect, params, mask) in &self.effects {
-            let params = super::clamp_for_effect(effect.as_ref(), params);
-            if effect.is_temporal() {
-                segment = effect.process_video(&segment, mask.as_ref(), &params)?;
-            } else {
-                let mask_ref = mask.as_ref();
-                let params_ref = &params;
-                let results: crate::error::Result<Vec<Frame>> = segment
-                    .frames
-                    .par_iter()
-                    .map(|frame| effect.process_frame(frame, mask_ref, params_ref))
-                    .collect();
-                segment.frames = results?;
-            }
-        }
-        Ok(segment)
-    }
-
-    /// Process a slice of frames in parallel (for export pipelines that
-    /// split work across chunks). Temporal effects are not supported here
-    /// because they require cross-frame context; callers must route those
-    /// through `process_video` instead.
-    pub fn process_frames_parallel(&self, frames: Vec<Frame>) -> crate::error::Result<Vec<Frame>> {
-        if self.effects.is_empty() {
-            return Ok(frames);
-        }
-        if self.effects.iter().any(|(e, _, _)| e.is_temporal()) {
-            return Err(crate::error::AppError::Generic(
-                "process_frames_parallel does not support temporal effects".to_string(),
-            ));
-        }
-        frames
-            .par_iter()
-            .map(|frame| {
-                let mut working = frame.clone();
-                for (effect, params, mask) in &self.effects {
-                    let params = super::clamp_for_effect(effect.as_ref(), params);
-                    working = effect.process_frame(&working, mask.as_ref(), &params)?;
-                }
-                Ok(working)
-            })
-            .collect()
-    }
 }
 
 #[cfg(test)]

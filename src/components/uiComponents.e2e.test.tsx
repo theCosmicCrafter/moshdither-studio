@@ -39,7 +39,7 @@ describe("UI Components E2E", () => {
     it("shows processing icon when isProcessing", () => {
       useAppStore.getState().setIsProcessing(true);
       render(<StatusBar />);
-      expect(screen.getByText("sync")).toBeInTheDocument();
+      expect(screen.getByText("cloud_sync")).toBeInTheDocument();
     });
 
     it("displays effect count and active stack count", () => {

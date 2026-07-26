@@ -15,24 +15,37 @@ export const pixelGridOverlayShader: EffectShader = {
   fragmentSource: `
     precision highp float;
     uniform sampler2D tDiffuse;
-    uniform float gridSize;
-    uniform float lineWidth;
+    uniform vec2 resolution;
+    uniform float gridSize;   // pixels 2.0..256.0
+    uniform float lineWidth;  // pixels 0.0..10.0
     uniform vec3 gridColor;
     uniform float opacity;
     varying vec2 vUv;
 
     void main() {
       vec4 col = texture2D(tDiffuse, vUv);
-      vec2 grid = abs(fract(vUv * gridSize - 0.5) - 0.5);
-      vec2 gridLine = smoothstep(vec2(0.0), vec2(lineWidth), grid);
-      float lineMask = 1.0 - min(gridLine.x, gridLine.y);
-      vec3 result = mix(col.rgb, gridColor, lineMask * opacity);
+      if (opacity <= 0.0 || gridSize <= 0.0) {
+        gl_FragColor = col;
+        return;
+      }
+
+      vec2 pixel = vUv * resolution;
+      float gSize = (gridSize >= 2.0 ? gridSize : 32.0);
+      float lw = (lineWidth > 0.0 ? lineWidth : 1.0);
+
+      vec2 modP = mod(pixel, gSize);
+      bool onGridX = (modP.x < lw);
+      bool onGridY = (modP.y < lw);
+
+      float mask = (onGridX || onGridY) ? 1.0 : 0.0;
+      vec3 cyan = vec3(0.0, 1.0, 1.0);
+      vec3 result = mix(col.rgb, cyan, mask * opacity);
       gl_FragColor = vec4(result, col.a);
     }
   `,
   uniforms: [
     { name: 'gridSize', type: 'float', default: 32.0 },
-    { name: 'lineWidth', type: 'float', default: 0.01 },
+    { name: 'lineWidth', type: 'float', default: 1.0 },
     { name: 'gridColor', type: 'vec3', default: [0.0, 1.0, 1.0] },
     { name: 'opacity', type: 'float', default: 0.3 },
   ],

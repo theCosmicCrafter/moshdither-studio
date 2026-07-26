@@ -15,44 +15,43 @@ export const safeAreaShader: EffectShader = {
   fragmentSource: `
     precision highp float;
     uniform sampler2D tDiffuse;
-    uniform float margin;
-    uniform float lineWidth;
+    uniform vec2 resolution;
+    uniform float margin;     // percentage 0.0..25.0
+    uniform float lineWidth;  // pixels 0.0..10.0
     uniform vec3 guideColor;
     uniform float opacity;
     varying vec2 vUv;
 
     void main() {
       vec4 col = texture2D(tDiffuse, vUv);
-      float m = margin;
-      float lw = lineWidth;
+      if (opacity <= 0.0 || margin <= 0.0) {
+        gl_FragColor = col;
+        return;
+      }
 
-      // Outer border (action-safe)
-      float outerLeft = smoothstep(0.0, lw, vUv.x - m) * smoothstep(0.0, lw, (1.0 - m) - vUv.x);
-      float outerTop = smoothstep(0.0, lw, vUv.y - m) * smoothstep(0.0, lw, (1.0 - m) - vUv.y);
-      float outerMask = 1.0 - min(outerLeft, outerTop);
+      vec2 pixel = vUv * resolution;
+      float mPct = (margin <= 1.0 ? margin : margin / 100.0);
+      vec2 m = resolution * mPct;
+      float lw = (lineWidth > 0.0 ? lineWidth : 2.0);
 
-      // Inner border (title-safe) at margin + 5%
-      float m2 = m + 0.05;
-      float innerLeft = smoothstep(0.0, lw, vUv.x - m2) * smoothstep(0.0, lw, (1.0 - m2) - vUv.x);
-      float innerTop = smoothstep(0.0, lw, vUv.y - m2) * smoothstep(0.0, lw, (1.0 - m2) - vUv.y);
-      float innerMask = 1.0 - min(innerLeft, innerTop);
+      bool onBorderX = (pixel.x >= m.x - lw && pixel.x <= m.x + lw) ||
+                       (pixel.x >= (resolution.x - m.x) - lw && pixel.x <= (resolution.x - m.x) + lw);
+      bool inYRange = (pixel.y >= m.y - lw && pixel.y <= (resolution.y - m.y) + lw);
 
-      // Only show border lines, not filled area
-      float outerLine = outerMask * (1.0 - step(m + lw, max(abs(vUv.x - 0.5), abs(vUv.y - 0.5)) * 2.0 - m + lw));
-      float lineMask = max(outerMask * step(abs(vUv.x - m), lw) + outerMask * step(abs(vUv.x - (1.0 - m)), lw)
-                          + outerMask * step(abs(vUv.y - m), lw) + outerMask * step(abs(vUv.y - (1.0 - m)), lw),
-                          innerMask * step(abs(vUv.x - m2), lw) + innerMask * step(abs(vUv.x - (1.0 - m2)), lw)
-                          + innerMask * step(abs(vUv.y - m2), lw) + innerMask * step(abs(vUv.y - (1.0 - m2)), lw));
+      bool onBorderY = (pixel.y >= m.y - lw && pixel.y <= m.y + lw) ||
+                       (pixel.y >= (resolution.y - m.y) - lw && pixel.y <= (resolution.y - m.y) + lw);
+      bool inXRange = (pixel.x >= m.x - lw && pixel.x <= (resolution.x - m.x) + lw);
 
-      lineMask = clamp(lineMask, 0.0, 1.0);
-      vec3 result = mix(col.rgb, guideColor, lineMask * opacity);
+      float mask = ((onBorderX && inYRange) || (onBorderY && inXRange)) ? 1.0 : 0.0;
+      vec3 yellow = vec3(1.0, 1.0, 0.0);
+      vec3 result = mix(col.rgb, yellow, mask * opacity);
       gl_FragColor = vec4(result, col.a);
     }
   `,
   uniforms: [
-    { name: 'margin', type: 'float', default: 0.05 },
-    { name: 'lineWidth', type: 'float', default: 0.003 },
-    { name: 'guideColor', type: 'vec3', default: [0.0, 1.0, 0.85] },
-    { name: 'opacity', type: 'float', default: 0.6 },
+    { name: 'margin', type: 'float', default: 5.0 },
+    { name: 'lineWidth', type: 'float', default: 2.0 },
+    { name: 'guideColor', type: 'vec3', default: [1.0, 1.0, 0.0] },
+    { name: 'opacity', type: 'float', default: 0.5 },
   ],
 };

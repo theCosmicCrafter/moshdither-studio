@@ -184,12 +184,6 @@ export { transformShader } from "./transform";
 import { colorGradeShader } from "./colorGrade";
 export { colorGradeShader } from "./colorGrade";
 
-import { blendModesShader } from "./blendModes";
-export { blendModesShader } from "./blendModes";
-
-import { curvesShader } from "./curves";
-export { curvesShader } from "./curves";
-
 import { paletteDitherShader } from "./paletteDither";
 export { paletteDitherShader } from "./paletteDither";
 
@@ -273,8 +267,6 @@ shaderRegistry.register(h264ArtifactShader);
 shaderRegistry.register(iframeRemovalShader);
 shaderRegistry.register(transformShader);
 shaderRegistry.register(colorGradeShader);
-shaderRegistry.register(blendModesShader);
-shaderRegistry.register(curvesShader);
 shaderRegistry.register(paletteDitherShader);
 shaderRegistry.register(liftGammaGainShader);
 shaderRegistry.register(pixelGridOverlayShader);

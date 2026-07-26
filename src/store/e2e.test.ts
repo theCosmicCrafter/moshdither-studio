@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { useAppStore, applyEasing } from "./index";
-import type { EffectMeta, Keyframe, AudioBinding } from "./index";
+import { beforeEach, describe, expect, it } from "vitest";
+import type { AudioBinding, EffectMeta, Keyframe } from "./index";
+import { applyEasing, useAppStore } from "./index";
 
 function mockEffect(id: string, params: Array<{ id: string; default: number }>): EffectMeta {
   return {
@@ -399,6 +399,7 @@ describe("Store E2E — State Management", () => {
     });
 
     it("setInPoint/setOutPoint validate ordering", () => {
+      useAppStore.getState().setDuration(30);
       useAppStore.getState().setInPoint(5);
       useAppStore.getState().setOutPoint(3);
       // outPoint=3 is set, but inPoint is cleared because 5 >= 3

@@ -228,8 +228,9 @@ describe("ExportPanel", () => {
 
   it("shows aspect ratio options when locked", () => {
     render(<ExportPanel />);
-    const arLabel = screen.getByText("Lock Aspect Ratio").closest("label")!;
-    const checkbox = arLabel.querySelector('input[type="checkbox"]')!;
+    const arText = screen.getByText("Lock Aspect Ratio");
+    const container = arText.parentElement!;
+    const checkbox = container.querySelector('input[type="checkbox"]')!;
     fireEvent.click(checkbox);
     expect(screen.getByText("16:9")).toBeInTheDocument();
     expect(screen.getByText("4:3")).toBeInTheDocument();

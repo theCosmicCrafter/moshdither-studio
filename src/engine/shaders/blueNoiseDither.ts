@@ -16,30 +16,27 @@ export const blueNoiseDitherShader: EffectShader = {
     precision highp float;
     uniform sampler2D tDiffuse;
     uniform float amount;
+    uniform vec2 resolution;
     varying vec2 vUv;
 
-    float bayer2(float x, float y) {
-      float ix = mod(x, 2.0);
-      float iy = mod(y, 2.0);
-      if (ix < 1.0) { if (iy < 1.0) return 0.0; return 3.0; }
-      if (iy < 1.0) return 2.0; return 1.0;
-    }
-    float bayer4(float x, float y) {
-      return 4.0 * bayer2(mod(x, 2.0), mod(y, 2.0)) + bayer2(floor(x / 2.0), floor(y / 2.0));
-    }
-    float bayer8(float x, float y) {
-      return 4.0 * bayer4(mod(x, 4.0), mod(y, 4.0)) + bayer2(floor(x / 4.0), floor(y / 4.0));
+    // Golden ratio spatial hash blue-noise approximation
+    float goldenNoise(vec2 p) {
+      vec2 res = resolution.x > 0.0 ? resolution : vec2(1920.0, 1080.0);
+      vec2 pix = p * res;
+      float phi = 1.61803398874989484820459;
+      return fract(tan(distance(pix * phi, pix) * 0.1) * pix.x);
     }
 
     void main() {
       vec4 color = texture2D(tDiffuse, vUv);
       float lum = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-      float px = mod(floor(vUv.x * 64.0), 8.0);
-      float py = mod(floor(vUv.y * 64.0), 8.0);
-      float noise = (bayer8(px, py) / 64.0 - 0.5) * amount;
+      float noise = (goldenNoise(vUv) - 0.5) * amount;
       float t = step(0.5 - noise, lum);
       gl_FragColor = vec4(vec3(t), color.a);
     }
   `,
-  uniforms: [{ name: "amount", type: "float", default: 0.5 }],
+  uniforms: [
+    { name: "amount", type: "float", default: 0.5 },
+    { name: "resolution", type: "vec2", default: [1920, 1080] },
+  ],
 };

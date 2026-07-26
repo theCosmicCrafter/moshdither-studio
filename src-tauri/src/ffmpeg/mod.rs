@@ -683,6 +683,11 @@ pub fn encode_video(
         args.push("0".to_string());
     }
 
+    args.push("-r".to_string());
+    args.push(fps.to_string());
+    args.push("-fps_mode".to_string());
+    args.push("cfr".to_string());
+
     args.push("-pix_fmt".to_string());
     args.push("yuv420p".to_string());
 

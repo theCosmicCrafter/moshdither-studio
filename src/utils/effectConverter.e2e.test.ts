@@ -72,6 +72,23 @@ describe("Effect Pipeline E2E", () => {
       expect(shaderRegistry.has(rustToWebGL["overlay.rule_of_thirds"].shaderId)).toBe(true);
       expect(shaderRegistry.has(rustToWebGL["overlay.crosshairs"].shaderId)).toBe(true);
     });
+
+    it("every paramMap target uniform is declared in the target shader", () => {
+      for (const [effectId, mapping] of Object.entries(rustToWebGL)) {
+        if (mapping.shaderId === "pass_through") continue;
+        const shader = shaderRegistry.get(mapping.shaderId);
+        expect(shader, `Shader ${mapping.shaderId} for effect ${effectId} not registered`).toBeDefined();
+        if (!shader) continue;
+        const declaredUniforms = new Set(shader.uniforms.map((u) => u.name));
+        for (const [rustKey, webglUniform] of Object.entries(mapping.paramMap)) {
+          if (webglUniform === "tLUT" || webglUniform === "u_maskTexture") continue;
+          expect(
+            declaredUniforms.has(webglUniform),
+            `Effect ${effectId} maps param '${rustKey}' to uniform '${webglUniform}', but shader '${mapping.shaderId}' does not declare uniform '${webglUniform}'`
+          ).toBe(true);
+        }
+      }
+    });
   });
 
   describe("stackToRenderPasses", () => {

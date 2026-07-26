@@ -15,29 +15,38 @@ export const ruleOfThirdsShader: EffectShader = {
   fragmentSource: `
     precision highp float;
     uniform sampler2D tDiffuse;
-    uniform float lineWidth;
+    uniform vec2 resolution;
+    uniform float lineWidth;  // pixels 0.0..10.0
     uniform vec3 gridColor;
     uniform float opacity;
     varying vec2 vUv;
 
     void main() {
       vec4 col = texture2D(tDiffuse, vUv);
-      float lw = lineWidth;
+      if (opacity <= 0.0) {
+        gl_FragColor = col;
+        return;
+      }
 
-      // Vertical lines at 1/3 and 2/3
-      float vLine1 = smoothstep(lw, 0.0, abs(vUv.x - 1.0 / 3.0));
-      float vLine2 = smoothstep(lw, 0.0, abs(vUv.x - 2.0 / 3.0));
-      // Horizontal lines at 1/3 and 2/3
-      float hLine1 = smoothstep(lw, 0.0, abs(vUv.y - 1.0 / 3.0));
-      float hLine2 = smoothstep(lw, 0.0, abs(vUv.y - 2.0 / 3.0));
+      vec2 pixel = vUv * resolution;
+      float lw = (lineWidth > 0.0 ? lineWidth : 2.0);
 
-      float lineMask = max(max(vLine1, vLine2), max(hLine1, hLine2));
-      vec3 result = mix(col.rgb, gridColor, lineMask * opacity);
+      float x1 = resolution.x / 3.0;
+      float x2 = resolution.x * 2.0 / 3.0;
+      float y1 = resolution.y / 3.0;
+      float y2 = resolution.y * 2.0 / 3.0;
+
+      bool onV = (pixel.x >= x1 - lw && pixel.x <= x1 + lw) || (pixel.x >= x2 - lw && pixel.x <= x2 + lw);
+      bool onH = (pixel.y >= y1 - lw && pixel.y <= y1 + lw) || (pixel.y >= y2 - lw && pixel.y <= y2 + lw);
+
+      float mask = (onV || onH) ? 1.0 : 0.0;
+      vec3 white = vec3(1.0, 1.0, 1.0);
+      vec3 result = mix(col.rgb, white, mask * opacity);
       gl_FragColor = vec4(result, col.a);
     }
   `,
   uniforms: [
-    { name: 'lineWidth', type: 'float', default: 0.002 },
+    { name: 'lineWidth', type: 'float', default: 2.0 },
     { name: 'gridColor', type: 'vec3', default: [1.0, 1.0, 1.0] },
     { name: 'opacity', type: 'float', default: 0.4 },
   ],

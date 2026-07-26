@@ -67,6 +67,8 @@ struct Sam3Response {
     frame_masks: Vec<Vec<String>>,
     #[serde(default)]
     frame_scores: Vec<Vec<f64>>,
+    #[serde(default)]
+    mask: String,
 }
 
 /// Per-frame masks and their scores returned by the SAM3 video predictor.
@@ -123,7 +125,8 @@ fn cleanup_stale_sam3_bridge() {
             .map(|s| s.to_string_lossy().to_lowercase())
             .collect::<Vec<_>>()
             .join(" ");
-        if exe.contains("sam3-bridge") || exe.contains("sam3_bridge")
+        if exe.contains("sam3-bridge")
+            || exe.contains("sam3_bridge")
             || cmd.contains("sam3_bridge.py")
             || cmd.contains("sam3-bridge")
         {
@@ -145,6 +148,9 @@ pub struct Sam3Engine {
     child: Mutex<Option<std::process::Child>>,
     stdin: Mutex<ChildStdin>,
     rx: Mutex<Receiver<String>>,
+    /// Serializes the entire send→receive cycle so concurrent callers
+    /// don't interleave requests and desync the IPC pipe.
+    command_mutex: Mutex<()>,
     auth_token: String,
 }
 
@@ -360,9 +366,9 @@ impl Sam3Engine {
                     break;
                 }
                 let payload_len = u32::from_le_bytes(len_buf) as usize;
-                if payload_len > 64 * 1024 * 1024 {
+                if payload_len > 512 * 1024 * 1024 {
                     eprintln!(
-                        "[SAM3 Reader] frame size {} exceeds 64 MiB limit",
+                        "[SAM3 Reader] frame size {} exceeds 512 MiB limit",
                         payload_len
                     );
                     break;
@@ -408,11 +414,16 @@ impl Sam3Engine {
             child: Mutex::new(Some(child)),
             stdin: Mutex::new(stdin),
             rx: Mutex::new(rx),
+            command_mutex: Mutex::new(()),
             auth_token,
         })
     }
 
     fn send(&self, mut req: Sam3Request) -> crate::error::Result<Sam3Response> {
+        // Serialize the entire send→receive cycle so concurrent callers
+        // don't interleave requests and desync the IPC pipe.
+        let _cmd_guard = self.command_mutex.lock();
+
         req.auth_token = Some(self.auth_token.clone());
         let payload = serde_json::to_vec(&req)?;
         let mut stdin = self.stdin.lock();
@@ -425,12 +436,24 @@ impl Sam3Engine {
         // lightweight mask operations should return in seconds.
         let timeout = Self::command_timeout(&req.cmd);
         let rx = self.rx.lock();
-        let line = rx.recv_timeout(timeout).map_err(|e| {
-            crate::error::AppError::Sam3Timeout(format!(
-                "SAM3 IPC timed out after {:?} for command '{}': {}",
-                timeout, req.cmd, e
-            ))
-        })?;
+        let line = match rx.recv_timeout(timeout) {
+            Ok(line) => line,
+            Err(e) => {
+                drop(rx);
+                // On timeout, the Python bridge may still be processing this
+                // request and will write a response later. That stale response
+                // would be picked up by the next send() call, desyncing the
+                // pipe (reading response body bytes as a length header).
+                // Drain any late-arriving response with a short grace period.
+                let drain_rx = self.rx.lock();
+                let _ = drain_rx.recv_timeout(Duration::from_secs(2));
+                drop(drain_rx);
+                return Err(crate::error::AppError::Sam3Timeout(format!(
+                    "SAM3 IPC timed out after {:?} for command '{}': {}",
+                    timeout, req.cmd, e
+                )));
+            }
+        };
         drop(rx);
 
         let resp: Sam3Response = serde_json::from_str(&line)?;
@@ -442,7 +465,7 @@ impl Sam3Engine {
     fn command_timeout(cmd: &str) -> Duration {
         match cmd {
             "video_predictor" => Duration::from_secs(600),
-            "load_image" => Duration::from_secs(60),
+            "load_image" => Duration::from_secs(180),
             "text_prompt" | "point_prompt" | "box_prompt" | "auto_mask" | "refine_mask"
             | "postprocess_mask" => Duration::from_secs(120),
             _ => Duration::from_secs(30),
@@ -706,16 +729,13 @@ impl Sam3Engine {
             frames: None,
         })?;
         if resp.status == "ok" {
-            // The Python bridge returns {"mask": "data:image/png;base64,..."}
-            // We extract it from the JSON string directly
-            let line = serde_json::to_string(&resp)?;
-            let val: serde_json::Value = serde_json::from_str(&line)?;
-            val.get("mask")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .ok_or_else(|| {
-                    crate::error::AppError::Generic("postprocess_mask missing mask field".into())
-                })
+            if resp.mask.is_empty() {
+                Err(crate::error::AppError::Generic(
+                    "postprocess_mask returned empty mask".into(),
+                ))
+            } else {
+                Ok(resp.mask)
+            }
         } else {
             Err(crate::error::AppError::Generic(resp.message))
         }

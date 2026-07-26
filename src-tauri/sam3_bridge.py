@@ -89,25 +89,28 @@ CHECKPOINT_PATH = os.environ.get("SAM3_CHECKPOINT", str(_DEFAULT_CHECKPOINT))
 DEVICE = os.environ.get("SAM3_DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
 USE_AMP = os.environ.get("SAM3_USE_AMP", "1") == "1"
 
-# ── Globals ────────────────────────────────────────────────────
+MAX_SAM3_DIM = int(os.environ.get("SAM3_MAX_DIM", "1024"))
+scale_x = 1.0
+scale_y = 1.0
 model = None
 processor = None         # Sam3Processor (text / box grounding)
 model_manager = None     # Manages GPU/CPU offloading
 current_image = None
 orig_hw = None
-inference_state = None   # state returned by processor.set_image()
+_raw_stdout = sys.stdout.buffer
+sys.stdout = sys.stderr
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(levelname)s: %(message)s")
 log = logging.info
 
 _AUTH_TOKEN: str | None = None
 
 
 def _write_frame(data: bytes):
-    """Write a length-prefixed frame to stdout: 4-byte LE length + payload."""
-    sys.stdout.buffer.write(struct.pack("<I", len(data)))
-    sys.stdout.buffer.write(data)
-    sys.stdout.buffer.flush()
+    """Write a length-prefixed frame to raw stdout: 4-byte LE length + payload."""
+    _raw_stdout.write(struct.pack("<I", len(data)))
+    _raw_stdout.write(data)
+    _raw_stdout.flush()
 
 
 def send_response(response: dict):
@@ -121,8 +124,8 @@ def _read_frame() -> bytes | None:
     if len(len_bytes) < 4:
         return None
     payload_len = struct.unpack("<I", len_bytes)[0]
-    if payload_len > 64 * 1024 * 1024:  # 64 MiB sanity limit
-        raise ValueError(f"Frame size {payload_len} exceeds 64 MiB safety limit")
+    if payload_len > 512 * 1024 * 1024:  # 512 MiB safety limit
+        raise ValueError(f"Frame size {payload_len} exceeds 512 MiB safety limit")
     payload = sys.stdin.buffer.read(payload_len)
     if len(payload) < payload_len:
         return None
@@ -222,7 +225,7 @@ def pil_from_base64(data_url: str) -> Image.Image:
 
 
 def mask_to_base64(mask: np.ndarray) -> str:
-    """Encode a boolean/float mask as base64 PNG."""
+    """Encode a boolean/float mask as base64 PNG, resizing back to orig_hw if needed."""
     if mask.dtype == bool:
         mask_u8 = (mask * 255).astype(np.uint8)
     elif mask.dtype in (np.float32, np.float64):
@@ -230,6 +233,8 @@ def mask_to_base64(mask: np.ndarray) -> str:
     else:
         mask_u8 = mask.astype(np.uint8)
     img = Image.fromarray(mask_u8, mode="L")
+    if orig_hw and (img.height != orig_hw[0] or img.width != orig_hw[1]):
+        img = img.resize((orig_hw[1], orig_hw[0]), Image.Resampling.NEAREST)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode("ascii")
@@ -239,7 +244,7 @@ def mask_to_base64(mask: np.ndarray) -> str:
 # ── Command Handlers ─────────────────────────────────────────
 
 def cmd_load_image(image_b64: str):
-    global current_image, orig_hw, inference_state
+    global current_image, orig_hw, inference_state, scale_x, scale_y
     try:
         ensure_model_loaded()
         if model_manager:
@@ -252,8 +257,22 @@ def cmd_load_image(image_b64: str):
     except ValueError as e:
         return {"status": "error", "message": str(e)}
 
-    current_image = image
     orig_hw = (image.height, image.width)
+    w, h = image.width, image.height
+    max_dim = max(w, h)
+    if max_dim > MAX_SAM3_DIM:
+        scale = MAX_SAM3_DIM / float(max_dim)
+        new_w, new_h = max(1, int(w * scale)), max(1, int(h * scale))
+        scale_x = new_w / float(w)
+        scale_y = new_h / float(h)
+        log("Downscaling SAM3 backbone image from %dx%d to %dx%d for high performance", w, h, new_w, new_h)
+        sam_image = image.resize((new_w, new_h), Image.Resampling.BILINEAR)
+    else:
+        scale_x = 1.0
+        scale_y = 1.0
+        sam_image = image
+
+    current_image = sam_image
 
     try:
         # Set image in the text/grounding processor and capture inference state.
@@ -261,15 +280,15 @@ def cmd_load_image(image_b64: str):
         with torch.inference_mode():
             if DEVICE == "cuda" and USE_AMP:
                 with torch.autocast(device_type="cuda", dtype=torch.float16):
-                    inference_state = processor.set_image(image)
+                    inference_state = processor.set_image(sam_image)
             else:
-                inference_state = processor.set_image(image)
+                inference_state = processor.set_image(sam_image)
     except RuntimeError as e:
         if "out of memory" in str(e).lower():
             return {"status": "error", "message": f"CUDA out of memory during image encoding: {e}"}
         return {"status": "error", "message": f"Image encoding failed: {e}"}
 
-    return {"status": "ok", "width": image.width, "height": image.height}
+    return {"status": "ok", "width": orig_hw[1], "height": orig_hw[0]}
 
 
 def cmd_text_prompt(prompt: str):
@@ -320,6 +339,9 @@ def cmd_point_prompt(points: list, labels: list = None):
         model_manager.move_to_target()
 
     points_np = np.array(points, dtype=np.float32)   # shape [N, 2]
+    if scale_x != 1.0 or scale_y != 1.0:
+        points_np[:, 0] *= scale_x
+        points_np[:, 1] *= scale_y
     labels_np = np.array(labels if labels else [1] * len(points), dtype=np.int32)
 
     try:
@@ -346,16 +368,11 @@ def cmd_point_prompt(points: list, labels: list = None):
             return {"status": "error", "message": f"CUDA out of memory during point inference: {e}"}
         raise
 
-    # predict_inst() returns:
-    #   masks  — np.ndarray [num_masks, H, W]  (3 masks when multimask_output=True)
-    #   scores — np.ndarray [num_masks]
-    # Return all masks sorted by score (highest first) so the user can pick.
     if masks.ndim == 3:
         sorted_indices = np.argsort(scores)[::-1]
         all_masks = [masks[i] for i in sorted_indices]
         all_scores = [float(scores[i]) for i in sorted_indices]
     else:
-        # Fallback for unexpected shape
         all_masks = [masks[0] if masks.ndim >= 2 else masks]
         all_scores = [float(scores[0]) if hasattr(scores, '__len__') else float(scores)]
 
@@ -375,13 +392,15 @@ def cmd_refine_mask(mask_b64: str, points: list, labels: list = None):
     if model_manager:
         model_manager.move_to_target()
 
-    # Decode mask to boolean array
     try:
         mask_img = pil_from_base64(mask_b64)
         mask_np = np.array(mask_img.convert("L"), dtype=np.uint8) > 127
     except Exception as e:
         return {"status": "error", "message": f"Invalid mask: {e}"}
     points_np = np.array(points, dtype=np.float32)
+    if scale_x != 1.0 or scale_y != 1.0:
+        points_np[:, 0] *= scale_x
+        points_np[:, 1] *= scale_y
     labels_np = np.array(labels if labels else [1] * len(points), dtype=np.int32)
     try:
         with torch.inference_mode():
@@ -406,7 +425,6 @@ def cmd_refine_mask(mask_b64: str, points: list, labels: list = None):
                 torch.cuda.empty_cache()
             return {"status": "error", "message": f"CUDA out of memory during refine: {e}"}
         raise
-    # Compute IoU with the provided mask and sort results
     ious = []
     for i in range(masks.shape[0]):
         m = masks[i]
@@ -435,6 +453,11 @@ def cmd_box_prompt(boxes: list):
     all_scores = []
     for box in boxes:
         box_np = np.array(box, dtype=np.float32)  # [x0, y0, x1, y1]
+        if scale_x != 1.0 or scale_y != 1.0:
+            box_np[0] *= scale_x
+            box_np[1] *= scale_y
+            box_np[2] *= scale_x
+            box_np[3] *= scale_y
         try:
             with torch.inference_mode():
                 if DEVICE == "cuda" and USE_AMP:
@@ -605,7 +628,7 @@ def cmd_postprocess_mask(mask_b64: str, grow: int = 0, shrink: int = 0, feather:
     }
 
 
-def cmd_auto_mask(grid_size: int = 16, iou_threshold: float = 0.7, min_mask_region_area: int = 100):
+def cmd_auto_mask(grid_size: int = 8, iou_threshold: float = 0.7, min_mask_region_area: int = 100):
     """Generate automatic masks by sampling a grid of points across the image."""
     if model is None:
         return {"status": "error", "message": "Model not loaded"}
@@ -615,7 +638,8 @@ def cmd_auto_mask(grid_size: int = 16, iou_threshold: float = 0.7, min_mask_regi
     if model_manager:
         model_manager.move_to_target()
 
-    h, w = orig_hw[:2]
+    grid_size = min(grid_size, 8)  # Cap grid to 8x8 (64 points max) for responsive performance
+    h, w = current_image.height, current_image.width
     all_masks = []
     all_scores = []
 

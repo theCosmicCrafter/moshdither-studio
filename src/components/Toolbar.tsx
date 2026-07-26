@@ -49,7 +49,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
   const setPlaybackSpeed = useAppStore((s) => s.setPlaybackSpeed);
   const isPlaying = useAppStore((s) => s.isPlaying);
   const togglePlay = useAppStore((s) => s.togglePlay);
-  const [fps, setFps] = useState(12);
+  const [fps, setFps] = useState(30);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [editMenuOpen, setEditMenuOpen] = useState(false);
   const editMenuRef = useRef<HTMLDivElement>(null);
@@ -580,7 +580,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
           <input
             type="range"
             min="1"
-            max="30"
+            max="60"
             step="1"
             value={fps}
             onChange={(e) => setFps(Number.parseInt(e.target.value))}

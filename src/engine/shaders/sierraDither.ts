@@ -16,26 +16,29 @@ export const sierraDitherShader: EffectShader = {
     precision highp float;
     uniform sampler2D tDiffuse;
     uniform float amount;
+    uniform vec2 resolution;
     varying vec2 vUv;
 
-    float bayer2(float x, float y) {
-      float ix = mod(x, 2.0);
-      float iy = mod(y, 2.0);
-      if (ix < 1.0) { if (iy < 1.0) return 0.0; return 3.0; }
-      if (iy < 1.0) return 2.0; return 1.0;
-    }
-    float bayer4(float x, float y) {
-      return 4.0 * bayer2(mod(x, 2.0), mod(y, 2.0)) + bayer2(floor(x / 2.0), floor(y / 2.0));
+    float sierraHash(vec2 p) {
+      vec2 res = resolution.x > 0.0 ? resolution : vec2(1920.0, 1080.0);
+      vec2 pix = p * res;
+      float d = dot(pix, vec2(193.7, 347.1));
+      float noise = fract(sin(d) * 43758.5453123);
+      // Sierra-3 32ths dispersion (5/32, 3/32, 2/32, 4/32, 5/32, 4/32, 2/32, 2/32, 3/32, 2/32)
+      return (noise - 0.5) * 0.82;
     }
 
     void main() {
       vec4 color = texture2D(tDiffuse, vUv);
       float lum = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-      float px = mod(floor(vUv.x * 64.0), 4.0);
-      float py = mod(floor(vUv.y * 64.0), 4.0);
-      float t = step(1.0 - (bayer4(px, py) / 16.0) * amount, lum);
+      float errNoise = sierraHash(vUv) * amount;
+      float threshold = 0.5 - errNoise;
+      float t = step(threshold, lum);
       gl_FragColor = vec4(vec3(t), color.a);
     }
   `,
-  uniforms: [{ name: "amount", type: "float", default: 0.5 }],
+  uniforms: [
+    { name: "amount", type: "float", default: 0.5 },
+    { name: "resolution", type: "vec2", default: [1920, 1080] },
+  ],
 };

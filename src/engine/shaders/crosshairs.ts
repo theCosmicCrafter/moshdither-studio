@@ -15,39 +15,45 @@ export const crosshairsShader: EffectShader = {
   fragmentSource: `
     precision highp float;
     uniform sampler2D tDiffuse;
-    uniform float size;
-    uniform float lineWidth;
+    uniform vec2 resolution;
+    uniform float size;       // percentage 1.0..50.0
+    uniform float lineWidth;  // pixels 0.0..10.0
     uniform vec3 crosshairColor;
     uniform float opacity;
     varying vec2 vUv;
 
-    float cornerBracket(vec2 uv, vec2 corner, float sz, float lw) {
-      // Distance from corner in x and y
-      vec2 d = abs(uv - corner);
-      // Only draw within size radius of corner
-      if (d.x > sz && d.y > sz) return 0.0;
-      // Horizontal line: near corner.y, within sz in x
-      float hLine = step(d.y, lw) * step(d.x, sz);
-      // Vertical line: near corner.x, within sz in y
-      float vLine = step(d.x, lw) * step(d.y, sz);
-      return max(hLine, vLine);
-    }
-
     void main() {
       vec4 col = texture2D(tDiffuse, vUv);
+      if (opacity <= 0.0 || size <= 0.0) {
+        gl_FragColor = col;
+        return;
+      }
+
+      vec2 pixel = vUv * resolution;
+      float szPct = (size <= 1.0 ? size : size / 100.0);
+      vec2 bSize = resolution * szPct;
+      float lw = (lineWidth > 0.0 ? lineWidth : 2.0);
+
+      vec2 dTL = pixel;
+      vec2 dTR = vec2(resolution.x - pixel.x, pixel.y);
+      vec2 dBL = vec2(pixel.x, resolution.y - pixel.y);
+      vec2 dBR = resolution - pixel;
+
       float mask = 0.0;
-      mask = max(mask, cornerBracket(vUv, vec2(0.0, 0.0), size, lineWidth));
-      mask = max(mask, cornerBracket(vUv, vec2(1.0, 0.0), size, lineWidth));
-      mask = max(mask, cornerBracket(vUv, vec2(0.0, 1.0), size, lineWidth));
-      mask = max(mask, cornerBracket(vUv, vec2(1.0, 1.0), size, lineWidth));
-      vec3 result = mix(col.rgb, crosshairColor, mask * opacity);
+      if ((dTL.x < bSize.x && dTL.y < lw) || (dTL.y < bSize.y && dTL.x < lw)) mask = 1.0;
+      if ((dTR.x < bSize.x && dTR.y < lw) || (dTR.y < bSize.y && dTR.x < lw)) mask = 1.0;
+      if ((dBL.x < bSize.x && dBL.y < lw) || (dBL.y < bSize.y && dBL.x < lw)) mask = 1.0;
+      if ((dBR.x < bSize.x && dBR.y < lw) || (dBR.y < bSize.y && dBR.x < lw)) mask = 1.0;
+
+      vec3 cyan = vec3(0.0, 1.0, 1.0);
+      vec3 result = mix(col.rgb, cyan, mask * opacity);
       gl_FragColor = vec4(result, col.a);
     }
   `,
   uniforms: [
-    { name: 'size', type: 'float', default: 0.05 },
-    { name: 'lineWidth', type: 'float', default: 0.003 },
-    { name: 'crosshairColor', type: 'vec3', default: [1.0, 0.7, 0.88] },
-    { name: 'opacity', type: 'float', default: 0.5 },
+    { name: 'size', type: 'float', default: 10.0 },
+    { name: 'lineWidth', type: 'float', default: 2.0 },
+    { name: 'crosshairColor', type: 'vec3', default: [0.0, 1.0, 1.0] },
+    { name: 'opacity', type: 'float', default: 0.6 },
   ],
 };

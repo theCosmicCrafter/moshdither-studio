@@ -293,11 +293,12 @@ describe("CommandPalette", () => {
     });
 
     it("Set out point sets outPoint", () => {
+      useAppStore.getState().setDuration(300);
       render(<CommandPalette />);
       fireEvent.keyDown(window, { key: "p", ctrlKey: true, shiftKey: true });
       fireEvent.click(screen.getByText("Set out point").closest("button")!);
-      // setOutPoint clamps to a maximum of 99
-      expect(useAppStore.getState().outPoint).toBe(99);
+      // setOutPoint clamps to a maximum of duration (300)
+      expect(useAppStore.getState().outPoint).toBe(300);
     });
 
     it("Clear in/out points clears both", () => {

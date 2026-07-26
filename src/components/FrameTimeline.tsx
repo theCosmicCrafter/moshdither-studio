@@ -40,9 +40,11 @@ export default function FrameTimeline() {
     const originalTime = video.currentTime;
 
     for (let i = 0; i < frameCount; i++) {
-      video.currentTime = i / fps;
-      await new Promise((resolve) => {
-        video.onseeked = resolve;
+      await new Promise<void>((resolve, reject) => {
+        const timeout = window.setTimeout(() => reject(new Error(`Seek timeout at frame ${i}`)), 5000);
+        video.onseeked = () => { window.clearTimeout(timeout); resolve(); };
+        video.onerror = () => { window.clearTimeout(timeout); reject(new Error(`Seek error at frame ${i}`)); };
+        video.currentTime = i / fps;
       });
       ctx?.drawImage(video, 0, 0, canvas.width, canvas.height);
       const b64 = canvas.toDataURL("image/jpeg", 0.8).split(",")[1];
@@ -103,13 +105,13 @@ export default function FrameTimeline() {
   const currentFrameIndex = Math.floor(currentTime * 10);
 
   return (
-    <div className="flex flex-col gap-2 p-2 bg-[var(--surface-1)] rounded">
+    <div className="flex flex-col gap-2 p-2 bg-surface-container-low rounded">
       <div className="flex justify-between items-center">
-        <h3 className="text-xs font-bold uppercase text-[var(--text-muted)]">Frame Timeline</h3>
+        <h3 className="text-xs font-bold uppercase text-on-surface-variant">Frame Timeline</h3>
         <button
           onClick={extractFrames}
           disabled={isProcessing}
-          className="neo-btn rounded-md px-2 py-1 text-xs bg-[var(--surface-2)]"
+          className="neo-btn rounded-md px-2 py-1 text-xs bg-surface-container"
         >
           {isProcessing ? "Processing..." : "Run Video Predictor"}
         </button>
@@ -123,7 +125,7 @@ export default function FrameTimeline() {
               type="button"
               aria-label={`Select frame ${i + 1}`}
               className={`relative flex-shrink-0 cursor-pointer border-2 frame-thumb p-0 bg-transparent ${
-                i === currentFrameIndex ? "border-[var(--accent-teal)]" : "border-transparent"
+                i === currentFrameIndex ? "border-accent-teal" : "border-transparent"
               }`}
               onClick={() => setCurrentTime(i / 10)}
             >
@@ -134,7 +136,7 @@ export default function FrameTimeline() {
             </button>
           ))
         ) : (
-          <div className="text-xs text-[var(--text-dim)]">
+          <div className="text-xs text-outline">
             Click 'Run Video Predictor' to extract frames and generate tracking masks.
           </div>
         )}

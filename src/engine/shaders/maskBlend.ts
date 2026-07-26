@@ -1,42 +1,44 @@
-import { FULLSCREEN_QUAD_VERT } from "../webgl2/types";
 import type { EffectShader } from "../webgl2/types";
+
+const defaultVertexShader = `#version 300 es
+in vec2 position;
+in vec2 uv;
+out vec2 vUv;
+void main() {
+    vUv = uv;
+    gl_Position = vec4(position, 0.0, 1.0);
+}
+`;
 
 export const maskBlendShader: EffectShader = {
   id: "maskBlend",
   name: "Mask Blend",
-  vertexSource: FULLSCREEN_QUAD_VERT,
-  fragmentSource: `
-    precision highp float;
-    uniform sampler2D tDiffuse;   // effect output (current)
-    uniform sampler2D tPrevious;  // pre-effect frame
-    uniform sampler2D tMask;      // mask (grayscale)
-    uniform int u_mode;           // 0=inside, 1=outside, 2=alpha
-    varying vec2 vUv;
+  vertexSource: defaultVertexShader,
+  fragmentSource: `#version 300 es
+precision highp float;
 
-    void main() {
-      vec4 effectCol = texture2D(tDiffuse, vUv);
-      vec4 prevCol = texture2D(tPrevious, vUv);
-      float maskVal = texture2D(tMask, vUv).r; // grayscale mask
+in vec2 vUv;
+out vec4 fragColor;
 
-      vec3 blended;
-      if (u_mode == 1) {
-        // outside: original where mask is white, effect where black
-        blended = mix(effectCol.rgb, prevCol.rgb, maskVal);
-      } else if (u_mode == 2) {
-        // alpha: effect multiplied by mask
-        blended = effectCol.rgb * maskVal;
-      } else {
-        // inside: effect where mask is white, original where black
-        blended = mix(prevCol.rgb, effectCol.rgb, maskVal);
-      }
+uniform sampler2D tDiffuse;   // Post-effect texture
+uniform sampler2D tPrevious;  // Pre-effect texture
+uniform sampler2D tMask;      // Mask texture
 
-      gl_FragColor = vec4(blended, effectCol.a);
-    }
-  `,
+void main() {
+    vec4 postColor = texture(tDiffuse, vUv);
+    vec4 preColor = texture(tPrevious, vUv);
+    vec4 maskColor = texture(tMask, vUv);
+
+    // Use mask luminance as blend factor
+    float maskFactor = maskColor.r;
+
+    // Linear blend: mask = 1.0 -> postColor (effect active), mask = 0.0 -> preColor (original)
+    fragColor = mix(preColor, postColor, maskFactor);
+}
+`,
   uniforms: [
-    { name: "tDiffuse", type: "sampler2D", default: "" },
-    { name: "tPrevious", type: "sampler2D", default: "" },
-    { name: "tMask", type: "sampler2D", default: "" },
-    { name: "u_mode", type: "int", default: 0 },
+    { name: "tDiffuse", type: "sampler2D", default: 0 },
+    { name: "tPrevious", type: "sampler2D", default: 2 },
+    { name: "tMask", type: "sampler2D", default: 3 },
   ],
 };

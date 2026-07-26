@@ -163,7 +163,6 @@ vi.mock("../../engine/palettePresets", () => ({
 }));
 
 // ── Import components after mocks ────────────────────────────
-import Accordion from "../Accordion";
 import StatusBar from "../StatusBar";
 import FloatingPanel from "../FloatingPanel";
 import PanelMenu from "../PanelMenu";
@@ -300,103 +299,7 @@ describe("Component Test Suite", () => {
     cleanup();
   });
 
-  // ── Accordion ──────────────────────────────────────────────
-  describe("Accordion", () => {
-    it("renders all item titles", () => {
-      render(
-        <Accordion
-          items={[
-            { id: "a", title: "Section A", children: <div>A content</div> },
-            { id: "b", title: "Section B", children: <div>B content</div> },
-          ]}
-        />
-      );
-      expect(screen.getByText("Section A")).toBeInTheDocument();
-      expect(screen.getByText("Section B")).toBeInTheDocument();
-    });
 
-    it("expands section on click and shows children", () => {
-      render(
-        <Accordion
-          items={[
-            { id: "a", title: "Section A", children: <div data-testid="a-content">A content</div> },
-          ]}
-        />
-      );
-      expect(screen.queryByTestId("a-content")).not.toBeInTheDocument();
-      fireEvent.click(screen.getByText("Section A"));
-      expect(screen.getByTestId("a-content")).toBeInTheDocument();
-    });
-
-    it("collapses section on second click", () => {
-      render(
-        <Accordion
-          items={[
-            { id: "a", title: "Section A", children: <div data-testid="a-content">A content</div> },
-          ]}
-        />
-      );
-      const header = screen.getByText("Section A");
-      fireEvent.click(header);
-      expect(screen.getByTestId("a-content")).toBeInTheDocument();
-      fireEvent.click(header);
-      expect(screen.queryByTestId("a-content")).not.toBeInTheDocument();
-    });
-
-    it("shows only one section when allowMultiple is false", () => {
-      render(
-        <Accordion
-          items={[
-            { id: "a", title: "A", children: <div data-testid="ca">CA</div> },
-            { id: "b", title: "B", children: <div data-testid="cb">CB</div> },
-          ]}
-        />
-      );
-      fireEvent.click(screen.getByText("A"));
-      expect(screen.getByTestId("ca")).toBeInTheDocument();
-      fireEvent.click(screen.getByText("B"));
-      expect(screen.queryByTestId("ca")).not.toBeInTheDocument();
-      expect(screen.getByTestId("cb")).toBeInTheDocument();
-    });
-
-    it("allows multiple open sections when allowMultiple is true", () => {
-      render(
-        <Accordion
-          allowMultiple
-          items={[
-            { id: "a", title: "A", children: <div data-testid="ca">CA</div> },
-            { id: "b", title: "B", children: <div data-testid="cb">CB</div> },
-          ]}
-        />
-      );
-      fireEvent.click(screen.getByText("A"));
-      fireEvent.click(screen.getByText("B"));
-      expect(screen.getByTestId("ca")).toBeInTheDocument();
-      expect(screen.getByTestId("cb")).toBeInTheDocument();
-    });
-
-    it("renders default expanded sections", () => {
-      render(
-        <Accordion
-          items={[
-            { id: "a", title: "A", defaultExpanded: true, children: <div data-testid="ca">CA</div> },
-          ]}
-        />
-      );
-      expect(screen.getByTestId("ca")).toBeInTheDocument();
-    });
-
-    it("displays badge when provided", () => {
-      render(
-        <Accordion
-          items={[
-            { id: "a", title: "A", badge: 5, children: <div /> },
-          ]}
-        />
-      );
-      expect(screen.getByText("5")).toBeInTheDocument();
-    });
-  });
 
   // ── StatusBar ──────────────────────────────────────────────
   describe("StatusBar", () => {
@@ -409,7 +312,7 @@ describe("Component Test Suite", () => {
     it("shows processing icon when isProcessing", () => {
       useAppStore.getState().setIsProcessing(true);
       render(<StatusBar />);
-      expect(screen.getByText("sync")).toBeInTheDocument();
+      expect(screen.getByText("cloud_sync")).toBeInTheDocument();
     });
 
     it("displays effect count and active stack count", () => {

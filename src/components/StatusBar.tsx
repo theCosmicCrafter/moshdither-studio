@@ -13,6 +13,8 @@ export default function StatusBar() {
   const scopeButton = (mode: typeof scopeMode, icon: string, label: string) => (
     <button
       title={label}
+      aria-label={label}
+      aria-pressed={scopesVisible && scopeMode === mode}
       onClick={() => {
         if (!scopesVisible) {
           setScopesVisible(true);
@@ -37,7 +39,7 @@ export default function StatusBar() {
       <div className="flex items-center gap-2">
         {isProcessing ? (
           <span className="material-symbols-outlined animate-pulse text-accent-pink" style={{ fontSize: 14 }}>
-            sync
+            cloud_sync
           </span>
         ) : (
           <div className="w-1.5 h-1.5 rounded-full bg-accent-teal animate-pulse-glow" />
@@ -46,8 +48,8 @@ export default function StatusBar() {
       </div>
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-1">
-          {scopeButton("histogram", "bar_chart", "Histogram")}
-          {scopeButton("waveform", "graphic_eq", "Waveform")}
+          {scopeButton("histogram", "graphic_eq", "Histogram")}
+          {scopeButton("waveform", "view_timeline", "Waveform")}
           {scopeButton("rgb_parade", "palette", "RGB Parade")}
         </div>
         <span className="text-outline-variant">|</span>

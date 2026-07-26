@@ -18,6 +18,7 @@ import { stackToRenderPasses, buildShaderMap, stackToRustPayload, stackHasApprox
 import ManualMaskOverlay from "./ManualMaskOverlay";
 import ScopesOverlay from "./ScopesOverlay";
 import PlaybackOverlay from "./PlaybackOverlay";
+import AudioVisualizer from "./common/AudioVisualizer";
 
 interface Props {
   isDropTarget?: boolean;
@@ -31,15 +32,7 @@ function AudioWaveform() {
   return (
     <div className="absolute bottom-10 left-1/2 -translate-x-1/2 w-1/2 h-20 neo-panel rounded-lg bg-surface/80 backdrop-blur-md p-3 flex flex-col justify-end z-50 border border-accent-teal/20 pointer-events-none">
       <div className="text-[8px] font-label-sm text-accent-teal/70 absolute top-2 left-2 uppercase">Audio/Pixel Intensity</div>
-      <div className="flex items-end h-full w-full gap-[2px] opacity-80 pt-4 overflow-hidden justify-center">
-        {Object.values(audioBandEnergies).slice(0, 32).map((v: number, i: number) => (
-          <div
-            key={i}
-            className="w-1 bg-accent-teal rounded-t audio-bar"
-            ref={(el) => { if (el) el.style.height = `${Math.max(5, Math.min(100, v * 100))}%`; }}
-          />
-        ))}
-      </div>
+      <AudioVisualizer className="h-full pt-4" />
     </div>
   );
 }
@@ -1007,7 +1000,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     // Animation loop only when playing (for time-based effects)
     if (isPlaying) {
       let lastRenderTime = 0;
-      const MIN_RENDER_INTERVAL = 100; // ~10fps when playing
+      const MIN_RENDER_INTERVAL = 33; // ~30fps when playing
 
       const renderCpu = async () => {
         if (cancelled) return;
@@ -1101,10 +1094,18 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       {mediaLoaded && (
         <div className="h-10 flex items-center justify-between px-4 flex-shrink-0 border-b border-outline-variant/20 bg-surface/80 backdrop-blur-xl">
           <div className="flex items-center gap-4">
-            <span className="text-label-sm font-label-sm text-on-surface-variant flex items-center gap-2 neo-flat px-3 py-1 rounded-full cursor-default" title={isApproximatePreview && !useCpuPreview ? "WebGL preview is approximate — export will use accurate CPU rendering" : undefined}>
+            <button
+              type="button"
+              onClick={() => {
+                const s = useAppStore.getState();
+                s.setUseCpuPreview(!s.useCpuPreview);
+              }}
+              className="text-label-sm font-label-sm text-on-surface-variant flex items-center gap-2 neo-flat px-3 py-1 rounded-full cursor-pointer hover:border-accent-teal/40 transition-colors"
+              title={useCpuPreview ? "Click to switch to fast WebGL GPU preview" : "Click to switch to 100% exact Rust CPU preview (exact saved output)"}
+            >
               <span className={`w-2 h-2 rounded-full ${useCpuPreview ? "bg-accent-teal" : isApproximatePreview ? "bg-amber-400" : stackCount > 0 ? "bg-accent-pink animate-pulse-glow" : "solar-bg animate-pulse-glow"}`} />
-              {useCpuPreview ? "CPU ACCURATE" : isApproximatePreview ? "APPROXIMATE" : stackCount > 0 ? "ANIMATING" : "LIVE PREVIEW"}
-            </span>
+              {useCpuPreview ? "EXACT OUTPUT (CPU)" : isApproximatePreview ? "APPROXIMATE (CLICK FOR EXACT)" : stackCount > 0 ? "ANIMATING" : "LIVE PREVIEW"}
+            </button>
             {fileName && (
               <span className="text-label-sm font-label-sm text-accent-teal/90 cursor-default hover:text-accent-teal transition-colors bg-surface/60 px-2 rounded">
                 {fileName.split(/[\\/]/).pop()?.toUpperCase() || "CLIP"}
