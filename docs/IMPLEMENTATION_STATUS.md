@@ -97,7 +97,7 @@
 | 2   | Audio analysis          | **Done**    | `src/hooks/useAudioReactive.ts`         | AnalyserNode, bass/mid/treble extraction           |
 | 3   | Audio parameter binding | **Done**    | `src/store/index.ts`                    | `AudioBinding` interface, mapping to effect params |
 | 4   | Audio baking            | **Done**    | `src-tauri/src/commands.rs`             | Pre-compute audio-driven params for export         |
-| 5   | MIDI control            | **Missing** | —                                       | Not implemented in Tauri version                   |
+| 5   | MIDI control            | **Out of scope** | —                                  | Removed 2026-07-26 — see `recycling/MANIFEST.md`. MoshDither is a passive render/export tool, not a real-time instrument. |
 
 ---
 
