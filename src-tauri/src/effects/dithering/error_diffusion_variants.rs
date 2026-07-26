@@ -29,39 +29,32 @@ impl Effect for ErrorDiffusionDither {
             name: "Error Diffusion Variants".to_string(),
             category: EffectCategory::Dithering,
             media_type: MediaType::Both,
-            parameters: vec![
-                ParameterDef {
-                    id: "algorithm".to_string(),
-                    name: "Algorithm".to_string(),
-                    param_type: ParamType::Select,
-                    default: json!("jarvis_judice_ninke"),
-                    min: None,
-                    max: None,
-                    step: None,
-                    options: Some(vec![
-                        "false_floyd_steinberg".to_string(),
-                        "steven_pigeon".to_string(),
-                        "sierra_two_row".to_string(),
-                        "filter_lite".to_string(),
-                        "sierra2_4a".to_string(),
-                        "burkes".to_string(),
-                        "jarvis_judice_ninke".to_string(),
-                        "stucki".to_string(),
-                        "atkinson".to_string(),
-                        "simple2d".to_string(),
-                    ]),
-                },
-                ParameterDef {
-                    id: "levels".to_string(),
-                    name: "Levels".to_string(),
-                    param_type: ParamType::Slider,
-                    default: json!(2),
-                    min: Some(2.0),
-                    max: Some(16.0),
-                    step: Some(1.0),
-                    options: None,
-                },
-            ],
+            // `algorithm` selects the kernel; the rest (levels, color_mode,
+            // serpentine) are the definitions shared with every other
+            // error-diffusion effect, so the ranges cannot drift apart.
+            parameters: std::iter::once(ParameterDef {
+                id: "algorithm".to_string(),
+                name: "Algorithm".to_string(),
+                param_type: ParamType::Select,
+                default: json!("jarvis_judice_ninke"),
+                min: None,
+                max: None,
+                step: None,
+                options: Some(vec![
+                    "false_floyd_steinberg".to_string(),
+                    "steven_pigeon".to_string(),
+                    "sierra_two_row".to_string(),
+                    "filter_lite".to_string(),
+                    "sierra2_4a".to_string(),
+                    "burkes".to_string(),
+                    "jarvis_judice_ninke".to_string(),
+                    "stucki".to_string(),
+                    "atkinson".to_string(),
+                    "simple2d".to_string(),
+                ]),
+            })
+            .chain(super::error_diffusion::param_defs())
+            .collect(),
         }
     }
 
@@ -75,11 +68,10 @@ impl Effect for ErrorDiffusionDither {
             .get("algorithm")
             .and_then(|v| v.as_str())
             .unwrap_or("jarvis_judice_ninke");
-        let levels = params
-            .get("levels")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(2)
-            .max(2) as u32;
+        // `levels` is read by error_diffusion::apply from `params`, along with
+        // color_mode and serpentine. Parsing it again here would duplicate the
+        // logic — and the old as_i64() read silently ignored a slider value
+        // that arrived as a JSON float.
 
         let kernel: &[(isize, isize, f32)] = match algorithm {
             "simple2d" => &[(1, 0, 0.5), (0, 1, 0.5)],
@@ -158,7 +150,7 @@ impl Effect for ErrorDiffusionDither {
             ],
         };
 
-        super::error_diffusion::apply(input, kernel, levels, true, params)
+        super::error_diffusion::apply(input, kernel, 2, true, params)
     }
 
     fn process_video(

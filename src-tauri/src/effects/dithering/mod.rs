@@ -38,3 +38,6 @@ pub use riemersma::RiemersmaDither;
 pub use sierra::SierraDither;
 pub use stucki::StuckiDither;
 pub use threshold::ThresholdDither;
+
+#[cfg(test)]
+mod output_stability_tests;

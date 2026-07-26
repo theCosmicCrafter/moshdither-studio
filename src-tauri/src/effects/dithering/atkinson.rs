@@ -25,7 +25,7 @@ impl Effect for AtkinsonDither {
             name: "Atkinson".to_string(),
             category: EffectCategory::Dithering,
             media_type: MediaType::Image,
-            parameters: vec![],
+            parameters: super::error_diffusion::param_defs(),
         }
     }
 

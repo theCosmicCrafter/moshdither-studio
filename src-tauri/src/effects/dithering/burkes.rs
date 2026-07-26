@@ -24,7 +24,7 @@ impl Effect for BurkesDither {
             name: "Burkes".to_string(),
             category: EffectCategory::Dithering,
             media_type: MediaType::Image,
-            parameters: vec![],
+            parameters: super::error_diffusion::param_defs(),
         }
     }
 

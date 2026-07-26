@@ -24,7 +24,7 @@ impl Effect for SierraDither {
             name: "Sierra".to_string(),
             category: EffectCategory::Dithering,
             media_type: MediaType::Image,
-            parameters: vec![],
+            parameters: super::error_diffusion::param_defs(),
         }
     }
 

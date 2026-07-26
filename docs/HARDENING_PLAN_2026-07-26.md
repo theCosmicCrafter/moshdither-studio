@@ -55,6 +55,15 @@ There is no correct fragment-shader implementation of Floyd-Steinberg.
 with serpentine scanning and level quantisation. The export has always been
 correct — only the preview lies.
 
+> **RESOLVED 2026-07-26.** All seven shaders moved to
+> `recycling/dead_dither_shaders_2026-07-26/`; their `rustToWebGL` entries now
+> point at `pass_through`. A detail the original finding missed: the shaders
+> were already unreachable. All seven were marked `accurate: false`, and
+> `stackRequiresCpuPreview()` returns `true` on that flag, so their previews
+> already rendered on the Rust CPU path. They were compiled and registered at
+> startup, then bypassed — which is why removing them has provably zero output
+> impact, demonstrable from the routing flag rather than by comparing frames.
+
 ### 1.2 All error diffusion is grayscale-only
 
 `error_diffusion.rs` writes `data[idx] = data[idx+1] = data[idx+2] = v`. Every
@@ -62,6 +71,17 @@ one of the seven error-diffusion dithers **destroys colour**, in preview *and*
 in export. For a glitch-art tool this is a significant functional gap —
 palette-quantised colour error diffusion is the signature look of the genre,
 and `references/dither_pie` in this very repo does exactly that.
+
+> **PARTLY RESOLVED 2026-07-26.** `color_mode = "rgb"` now diffuses R/G/B
+> independently and keeps colour. Palette-quantised mode remains open pending a
+> palette-source decision — see §3.5.
+>
+> The finding also understated the problem. `error_diffusion::apply` took a
+> `params` argument named `_params` and ignored it entirely, while all six
+> kernel effects declared `parameters: vec![]` — so the family had no colour,
+> no level control and no scan-order control, and `error_diffusion_variants`
+> was the only way to reach any of it. That is now fixed at the shared core, so
+> all eight call sites gained the controls at once.
 
 ### 1.3 Ordered dithering is correct — leave it alone
 
@@ -205,7 +225,7 @@ that Floyd-Steinberg differs from Atkinson. Add:
 - **Serpentine test** — assert odd rows scan right-to-left.
 - **Determinism test** — same input twice, identical output.
 
-### 3.5 Add colour error diffusion **[NEEDS YOUR CALL]**
+### 3.5 Add colour error diffusion — **(a) DONE 2026-07-26, (b) still open**
 
 Extend `error_diffusion::apply` to diffuse per-channel against a palette rather
 than collapsing to luminance. Scope options:
@@ -217,9 +237,32 @@ than collapsing to luminance. Scope options:
   This is what `dither_pie` does and what most users of this genre expect.
 - **(c) Both, with a mode parameter** — grayscale / RGB / palette.
 
-My recommendation is **(c)**, defaulting to palette, with grayscale retained so
-existing saved projects render unchanged. This is an additive change and is the
-single biggest visible upgrade in the plan.
+**Delivered:** `error_diffusion::apply` is now parameter-driven, exposing
+`levels` (2–16), `color_mode` (`grayscale` | `rgb`) and `serpentine` through a
+shared `error_diffusion::param_defs()` used by all six kernel effects plus
+`error_diffusion_variants`. Previously the function took a `_params` argument
+and discarded it, and every caller hardcoded `levels = 2, serpentine = true` —
+so the whole family was 1-bit monochrome with no user control.
+
+**Deviation from the recommendation, deliberately:** the plan proposed
+defaulting to palette. The default is **grayscale**. Defaulting to anything else
+would silently re-render every saved project and the shipped
+`dithering.floyd_steinberg` preset in `defaultPresets.ts`, none of which store
+parameter values. `effects::dithering::output_stability_tests` pins the default
+output of all eight effects by hash to keep it that way; a future change to the
+default is a decision that test forces someone to make explicitly.
+
+**Still open — (b) palette-quantised.** Needs a palette *source* decision that
+RGB mode did not: fixed preset, k-means-derived from the frame
+(`dithering::kmeans` already exists), or user-selected. Until that is settled,
+`color_mode` has two options rather than three.
+
+> **Note on scope:** `dithering.riemersma` was deliberately excluded. It does not
+> use `error_diffusion::apply` — it has its own Hilbert-curve traversal with a
+> hardcoded binary threshold (`corrected > 127.0`) — so giving it `levels` means
+> changing its quantiser and therefore its output at defaults. `serpentine` is
+> meaningless for curve-order traversal. It keeps zero parameters, and a test
+> asserts that, so nobody advertises controls it cannot honour.
 
 ---
 
