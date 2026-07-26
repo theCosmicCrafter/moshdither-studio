@@ -29,6 +29,17 @@ export interface FloatingWindow {
 
 export type DropPosition = "top" | "bottom" | "left" | "right" | "center";
 
+/**
+ * Composition guides available in the viewport. Each replaces a former
+ * `overlay.*` registry effect of the same name.
+ */
+export interface ViewportGuides {
+  safeArea: boolean;
+  ruleOfThirds: boolean;
+  crosshairs: boolean;
+  pixelGrid: boolean;
+}
+
 export interface EffectMeta {
   id: string;
   name: string;
@@ -172,6 +183,16 @@ export interface AppState {
   /** True when the loaded video's audio is silent or missing. The UI shows
    *  a warning banner so the user knows audio-reactive effects won't respond. */
   audioIsSilent: boolean;
+
+  /**
+   * Composition guides drawn on top of the preview and never exported.
+   *
+   * These were previously four entries in the effect registry
+   * (`overlay.safe_area` and friends), which meant framing aids sat in the same
+   * list as Datamosh and VHS and got burned into the delivered file. They are
+   * viewport furniture, so they live in view state.
+   */
+  viewportGuides: ViewportGuides;
 
   // Mask / Segmentation
   activeMask: string | null; // base64 PNG of current mask
@@ -372,6 +393,8 @@ export interface AppState {
   // Mask actions
   setActiveMask: (maskB64: string | null) => void;
   setMaskVisible: (v: boolean) => void;
+  toggleViewportGuide: (guide: keyof ViewportGuides) => void;
+  setViewportGuides: (guides: Partial<ViewportGuides>) => void;
   setMaskTab: (tab: "sam3" | "manual") => void;
   setMaskTool: (tool: "brush" | "eraser" | "rect" | "ellipse" | "polygon") => void;
   setBrushSize: (size: number) => void;
@@ -519,6 +542,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeMask: null,
   maskRevision: 0,
   maskVisible: true,
+  viewportGuides: {
+    safeArea: false,
+    ruleOfThirds: false,
+    crosshairs: false,
+    pixelGrid: false,
+  },
   maskTab: "sam3",
   maskTool: "brush",
   brushSize: 20,
@@ -1190,6 +1219,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   setActiveMask: (maskB64) =>
     set((state) => ({ activeMask: maskB64, maskRevision: state.maskRevision + 1 })),
   setMaskVisible: (v) => set({ maskVisible: v }),
+  toggleViewportGuide: (guide) =>
+    set((state) => ({
+      viewportGuides: { ...state.viewportGuides, [guide]: !state.viewportGuides[guide] },
+    })),
+  setViewportGuides: (guides) =>
+    set((state) => ({ viewportGuides: { ...state.viewportGuides, ...guides } })),
   setMaskTab: (tab) => set({ maskTab: tab }),
   setMaskTool: (tool) => set({ maskTool: tool }),
   setBrushSize: (size) => set({ brushSize: clampFinite(size, 1, 200, 20) }),

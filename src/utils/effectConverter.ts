@@ -779,23 +779,10 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
     accurate: false,
   },
 
-  // Overlay / HUD add-on effects
-  "overlay.pixel_grid": {
-    shaderId: "pixel_grid_overlay",
-    paramMap: { grid_size: "gridSize", line_width: "lineWidth", opacity: "opacity" },
-  },
-  "overlay.safe_area": {
-    shaderId: "safe_area",
-    paramMap: { margin: "margin", line_width: "lineWidth", opacity: "opacity" },
-  },
-  "overlay.rule_of_thirds": {
-    shaderId: "rule_of_thirds",
-    paramMap: { line_width: "lineWidth", opacity: "opacity" },
-  },
-  "overlay.crosshairs": {
-    shaderId: "crosshairs",
-    paramMap: { size: "size", line_width: "lineWidth", opacity: "opacity" },
-  },
+  // Composition guides (safe area, rule of thirds, crosshairs, pixel grid) are
+  // no longer effects. They are viewport furniture drawn by ViewportGuides.tsx
+  // and never reach the export stack — see migrateOverlayGuides.ts for the
+  // migration that strips them out of stacks saved while they were effects.
 };
 
 /**

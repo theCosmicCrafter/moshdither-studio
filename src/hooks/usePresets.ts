@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useAppStore, type StackEntry } from "../store";
+import { migrateOverlayGuides } from "../utils/migrateOverlayGuides";
 import { DEFAULT_PRESETS } from "./defaultPresets";
 
 export interface Preset {
@@ -113,9 +114,16 @@ export function usePresets() {
 
   const loadPreset = useCallback(
     (preset: Preset) => {
+      // Presets saved before the composition guides left the effect registry
+      // still contain overlay.* entries. Those IDs no longer resolve in Rust,
+      // and an unknown effect there aborts the whole render, so strip them and
+      // switch on the equivalent viewport guides instead.
+      const { stack: migratedStack, guides, migrated } = migrateOverlayGuides(preset.stack);
+      if (migrated) useAppStore.getState().setViewportGuides(guides);
+
       // Replace the stack atomically — no clear+setTimeout+add race condition.
       // Deep clone the preset stack so edits to the loaded stack don't mutate the preset.
-      const newStack: StackEntry[] = preset.stack.map((entry) => ({
+      const newStack: StackEntry[] = migratedStack.map((entry) => ({
         ...entry,
         id: `${entry.effectId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         params: JSON.parse(JSON.stringify(entry.params)),

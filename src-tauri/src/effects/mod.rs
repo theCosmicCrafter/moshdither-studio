@@ -8,7 +8,6 @@ pub mod dithering;
 pub mod glitch;
 pub mod motion;
 pub mod noise;
-pub mod overlay;
 pub mod pixel_geo;
 pub mod segmentation;
 

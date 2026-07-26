@@ -90,7 +90,10 @@ dithering are *legitimately* parallel per-pixel operations, so the shader is
 the right implementation and it matches the Rust. This is the model the
 error-diffusion effects should be measured against, not rewritten toward.
 
-### 1.4 Composition guides are burned into exports
+### 1.4 Composition guides are burned into exports — **RESOLVED 2026-07-26**
+
+> Demoted to a viewport SVG overlay (`ViewportGuides.tsx`). Effect count 98 → 94.
+> See §5.1 and `recycling/overlay_guides_demoted_2026-07-26/`.
 
 `overlay.crosshairs`, `overlay.safe_area`, `overlay.rule_of_thirds` and
 `overlay.pixel_grid` are registered as **effects in the export stack**. Framing
@@ -114,9 +117,12 @@ them from creative effects.
 | **Total** | **98** |
 
 Five of the 26 datamoshing entries are `profile_bloom`, `profile_extreme`,
-`profile_glitch`, `profile_rainbow`, `profile_smear` — parameter bundles over
-existing effects, presented as if they were distinct algorithms. The app has a
-real preset system (`PresetPanel`, `usePresets`); these belong there.
+`profile_glitch`, `profile_rainbow`, `profile_smear`.
+
+> **Corrected 2026-07-26.** An earlier draft of this section called them
+> "parameter bundles [that] belong in the preset system". That was wrong — see
+> §5.2 for why, and note the total above is now **94**, not 98, after §5.1.
+> The owner has since confirmed these are commonly-used and stay as they are.
 
 ---
 
@@ -315,7 +321,7 @@ than a judgement call, and it makes future regressions obvious.
 Recommendations with rationale. Everything marked **cut** or **demote** is a
 product decision and needs your sign-off.
 
-### 5.1 Overlay guides — **demote out of the effect stack**
+### 5.1 Overlay guides — **DONE 2026-07-26**
 
 Move `crosshairs`, `safe_area`, `rule_of_thirds`, `pixel_grid` from the effect
 registry into a **viewport overlay layer** that draws on top of the preview and
@@ -324,6 +330,22 @@ guides in, that becomes an explicit export checkbox, not four entries in the
 same list as Datamosh and VHS.
 
 Net: −4 effects from the browser, clearer mental model, no capability lost.
+
+**Delivered.** Guides now live in `viewportGuides` store state and are drawn by
+`src/components/ViewportGuides.tsx` as an SVG overlay, with a four-button toggle
+group in the viewport header. There is no code path from that component to the
+render pipeline, so the "never exported" property is structural rather than a
+flag. Effect count 98 → 94; `mosh-verify` reports 94/94.
+
+One thing the original plan did not account for: **an unknown effect ID is a
+hard error in Rust** — `Effect '...' not found` aborts the whole render rather
+than skipping the entry. Presets and auto-saved sessions written while the
+guides were effects still contain `overlay.*` entries, so removing them from the
+registry without a migration would have broken preview and export for any
+affected saved work. `src/utils/migrateOverlayGuides.ts` strips those entries on
+load and switches on the matching guide; it runs in both restore paths
+(`usePresets.loadPreset` and `useProjectSession.restoreSession`). Only *enabled*
+entries turn their guide on, since a disabled overlay was not being drawn.
 
 ### 5.2 Datamoshing `profile_*` — **RETRACTED. Keep them as effects.**
 

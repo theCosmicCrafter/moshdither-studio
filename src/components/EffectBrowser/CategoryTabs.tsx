@@ -12,7 +12,6 @@ const CATEGORIES: { id: string; label: string; color: string }[] = [
   { id: "audio_reactive", label: "Audio", color: "var(--cat-audio-reactive)" },
   { id: "segmentation", label: "Mask", color: "var(--cat-segmentation)" },
   { id: "composite", label: "Comp", color: "var(--cat-composite)" },
-  { id: "overlay", label: "Overlay", color: "var(--cat-overlay, var(--accent-teal))" },
 ];
 
 export default function CategoryTabs() {

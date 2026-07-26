@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { useAppStore, type StackEntry, type KeyframeTrack, type AudioBinding } from "../store";
 import { loadMediaFromPath, loadMediaFromBase64 } from "../lib/tauri";
+import { migrateOverlayGuides } from "../utils/migrateOverlayGuides";
 
 const AUTO_SAVE_KEY = "moshdither_autosave_v1";
 const RECENT_PROJECTS_KEY = "moshdither_recent_projects_v1";
@@ -144,9 +145,14 @@ export function useProjectSession() {
     async (session: ProjectSession, onRefreshPreview?: () => Promise<boolean>) => {
       const store = useAppStore.getState();
 
-      // 1. Restore effect stack directly
+      // 1. Restore effect stack directly.
+      // Sessions auto-saved before the composition guides left the effect
+      // registry still contain overlay.* entries, which no longer resolve in
+      // Rust and would abort the render. Strip them into viewport guides.
       if (session.effectStack && session.effectStack.length > 0) {
-        store.setEffectStack(session.effectStack);
+        const { stack, guides, migrated } = migrateOverlayGuides(session.effectStack);
+        if (migrated) store.setViewportGuides(guides);
+        store.setEffectStack(stack);
       } else {
         store.clearStack();
       }

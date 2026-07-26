@@ -178,17 +178,9 @@ export { paletteDitherShader } from "./paletteDither";
 import { liftGammaGainShader } from "./liftGammaGain";
 export { liftGammaGainShader } from "./liftGammaGain";
 
-import { pixelGridOverlayShader } from "./pixelGridOverlay";
-export { pixelGridOverlayShader } from "./pixelGridOverlay";
-
-import { safeAreaShader } from "./safeArea";
-export { safeAreaShader } from "./safeArea";
-
-import { ruleOfThirdsShader } from "./ruleOfThirds";
-export { ruleOfThirdsShader } from "./ruleOfThirds";
-
-import { crosshairsShader } from "./crosshairs";
-export { crosshairsShader } from "./crosshairs";
+// Composition guides (pixel grid, safe area, rule of thirds, crosshairs) are no
+// longer effects and no longer have shaders. They are drawn as an SVG overlay by
+// ViewportGuides.tsx so they cannot reach an export.
 
 import { maskBlendShader } from "./maskBlend";
 export { maskBlendShader } from "./maskBlend";
@@ -250,8 +242,4 @@ shaderRegistry.register(transformShader);
 shaderRegistry.register(colorGradeShader);
 shaderRegistry.register(paletteDitherShader);
 shaderRegistry.register(liftGammaGainShader);
-shaderRegistry.register(pixelGridOverlayShader);
-shaderRegistry.register(safeAreaShader);
-shaderRegistry.register(ruleOfThirdsShader);
-shaderRegistry.register(crosshairsShader);
 shaderRegistry.register(maskBlendShader);

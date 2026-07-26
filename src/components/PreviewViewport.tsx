@@ -18,6 +18,7 @@ import { stackToRenderPasses, buildShaderMap, stackToRustPayload, stackHasApprox
 import ManualMaskOverlay from "./ManualMaskOverlay";
 import ScopesOverlay from "./ScopesOverlay";
 import PlaybackOverlay from "./PlaybackOverlay";
+import ViewportGuides from "./ViewportGuides";
 import AudioVisualizer from "./common/AudioVisualizer";
 
 interface Props {
@@ -74,6 +75,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     proxyUrl,
     isVideo,
     filePath: fileName,
+    viewportGuides,
   } = useAppStore(
     useShallow((s) => ({
       mediaLoaded: s.mediaLoaded,
@@ -88,6 +90,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       proxyUrl: s.proxyUrl,
       isVideo: s.isVideo,
       filePath: s.filePath,
+      viewportGuides: s.viewportGuides,
     }))
   );
 
@@ -1113,6 +1116,34 @@ function PreviewViewport({ isDropTarget = false }: Props) {
             )}
           </div>
           <div className="flex items-center gap-3">
+            {/* Composition guides. Preview-only: these never enter the export
+                stack, which is the whole reason they are not effects. */}
+            <div className="flex items-center gap-1" role="group" aria-label="Composition guides">
+              {(
+                [
+                  { key: "safeArea", icon: "crop_free", label: "Safe area guides" },
+                  { key: "ruleOfThirds", icon: "grid_3x3", label: "Rule of thirds" },
+                  { key: "crosshairs", icon: "add", label: "Centre crosshairs" },
+                  { key: "pixelGrid", icon: "grid_4x4", label: "Pixel grid" },
+                ] as const
+              ).map(({ key, icon, label }) => (
+                <button
+                  key={key}
+                  type="button"
+                  aria-label={label}
+                  aria-pressed={viewportGuides[key]}
+                  title={`${label} (preview only — not exported)`}
+                  onClick={() => useAppStore.getState().toggleViewportGuide(key)}
+                  className={`material-symbols-outlined text-sm neo-btn p-1.5 rounded-full transition-colors ${
+                    viewportGuides[key]
+                      ? "text-accent-teal"
+                      : "text-on-surface-variant hover:text-primary"
+                  }`}
+                >
+                  {icon}
+                </button>
+              ))}
+            </div>
             {mediaInfo && (
               <span className="text-label-sm font-label-sm text-accent-teal neo-flat px-3 py-1 rounded-full cursor-default hover:border-accent-teal/30 transition-colors">
                 {mediaInfo.width} x {mediaInfo.height}
@@ -1269,6 +1300,11 @@ function PreviewViewport({ isDropTarget = false }: Props) {
                       draggable={false}
                       className="absolute inset-0 pointer-events-none preview-img mask-overlay-img"
                     />
+                  )}
+
+                  {/* Composition guides — preview only, never reach the export pipeline */}
+                  {mediaInfo && (
+                    <ViewportGuides width={mediaInfo.width} height={mediaInfo.height} />
                   )}
 
                   {/* SAM3 interaction canvas overlay */}

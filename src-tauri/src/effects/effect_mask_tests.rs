@@ -1566,7 +1566,6 @@ mod tests {
     mod composite_overlay {
         use super::*;
         use crate::effects::composite::Overlay;
-        use crate::effects::overlay::*;
 
         #[test]
         fn test_overlay_modifies_rgb() {
@@ -1587,48 +1586,6 @@ mod tests {
             assert_pixel_unchanged(&result, &frame, 2, 0, "unmasked should be original");
         }
 
-        #[test]
-        fn test_pixel_grid_overlay_modifies_rgb() {
-            let frame = solid_frame(32, 32, 128, 128, 128, 255);
-            let effect = PixelGridOverlay;
-            let result = effect
-                .process_frame(&frame, None, &serde_json::Map::new())
-                .unwrap();
-            let p = pixel_at(&result, 0, 0);
-            assert!(p.0 <= 255, "should produce valid output");
-        }
-
-        #[test]
-        fn test_pixel_grid_inside_mask() {
-            let frame = solid_frame(32, 2, 128, 128, 128, 255);
-            let mask = left_half_mask(32, 2);
-            let result = run_effect_with_mask(&PixelGridOverlay, &frame, Some(&mask), "inside");
-            assert_pixel_unchanged(&result, &frame, 16, 0, "unmasked should be original");
-        }
-
-        #[test]
-        fn test_safe_area_inside_mask() {
-            let frame = solid_frame(32, 2, 128, 128, 128, 255);
-            let mask = left_half_mask(32, 2);
-            let result = run_effect_with_mask(&SafeArea, &frame, Some(&mask), "inside");
-            assert_pixel_unchanged(&result, &frame, 16, 0, "unmasked should be original");
-        }
-
-        #[test]
-        fn test_rule_of_thirds_inside_mask() {
-            let frame = solid_frame(32, 2, 128, 128, 128, 255);
-            let mask = left_half_mask(32, 2);
-            let result = run_effect_with_mask(&RuleOfThirds, &frame, Some(&mask), "inside");
-            assert_pixel_unchanged(&result, &frame, 16, 0, "unmasked should be original");
-        }
-
-        #[test]
-        fn test_crosshairs_inside_mask() {
-            let frame = solid_frame(32, 2, 128, 128, 128, 255);
-            let mask = left_half_mask(32, 2);
-            let result = run_effect_with_mask(&Crosshairs, &frame, Some(&mask), "inside");
-            assert_pixel_unchanged(&result, &frame, 16, 0, "unmasked should be original");
-        }
     }
 
     // ── Advanced dithering effects ─────────────────────────────

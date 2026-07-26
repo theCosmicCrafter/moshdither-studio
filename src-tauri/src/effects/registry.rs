@@ -66,10 +66,6 @@ impl EffectRegistry {
         self.register(super::composite::Overlay::default());
 
         // Overlay (HUD-style guides)
-        self.register(super::overlay::PixelGridOverlay);
-        self.register(super::overlay::SafeArea);
-        self.register(super::overlay::RuleOfThirds);
-        self.register(super::overlay::Crosshairs);
 
         // Pixel Geometry
         self.register(super::pixel_geo::PixelSort::default());

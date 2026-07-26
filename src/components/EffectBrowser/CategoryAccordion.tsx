@@ -13,7 +13,6 @@ const CATEGORIES: { id: string; label: string; icon: string; color: string }[] =
   { id: "audio_reactive", label: "Audio", icon: "graphic_eq", color: "var(--cat-audio-reactive)" },
   { id: "segmentation", label: "Mask", icon: "masks", color: "var(--cat-segmentation)" },
   { id: "composite", label: "Comp", icon: "layers", color: "var(--cat-composite)" },
-  { id: "overlay", label: "Overlay", icon: "grid_3x3", color: "var(--cat-overlay, var(--accent-teal))" },
 ];
 
 export default function CategoryAccordion() {
