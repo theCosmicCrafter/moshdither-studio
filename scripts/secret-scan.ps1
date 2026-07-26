@@ -53,7 +53,11 @@ if ($History) {
     # repository clean while the credential is still readable in history. If you
     # are checking whether you ever leaked something, you want all of it.
     Write-Host "Scanning full git history..." -ForegroundColor Cyan
-    $scanArgs = @("git", "file://$repoRoot", "--no-update")
+    # Forward slashes are required. A Windows path with backslashes in a file://
+    # URI is parsed as ssh://file/... and the scan dies trying to resolve a
+    # hostname called "file".
+    $uri = "file://" + ($repoRoot -replace '\\', '/')
+    $scanArgs = @("git", $uri, "--no-update")
     if ($OnlyVerified) { $scanArgs += "--only-verified" }
     if ($SinceCommit) { $scanArgs += "--since-commit=$SinceCommit" }
     & $trufflehog @scanArgs
@@ -74,10 +78,28 @@ else {
                   "--exclude-paths", $excludeFile)
     & $trufflehog @scanArgs
 }
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "`nSECRET DETECTED! Commit blocked." -ForegroundColor Red
-    Write-Host "Review the findings above. If it's a false positive, contact a maintainer." -ForegroundColor Red
+# TruffleHog uses 183 for "findings present" and other non-zero codes for real
+# failures. Treating every non-zero exit as a detection reports a scan that could
+# not run as a leak, which sends you looking for a secret that was never found.
+if ($LASTEXITCODE -eq 183) {
+    Write-Host ""
+    Write-Host "SECRETS FOUND -- review the findings above." -ForegroundColor Red
+    Write-Host "Rotate anything real before removing it from the code: deleting a" -ForegroundColor Red
+    Write-Host "key does not revoke it, and it stays readable in git history." -ForegroundColor Red
     exit 1
 }
+elseif ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "SCAN FAILED (exit $LASTEXITCODE) -- this is an error, not a detection." -ForegroundColor Red
+    Write-Host "Nothing was verified. Fix the error above and run it again." -ForegroundColor Red
+    exit $LASTEXITCODE
+}
 
-Write-Host "`nNo secrets detected. Clean!" -ForegroundColor Green
+Write-Host ""
+Write-Host "No verified secrets found." -ForegroundColor Green
+Write-Host ""
+Write-Host "Note: TruffleHog reports 'unverified' findings separately -- candidates" -ForegroundColor DarkGray
+Write-Host "it could not confirm with the issuing provider. Those do not fail this" -ForegroundColor DarkGray
+Write-Host "scan and are usually placeholders in vendored code, but a revoked or" -ForegroundColor DarkGray
+Write-Host "unreachable real key would land there too. Read the output above rather" -ForegroundColor DarkGray
+Write-Host "than trusting this line alone." -ForegroundColor DarkGray

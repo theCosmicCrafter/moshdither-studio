@@ -54,7 +54,10 @@ Thumbs.db
 /models/**/*.safetensors
 
 # MCP server dependencies
-/mcp-servers/*/node_modules
+# Any node_modules at any depth. The root-only '/node_modules' rule above missed
+# nested ones, so mcp-servers/mosh-verify/node_modules (3,508 files) was tracked
+# for months before anyone noticed.
+node_modules/
 
 # Reference/legacy projects (not part of the app, kept for algorithm reference only)
 /references

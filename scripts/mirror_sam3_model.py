@@ -34,8 +34,15 @@ def create_windows_junction(link: Path, target: Path):
     if link.exists() or link.is_symlink():
         raise RuntimeError(f"Link path already exists: {link}. Remove it first.")
 
-    cmd = ["mklink", "/J", str(link), str(target)]
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    # mklink is a cmd.exe builtin, so it cannot be executed directly -- but
+    # passing a list with shell=True is the dangerous combination: Python joins
+    # the list into one string and hands it to the shell, so a path containing
+    # shell metacharacters is interpreted rather than treated as a path.
+    #
+    # Invoking cmd explicitly with shell=False keeps the arguments as distinct
+    # argv entries, which Python quotes for us.
+    cmd = ["cmd", "/c", "mklink", "/J", str(link), str(target)]
+    result = subprocess.run(cmd, shell=False, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         raise RuntimeError(f"Failed to create junction: {result.stderr}")
 

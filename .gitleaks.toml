@@ -1,0 +1,49 @@
+# gitleaks configuration for MoshDither Studio.
+#
+# Extends the stock ruleset rather than replacing it, so upstream rule updates
+# still apply and this file only records deliberate exceptions.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Paths that legitimately contain secret-shaped strings"
+
+paths = [
+  # detect-secrets' own baseline. It records the SHA of every known finding, and
+  # a SHA is by construction a high-entropy string, so gitleaks reports the file
+  # that exists to track findings as a finding itself. Excluding it is not
+  # weakening the gate: every entry in that file has already been reviewed by
+  # detect-secrets, which runs alongside gitleaks here.
+  '''^\.secrets\.baseline$''',
+
+  # Vendored third-party trees. Anything found here belongs to that project and
+  # is almost always its test fixtures. references/ alone is ~1 GB of cloned
+  # repositories.
+  '''^references/''',
+  '''^sam3_env/''',
+  '''^sam3_repo/''',
+  '''^audit_venv/''',
+  '''^node_modules/''',
+  '''(^|/)node_modules/''',
+
+  # Local recycling bin (gitignored) and build output.
+  '''^recycling/''',
+  '''^dist/''',
+  '''^src-tauri/target/''',
+
+  # Scanner output, which quotes the very strings it is reporting.
+  '''^cargo-audit\.json$''',
+  '''^npm-audit\.json$''',
+]
+
+[[rules]]
+  # The Tauri updater's public key is published on purpose -- that is how the
+  # app verifies an update signature. A base64 blob in this field is expected.
+  id = "tauri-updater-pubkey"
+  description = "Tauri updater public key (public by design)"
+  regex = '''"pubkey"\s*:\s*"[A-Za-z0-9+/=]+"'''
+  [rules.allowlist]
+    description = "Public keys are meant to be distributed"
+    regexTarget = "match"
+    regexes = ['''.*''']
