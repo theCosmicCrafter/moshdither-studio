@@ -91,7 +91,7 @@ jobs:
       # Empty placeholders are enough. The build script only checks the path
       # resolves; fmt/clippy/test never execute these binaries. Anything that
       # does run them belongs in the E2E job, which builds a real bundle.
-      - name: Stub externalBin for the host triple
+      - name: Stub externalBin and frontendDist
         run: |
           TRIPLE=$(rustc -vV | awk '/^host:/ {print $2}')
           mkdir -p src-tauri/bin
@@ -101,6 +101,21 @@ jobs:
           done
           echo "Stubbed externalBin for ${TRIPLE}:"
           ls -l src-tauri/bin/
+
+          # tauri.conf.json sets frontendDist to "../dist". The tauri-build proc
+          # macro resolves that at COMPILE time and panics if it is missing:
+          #
+          #     error: proc macro panicked
+          #       The `frontendDist` configuration is set to "../dist" but this
+          #       path doesn't exist
+          #
+          # This job never runs `npm run build`, so dist/ does not exist. A
+          # placeholder is enough -- fmt, clippy and cargo test never load the
+          # frontend; only the bundler embeds it, and this job does not bundle.
+          # Building the real frontend here would add an npm install and a vite
+          # build to every Rust check for no additional coverage.
+          mkdir -p dist
+          echo '<!doctype html><title>ci stub</title>' > dist/index.html
 
       - name: Check formatting
         run: cargo fmt -- --check
@@ -182,6 +197,13 @@ jobs:
             chmod +x "src-tauri/bin/${b}-${TRIPLE}"
           done
           ls -l src-tauri/bin/
+
+          # frontendDist must exist at compile time -- see the rust job above.
+          # This job builds mosh-verify, a standalone CLI that never loads the
+          # frontend, but the build script runs for the whole crate regardless
+          # of which binary is being built.
+          mkdir -p dist
+          echo '<!doctype html><title>ci stub</title>' > dist/index.html
 
       - name: Build mosh-verify binary
         run: cargo build --release --bin mosh-verify --manifest-path src-tauri/Cargo.toml
