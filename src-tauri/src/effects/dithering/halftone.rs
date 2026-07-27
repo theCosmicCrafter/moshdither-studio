@@ -78,55 +78,76 @@ impl Effect for HalftoneDither {
         let theta = screen_angle.to_radians();
         let cos_t = theta.cos();
         let sin_t = theta.sin();
-        let half = (dot_size as f32 - 1.0) / 2.0;
+        let cell = dot_size as f32;
 
-        for y in (0..h).step_by(dot_size as usize) {
-            for x in (0..w).step_by(dot_size as usize) {
-                // Compute local average luminance over the cell.
+        // The screen angle rotates the LATTICE OF DOTS, which is what a physical
+        // halftone screen does -- CMYK separations are printed at 15/45/75
+        // degrees precisely so their dot grids do not coincide and moire.
+        //
+        // The previous implementation rotated each pixel's offset around its own
+        // cell centre and then took the distance from that centre. Rotation
+        // preserves magnitude, so rx*rx + ry*ry always equalled lx*lx + ly*ly and
+        // the angle cancelled out exactly: the control existed, was documented,
+        // and changed nothing in preview or export.
+        //
+        // Iterating over output pixels rather than over cells: each pixel is
+        // mapped into the rotated screen space, which decides the cell it belongs
+        // to, and the cell's luminance is sampled back in image space.
+        for py in 0..h {
+            for px in 0..w {
+                let fx = px as f32;
+                let fy = py as f32;
+
+                // Into screen space.
+                let sx = fx * cos_t + fy * sin_t;
+                let sy = -fx * sin_t + fy * cos_t;
+
+                // Which cell of the rotated lattice, and where its centre sits.
+                let cx = (sx / cell).floor();
+                let cy = (sy / cell).floor();
+                let centre_sx = (cx + 0.5) * cell;
+                let centre_sy = (cy + 0.5) * cell;
+
+                // Cell centre back in image space, to sample the source there.
+                let centre_x = centre_sx * cos_t - centre_sy * sin_t;
+                let centre_y = centre_sx * sin_t + centre_sy * cos_t;
+
+                // Mean luminance of the source region under this cell. Sampled
+                // around the cell centre in image space so the value follows the
+                // rotated lattice rather than an axis-aligned block.
                 let mut sum = 0.0;
-                let mut count = 0;
-                for dy in 0..dot_size {
-                    for dx in 0..dot_size {
-                        let px = x + dx;
-                        let py = y + dy;
-                        if px < w && py < h {
-                            let idx = ((py * w + px) * 4) as usize;
-                            let lum = 0.299 * input.data[idx] as f32
-                                + 0.587 * input.data[idx + 1] as f32
-                                + 0.114 * input.data[idx + 2] as f32;
-                            sum += lum;
+                let mut count = 0u32;
+                let r = (dot_size / 2).max(1) as i32;
+                for oy in -r..=r {
+                    for ox in -r..=r {
+                        let mx = centre_x.round() as i32 + ox;
+                        let my = centre_y.round() as i32 + oy;
+                        if mx >= 0 && my >= 0 && (mx as u32) < w && (my as u32) < h {
+                            let midx = ((my as u32 * w + mx as u32) * 4) as usize;
+                            sum += 0.299 * input.data[midx] as f32
+                                + 0.587 * input.data[midx + 1] as f32
+                                + 0.114 * input.data[midx + 2] as f32;
                             count += 1;
                         }
                     }
                 }
-                let avg = sum / count.max(1) as f32;
-                // For dark average we want *large* black dots (small white radius);
-                // for light average we want *small* dots. Invert so radius grows with darkness.
-                let radius = ((255.0 - avg) / 255.0) * (dot_size as f32 / 2.0);
-                let center_x = x as f32 + half;
-                let center_y = y as f32 + half;
+                let avg = if count > 0 { sum / count as f32 } else { 0.0 };
 
-                for dy in 0..dot_size {
-                    for dx in 0..dot_size {
-                        let px = x + dx;
-                        let py = y + dy;
-                        if px < w && py < h {
-                            let idx = ((py * w + px) * 4) as usize;
-                            // Rotate the offset by the screen angle.
-                            let lx = px as f32 - center_x;
-                            let ly = py as f32 - center_y;
-                            let rx = lx * cos_t - ly * sin_t;
-                            let ry = lx * sin_t + ly * cos_t;
-                            let dist = (rx * rx + ry * ry).sqrt();
-                            // Dot grows inward from the cell corners.
-                            let on = if dist <= radius { 0u8 } else { 255u8 };
-                            data[idx] = on;
-                            data[idx + 1] = on;
-                            data[idx + 2] = on;
-                            data[idx + 3] = input.data[idx + 3];
-                        }
-                    }
-                }
+                // Dark cells get large dots, light cells small ones.
+                let radius = ((255.0 - avg) / 255.0) * (cell / 2.0);
+
+                // Distance measured in screen space, so the dot is centred on the
+                // rotated lattice point rather than on an axis-aligned cell.
+                let dx = sx - centre_sx;
+                let dy = sy - centre_sy;
+                let dist = (dx * dx + dy * dy).sqrt();
+
+                let idx = ((py * w + px) * 4) as usize;
+                let on = if dist <= radius { 0u8 } else { 255u8 };
+                data[idx] = on;
+                data[idx + 1] = on;
+                data[idx + 2] = on;
+                data[idx + 3] = input.data[idx + 3];
             }
         }
 
@@ -169,5 +190,96 @@ mod tests {
         let e = HalftoneDither::new(2, 0.0);
         let r = e.process_frame(&f, None, &serde_json::Map::new()).unwrap();
         assert_eq!(r.data.len(), 64);
+    }
+}
+
+#[cfg(test)]
+mod screen_angle_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Non-uniform source: a uniform field gives every cell the same radius, so
+    /// a rotated lattice can still land on identical output and hide a bug.
+    fn gradient_frame(w: u32, h: u32) -> Frame {
+        let mut data = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let v = (((x * 5 + y * 3) % 256) as u8).saturating_add(20);
+                data.extend_from_slice(&[v, v / 2, 255 - v, 255]);
+            }
+        }
+        Frame {
+            width: w,
+            height: h,
+            data,
+        }
+    }
+
+    fn run(angle: f64, dot: u64) -> Frame {
+        let mut p = serde_json::Map::new();
+        p.insert("screen_angle".into(), json!(angle));
+        p.insert("dot_size".into(), json!(dot));
+        HalftoneDither::default()
+            .process_frame(&gradient_frame(64, 64), None, &p)
+            .expect("halftone ok")
+    }
+
+    /// The regression this file existed to have.
+    ///
+    /// The original implementation rotated each pixel's offset around its own
+    /// cell centre and then measured distance from that same centre. Rotation
+    /// preserves magnitude, so the angle cancelled exactly and the control did
+    /// nothing -- silently, in both preview and export.
+    #[test]
+    fn screen_angle_changes_the_output() {
+        let a = run(0.0, 8);
+        let b = run(45.0, 8);
+        assert_ne!(
+            a.data, b.data,
+            "screen_angle produced identical output at 0 and 45 degrees; the \
+             dot lattice is not being rotated"
+        );
+    }
+
+    #[test]
+    fn distinct_angles_give_distinct_screens() {
+        let angles = [0.0, 15.0, 30.0, 45.0, 75.0];
+        let outputs: Vec<_> = angles.iter().map(|a| run(*a, 8).data).collect();
+        for i in 0..outputs.len() {
+            for j in (i + 1)..outputs.len() {
+                assert_ne!(
+                    outputs[i], outputs[j],
+                    "screen angles {} and {} produced identical output",
+                    angles[i], angles[j]
+                );
+            }
+        }
+    }
+
+    /// A full rotation of the square lattice is 90 degrees, so 0 and 90 must
+    /// agree. This pins that the angle is a real lattice rotation rather than
+    /// some arbitrary function of the parameter that merely happens to differ.
+    #[test]
+    fn the_lattice_has_ninety_degree_symmetry() {
+        assert_eq!(
+            run(0.0, 8).data,
+            run(90.0, 8).data,
+            "a square dot lattice repeats every 90 degrees"
+        );
+    }
+
+    #[test]
+    fn output_is_still_bilevel_and_preserves_alpha() {
+        let out = run(30.0, 6);
+        for px in out.data.chunks_exact(4) {
+            assert!(
+                px[0] == 0 || px[0] == 255,
+                "halftone must be pure black or white, got {}",
+                px[0]
+            );
+            assert_eq!(px[0], px[1]);
+            assert_eq!(px[1], px[2]);
+            assert_eq!(px[3], 255);
+        }
     }
 }
