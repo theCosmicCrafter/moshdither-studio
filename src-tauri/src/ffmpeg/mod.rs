@@ -332,7 +332,13 @@ pub fn decode_video_with_options(
     let ffmpeg = ffmpeg_binary()?;
     let mut cmd = Command::new(&ffmpeg);
     cmd.args(["-i", path]);
-    cmd.args(["-frames:v", &requested_max.to_string()]);
+    // max_frames, not requested_max. ffmpeg buffers everything it decodes into
+    // this process's stdout pipe, so asking for more frames than the memory
+    // budget allows means peak usage is set by requested_max while only
+    // max_frames survive into the returned Vec -- the budget bounded the result
+    // but not the decode. Capping the encoder at the same number the budget
+    // permits makes the limit real.
+    cmd.args(["-frames:v", &max_frames.to_string()]);
 
     // Build the video filter chain: optional scale, then format=rgba.
     // `scale=W:H:force_original_aspect_ratio=decrease` scales so the longer
@@ -373,6 +379,26 @@ pub fn decode_video_with_options(
             height,
             data: chunk.to_vec(),
         });
+    }
+
+    // Hitting the cap exactly almost always means the source was longer and got
+    // cut. There was no signal at all before: export_video calls this with
+    // max_frames = None, so a clip over DEFAULT_DECODE_MAX_FRAMES (10 000 frames
+    // -- about 5.5 minutes at 30fps, 7 at 24) was silently shortened and the
+    // user got a truncated file with no indication why.
+    //
+    // A warning is not a fix for that; it makes the loss visible. Removing the
+    // limit outright is not safe either, since the decode is fully buffered in
+    // memory. The real fix is streaming decode, which is a larger change.
+    if frames.len() == max_frames {
+        eprintln!(
+            "[ffmpeg] WARNING: decode stopped at the {}-frame limit ({:.1}s at {:.0} fps). \
+             If the source is longer, the result is TRUNCATED. Raise the limit by passing \
+             max_frames, or lower memory per frame with a smaller scale.",
+            max_frames,
+            max_frames as f64 / fps.max(1.0),
+            fps
+        );
     }
 
     Ok(VideoSegment { frames, fps })
