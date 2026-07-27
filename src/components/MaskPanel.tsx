@@ -50,11 +50,7 @@ export default function MaskPanel() {
     try {
       await sam3Init();
       setSam3Ready(true);
-      // Load current frame into SAM3 if media is available
-      if (useAppStore.getState().mediaLoaded) {
-        const b64 = await getFrameData();
-        await sam3LoadImage(b64);
-      }
+      // Image auto-load is handled by the useEffect below when sam3Ready flips.
       setStatusMessage("SAM3 ready");
       return true;
     } catch (e) {
@@ -225,7 +221,7 @@ export default function MaskPanel() {
         <div className="flex justify-end">
           <button
             onClick={() => setMaskVisible(!maskVisible)}
-            className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-[var(--surface-2)] hover:bg-[var(--surface-3)] transition-colors"
+            className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-surface-container hover:bg-surface-container-high transition-colors"
           >
             {maskVisible ? "Hide" : "Show"}
           </button>
@@ -238,8 +234,8 @@ export default function MaskPanel() {
           onClick={() => setMaskTab("sam3")}
           className={`flex-1 py-1 px-2 text-[10px] uppercase tracking-wider rounded transition-colors ${
             maskTab === "sam3"
-              ? "bg-[var(--accent)] text-black font-semibold"
-              : "bg-[var(--surface-2)] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+              ? "bg-accent text-black font-semibold"
+              : "bg-surface-container text-on-surface-variant hover:text-on-surface"
           }`}
         >
           SAM3
@@ -248,8 +244,8 @@ export default function MaskPanel() {
           onClick={() => setMaskTab("manual")}
           className={`flex-1 py-1 px-2 text-[10px] uppercase tracking-wider rounded transition-colors ${
             maskTab === "manual"
-              ? "bg-[var(--accent)] text-black font-semibold"
-              : "bg-[var(--surface-2)] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+              ? "bg-accent text-black font-semibold"
+              : "bg-surface-container text-on-surface-variant hover:text-on-surface"
           }`}
         >
           Manual
@@ -303,7 +299,7 @@ export default function MaskPanel() {
           <button
             onClick={handleLoadImage}
             disabled={isLoading}
-            className="w-full py-1.5 px-3 rounded bg-[var(--surface-2)] text-[var(--text-primary)] text-xs uppercase tracking-wider hover:bg-[var(--surface-3)] transition-colors disabled:opacity-50"
+            className="w-full py-1.5 px-3 rounded bg-surface-container text-on-surface text-xs uppercase tracking-wider hover:bg-surface-container-high transition-colors disabled:opacity-50"
           >
             Load Current Image
           </button>
@@ -353,12 +349,12 @@ export default function MaskPanel() {
                 {sam3Points.map((p, idx) => (
                   <div
                     key={idx}
-                    className="flex items-center justify-between px-2 py-1 rounded bg-[var(--surface-1)] text-xs"
+                    className="flex items-center justify-between px-2 py-1 rounded bg-surface-container-low text-xs"
                   >
                     <div className="flex items-center gap-2">
                       <span
                         className="w-2 h-2 rounded-full"
-                        style={{ background: p.label === 1 ? "#22c55e" : "#ef4444" }}
+                        style={{ background: p.label === 1 ? "var(--success, #22c55e)" : "var(--danger, #ef4444)" }}
                       />
                       <span className="text-[var(--text-primary)]">
                         ({p.x}, {p.y})
@@ -367,7 +363,7 @@ export default function MaskPanel() {
                         className="text-[10px] px-1 rounded"
                         style={{
                           background: p.label === 1 ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.15)",
-                          color: p.label === 1 ? "#22c55e" : "#ef4444",
+                          color: p.label === 1 ? "var(--success, #22c55e)" : "var(--danger, #ef4444)",
                         }}
                       >
                         {p.label === 1 ? "include" : "exclude"}
@@ -399,8 +395,8 @@ export default function MaskPanel() {
                   max={1}
                   step={0.05}
                   value={sam3OverlayOpacity}
-                  onChange={(e) => setSam3OverlayOpacity(parseFloat(e.target.value))}
-                  className="flex-1 h-1 bg-[var(--surface-2)] rounded-lg appearance-none cursor-pointer"
+                  onChange={(e) => setSam3OverlayOpacity(Number.parseFloat(e.target.value))}
+                  className="flex-1 h-1 bg-surface-container rounded-lg appearance-none cursor-pointer"
                 />
                 <span className="text-[10px] text-[var(--text-muted)] w-8 text-right">
                   {Math.round(sam3OverlayOpacity * 100)}%
@@ -455,7 +451,7 @@ export default function MaskPanel() {
           {activeMask && (
             <button
               onClick={handleClear}
-              className="w-full py-1.5 px-3 rounded border border-[var(--panel-border)] text-[var(--text-muted)] text-xs uppercase tracking-wider hover:text-[var(--text-primary)] transition-colors"
+              className="w-full py-1.5 px-3 rounded border border-border-secondary text-on-surface-variant text-xs uppercase tracking-wider hover:text-on-surface transition-colors"
             >
               Clear Mask
             </button>
@@ -487,7 +483,7 @@ const TextPromptInput = memo(function TextPromptInput({
         onChange={(e) => setPrompt(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
         placeholder="e.g. sky, person, car..."
-        className="flex-1 min-w-0 bg-[var(--surface-1)] border border-[var(--panel-border)] rounded px-2 py-1.5 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)]"
+        className="flex-1 min-w-0 bg-surface-container-low border border-border-secondary rounded px-2 py-1.5 text-xs text-on-surface placeholder:text-on-surface-variant focus:outline-none focus:border-accent"
       />
       <button
         onClick={handleSubmit}

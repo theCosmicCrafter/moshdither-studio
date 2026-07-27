@@ -6,7 +6,6 @@ import App from "./App";
 import "@fontsource-variable/geist/wght.css";
 import "@fontsource-variable/jetbrains-mono/wght.css";
 import "@fontsource/architects-daughter/index.css";
-import "material-symbols/outlined.css";
 
 import "./index.css";
 

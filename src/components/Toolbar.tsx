@@ -14,7 +14,7 @@ import KeyboardShortcutsEditor from "./KeyboardShortcutsEditor";
 import { PANEL_REGISTRY } from "./DockSystem/panelRegistry";
 
 interface Props {
-  onFileLoaded: () => Promise<boolean>;
+  readonly onFileLoaded: () => Promise<boolean>;
 }
 
 export default function Toolbar({ onFileLoaded }: Props) {
@@ -49,7 +49,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
   const setPlaybackSpeed = useAppStore((s) => s.setPlaybackSpeed);
   const isPlaying = useAppStore((s) => s.isPlaying);
   const togglePlay = useAppStore((s) => s.togglePlay);
-  const [fps, setFps] = useState(12);
+  const [fps, setFps] = useState(30);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [editMenuOpen, setEditMenuOpen] = useState(false);
   const editMenuRef = useRef<HTMLDivElement>(null);
@@ -274,34 +274,46 @@ export default function Toolbar({ onFileLoaded }: Props) {
     <header
       data-tauri-drag-region
       className="flex justify-between items-center h-header-height px-container-padding w-full z-50 bg-surface/80 backdrop-blur-xl border-b border-outline-variant/30"
+      role="toolbar"
+      aria-label="Main toolbar"
     >
       {/* Left: Logo + Nav */}
       <div className="flex items-center gap-6">
         <span
           className="font-headline-lg text-headline-lg solar-text tracking-wider filigree-header ml-6 cursor-default toolbar-logo"
+          aria-hidden="true"
         >
           MoshDither Studio
         </span>
-        <nav className="hidden md:flex gap-4 ml-6">
+        <nav className="hidden md:flex gap-4 ml-6" aria-label="Menu bar">
           <div ref={fileMenuRef} className="relative">
             <button
               onClick={() => setFileMenuOpen((v) => !v)}
               className="font-label-md text-label-md text-accent-pink font-bold border-b-2 border-accent-pink pb-1 hover:text-accent-teal transition-colors flex items-center gap-1"
+              aria-haspopup="menu"
+              aria-expanded={fileMenuOpen}
+              aria-label="File menu"
             >
               File
               <span
                 className={`material-symbols-outlined menu-chevron ${fileMenuOpen ? "menu-chevron-open" : ""}`}
+                aria-hidden="true"
               >
                 expand_more
               </span>
             </button>
             {fileMenuOpen && (
-              <div className="absolute left-0 top-full mt-1 z-[200] min-w-[220px] neo-flat rounded-lg bg-surface/90 backdrop-blur-xl border border-outline/20 py-1 shadow-xl">
+              <div
+                className="absolute left-0 top-full mt-1 z-[200] min-w-[220px] neo-flat rounded-lg bg-surface/90 backdrop-blur-xl border border-outline/20 py-1 shadow-xl"
+                role="menu"
+                aria-label="File menu"
+              >
                 <button
                   onClick={() => { handleOpen(); setFileMenuOpen(false); }}
                   className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors"
+                  role="menuitem"
                 >
-                  <span className="material-symbols-outlined menu-item-icon">folder_open</span>
+                  <span className="material-symbols-outlined menu-item-icon" aria-hidden="true">folder_open</span>
                   Open File
                 </button>
                 <div className="border-t border-outline/10 my-1" />
@@ -309,6 +321,8 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   onClick={() => { handleExport(); setFileMenuOpen(false); }}
                   disabled={!mediaLoaded}
                   className={`w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded ? "toolbar-enabled" : "toolbar-disabled"}`}
+                  role="menuitem"
+                  aria-disabled={!mediaLoaded}
                 >
                   <span className="material-symbols-outlined menu-item-icon">movie_export</span>
                   Export Video
@@ -463,7 +477,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                     max={1}
                     step={0.05}
                     value={panelOpacity}
-                    onChange={(e) => setPanelOpacity(parseFloat(e.target.value))}
+                    onChange={(e) => setPanelOpacity(Number.parseFloat(e.target.value))}
                     className="w-full accent-[var(--accent-teal)]"
                     title="Panel opacity"
                     aria-label="Panel opacity"
@@ -490,6 +504,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
           disabled={!canUndo}
           className={`material-symbols-outlined text-on-surface-variant hover:text-accent-teal transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full transport-icon ${canUndo ? "toolbar-enabled" : "toolbar-disabled"}`}
           title="Undo"
+          aria-label="Undo"
         >
           undo
         </button>
@@ -498,6 +513,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
           disabled={!canRedo}
           className={`material-symbols-outlined text-on-surface-variant hover:text-accent-teal transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full transport-icon ${canRedo ? "toolbar-enabled" : "toolbar-disabled"}`}
           title="Redo"
+          aria-label="Redo"
         >
           redo
         </button>
@@ -506,6 +522,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
           disabled={stackCount === 0}
           className={`material-symbols-outlined text-on-surface-variant hover:text-accent-pink transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full transport-icon ${stackCount > 0 ? "toolbar-enabled" : "toolbar-disabled"}`}
           title="Clear Stack"
+          aria-label="Clear effect stack"
         >
           delete_sweep
         </button>
@@ -514,6 +531,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
           onClick={() => setZoom(zoom - 0.25)}
           className="material-symbols-outlined text-on-surface-variant hover:text-accent-teal transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full transport-icon"
           title="Zoom Out"
+          aria-label="Zoom out"
         >
           zoom_out
         </button>
@@ -526,6 +544,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
           onClick={() => setZoom(zoom + 0.25)}
           className="material-symbols-outlined text-on-surface-variant hover:text-accent-teal transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full transport-icon"
           title="Zoom In"
+          aria-label="Zoom in"
         >
           zoom_in
         </button>
@@ -534,6 +553,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
           onClick={() => togglePlay()}
           className={`material-symbols-outlined transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full transport-icon ${isPlaying ? "text-accent-pink neo-pressed" : "text-on-surface-variant hover:text-accent-teal"}`}
           title={isPlaying ? "Pause" : "Play"}
+          aria-label={isPlaying ? "Pause playback" : "Play preview"}
         >
           {isPlaying ? "pause" : "play_arrow"}
         </button>
@@ -548,7 +568,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
             step="1"
             value={currentTime}
             onChange={(e) => {
-              setCurrentTime(parseInt(e.target.value));
+              setCurrentTime(Number.parseInt(e.target.value));
               handleProcess();
             }}
             className="slider-thumb w-20"
@@ -560,10 +580,10 @@ export default function Toolbar({ onFileLoaded }: Props) {
           <input
             type="range"
             min="1"
-            max="30"
+            max="60"
             step="1"
             value={fps}
-            onChange={(e) => setFps(parseInt(e.target.value))}
+            onChange={(e) => setFps(Number.parseInt(e.target.value))}
             className="slider-thumb w-16"
             title={`${fps} FPS`}
           />
@@ -571,7 +591,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
         </div>
         <select
           value={playbackSpeed}
-          onChange={(e) => setPlaybackSpeed(parseFloat(e.target.value))}
+          onChange={(e) => setPlaybackSpeed(Number.parseFloat(e.target.value))}
           className="themed-select text-label-sm font-label-sm cursor-pointer"
           title="Playback speed"
         >
@@ -590,6 +610,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
           onClick={() => setShowShortcuts(true)}
           className="font-label-md text-label-md text-primary hover:text-accent-teal transition-colors active:scale-95 duration-100"
           title="Keyboard shortcuts"
+          aria-label="Open keyboard shortcuts"
         >
           <span className="material-symbols-outlined">keyboard</span>
         </button>
@@ -597,6 +618,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
           onClick={toggleTheme}
           className="font-label-md text-label-md text-primary hover:text-accent-teal transition-colors active:scale-95 duration-100"
           title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+          aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
         >
           <span className="material-symbols-outlined">{theme === "dark" ? "light_mode" : "dark_mode"}</span>
         </button>

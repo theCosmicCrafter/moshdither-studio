@@ -9,7 +9,6 @@ pub mod motion_transfer;
 pub mod mv_effects;
 pub mod optical_flow;
 pub mod profiles;
-pub mod repeat;
 pub mod rise;
 pub mod shuffle;
 
@@ -26,6 +25,5 @@ pub use mv_effects::{
 };
 pub use optical_flow::OpticalFlow;
 pub use profiles::{BloomProfile, ExtremeProfile, GlitchProfile, RainbowProfile, SmearProfile};
-pub use repeat::RepeatDatamosh;
 pub use rise::RiseDatamosh;
 pub use shuffle::ShuffleDatamosh;

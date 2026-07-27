@@ -1,0 +1,37 @@
+name: "MoshDither Studio CodeQL config"
+
+# Keep CodeQL on this project's own code.
+#
+# Without this it also analysed references/ (~1 GB of cloned third-party
+# repositories), the SAM3 checkouts and the Python virtualenvs. Two problems:
+# the Python analysis timed out or failed trying to resolve a dependency tree
+# that includes torch + CUDA, and any alert it did raise belonged to somebody
+# else's project.
+#
+# Paths are relative to the repository root.
+paths-ignore:
+  # Vendored third-party source. references/ alone is ~1 GB of cloned repos.
+  - references
+  - sam3_repo
+  - packages/python-backend/sam3_repo
+
+  # Python environments -- thousands of installed packages, none of them ours.
+  - sam3_env
+  - audit_venv
+  - packages/python-backend/venv
+
+  # JS dependencies.
+  - node_modules
+  - mcp-servers/**/node_modules
+
+  # Build output and generated artefacts.
+  - dist
+  - src-tauri/target
+  - test-results
+  - playwright-report
+  - outputs
+  - test-outputs
+
+  # The project's deletion protocol keeps removed files here on purpose; they
+  # are out of the build and should not be analysed.
+  - recycling

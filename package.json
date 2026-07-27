@@ -5,18 +5,27 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "node scripts/verify-external-bins.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "verify:external": "node scripts/verify-external-bins.mjs",
+    "subset:icons": "node scripts/subset-material-symbols.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
+    "setup:sam3-env": "python scripts/setup-sam3-env.py",
+    "build:sam3-sidecar": "python scripts/build-sam3-sidecar.py",
+    "download:sam3-checkpoint": "python scripts/download-sam3-checkpoint.py",
+    "enable:sam3-sidecar": "node scripts/enable-sam3-sidecar.mjs",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "test": "vitest run",
     "test:unit": "vitest run",
     "test:e2e": "playwright test",
     "test:all": "vitest run && playwright test",
     "audit:features": "python tools/feature_audit.py",
-    "audit:parity": "playwright test tests/e2e/run-parity.spec.ts"
+    "audit:parity": "playwright test tests/e2e/run-parity.spec.ts",
+    "secret-scan": "pwsh -ExecutionPolicy Bypass -File scripts/secret-scan.ps1",
+    "secret-scan:history": "pwsh -ExecutionPolicy Bypass -File scripts/secret-scan.ps1 -History"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",
@@ -25,11 +34,10 @@
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.0.0",
     "lucide-react": "^0.460.0",
-    "material-symbols": "^0.45.8",
     "meyda": "^5.6.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "web-audio-beat-detector": "^8.2.36",
+    "web-audio-beat-detector": "^8.2.37",
     "zustand": "^4.5.2"
   },
   "devDependencies": {
@@ -41,7 +49,6 @@
     "@types/node": "^26.1.1",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
-    "@types/webmidi": "^2.1.0",
     "@typescript-eslint/eslint-plugin": "^8.61.1",
     "@typescript-eslint/parser": "^8.61.1",
     "@vitejs/plugin-react": "^6.0.3",
@@ -56,5 +63,8 @@
     "typescript": "^5.5.3",
     "vite": "^8.1.5",
     "vitest": "^4.1.10"
+  },
+  "overrides": {
+    "brace-expansion": "^5.0.8"
   }
 }

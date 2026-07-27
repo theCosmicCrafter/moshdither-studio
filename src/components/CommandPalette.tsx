@@ -111,6 +111,9 @@ export default function CommandPalette() {
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Command palette"
       style={{
         position: "fixed",
         inset: 0,
@@ -144,6 +147,10 @@ export default function CommandPalette() {
           }}
           onKeyDown={handleKeyDown}
           placeholder="Type a command..."
+          aria-label="Command search input"
+          aria-autocomplete="list"
+          aria-controls="command-palette-listbox"
+          aria-activedescendant={commands.length > 0 ? `command-option-${selectedIndex}` : undefined}
           style={{
             width: "100%",
             padding: "16px 20px",
@@ -155,9 +162,15 @@ export default function CommandPalette() {
             caretColor: "var(--accent-primary, #0a84ff)",
           }}
         />
-        <div style={{ maxHeight: 320, overflowY: "auto" }}>
+        <div
+          id="command-palette-listbox"
+          role="listbox"
+          aria-label="Available commands"
+          style={{ maxHeight: 320, overflowY: "auto" }}
+        >
           {commands.length === 0 && (
             <div
+              role="status"
               style={{
                 padding: 24,
                 textAlign: "center",
@@ -171,6 +184,9 @@ export default function CommandPalette() {
           {commands.map((cmd, i) => (
             <button
               key={cmd.id}
+              id={`command-option-${i}`}
+              role="option"
+              aria-selected={i === selectedIndex}
               onClick={() => execute(cmd)}
               style={{
                 width: "100%",

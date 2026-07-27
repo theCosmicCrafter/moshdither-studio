@@ -19,21 +19,20 @@ fn apply_lift_gamma_gain(
     let gf = g as f32 / 255.0;
     let bf = b as f32 / 255.0;
 
-    // Apply gain (multiply)
-    let mut cr = rf * (1.0 + gain[0]);
-    let mut cg = gf * (1.0 + gain[1]);
-    let mut cb = bf * (1.0 + gain[2]);
-
-    // Apply lift (add)
-    cr += lift[0];
-    cg += lift[1];
-    cb += lift[2];
-
-    // Apply gamma (power curve)
-    let safe_gamma = |v: f32| (v + 1.0).max(0.01);
-    cr = cr.max(0.0).powf(1.0 / safe_gamma(gamma[0]));
-    cg = cg.max(0.0).powf(1.0 / safe_gamma(gamma[1]));
-    cb = cb.max(0.0).powf(1.0 / safe_gamma(gamma[2]));
+    // Canonical lift/gamma/gain (video-grading style):
+    //   out = ((in + lift * (1 - in)) * (1 + gain)) ^ (1 / gamma)
+    // Lift raises shadows while leaving white untouched (weighted by 1-in),
+    // gain scales linearly (strongest visible effect in highlights),
+    // gamma bends the midtones with a power curve.
+    let apply = |v: f32, l: f32, gm: f32, gn: f32| -> f32 {
+        let lifted = v + l * (1.0 - v);
+        let gained = lifted * (1.0 + gn);
+        let safe_gamma = (gm + 1.0).max(0.01);
+        gained.max(0.0).powf(1.0 / safe_gamma)
+    };
+    let cr = apply(rf, lift[0], gamma[0], gain[0]);
+    let cg = apply(gf, lift[1], gamma[1], gain[1]);
+    let cb = apply(bf, lift[2], gamma[2], gain[2]);
 
     // Blend with original
     let out_r = (rf * (1.0 - amount) + cr * amount) * 255.0;

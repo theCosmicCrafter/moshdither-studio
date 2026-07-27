@@ -414,16 +414,53 @@ def _ensure_groundingdino(device: str = "cpu"):
         cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "moshdither", "grounding-dino")
         os.makedirs(cache_dir, exist_ok=True)
 
+        # Pinned to an exact commit rather than tracking `main`.
+        #
+        # Without a revision this fetches whatever the repository points at
+        # today, so a compromise or force-push upstream is pulled silently. That
+        # matters more than usual here: transformers < 5.3.0 (PYSEC-2026-2289)
+        # executes arbitrary code from a repository named in a model's
+        # config.json `_attn_implementation_internal` field during
+        # from_pretrained(). An unpinned revision is the delivery vector for it.
+        #
+        # This SHA is the repository head as of 2024-05-12, unchanged since.
+        # Verify before changing:
+        #   https://huggingface.co/api/models/IDEA-Research/grounding-dino-tiny
+        # pragma: allowlist secret -- a git commit SHA is public by definition;
+        # detect-secrets reads any 40-char hex string as high entropy.
+        GROUNDING_DINO_REVISION = "a2bb814dd30d776dcf7e30523b00659f4f141c71"  # pragma: allowlist secret
+
         # Download if missing
         if not os.path.exists(os.path.join(cache_dir, "model.safetensors")):
             snapshot_download(
                 repo_id="IDEA-Research/grounding-dino-tiny",
+                revision=GROUNDING_DINO_REVISION,
                 local_dir=cache_dir,
                 local_dir_use_symlinks=False,
+                # safetensors only. The repository also ships pytorch_model.bin,
+                # a pickle, which executes arbitrary code on load by design. Only
+                # model.safetensors is needed and it cannot carry code.
+                allow_patterns=["*.json", "*.txt", "*.safetensors", "*.model"],
             )
 
-        _grounding_dino_processor = AutoProcessor.from_pretrained(cache_dir)
-        _grounding_dino_model = AutoModelForZeroShotObjectDetection.from_pretrained(cache_dir)
+        # Both loads read the local cache_dir populated above, never the Hub, so
+        # local_files_only=True makes that a guarantee rather than a convention:
+        # if the directory is incomplete these raise instead of silently
+        # fetching an unpinned copy over the network.
+        #
+        # trust_remote_code is False by default; stated explicitly so a future
+        # edit has to make that decision deliberately rather than by omission.
+        # Enabling it would let the repository ship executable code.
+        #
+        # nosec B615 -- bandit flags from_pretrained() without revision=, but
+        # revision has no meaning for a local path. The pin lives on the
+        # snapshot_download() above, which is what actually contacts the Hub.
+        _grounding_dino_processor = AutoProcessor.from_pretrained(  # nosec B615
+            cache_dir, trust_remote_code=False, local_files_only=True
+        )
+        _grounding_dino_model = AutoModelForZeroShotObjectDetection.from_pretrained(  # nosec B615
+            cache_dir, trust_remote_code=False, local_files_only=True
+        )
         # Try CUDA first, fall back to CPU if unavailable (e.g., CPU-only PyTorch wheel)
         try:
             _grounding_dino_model.to(device)

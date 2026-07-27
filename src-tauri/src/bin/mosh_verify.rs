@@ -13,7 +13,9 @@ use std::env;
 use std::process::ExitCode;
 
 use moshdither_studio_lib::effects::types::{Frame, Mask, MediaType, ParameterDef, VideoSegment};
-use moshdither_studio_lib::effects::{functional_tests, verification, EffectRegistry};
+use moshdither_studio_lib::effects::{
+    clamp_params, functional_tests, verification, EffectRegistry,
+};
 use moshdither_studio_lib::ffmpeg;
 use moshdither_studio_lib::utils::image_io;
 
@@ -57,6 +59,26 @@ fn print_usage() {
     eprintln!("    --filter <substring>   Only animate effects whose ID contains substring");
     eprintln!("    --duration <secs>      Clip duration in seconds (default: 5)");
     eprintln!("    --fps <n>              Frames per second (default: 24)");
+    eprintln!();
+    eprintln!("  audio-render            Render audio-reactive effects with baked audio features");
+    eprintln!("    --video <path>        Path to input video (required)");
+    eprintln!("    --audio-bake <path>   Path to AudioBakeData JSON (required)");
+    eprintln!("    --output <dir>        Output directory (default: ./audio-outputs)");
+    eprintln!("    --filter <substring>  Only render effects whose ID contains substring");
+    eprintln!("    --max-frames <n>      Max frames to decode (default: 450 = 15s @ 30fps)");
+    eprintln!("    --scale <n>           Downscale so longest side = n px (e.g. 720 for 720p)");
+    eprintln!("                          Essential for 4K source — without this, the 2 GiB");
+    eprintln!("                          decode budget only allows ~64 4K frames");
+    eprintln!();
+    eprintln!("  render-presets          Render preset stacks on a test image");
+    eprintln!("    --image <path>        Path to test image (required)");
+    eprintln!("    --presets <path>      JSON file with preset specs (required)");
+    eprintln!("    --output <dir>        Output directory (default: ./preset-outputs)");
+    eprintln!();
+    eprintln!("  render-luts             Render every LUT in a directory via color.lut_grading");
+    eprintln!("    --image <path>        Path to test image (required)");
+    eprintln!("    --lut-dir <dir>       Directory containing LUT PNGs (default: ./public/lut)");
+    eprintln!("    --output <dir>        Output directory (default: ./lut-outputs)");
     eprintln!();
     eprintln!("EXAMPLES:");
     eprintln!("  mosh-verify verify-all --format json > report.json");
@@ -509,7 +531,7 @@ fn cmd_render_all(args: &[String]) -> ExitCode {
         };
 
         let safe_name = sanitize_filename(&meta.id);
-        let params = build_default_params(&meta.id, &meta.parameters);
+        let params = clamp_params(&meta.id, &build_default_params(&meta.id, &meta.parameters));
 
         // ── Render image output ──────────────────────────────
         let img_out_path = format!("{}/images/{}.png", output_dir, safe_name);
@@ -597,6 +619,8 @@ fn cmd_render_all(args: &[String]) -> ExitCode {
                                 None,
                                 None,
                                 None,
+                                None,
+                                None,
                             ) {
                                 Ok(()) => {
                                     eprintln!(
@@ -647,6 +671,586 @@ fn cmd_render_all(args: &[String]) -> ExitCode {
     eprintln!("Videos: {}/videos/", output_dir);
 
     if stats.errors > 0 {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+// ── render-presets: render built-in preset stacks on a test image ───────────
+
+/// Preset stack entry — mirrors the frontend `StackEntry` shape.
+#[derive(serde::Deserialize)]
+struct PresetEntry {
+    effect_id: String,
+    #[serde(default)]
+    params: serde_json::Map<String, serde_json::Value>,
+    #[serde(default = "default_true")]
+    enabled: bool,
+}
+fn default_true() -> bool {
+    true
+}
+
+#[derive(serde::Deserialize)]
+struct PresetSpec {
+    name: String,
+    stack: Vec<PresetEntry>,
+}
+
+fn cmd_render_presets(args: &[String]) -> ExitCode {
+    let mut image_path: Option<&str> = None;
+    let mut output_dir = "./preset-outputs".to_string();
+    let mut presets_file: Option<&str> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--image" => {
+                i += 1;
+                if i < args.len() {
+                    image_path = Some(&args[i]);
+                }
+            }
+            "--output" => {
+                i += 1;
+                if i < args.len() {
+                    output_dir = args[i].clone();
+                }
+            }
+            "--presets" => {
+                i += 1;
+                if i < args.len() {
+                    presets_file = Some(&args[i]);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let image_path = match image_path {
+        Some(p) => p,
+        None => {
+            eprintln!("Error: --image <path> is required");
+            return ExitCode::from(2);
+        }
+    };
+    let presets_file = match presets_file {
+        Some(p) => p,
+        None => {
+            eprintln!("Error: --presets <path> is required (JSON file with preset specs)");
+            return ExitCode::from(2);
+        }
+    };
+
+    let _ = std::fs::create_dir_all(&output_dir);
+
+    eprintln!("Loading image: {}", image_path);
+    let _current = match image_io::load_image(image_path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Error loading image: {}", e);
+            return ExitCode::from(1);
+        }
+    };
+    eprintln!("  Image: {}x{}", _current.width, _current.height);
+
+    eprintln!("Loading presets: {}", presets_file);
+    let presets_json = match std::fs::read_to_string(presets_file) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error reading presets file: {}", e);
+            return ExitCode::from(1);
+        }
+    };
+    let presets: Vec<PresetSpec> = match serde_json::from_str(&presets_json) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Error parsing presets JSON: {}", e);
+            return ExitCode::from(1);
+        }
+    };
+    eprintln!("  {} presets\n", presets.len());
+
+    let registry = EffectRegistry::new();
+    let mut ok = 0usize;
+    let mut errors = 0usize;
+
+    for preset in &presets {
+        let safe_name = sanitize_filename(&preset.name);
+        // Reset to original image for each preset by reloading.
+        let mut frame = match image_io::load_image(image_path) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("  ERR  {} — reload failed: {}", preset.name, e);
+                errors += 1;
+                continue;
+            }
+        };
+
+        let mut preset_errors = 0;
+        for entry in &preset.stack {
+            if !entry.enabled {
+                continue;
+            }
+            let effect = match registry.get(&entry.effect_id) {
+                Some(e) => e,
+                None => {
+                    eprintln!(
+                        "  ERR  {} — effect not found: {}",
+                        preset.name, entry.effect_id
+                    );
+                    preset_errors += 1;
+                    break;
+                }
+            };
+            // Build params from the entry's params map, filling in defaults
+            // for any missing parameters.
+            let mut params = entry.params.clone();
+            if let Some(meta) = registry
+                .list()
+                .into_iter()
+                .find(|m| m.id == entry.effect_id)
+            {
+                for p in &meta.parameters {
+                    if !params.contains_key(&p.id) {
+                        params.insert(p.id.clone(), p.default.clone());
+                    }
+                }
+            }
+            let params = clamp_params(&entry.effect_id, &params);
+
+            match effect.process_frame(&frame, None, &params) {
+                Ok(out) => frame = out,
+                Err(e) => {
+                    eprintln!("  ERR  {} — {} failed: {}", preset.name, entry.effect_id, e);
+                    preset_errors += 1;
+                    break;
+                }
+            }
+        }
+
+        if preset_errors > 0 {
+            errors += 1;
+            continue;
+        }
+
+        let out_path = format!("{}/{}.png", output_dir, safe_name);
+        match image_io::save_image(&frame, &out_path, Some("png"), None) {
+            Ok(_) => {
+                eprintln!("  OK   {} → {}.png", preset.name, safe_name);
+                ok += 1;
+            }
+            Err(e) => {
+                eprintln!("  ERR  {} — save failed: {}", preset.name, e);
+                errors += 1;
+            }
+        }
+        // Suppress unused warning on `_current` (kept for clarity of intent).
+        let _ = &_current;
+    }
+
+    eprintln!("\nDone: {} ok, {} errors", ok, errors);
+    if errors > 0 {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+// ── render-luts: render every LUT in a directory via color.lut_grading ──────
+
+fn cmd_render_luts(args: &[String]) -> ExitCode {
+    let mut image_path: Option<&str> = None;
+    let mut output_dir = "./lut-outputs".to_string();
+    let mut lut_dir = "./public/lut".to_string();
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--image" => {
+                i += 1;
+                if i < args.len() {
+                    image_path = Some(&args[i]);
+                }
+            }
+            "--output" => {
+                i += 1;
+                if i < args.len() {
+                    output_dir = args[i].clone();
+                }
+            }
+            "--lut-dir" => {
+                i += 1;
+                if i < args.len() {
+                    lut_dir = args[i].clone();
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let image_path = match image_path {
+        Some(p) => p,
+        None => {
+            eprintln!("Error: --image <path> is required");
+            return ExitCode::from(2);
+        }
+    };
+
+    let _ = std::fs::create_dir_all(&output_dir);
+
+    eprintln!("Loading image: {}", image_path);
+    let test_image = match image_io::load_image(image_path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Error loading image: {}", e);
+            return ExitCode::from(1);
+        }
+    };
+    eprintln!("  Image: {}x{}", test_image.width, test_image.height);
+
+    let lut_dir_path = std::path::Path::new(&lut_dir);
+    let lut_files: Vec<_> = match std::fs::read_dir(lut_dir_path) {
+        Ok(rd) => rd
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .map(|ext| ext.eq_ignore_ascii_case("png"))
+                    .unwrap_or(false)
+            })
+            .collect(),
+        Err(e) => {
+            eprintln!("Error reading LUT directory {}: {}", lut_dir, e);
+            return ExitCode::from(1);
+        }
+    };
+
+    eprintln!("Found {} LUT files in {}\n", lut_files.len(), lut_dir);
+
+    let registry = EffectRegistry::new();
+    let lut_effect = match registry.get("color.lut_grading") {
+        Some(e) => e,
+        None => {
+            eprintln!("Error: color.lut_grading effect not found in registry");
+            return ExitCode::from(1);
+        }
+    };
+
+    // Build params with the LUT path. The effect accepts `lut_path` as a
+    // relative path (e.g. "lut/midnight.png") or an absolute path.
+    let mut ok = 0usize;
+    let mut errors = 0usize;
+
+    for entry in &lut_files {
+        let path = entry.path();
+        let lut_name = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        // Pass the absolute path — the effect's path guard validates it
+        // and rejects relative paths that don't start with `lut/`.
+        let lut_path_str = std::fs::canonicalize(&path)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| path.to_string_lossy().to_string());
+
+        let mut params = serde_json::Map::new();
+        params.insert("amount".to_string(), serde_json::json!(1.0));
+        params.insert("lut_path".to_string(), serde_json::json!(lut_path_str));
+        let params = clamp_params("color.lut_grading", &params);
+
+        match lut_effect.process_frame(&test_image, None, &params) {
+            Ok(output) => {
+                let out_path = format!("{}/{}.png", output_dir, sanitize_filename(&lut_name));
+                match image_io::save_image(&output, &out_path, Some("png"), None) {
+                    Ok(_) => {
+                        eprintln!("  OK   {} → {}.png", lut_name, lut_name);
+                        ok += 1;
+                    }
+                    Err(e) => {
+                        eprintln!("  ERR  {} — save failed: {}", lut_name, e);
+                        errors += 1;
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("  ERR  {} — process_frame failed: {}", lut_name, e);
+                errors += 1;
+            }
+        }
+    }
+
+    eprintln!("\nDone: {} ok, {} errors", ok, errors);
+    if errors > 0 {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+// ── audio-render: render audio-reactive effects with baked audio features ──
+
+fn cmd_audio_render(args: &[String]) -> ExitCode {
+    let mut video_path: Option<&str> = None;
+    let mut audio_bake_path: Option<&str> = None;
+    let mut output_dir = "./audio-outputs".to_string();
+    let mut filter: Option<&str> = None;
+    let mut max_frames: usize = 450; // 15s @ 30fps default
+    let mut scale: Option<usize> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--video" => {
+                i += 1;
+                if i < args.len() {
+                    video_path = Some(&args[i]);
+                }
+            }
+            "--audio-bake" => {
+                i += 1;
+                if i < args.len() {
+                    audio_bake_path = Some(&args[i]);
+                }
+            }
+            "--output" => {
+                i += 1;
+                if i < args.len() {
+                    output_dir = args[i].clone();
+                }
+            }
+            "--filter" => {
+                i += 1;
+                if i < args.len() {
+                    filter = Some(&args[i]);
+                }
+            }
+            "--max-frames" => {
+                i += 1;
+                if i < args.len() {
+                    max_frames = args[i].parse().unwrap_or(450);
+                }
+            }
+            "--scale" => {
+                i += 1;
+                if i < args.len() {
+                    scale = args[i].parse().ok();
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let video_path = match video_path {
+        Some(p) => p,
+        None => {
+            eprintln!("Error: --video <path> is required");
+            return ExitCode::from(2);
+        }
+    };
+    let audio_bake_path = match audio_bake_path {
+        Some(p) => p,
+        None => {
+            eprintln!("Error: --audio-bake <path.json> is required");
+            eprintln!("Generate one with scripts/extract_audio_features.py");
+            return ExitCode::from(2);
+        }
+    };
+
+    // Load AudioBakeData JSON
+    eprintln!("Loading audio bake data: {}", audio_bake_path);
+    let bake_json = match std::fs::read_to_string(audio_bake_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error reading audio bake file: {}", e);
+            return ExitCode::from(1);
+        }
+    };
+    let bake: moshdither_studio_lib::audio::AudioBakeData = match serde_json::from_str(&bake_json) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("Error parsing audio bake JSON: {}", e);
+            return ExitCode::from(1);
+        }
+    };
+    eprintln!(
+        "  Audio bake: {} frames @ {} fps (bpm={:?})",
+        bake.total_frames, bake.fps, bake.bpm
+    );
+
+    // Load video. If --scale was not specified, auto-pick a scale that
+    // fits the adaptive memory budget (4K source → 1080p, etc.).
+    let effective_scale = if scale.is_none() {
+        match ffmpeg::plan_decode(video_path, None) {
+            Ok((s, budget)) => {
+                eprintln!(
+                    "  Decode plan: auto scale={:?} (memory budget {:.0} MB)",
+                    s,
+                    budget as f64 / (1024.0 * 1024.0)
+                );
+                s
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: plan_decode failed ({}), decoding at native res",
+                    e
+                );
+                None
+            }
+        }
+    } else {
+        scale
+    };
+
+    eprintln!("Loading video: {}", video_path);
+    let mut test_video =
+        match ffmpeg::decode_video_with_options(video_path, Some(max_frames), effective_scale) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("Error loading video: {}", e);
+                return ExitCode::from(1);
+            }
+        };
+    eprintln!(
+        "  Video: {}x{}, {} frames, {} fps",
+        test_video.frames.first().map(|f| f.width).unwrap_or(0),
+        test_video.frames.first().map(|f| f.height).unwrap_or(0),
+        test_video.frames.len(),
+        test_video.fps
+    );
+
+    // If video has more frames than audio bake, truncate
+    if test_video.frames.len() > bake.frames.len() {
+        eprintln!(
+            "  Truncating video from {} to {} frames to match audio bake",
+            test_video.frames.len(),
+            bake.frames.len()
+        );
+        test_video.frames.truncate(bake.frames.len());
+    }
+
+    // Create output directory
+    let _ = std::fs::create_dir_all(&output_dir);
+
+    // Find audio-reactive effects
+    let registry = EffectRegistry::new();
+    let metas = registry.list();
+    let audio_effects: Vec<_> = metas
+        .iter()
+        .filter(|m| m.id.starts_with("audio_reactive"))
+        .filter(|m| filter.is_none_or(|f| m.id.contains(f)))
+        .collect();
+
+    if audio_effects.is_empty() {
+        eprintln!("No audio-reactive effects matched filter");
+        return ExitCode::from(1);
+    }
+
+    eprintln!(
+        "\nRendering {} audio-reactive effects...\n",
+        audio_effects.len()
+    );
+
+    let mut ok_count = 0usize;
+    let mut err_count = 0usize;
+    let mut report_lines: Vec<String> = Vec::new();
+
+    for meta in &audio_effects {
+        let effect = match registry.get(&meta.id) {
+            Some(e) => e,
+            None => {
+                eprintln!("  SKIP {} — not found", meta.id);
+                continue;
+            }
+        };
+
+        let safe_name = sanitize_filename(&meta.id);
+        let out_path = format!("{}/{}.mp4", output_dir, safe_name);
+
+        // Build base params from defaults, then inject audio features per frame.
+        let base_params = build_default_params(&meta.id, &meta.parameters);
+
+        eprintln!(
+            "  Rendering {} ({} frames)...",
+            meta.id,
+            test_video.frames.len()
+        );
+        let mut out_frames = Vec::with_capacity(test_video.frames.len());
+        let mut had_error = false;
+
+        for (idx, frame) in test_video.frames.iter().enumerate() {
+            // Clone base params and inject audio features for this frame
+            let mut params = base_params.clone();
+            bake.inject_params(&mut params, idx);
+
+            // Clamp to declared ranges
+            let params = clamp_params(&meta.id, &params);
+
+            match effect.process_frame(frame, None, &params) {
+                Ok(f) => out_frames.push(f),
+                Err(e) => {
+                    eprintln!("    ERR frame {}: {}", idx, e);
+                    had_error = true;
+                    break;
+                }
+            }
+        }
+
+        if had_error {
+            err_count += 1;
+            report_lines.push(format!("ERR|{}|process_frame failed", meta.id));
+            continue;
+        }
+
+        let segment = VideoSegment {
+            frames: out_frames,
+            fps: test_video.fps,
+        };
+
+        match ffmpeg::encode_video(
+            &segment, &out_path, "h264", None, None, None, None, None, None, None, None, None,
+            None, None,
+        ) {
+            Ok(()) => {
+                eprintln!(
+                    "  OK   {} → {} ({} frames)",
+                    meta.id,
+                    safe_name,
+                    segment.frames.len()
+                );
+                ok_count += 1;
+                report_lines.push(format!(
+                    "OK|{}|{}.mp4|{} frames",
+                    meta.id,
+                    safe_name,
+                    segment.frames.len()
+                ));
+            }
+            Err(e) => {
+                eprintln!("  ERR  {} — encode failed: {}", meta.id, e);
+                err_count += 1;
+                report_lines.push(format!("ERR|{}|encode: {}", meta.id, e));
+            }
+        }
+    }
+
+    // Write report
+    let report_path = format!("{}/audio-render-report.csv", output_dir);
+    let report_content = format!("status|effect_id|output|notes\n{}", report_lines.join("\n"));
+    let _ = std::fs::write(&report_path, report_content);
+
+    eprintln!("\n=== Audio Render Summary ===");
+    eprintln!("Total effects: {}", audio_effects.len());
+    eprintln!("OK: {}", ok_count);
+    eprintln!("Errors: {}", err_count);
+    eprintln!("\nReport: {}", report_path);
+    eprintln!("Output: {}/", output_dir);
+
+    if err_count > 0 {
         ExitCode::from(1)
     } else {
         ExitCode::SUCCESS
@@ -798,7 +1402,7 @@ fn animate_effect_params(
         _ => {}
     }
 
-    params
+    clamp_params(effect_id, &params)
 }
 
 /// Apply a small horizontal drift to a frame so purely-deterministic effects
@@ -997,6 +1601,7 @@ fn cmd_animate_all(args: &[String]) -> ExitCode {
                 params.insert("threshold".to_string(), serde_json::json!(50.0));
                 params.insert("n_frames".to_string(), serde_json::json!(5));
             }
+            let params = clamp_params(&meta.id, &params);
             match effect.process_video(&synthetic, vid_mask.as_ref(), &params) {
                 Ok(seg) => frames = seg.frames,
                 Err(e) => process_error = Some(format!("process_video: {}", e)),
@@ -1070,6 +1675,8 @@ fn cmd_animate_all(args: &[String]) -> ExitCode {
             &segment,
             &vid_out_path,
             "h264",
+            None,
+            None,
             None,
             None,
             None,
@@ -1250,6 +1857,9 @@ fn main() -> ExitCode {
         "test-all" => cmd_test_all(&args[1..]),
         "render-all" => cmd_render_all(&args[1..]),
         "animate-all" => cmd_animate_all(&args[1..]),
+        "audio-render" => cmd_audio_render(&args[1..]),
+        "render-presets" => cmd_render_presets(&args[1..]),
+        "render-luts" => cmd_render_luts(&args[1..]),
         "status" => cmd_status(),
         "--help" | "-h" | "help" => {
             print_usage();

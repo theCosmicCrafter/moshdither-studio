@@ -7,7 +7,51 @@ version = 2
 db-path = "~/.cargo/advisory-dbs"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "warn"
-ignore = []
+
+# Every entry here is an `unmaintained` advisory, not a vulnerability. None is a
+# known exploitable defect; each says "nobody is publishing releases for this
+# crate any more". All are transitive -- none is a direct dependency of this
+# project -- and none has an upstream fix to move to.
+#
+# Listed individually and never as a blanket `unmaintained = "warn"`, so a NEW
+# unmaintained crate entering the tree still fails the check and forces a
+# decision. Actual vulnerability advisories are untouched and still error.
+#
+# Re-check when Tauri ships its GTK4 migration; most of this list goes away.
+ignore = [
+    # --- GTK3 bindings, 10 crates. -------------------------------------------
+    # Pulled in by Tauri's Linux webview backend (tauri -> gtk/webkit2gtk). The
+    # gtk-rs project has moved to GTK4 and archived the GTK3 bindings; Tauri v2
+    # has not migrated, so there is no version to upgrade to. This app targets
+    # Windows, where these crates are not even compiled in -- cargo-deny
+    # evaluates the whole graph regardless of target.
+    "RUSTSEC-2024-0411",
+    "RUSTSEC-2024-0412",
+    "RUSTSEC-2024-0413",
+    "RUSTSEC-2024-0414",
+    "RUSTSEC-2024-0415",
+    "RUSTSEC-2024-0416",
+    "RUSTSEC-2024-0417",
+    "RUSTSEC-2024-0418",
+    "RUSTSEC-2024-0419",
+    "RUSTSEC-2024-0420",
+
+    # --- unic-* Unicode crates, 5. -------------------------------------------
+    # Transitive, via the Unicode handling in the dependency tree. Superseded by
+    # icu4x upstream, but the crates that depend on them have not switched.
+    "RUSTSEC-2025-0075",
+    "RUSTSEC-2025-0080",
+    "RUSTSEC-2025-0081",
+    "RUSTSEC-2025-0098",
+    "RUSTSEC-2025-0100",
+
+    # --- proc-macro build-time helpers, 2. -----------------------------------
+    # Both are proc-macro dependencies, so they run at build time only and are
+    # not present in the shipped binary. proc-macro-error is superseded by
+    # proc-macro-error2; paste has no successor.
+    "RUSTSEC-2024-0370",
+    "RUSTSEC-2024-0436",
+]
 
 [licenses]
 version = 2
@@ -20,6 +64,30 @@ allow = [
     "Apache-2.0 WITH LLVM-exception",
     "MPL-2.0",
     "OpenSSL",
+
+    # Added 2026-07-26. All four are permissive and were already present in the
+    # dependency tree; the list had simply fallen behind, so `cargo deny check`
+    # failed on 48 crates for licences nobody objects to.
+    #
+    # Unicode-3.0 (38 crates) is the direct successor to Unicode-DFS-2016 above,
+    # which the ICU / unicode-ident crates migrated to. Allowing the old name
+    # but not the new one was an oversight rather than a policy.
+    "Unicode-3.0",
+    # BSD-2-Clause (6) is the two-clause form of BSD-3-Clause, already allowed,
+    # minus the non-endorsement clause.
+    "BSD-2-Clause",
+    # Zlib (2) is a permissive licence with no attribution requirement in
+    # binary form.
+    "Zlib",
+    # CDLA-Permissive-2.0 (2) is the Community Data License Agreement
+    # permissive variant, used by data-table crates. No copyleft obligations.
+    "CDLA-Permissive-2.0",
+    # NCSA (University of Illinois/NCSA Open Source License) covers
+    # libfuzzer-sys, a fuzzing harness. It is permissive -- effectively MIT and
+    # BSD combined -- and `cargo tree -i libfuzzer-sys` resolves to nothing on
+    # any target here, so it is in the lockfile without being linked into a
+    # build.
+    "NCSA",
 ]
 confidence-threshold = 0.8
 exceptions = []

@@ -1,3 +1,5 @@
+import { convertFileSrc } from "../../lib/tauri";
+import { cubeToFlatLutImageData, parseCubeLut } from "../../utils/parseLut";
 import { WebGLContext } from "../webgl2/WebGLContext";
 
 export interface LUTPreset {
@@ -96,4 +98,43 @@ export class LUTLoader {
     this.cache.forEach((t) => gl.deleteTexture(t));
     this.cache.clear();
   }
+}
+
+/// Load a custom LUT from disk. PNGs use the asset protocol directly;
+/// .cube files are parsed and converted to a 512×512 preview texture.
+export async function loadCustomLUT(
+  filePath: string
+): Promise<{ previewUrl: string; filePath: string }> {
+  const ext = filePath.split(".").pop()?.toLowerCase();
+  if (ext === "png") {
+    return { previewUrl: convertFileSrc(filePath), filePath };
+  }
+  if (ext === "cube") {
+    const response = await fetch(convertFileSrc(filePath));
+    if (!response.ok) {
+      throw new Error(`Failed to read .cube file: ${response.statusText}`);
+    }
+    const text = await response.text();
+    const parsed = parseCubeLut(text);
+    const imageData = cubeToFlatLutImageData(parsed);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = imageData.width;
+    canvas.height = imageData.height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      throw new Error("Could not create 2D canvas context");
+    }
+    ctx.putImageData(imageData, 0, 0);
+
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (b) => (b ? resolve(b) : reject(new Error("canvas.toBlob failed"))),
+        "image/png"
+      );
+    });
+    const previewUrl = URL.createObjectURL(blob);
+    return { previewUrl, filePath };
+  }
+  throw new Error(`Unsupported LUT extension: ${ext ?? "none"}`);
 }

@@ -45,9 +45,11 @@ export const bayerDitherShader: EffectShader = {
     }
 
     void main() {
-      vec2 pixel = vUv * resolution;
-      vec2 block = floor(pixel / scale) * scale;
-      vec2 uv = (block + 0.5) / resolution;
+      vec2 res = resolution.x > 0.0 ? resolution : vec2(1920.0, 1080.0);
+      vec2 pixel = vUv * res;
+      float s = scale > 0.0 ? scale : 4.0;
+      vec2 block = floor(pixel / s) * s;
+      vec2 uv = (block + 0.5) / res;
       vec4 color = texture2D(tDiffuse, uv);
       vec3 c = color.rgb;
 

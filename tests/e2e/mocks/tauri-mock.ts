@@ -61,9 +61,16 @@ export const tauriMockScript = `
     onDragDropEvent: () => Promise.resolve(() => {}),
   };
 
+  const callbacks = new Map();
+  let callbackId = 0;
+
   window.__TAURI_INTERNALS__ = {
     invoke(command, args) {
       console.log('[TAURI MOCK] invoke:', command, args);
+      if (command === 'plugin:event|listen') return Promise.resolve(1);
+      if (command === 'plugin:event|unlisten') return Promise.resolve();
+      if (command === 'plugin:dialog|open') return Promise.resolve(null);
+      if (command === 'plugin:dialog|save') return Promise.resolve(null);
       const response = mockResponses[command];
       if (typeof response === 'function') return Promise.resolve(response(args));
       if (response !== undefined) return Promise.resolve(response);
@@ -72,6 +79,19 @@ export const tauriMockScript = `
     convertFileSrc(path) {
       return 'http://localhost:1420/mock-file/' + encodeURIComponent(path);
     },
+    transformCallback(callback) {
+      const id = String(++callbackId);
+      callbacks.set(id, callback);
+      return id;
+    },
+    unregisterCallback(id) {
+      callbacks.delete(id);
+    },
+  };
+
+  window.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
+    unregisterListener() {},
+    emit() {},
   };
 
   // Mock @tauri-apps/api/core

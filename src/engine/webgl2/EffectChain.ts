@@ -1,7 +1,7 @@
-import { WebGLContext } from "./WebGLContext";
+import { LUTLoader } from "../lut/loader";
 import { FullscreenQuad } from "./FullscreenQuad";
 import { EffectShader, RenderPass } from "./types";
-import { LUTLoader } from "../lut/loader";
+import { WebGLContext } from "./WebGLContext";
 
 const MASK_MODE_MAP: Record<string, number> = {
   inside: 0,
@@ -17,7 +17,12 @@ export class EffectChain {
   private height: number;
   private initialized = false;
   private lutLoader: LUTLoader;
+  // LRU-bounded cache of uploaded mask textures. Mask base64 strings are used as
+  // keys; each value is a GPU RGBA texture whose memory is reclaimed on eviction.
+  // Without bounding, long editing sessions with many distinct masks would leak
+  // GPU memory indefinitely.
   private maskTextureCache = new Map<string, WebGLTexture>();
+  private static readonly MASK_CACHE_MAX = 8;
 
   constructor(ctx: WebGLContext, width: number, height: number) {
     this.ctx = ctx;
@@ -28,9 +33,30 @@ export class EffectChain {
     this.height = height;
   }
 
-  private async getMaskTexture(maskB64: string): Promise<WebGLTexture> {
+  /**
+   * Drop cached mask textures and force FBO recreation. Called when the WebGL
+   * context is restored so stale resources are not reused.
+   */
+  reset() {
+    this.maskTextureCache.clear();
+    this.savedPreviousTex = null;
+    this.initialized = false;
+    this.quad.reset();
+    this.lutLoader.clearCache();
+  }
+
+  private async getMaskTexture(maskB64: string): Promise<WebGLTexture | null> {
+    if (this.gl.isContextLost()) {
+      return null;
+    }
+    // LRU touch: re-insert at the tail (most recently used) so the head holds
+    // the least recently used entry. Map preserves insertion order in JS.
     const cached = this.maskTextureCache.get(maskB64);
-    if (cached) return cached;
+    if (cached) {
+      this.maskTextureCache.delete(maskB64);
+      this.maskTextureCache.set(maskB64, cached);
+      return cached;
+    }
     const img = new Image();
     img.crossOrigin = "anonymous";
     await new Promise<void>((resolve, reject) => {
@@ -49,8 +75,28 @@ export class EffectChain {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.bindTexture(gl.TEXTURE_2D, null);
+    this.evictMaskCacheIfNeeded();
     this.maskTextureCache.set(maskB64, tex);
     return tex;
+  }
+
+  /**
+   * Evict least-recently-used mask textures until the cache is within its bound.
+   * Deleted GPU textures are reclaimed by the driver. The first entry of a JS
+   * Map is the oldest insertion that has not been re-touched, which is exactly
+   * the LRU victim.
+   */
+  private evictMaskCacheIfNeeded() {
+    while (this.maskTextureCache.size >= EffectChain.MASK_CACHE_MAX) {
+      const oldest = this.maskTextureCache.keys().next();
+      if (oldest.done) break;
+      const key = oldest.value as string;
+      const tex = this.maskTextureCache.get(key);
+      if (tex) {
+        this.gl.deleteTexture(tex);
+      }
+      this.maskTextureCache.delete(key);
+    }
   }
 
   private ensurePingPongTextures(w: number, h: number) {
@@ -69,6 +115,11 @@ export class EffectChain {
     passes: RenderPass[],
     shaders: Map<string, EffectShader>
   ) {
+    if (this.gl.isContextLost()) {
+      console.warn("[EffectChain] render skipped: WebGL context lost");
+      return;
+    }
+
     if (passes.length === 0) {
       // No effects, just blit source to screen
       this.blit(sourceTexture);

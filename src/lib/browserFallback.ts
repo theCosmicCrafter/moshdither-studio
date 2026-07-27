@@ -22,6 +22,22 @@ function deriveCategory(effectId: string): string {
   return CATEGORY_MAP[prefix] || prefix;
 }
 
+/**
+ * Human-readable name for an effect in the browser fallback list.
+ *
+ * Effects with no WebGL equivalent map to the `pass_through` shader, so taking
+ * the name from the shader would label every one of them "Pass Through". Derive
+ * from the effect ID instead in that case.
+ *
+ * Note `mask_isolate` is the one effect ID that carries no `category.` prefix,
+ * so the local part is the whole ID.
+ */
+function deriveName(effectId: string, shaderName: string, shaderId: string): string {
+  if (shaderId !== "pass_through") return shaderName;
+  const local = effectId.includes(".") ? effectId.slice(effectId.indexOf(".") + 1) : effectId;
+  return local.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
+}
+
 function paramTypeFromUniform(udef: { type: string }): ParameterDef["type"] {
   if (udef.type === "bool") return "toggle";
   if (udef.type === "sampler2D") return "palette";
@@ -63,7 +79,7 @@ export function getFallbackEffects(): EffectMeta[] {
 
     effects.push({
       id: effectId,
-      name: shader.name,
+      name: deriveName(effectId, shader.name, mapping.shaderId),
       category: deriveCategory(effectId),
       media_type: "both",
       parameters: deriveParameters(mapping.paramMap, mapping.shaderId),

@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-    branches: [main]
+    branches: [master]
 
 jobs:
   # ── Frontend: lint, typecheck, unit tests ──────────────────────
@@ -77,6 +77,46 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
+      # tauri.conf.json declares externalBin: bin/ffmpeg, ffprobe, ffgac, ffedit.
+      # Tauri's build script requires a file to exist for the HOST target triple
+      # and aborts otherwise:
+      #
+      #     resource path `bin/ffmpeg-x86_64-unknown-linux-gnu` doesn't exist
+      #
+      # src-tauri/bin/ is gitignored -- the real binaries are ~250 MB and are
+      # fetched per-developer -- so CI has none, for any platform. That means
+      # this job has never actually compiled: it failed in the build script
+      # before reaching fmt, clippy or a single test.
+      #
+      # Empty placeholders are enough. The build script only checks the path
+      # resolves; fmt/clippy/test never execute these binaries. Anything that
+      # does run them belongs in the E2E job, which builds a real bundle.
+      - name: Stub externalBin and frontendDist
+        run: |
+          TRIPLE=$(rustc -vV | awk '/^host:/ {print $2}')
+          mkdir -p src-tauri/bin
+          for b in ffmpeg ffprobe ffgac ffedit; do
+            touch "src-tauri/bin/${b}-${TRIPLE}"
+            chmod +x "src-tauri/bin/${b}-${TRIPLE}"
+          done
+          echo "Stubbed externalBin for ${TRIPLE}:"
+          ls -l src-tauri/bin/
+
+          # tauri.conf.json sets frontendDist to "../dist". The tauri-build proc
+          # macro resolves that at COMPILE time and panics if it is missing:
+          #
+          #     error: proc macro panicked
+          #       The `frontendDist` configuration is set to "../dist" but this
+          #       path doesn't exist
+          #
+          # This job never runs `npm run build`, so dist/ does not exist. A
+          # placeholder is enough -- fmt, clippy and cargo test never load the
+          # frontend; only the bundler embeds it, and this job does not bundle.
+          # Building the real frontend here would add an npm install and a vite
+          # build to every Rust check for no additional coverage.
+          mkdir -p dist
+          echo '<!doctype html><title>ci stub</title>' > dist/index.html
+
       - name: Check formatting
         run: cargo fmt -- --check
         working-directory: src-tauri
@@ -88,3 +128,108 @@ jobs:
       - name: Test
         run: cargo test
         working-directory: src-tauri
+
+  # ── Supply-chain: cargo-deny advisory + license + ban check ────
+  cargo-deny:
+    name: Cargo Deny (advisories + licenses + bans)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: Run cargo deny check
+        run: cargo deny check
+        working-directory: src-tauri
+
+  # ── Real-backend E2E: Playwright against built Tauri binary ─────
+  # Exercises the real Rust backend via the `mosh-verify` CLI — a standalone
+  # binary built from the same crate as the Tauri app that calls the same
+  # EffectRegistry, ffmpeg, and image_io modules as the IPC commands.
+  # Skipped automatically if the binary or test media are not available.
+  e2e-real-backend:
+    name: E2E Tests (Real Rust Backend)
+    runs-on: ubuntu-latest
+    needs: [frontend, rust]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf ffmpeg
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # Same externalBin build-script requirement as the rust job above. This
+      # job builds a real binary, so it hits it too.
+      #
+      # ffgac/ffedit stay empty: mosh-verify exercises the Rust effect engine,
+      # which never invokes them (they are the FFglitch datamosh path, driven
+      # from Python). ffmpeg/ffprobe are symlinked to the apt-installed ffmpeg
+      # from the step above so anything that does shell out gets a working
+      # binary rather than a zero-byte file.
+      - name: Stub externalBin for the host triple
+        run: |
+          TRIPLE=$(rustc -vV | awk '/^host:/ {print $2}')
+          mkdir -p src-tauri/bin
+          ln -sf "$(command -v ffmpeg)"  "src-tauri/bin/ffmpeg-${TRIPLE}"
+          ln -sf "$(command -v ffprobe)" "src-tauri/bin/ffprobe-${TRIPLE}"
+          for b in ffgac ffedit; do
+            touch "src-tauri/bin/${b}-${TRIPLE}"
+            chmod +x "src-tauri/bin/${b}-${TRIPLE}"
+          done
+          ls -l src-tauri/bin/
+
+          # frontendDist must exist at compile time -- see the rust job above.
+          # This job builds mosh-verify, a standalone CLI that never loads the
+          # frontend, but the build script runs for the whole crate regardless
+          # of which binary is being built.
+          mkdir -p dist
+          echo '<!doctype html><title>ci stub</title>' > dist/index.html
+
+      - name: Build mosh-verify binary
+        run: cargo build --release --bin mosh-verify --manifest-path src-tauri/Cargo.toml
+
+      - name: Generate synthetic test media
+        run: |
+          mkdir -p test-media
+          # Generate a small test image (1280x720) using ffmpeg's testsrc
+          ffmpeg -y -f lavfi -i testsrc=duration=1:size=1280x720:rate=1 \
+            -frames:v 1 test-media/test.png
+          # Generate a short test video (640x360, 2 sec, 24fps)
+          ffmpeg -y -f lavfi -i testsrc=duration=2:size=640x360:rate=24 \
+            -c:v libx264 -pix_fmt yuv420p test-media/test.mp4
+          ls -la test-media/
+
+      - name: Run real-backend E2E tests
+        env:
+          MOSHDITHER_VERIFY_BIN: src-tauri/target/release/mosh-verify
+          MOSHDITHER_TEST_IMAGE: test-media/test.png
+          MOSHDITHER_TEST_VIDEO: test-media/test.mp4
+        run: npx playwright test tests/e2e/real-backend.spec.ts --workers=1
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-real-backend
+          path: playwright-report/
+          retention-days: 7

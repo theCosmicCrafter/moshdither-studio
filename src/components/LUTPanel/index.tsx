@@ -1,5 +1,8 @@
 import { useAppStore } from "../../store";
-import { LUT_PRESETS } from "../../engine/lut/loader";
+import { LUT_PRESETS, loadCustomLUT } from "../../engine/lut/loader";
+import { open } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
+import { isTauriAvailable } from "../../lib/browserFallback";
 
 export default function LUTPanel() {
   const addLUTEffect = useAppStore((s) => s.addLUTEffect);
@@ -8,6 +11,34 @@ export default function LUTPanel() {
   const handleApply = (url: string, name: string) => {
     addLUTEffect(url);
     setStatusMessage(`LUT applied: ${name}`);
+  };
+
+  const handleCustom = async () => {
+    if (!isTauriAvailable()) {
+      setStatusMessage("Custom LUTs require the desktop app.");
+      return;
+    }
+    const selected = await open({
+      multiple: false,
+      filters: [
+        { name: "LUT", extensions: ["png", "cube"] },
+        { name: "All Files", extensions: ["*"] },
+      ],
+    });
+    if (!selected || Array.isArray(selected)) return;
+
+    try {
+      // Copy the user-selected LUT into the app's allowed temporary directory so
+      // the webview can preview it through the asset protocol.
+      const preparedPath = (await invoke("prepare_custom_lut", { path: selected })) as string;
+      const { previewUrl, filePath } = await loadCustomLUT(preparedPath);
+      addLUTEffect(previewUrl, filePath);
+      setStatusMessage(`Custom LUT loaded: ${preparedPath.split(/[/\\]/).pop()}`);
+    } catch (err) {
+      setStatusMessage(
+        `Custom LUT failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   };
 
   return (
@@ -29,6 +60,27 @@ export default function LUTPanel() {
             </p>
           </div>
         </div>
+      </div>
+
+      {/* Custom LUT */}
+      <div className="px-2 pt-2">
+        <button
+          onClick={handleCustom}
+          className="w-full text-left px-3 py-2 rounded-lg font-body-sm text-body-sm text-on-surface hover:bg-surface/60 hover:text-accent-teal transition-colors active:scale-[0.98] duration-100 border border-outline-variant/10 flex items-center gap-2"
+          title="Load a custom .png or .cube LUT"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+            folder_open
+          </span>
+          Load Custom LUT…
+        </button>
+        <p className="mt-2 px-1 text-label-sm text-on-surface-variant opacity-70 leading-relaxed">
+          Click above to import a custom LUT. Supports 512×512 PNG LUTs and standard
+          Adobe / Resolve .cube 3D LUTs. Bundled presets live in{" "}
+          <code className="bg-surface/40 px-1 rounded">public/lut/</code> for dev builds
+          and <code className="bg-surface/40 px-1 rounded">resources/lut/</code> for
+          production installers.
+        </p>
       </div>
 
       {/* LUT list */}

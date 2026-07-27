@@ -1,18 +1,76 @@
 #Author: Akash Bora
-import os, shutil, subprocess, random, json
+import os, shutil, subprocess, random, json, tempfile
+from contextlib import contextmanager
 from pathlib import Path
 import numpy as np
+
+
+@contextmanager
+def _scratch_dir():
+    """Run a mosh in a private temp directory, then clean it up.
+
+    These effects write fixed filenames -- tmp.mpg, tmp.json, apply_vectors.js
+    and a cache_ffg/ tree -- into the *current working directory*, which is
+    whatever directory the app happened to spawn the process from. Two problems:
+
+    * Two exports running at once overwrite each other's intermediates and
+      produce corrupt or silently wrong output.
+    * The files land in the user's working directory, and any crash between
+      creation and os.remove() leaves them behind.
+
+    Giving each run its own directory fixes both, and means a failure cleans up
+    after itself. Paths passed in by the caller are made absolute first, since
+    they were resolved relative to the original directory.
+    """
+    previous = os.getcwd()
+    scratch = tempfile.mkdtemp(prefix="moshdither_ffg_")
+    try:
+        os.chdir(scratch)
+        yield scratch
+    finally:
+        os.chdir(previous)
+        shutil.rmtree(scratch, ignore_errors=True)
 
 DIRPATH = Path(os.path.dirname(os.path.realpath(__file__)))
 ffgac = os.path.join(str(DIRPATH.parent.parent),"FFglitch","ffgac")
 ffedit = os.path.join(str(DIRPATH.parent.parent),"FFglitch","ffedit")
 
+
+def _run(args):
+    """Run an external tool from an argument list, and fail loudly if it fails.
+
+    Replaces `subprocess.call(f'...', shell=True)`, which was wrong twice over:
+
+    1. **Injection.** The command was built by interpolating caller-supplied
+       paths into a single string handed to the shell. A video whose *filename*
+       contains a quote followed by shell metacharacters would close the quoted
+       argument and run whatever followed, with this process's privileges. This
+       is reachable: mosh_cli.py is spawned by the app for user-chosen files.
+       Passing a list with shell=False means the OS receives argv directly and
+       no shell ever parses it, so a path is always just a path.
+
+    2. **Silent failure.** subprocess.call returns the exit code and never
+       raises, and no call site checked it. When ffgac or ffedit failed the
+       pipeline carried on and died later at an unrelated "file not found",
+       pointing at the wrong step. Checking here means the failure is reported
+       where it happens, with the command and the tool's own stderr.
+    """
+    result = subprocess.run(args, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        tool = os.path.basename(str(args[0]))
+        raise RuntimeError(
+            f"{tool} failed (exit {result.returncode}): {' '.join(str(a) for a in args)}\n"
+            f"{(result.stderr or '')[-1500:]}"
+        )
+    return result
+
 def library(input_video, output, mode, extract_from="", fluidity=0, size=0, s=0, e=0, vh=0, gop=1000, r=0, f=0):
         
         def get_vectors(input_video):
-            subprocess.call(f'"{ffgac}" -i "{input_video}" -an -mpv_flags +nopimb+forcemv -qscale:v 0 -g "{gop}"' +
-                            ' -vcodec mpeg2video -f rawvideo -y tmp.mpg', shell=True)
-            subprocess.call(f'"{ffedit}" -i tmp.mpg -f mv:0 -e tmp.json', shell=True)
+            _run([ffgac, "-i", str(input_video), "-an", "-mpv_flags", "+nopimb+forcemv",
+                  "-qscale:v", "0", "-g", str(gop),
+                  "-vcodec", "mpeg2video", "-f", "rawvideo", "-y", "tmp.mpg"])
+            _run([ffedit, "-i", "tmp.mpg", "-f", "mv:0", "-e", "tmp.json"])
             os.remove('tmp.mpg')
             f = open('tmp.json', 'r')
             raw_data = json.load(f)
@@ -28,14 +86,19 @@ def library(input_video, output, mode, extract_from="", fluidity=0, size=0, s=0,
             return vectors
 
         def apply_vectors(vectors, input_video, output_video, method='add'):
-            subprocess.call(f'"{ffgac}" -i "{input_video}" -an -mpv_flags +nopimb+forcemv -qscale:v 0 -g "{gop}"' +
-                            ' -vcodec mpeg2video -f rawvideo -y tmp.mpg', shell=True)
+            _run([ffgac, "-i", str(input_video), "-an", "-mpv_flags", "+nopimb+forcemv",
+                  "-qscale:v", "0", "-g", str(gop),
+                  "-vcodec", "mpeg2video", "-f", "rawvideo", "-y", "tmp.mpg"])
             to_add = '+' if method == 'add' else ''
             script_path = 'apply_vectors.js'
+            # `export` is required from FFglitch 0.10 on. Without it ffedit
+            # aborts with "Could not find function glitch_frame()", which the
+            # old subprocess.call swallowed -- so fluid/stretch/motion_transfer
+            # silently produced nothing. The bundled binary is 0.10.2.
             script_contents = '''
             var vectors = [];
             var n_frames = 0;
-            function glitch_frame(frame) {
+            export function glitch_frame(frame) {
                 let fwd_mvs = frame["mv"]["forward"];
                 if (!fwd_mvs || !vectors[n_frames]) {
                     n_frames++;
@@ -56,7 +119,7 @@ def library(input_video, output, mode, extract_from="", fluidity=0, size=0, s=0,
             '''
             with open(script_path, 'w') as f:
                 f.write(script_contents.replace('var vectors = [];', f'var vectors = {json.dumps(vectors)};'))
-            subprocess.call(f'"{ffedit}" -i tmp.mpg -f mv -s "{script_path}" -o "{output_video}"', shell=True)
+            _run([ffedit, "-i", "tmp.mpg", "-f", "mv", "-s", str(script_path), "-o", str(output_video)])
             os.remove('apply_vectors.js')
             os.remove('tmp.mpg')
             
@@ -66,10 +129,11 @@ def library(input_video, output, mode, extract_from="", fluidity=0, size=0, s=0,
             os.mkdir("cache_ffg")
             base = os.path.basename(input_video)
             fin = os.path.join("cache_ffg",base[:-4]+".mpg")
-            subprocess.call(f'"{ffgac}" -i "{input_video}" -an -vcodec mpeg2video -f rawvideo -mpv_flags +nopimb -qscale:v 6 -r 30 -g "{gop}" -y "{fin}"', shell=True)
+            _run([ffgac, "-i", str(input_video), "-an", "-vcodec", "mpeg2video", "-f", "rawvideo",
+                  "-mpv_flags", "+nopimb", "-qscale:v", "6", "-r", "30", "-g", str(gop), "-y", str(fin)])
             os.mkdir(os.path.join("cache_ffg","raws"))
             framelist = []
-            subprocess.call(f'"{ffgac}" -i "{fin}" -vcodec copy cache_ffg/raws/frames_%04d.raw', shell=True)
+            _run([ffgac, "-i", str(fin), "-vcodec", "copy", "cache_ffg/raws/frames_%04d.raw"])
             frames = os.listdir(os.path.join("cache_ffg","raws"))
             siz = size
             framelist.extend(frames)
@@ -101,10 +165,11 @@ def library(input_video, output, mode, extract_from="", fluidity=0, size=0, s=0,
             base = os.path.basename(input_video)
             fin = os.path.join("cache_ffg",base[:-4]+".mpg")
             qua = ''
-            subprocess.call(f'"{ffgac}" -i "{input_video}" -an -vcodec mpeg2video -f rawvideo -mpv_flags +nopimb -qscale:v 6 -r 30 -g "{gop}" -y "{fin}"', shell=True)
+            _run([ffgac, "-i", str(input_video), "-an", "-vcodec", "mpeg2video", "-f", "rawvideo",
+                  "-mpv_flags", "+nopimb", "-qscale:v", "6", "-r", "30", "-g", str(gop), "-y", str(fin)])
             os.mkdir(os.path.join("cache_ffg","raws"))
             framelist = []
-            subprocess.call(f'"{ffgac}" -i "{fin}" -vcodec copy cache_ffg/raws/frames_%04d.raw', shell=True)
+            _run([ffgac, "-i", str(fin), "-vcodec", "copy", "cache_ffg/raws/frames_%04d.raw"])
             kil = e
             po = s
             if po==0:
@@ -140,9 +205,11 @@ def library(input_video, output, mode, extract_from="", fluidity=0, size=0, s=0,
                 fin=os.path.join("cache_ffg",base[:-4]+f"_{num}.mpg")
                 os.mkdir(os.path.join("cache_ffg",f"raws_{num}"))
                 
-                subprocess.call(f'"{ffgac}" -i "{i}" -an -vcodec mpeg2video -f rawvideo -mpv_flags +nopimb -qscale:v 6 -r 30 -s 1920x1080 -g "{gop}" -y "{fin}"', shell=True)
+                _run([ffgac, "-i", str(i), "-an", "-vcodec", "mpeg2video", "-f", "rawvideo",
+                      "-mpv_flags", "+nopimb", "-qscale:v", "6", "-r", "30",
+                      "-s", "1920x1080", "-g", str(gop), "-y", str(fin)])
                
-                subprocess.call(f'"{ffgac}" -i "{fin}" -vcodec copy cache_ffg/raws_{num}/frames_%04d.raw', shell=True)
+                _run([ffgac, "-i", str(fin), "-vcodec", "copy", f"cache_ffg/raws_{num}/frames_%04d.raw"])
                 converted.update({i:os.path.join("cache_ffg",f"raws_{num}")})
         
             num = 0
@@ -178,10 +245,11 @@ def library(input_video, output, mode, extract_from="", fluidity=0, size=0, s=0,
             base = os.path.basename(input_video)
             fin = os.path.join("cache_ffg",base[:-4]+".mpg")
             qua = ''
-            subprocess.call(f'"{ffgac}" -i "{input_video}" -an -vcodec mpeg2video -f rawvideo -mpv_flags +nopimb -qscale:v 6 -r 30 -g "{gop}" -y "{fin}"', shell=True)
+            _run([ffgac, "-i", str(input_video), "-an", "-vcodec", "mpeg2video", "-f", "rawvideo",
+                  "-mpv_flags", "+nopimb", "-qscale:v", "6", "-r", "30", "-g", str(gop), "-y", str(fin)])
             os.mkdir(os.path.join("cache_ffg","raws"))
             framelist = []
-            subprocess.call(f'"{ffgac}" -i "{fin}" -vcodec copy cache_ffg/raws/frames_%04d.raw', shell=True)
+            _run([ffgac, "-i", str(fin), "-vcodec", "copy", "cache_ffg/raws/frames_%04d.raw"])
             repeat = r
             po = f-1
             frames=os.listdir(os.path.join("cache_ffg","raws"))
@@ -220,24 +288,35 @@ def library(input_video, output, mode, extract_from="", fluidity=0, size=0, s=0,
                         col[vh] = 0
             return frames
 
-        if(mode==1):
-            transfer_to = input_video
-            vectors = []
-            if extract_from:
-                vectors = get_vectors(extract_from)
-                if transfer_to == '':
-                    with open(output, 'w') as f:
-                        json.dump(vectors, f)
-            apply_vectors(vectors, transfer_to, output)
-        elif(mode==2):
-            apply_vectors(movement(get_vectors(input_video)), input_video, output, method='')
-        elif(mode==3):
-            apply_vectors(fluid(get_vectors(input_video)), input_video, output, method='')
-        elif(mode==4):
-            shuffle(output)
-        elif(mode==5):
-            rise(output)
-        elif(mode==6):
-            water_bloom(output)
-        elif(mode==7):
-            combine(output)
+        # Caller paths are resolved before chdir, since the scratch directory
+        # changes what a relative path means.
+        output = os.path.abspath(output) if isinstance(output, str) else output
+        if isinstance(input_video, str):
+            input_video = os.path.abspath(input_video)
+        elif isinstance(input_video, (list, tuple)):
+            input_video = [os.path.abspath(v) for v in input_video]
+        if extract_from:
+            extract_from = os.path.abspath(extract_from)
+
+        with _scratch_dir():
+            if(mode==1):
+                transfer_to = input_video
+                vectors = []
+                if extract_from:
+                    vectors = get_vectors(extract_from)
+                    if transfer_to == '':
+                        with open(output, 'w') as f:
+                            json.dump(vectors, f)
+                apply_vectors(vectors, transfer_to, output)
+            elif(mode==2):
+                apply_vectors(movement(get_vectors(input_video)), input_video, output, method='')
+            elif(mode==3):
+                apply_vectors(fluid(get_vectors(input_video)), input_video, output, method='')
+            elif(mode==4):
+                shuffle(output)
+            elif(mode==5):
+                rise(output)
+            elif(mode==6):
+                water_bloom(output)
+            elif(mode==7):
+                combine(output)

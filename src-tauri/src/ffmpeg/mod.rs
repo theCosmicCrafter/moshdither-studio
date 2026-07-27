@@ -5,10 +5,131 @@
 use crate::commands::WatermarkSettings;
 use crate::effects::types::{Frame, VideoSegment};
 use crate::error::{AppError, Result};
+use parking_lot::Mutex as ParkingLotMutex;
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
+
+/// Default ceiling on the number of decoded frames kept in memory.
+const DEFAULT_DECODE_MAX_FRAMES: usize = 10_000;
+/// Hard cap on the per-decode memory budget (bytes). We cap at 4 GiB
+/// because `cmd.output()` buffers all of FFmpeg's stdout in memory before
+/// we chunk it into frames, so peak memory is ~2× the raw RGBA size
+/// (stdout buffer + frame Vec). A 4 GiB budget means peak ~8 GiB, which
+/// is safe on most 16 GiB systems. Systems with more RAM still benefit
+/// because auto-scale will pick native resolution for shorter clips.
+const MAX_DECODE_MEMORY_BUDGET_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+/// Floor on the per-decode memory budget. Even on low-RAM systems we still
+/// allow at least 1 GiB so short 1080p clips work.
+const MIN_DECODE_MEMORY_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
+/// Fraction of available system RAM to use as the decode budget. We use
+/// 50% of *available* (not total) RAM to leave headroom for the OS, GPU
+/// drivers, the WebView, the FFmpeg subprocess, and the effect-processing
+/// pipeline (which clones frames during rayon parallel processing).
+/// This matches the After Effects recommendation of reserving 20-30% of
+/// RAM for the OS and background apps, with an extra margin because our
+/// stdout-buffering pattern doubles peak memory.
+const DECODE_MEMORY_FRACTION_OF_RAM: f64 = 0.50;
+
+/// Compute the per-decode memory budget based on available system RAM.
+///
+/// Returns a value in bytes between [`MIN_DECODE_MEMORY_BUDGET_BYTES`] and
+/// [`MAX_DECODE_MEMORY_BUDGET_BYTES`]. The budget is `total_ram * 0.60`,
+/// clamped to that range. This replaces the old fixed 2 GiB cap which
+/// silently truncated 4K video to ~64 frames.
+fn adaptive_decode_memory_budget() -> u64 {
+    use sysinfo::System;
+    let mut sys = System::new();
+    sys.refresh_memory();
+    // Use available (not total) RAM — the OS, GPU drivers, WebView, and
+    // other app components are already using much of the total. Without
+    // this, a 16 GiB system reports an 8 GiB budget but the actual
+    // contiguous allocation may fail at 4 GiB.
+    let available = sys.available_memory();
+    if available == 0 {
+        // Fallback if sysinfo can't read memory (rare/sandboxed envs).
+        return MIN_DECODE_MEMORY_BUDGET_BYTES;
+    }
+    let budget = (available as f64 * DECODE_MEMORY_FRACTION_OF_RAM) as u64;
+    budget.clamp(
+        MIN_DECODE_MEMORY_BUDGET_BYTES,
+        MAX_DECODE_MEMORY_BUDGET_BYTES,
+    )
+}
+
+/// Pick the largest scale (longest side in px) that allows decoding the
+/// full clip within the memory budget. Returns `None` if the source
+/// already fits at native resolution.
+///
+/// Standard ladder: 4K(3840) → 1440 → 1080 → 720 → 480.
+/// We pick the largest rung whose per-frame size × frame count fits the
+/// budget. If even 480p doesn't fit (very long clip), we return 480 and
+/// let the caller decide whether to truncate or reject.
+fn pick_auto_scale(src_w: u32, src_h: u32, frame_count: usize, budget_bytes: u64) -> Option<usize> {
+    let rungs = [3840, 2560, 1920, 1440, 1280, 1080, 720, 480];
+    let longer = src_w.max(src_h) as usize;
+    // If the source already fits at native resolution, no scaling needed.
+    let native_frame_bytes = (src_w as u64) * (src_h as u64) * 4;
+    if native_frame_bytes.saturating_mul(frame_count as u64) <= budget_bytes {
+        return None;
+    }
+    // Walk down the ladder; pick the first rung that fits.
+    for &rung in &rungs {
+        if rung >= longer {
+            continue;
+        }
+        let scale = rung as f64 / longer as f64;
+        let w = ((src_w as f64) * scale).round().max(2.0) as u64;
+        let h = ((src_h as f64) * scale).round().max(2.0) as u64;
+        let frame_bytes = w * h * 4;
+        if frame_bytes.saturating_mul(frame_count as u64) <= budget_bytes {
+            return Some(rung);
+        }
+    }
+    // Even 480p doesn't fit — return the smallest rung and let the caller
+    // truncate frame count to fit.
+    Some(480)
+}
+
+/// Estimate the total frame count of a video by probing duration and fps.
+///
+/// We use this to decide whether to auto-downscale before decode. The
+/// estimate is `ceil(duration_secs * fps)`. For most sources this is
+/// exact; for VFR video it's an upper bound that's good enough for
+/// memory planning.
+pub fn probe_frame_count(path: &str) -> Result<usize> {
+    let (_w, _h, fps) = probe_video(path)?;
+    let meta = probe_metadata(path)?;
+    let duration = meta.duration.unwrap_or(0.0);
+    if duration <= 0.0 || fps <= 0.0 {
+        return Ok(0);
+    }
+    Ok((duration * fps).ceil() as usize)
+}
+
+/// Decide how to decode a video given the caller's preferred processing
+/// resolution and the system's memory budget.
+///
+/// `preferred_scale`:
+///   - `None`: caller wants native resolution. We probe the source; if it
+///     fits in the budget at native res, we return `None` (no scaling).
+///     If not, we auto-pick a downscale rung via [`pick_auto_scale`].
+///   - `Some(n)`: caller wants at most `n` px on the longest side. We
+///     honor this exactly (the user picked it deliberately).
+///
+/// Returns the scale to pass to [`decode_video_with_options`], plus the
+/// effective budget in bytes (for logging / error messages).
+pub fn plan_decode(path: &str, preferred_scale: Option<usize>) -> Result<(Option<usize>, u64)> {
+    let budget = adaptive_decode_memory_budget();
+    if let Some(n) = preferred_scale {
+        return Ok((Some(n), budget));
+    }
+    let (src_w, src_h, _fps) = probe_video(path)?;
+    let frame_count = probe_frame_count(path)?.max(1);
+    let scale = pick_auto_scale(src_w, src_h, frame_count, budget);
+    Ok((scale, budget))
+}
 
 /// Locate a binary by name. Tries bundled sidecar first, then dev path, then PATH.
 fn locate_binary(base: &str) -> Result<String> {
@@ -59,7 +180,7 @@ pub fn generate_proxy(source_path: &str, max_width: u32, crf: u32) -> Result<Str
 
     let scale_height = (orig_height as f64 * (max_width as f64 / orig_width as f64)).round() as u32;
     // Ensure even dimensions (required by some codecs)
-    let scale_height = if scale_height % 2 != 0 {
+    let scale_height = if !scale_height.is_multiple_of(2) {
         scale_height + 1
     } else {
         scale_height
@@ -126,25 +247,115 @@ pub fn ffglitch_available() -> bool {
 }
 
 /// Decode a video file to a sequence of raw RGBA frames.
+///
+/// Uses the legacy fixed-cap behavior: native resolution, up to
+/// [`DEFAULT_DECODE_MAX_FRAMES`] frames, with the per-frame budget enforced
+/// by `decode_video_with_options`. Prefer `decode_video_with_options` for
+/// new call sites that need to handle 4K source or control the processing
+/// resolution.
 pub fn decode_video(path: &str, max_frames: Option<usize>) -> Result<VideoSegment> {
+    decode_video_with_options(path, max_frames, None)
+}
+
+/// Decode a video file with optional scaling and an adaptive memory budget.
+///
+/// `scale` controls the processing resolution:
+///   - `None`: native resolution (caller is responsible for ensuring the
+///     clip fits in memory, e.g. via `pick_auto_scale`).
+///   - `Some(n)`: downscale so the longer side is at most `n` pixels,
+///     preserving aspect ratio.
+///
+/// The per-decode memory budget is computed adaptively from system RAM
+/// (see [`adaptive_decode_memory_budget`]). If the source would exceed
+/// the budget at the requested scale, the frame count is truncated to
+/// fit — but this is logged loudly so callers can detect it. Callers
+/// that need to guarantee the full clip is decoded should call
+/// [`pick_auto_scale`] first and pass the resulting scale here.
+pub fn decode_video_with_options(
+    path: &str,
+    max_frames: Option<usize>,
+    scale: Option<usize>,
+) -> Result<VideoSegment> {
+    // Resolve an explicit or default frame cap up-front.
+    let requested_max = max_frames.unwrap_or(DEFAULT_DECODE_MAX_FRAMES);
+    let budget = adaptive_decode_memory_budget() as usize;
+
+    // Probe source dimensions first so we can compute the actual output
+    // dimensions and verify the budget before launching FFmpeg.
+    let (src_w, src_h, fps) = probe_video(path)?;
+    let (width, height) = if let Some(max_dim) = scale {
+        // Match ffmpeg's `scale=W:H:force_original_aspect_ratio=decrease`:
+        // the longer side is clamped to max_dim, the shorter side is
+        // scaled proportionally and rounded to nearest.
+        let max_dim = max_dim as u32;
+        if src_w >= src_h {
+            let w = src_w.min(max_dim);
+            let h = ((w as f64) * (src_h as f64) / (src_w as f64)).round() as u32;
+            (w, h.max(2))
+        } else {
+            let h = src_h.min(max_dim);
+            let w = ((h as f64) * (src_w as f64) / (src_h as f64)).round() as u32;
+            (w.max(2), h)
+        }
+    } else {
+        (src_w, src_h)
+    };
+
+    let frame_size = (width as usize)
+        .saturating_mul(height as usize)
+        .saturating_mul(4);
+    if frame_size == 0 {
+        return Ok(VideoSegment {
+            frames: Vec::new(),
+            fps,
+        });
+    }
+
+    // Enforce the per-operation memory budget.
+    if frame_size > budget {
+        return Err(AppError::Ffmpeg(format!(
+            "video frame size {}x{} ({} bytes) exceeds decode memory budget ({} bytes); \
+             use a smaller --scale or process a shorter clip",
+            width, height, frame_size, budget
+        )));
+    }
+    let budget_frames = budget / frame_size;
+    let max_frames = requested_max.min(budget_frames).max(1);
+    if max_frames < requested_max {
+        eprintln!(
+            "[ffmpeg] WARNING: requested {} frames but only {} fit in memory budget \
+             ({}x{} @ {} bytes/frame, budget {} bytes). Clip will be truncated.",
+            requested_max, max_frames, width, height, frame_size, budget
+        );
+    }
+
     let ffmpeg = ffmpeg_binary()?;
     let mut cmd = Command::new(&ffmpeg);
     cmd.args(["-i", path]);
-    let max_frames_arg = max_frames.map(|n| n.to_string());
-    if let Some(max_frames_arg) = max_frames_arg.as_deref() {
-        cmd.args(["-frames:v", max_frames_arg]);
-    }
-    cmd.args([
-        "-vf",
-        "format=rgba",
-        "-f",
-        "rawvideo",
-        "-pix_fmt",
-        "rgba",
-        "pipe:1",
-    ])
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped());
+    // max_frames, not requested_max. ffmpeg buffers everything it decodes into
+    // this process's stdout pipe, so asking for more frames than the memory
+    // budget allows means peak usage is set by requested_max while only
+    // max_frames survive into the returned Vec -- the budget bounded the result
+    // but not the decode. Capping the encoder at the same number the budget
+    // permits makes the limit real.
+    cmd.args(["-frames:v", &max_frames.to_string()]);
+
+    // Build the video filter chain: optional scale, then format=rgba.
+    // `scale=W:H:force_original_aspect_ratio=decrease` scales so the longer
+    // side is at most `max_dim` while preserving aspect ratio. We avoid
+    // `min(W,iw)` syntax because the inner comma confuses the filter parser.
+    let vf = if let Some(max_dim) = scale {
+        format!(
+            "scale={m}:{m}:force_original_aspect_ratio=decrease,format=rgba",
+            m = max_dim
+        )
+    } else {
+        "format=rgba".to_string()
+    };
+    cmd.args(["-vf", &vf]);
+    cmd.args(["-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
 
     let output = cmd.output().map_err(AppError::Io)?;
     if !output.status.success() {
@@ -156,14 +367,11 @@ pub fn decode_video(path: &str, max_frames: Option<usize>) -> Result<VideoSegmen
         )));
     }
 
-    // Probe dimensions
-    let (width, height, fps) = probe_video(path)?;
-    let frame_size = (width * height * 4) as usize;
     let raw = output.stdout;
-    let mut frames = Vec::new();
+    let mut frames = Vec::with_capacity(max_frames);
 
     for chunk in raw.chunks_exact(frame_size) {
-        if max_frames.map(|m| frames.len() >= m).unwrap_or(false) {
+        if frames.len() >= max_frames {
             break;
         }
         frames.push(Frame {
@@ -171,6 +379,26 @@ pub fn decode_video(path: &str, max_frames: Option<usize>) -> Result<VideoSegmen
             height,
             data: chunk.to_vec(),
         });
+    }
+
+    // Hitting the cap exactly almost always means the source was longer and got
+    // cut. There was no signal at all before: export_video calls this with
+    // max_frames = None, so a clip over DEFAULT_DECODE_MAX_FRAMES (10 000 frames
+    // -- about 5.5 minutes at 30fps, 7 at 24) was silently shortened and the
+    // user got a truncated file with no indication why.
+    //
+    // A warning is not a fix for that; it makes the loss visible. Removing the
+    // limit outright is not safe either, since the decode is fully buffered in
+    // memory. The real fix is streaming decode, which is a larger change.
+    if frames.len() == max_frames {
+        eprintln!(
+            "[ffmpeg] WARNING: decode stopped at the {}-frame limit ({:.1}s at {:.0} fps). \
+             If the source is longer, the result is TRUNCATED. Raise the limit by passing \
+             max_frames, or lower memory per frame with a smaller scale.",
+            max_frames,
+            max_frames as f64 / fps.max(1.0),
+            fps
+        );
     }
 
     Ok(VideoSegment { frames, fps })
@@ -387,6 +615,8 @@ pub fn encode_video(
     trim_end: Option<f64>,
     output_width: Option<u32>,
     output_height: Option<u32>,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+    timeout: Option<std::time::Duration>,
 ) -> Result<()> {
     if segment.frames.is_empty() {
         return Err(AppError::Ffmpeg("No frames to encode".to_string()));
@@ -478,6 +708,11 @@ pub fn encode_video(
         args.push("-b:v".to_string());
         args.push("0".to_string());
     }
+
+    args.push("-r".to_string());
+    args.push(fps.to_string());
+    args.push("-fps_mode".to_string());
+    args.push("cfr".to_string());
 
     args.push("-pix_fmt".to_string());
     args.push("yuv420p".to_string());
@@ -574,7 +809,7 @@ pub fn encode_video(
     // yuv420p requires even dimensions. Append a pad filter as the final step
     // so the encoded output has even width/height without changing the source
     // frame dimensions when they are already even.
-    if w % 2 != 0 || h % 2 != 0 {
+    if !w.is_multiple_of(2) || !h.is_multiple_of(2) {
         let pad_filter = "pad=ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2:black".to_string();
         eprintln!("[export] DEBUG: ensuring even dimensions for {}x{}", w, h);
         if let Some(vf_pos) = args.iter().position(|a| a == "-vf") {
@@ -613,30 +848,100 @@ pub fn encode_video(
         .spawn()
         .map_err(|e| AppError::Ffmpeg(format!("Failed to spawn FFmpeg: {}", e)))?;
 
+    // Drain stderr in a separate thread so a chatty FFmpeg cannot deadlock
+    // on a full stderr pipe while we are still feeding it frames.
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| AppError::Ffmpeg("Failed to open FFmpeg stderr".to_string()))?;
+    let stderr_buf = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut stderr_thread: Option<std::thread::JoinHandle<()>> = Some({
+        let stderr_buf = Arc::clone(&stderr_buf);
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut reader = std::io::BufReader::new(stderr);
+            let mut buf = Vec::new();
+            // Best-effort read; the pipe will close when FFmpeg exits.
+            let _ = reader.read_to_end(&mut buf);
+            if let Ok(mut guard) = stderr_buf.lock() {
+                *guard = buf;
+            }
+        })
+    });
+
     {
+        use std::io::Write;
+        use std::sync::atomic::Ordering;
         let mut stdin = child
             .stdin
             .take()
             .ok_or_else(|| AppError::Ffmpeg("Failed to open FFmpeg stdin".to_string()))?;
         let total = segment.frames.len();
         for (i, frame) in segment.frames.iter().enumerate() {
+            if let Some(c) = cancel {
+                if c.load(Ordering::Relaxed) {
+                    eprintln!("[export] FFmpeg encode cancelled by user");
+                    let _ = stdin.flush();
+                    drop(stdin);
+                    let _ = child.kill();
+                    let _ = child.wait_timeout(std::time::Duration::from_secs(10));
+                    if let Some(t) = stderr_thread.take() {
+                        let _ = t.join();
+                    }
+                    return Err(AppError::Ffmpeg("Export cancelled by user".to_string()));
+                }
+            }
             if i % 50 == 0 || i == total - 1 {
                 eprintln!("[export] Writing frame {}/{} to FFmpeg stdin", i + 1, total);
             }
-            std::io::Write::write_all(&mut stdin, &frame.data).map_err(AppError::Io)?;
+            stdin.write_all(&frame.data).map_err(AppError::Io)?;
         }
         // Close stdin so FFmpeg sees EOF and can finish encoding the final frames.
         drop(stdin);
         eprintln!("[export] FFmpeg stdin closed (EOF sent), waiting for encode to finish...");
     }
 
-    let output = child.wait_with_output().map_err(AppError::Io)?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    // Wait for the child with a bounded timeout (default 10 minutes). If it
+    // expires, kill it so a hung encode cannot run forever.
+    use child_wait_timeout::ChildWT;
+    use std::io::ErrorKind;
+    let timeout = timeout.unwrap_or(std::time::Duration::from_secs(600));
+    let status = match child.wait_timeout(timeout) {
+        Ok(status) => status,
+        Err(e) if e.kind() == ErrorKind::TimedOut => {
+            eprintln!(
+                "[export] FFmpeg encode timed out after {:?}, killing process",
+                timeout
+            );
+            let _ = child.kill();
+            let _ = child.wait_timeout(std::time::Duration::from_secs(10));
+            if let Some(t) = stderr_thread.take() {
+                let _ = t.join();
+            }
+            return Err(AppError::Ffmpeg(format!(
+                "FFmpeg encode timed out after {:?}",
+                timeout
+            )));
+        }
+        Err(e) => {
+            let _ = child.kill();
+            if let Some(t) = stderr_thread.take() {
+                let _ = t.join();
+            }
+            return Err(AppError::Io(e));
+        }
+    };
+
+    if let Some(t) = stderr_thread.take() {
+        let _ = t.join();
+    }
+    let stderr_bytes = stderr_buf.lock().map(|g| g.clone()).unwrap_or_default();
+    if !status.success() {
+        let stderr = String::from_utf8_lossy(&stderr_bytes);
         eprintln!("[export] FFmpeg FAILED. stderr:\n{}", stderr);
         return Err(AppError::Ffmpeg(format!(
             "FFmpeg encode failed (exit {}): {}",
-            output.status.code().unwrap_or(-1),
+            status.code().unwrap_or(-1),
             stderr.chars().take(2000).collect::<String>()
         )));
     }
@@ -652,15 +957,27 @@ struct ProbeCache {
     order: VecDeque<String>,
 }
 
+/// Parse an ffprobe `r_frame_rate` string, which is typically a ratio such as
+/// `30000/1001` or a decimal like `30`.
+fn parse_r_frame_rate(s: &str) -> f64 {
+    let parts: Vec<&str> = s.split('/').collect();
+    if parts.len() == 2 {
+        let num: f64 = parts[0].parse().unwrap_or(30.0);
+        let den: f64 = parts[1].parse().unwrap_or(1.0);
+        if den != 0.0 {
+            return num / den;
+        }
+    }
+    s.parse::<f64>().unwrap_or(30.0)
+}
+
 /// Probe video file for width, height, and fps.
 /// Results are cached in-memory to avoid repeated ffprobe calls for the same file.
 pub fn probe_video(path: &str) -> Result<(u32, u32, f64)> {
-    static CACHE: OnceLock<Mutex<ProbeCache>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(ProbeCache::default()));
+    static CACHE: OnceLock<ParkingLotMutex<ProbeCache>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| ParkingLotMutex::new(ProbeCache::default()));
     {
-        let mut cache = cache
-            .lock()
-            .map_err(|e| AppError::Generic(format!("probe cache lock poisoned: {e}")))?;
+        let mut cache = cache.lock();
         if let Some(entry) = cache.entries.get(path).copied() {
             if let Some(position) = cache.order.iter().position(|key| key == path) {
                 cache.order.remove(position);
@@ -681,35 +998,45 @@ pub fn probe_video(path: &str) -> Result<(u32, u32, f64)> {
             "-show_entries",
             "stream=width,height,r_frame_rate",
             "-of",
-            "default=noprint_wrappers=1",
+            "json",
             path,
         ])
         .output()
         .map_err(AppError::Io)?;
 
-    let text = String::from_utf8_lossy(&output.stdout);
-    let mut width = 0u32;
-    let mut height = 0u32;
-    let mut fps = 30.0f64;
-
-    for line in text.lines() {
-        if let Some(v) = line.strip_prefix("width=") {
-            width = v
-                .parse()
-                .map_err(|_| AppError::Ffmpeg("Invalid width".to_string()))?;
-        } else if let Some(v) = line.strip_prefix("height=") {
-            height = v
-                .parse()
-                .map_err(|_| AppError::Ffmpeg("Invalid height".to_string()))?;
-        } else if let Some(v) = line.strip_prefix("r_frame_rate=") {
-            let parts: Vec<&str> = v.split('/').collect();
-            if parts.len() == 2 {
-                let num: f64 = parts[0].parse().unwrap_or(30.0);
-                let den: f64 = parts[1].parse().unwrap_or(1.0);
-                fps = num / den;
-            }
-        }
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(AppError::Ffmpeg(format!(
+            "ffprobe failed (exit {}): {}",
+            output.status.code().unwrap_or(-1),
+            stderr.chars().take(2000).collect::<String>()
+        )));
     }
+
+    let raw: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|e| AppError::Ffmpeg(format!("Invalid ffprobe JSON: {e}")))?;
+    let stream = raw
+        .get("streams")
+        .and_then(|s| s.as_array())
+        .and_then(|a| a.first())
+        .ok_or_else(|| AppError::Ffmpeg("ffprobe returned no video streams".to_string()))?;
+
+    let width = stream
+        .get("width")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| AppError::Ffmpeg("ffprobe did not return width".to_string()))?
+        as u32;
+    let height = stream
+        .get("height")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| AppError::Ffmpeg("ffprobe did not return height".to_string()))?
+        as u32;
+    let fps = parse_r_frame_rate(
+        stream
+            .get("r_frame_rate")
+            .and_then(|v| v.as_str())
+            .unwrap_or("30/1"),
+    );
 
     if width == 0 || height == 0 {
         return Err(AppError::Ffmpeg(
@@ -718,9 +1045,7 @@ pub fn probe_video(path: &str) -> Result<(u32, u32, f64)> {
     }
 
     let result = (width, height, fps);
-    let mut cache = cache
-        .lock()
-        .map_err(|e| AppError::Generic(format!("probe cache lock poisoned: {e}")))?;
+    let mut cache = cache.lock();
     if cache.entries.contains_key(path) {
         cache.order.retain(|key| key != path);
     }
@@ -837,4 +1162,79 @@ pub fn probe_metadata(path: &str) -> Result<MediaMetadata> {
         }
     }
     Ok(meta)
+}
+
+/// Check whether a media file has an audio stream.
+///
+/// Returns `Ok(true)` if at least one audio stream is present, `Ok(false)`
+/// if the file is video-only, or an error if ffprobe itself fails. This is
+/// used by the auto-audio-extraction path to decide whether to extract
+/// audio from a loaded video for audio-reactive effects.
+pub fn has_audio_stream(path: &str) -> Result<bool> {
+    let bin = ffprobe_binary()?;
+    let output = Command::new(&bin)
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "a",
+            "-show_entries",
+            "stream=codec_type",
+            "-of",
+            "csv=p=0",
+            path,
+        ])
+        .output()
+        .map_err(AppError::Io)?;
+    // ffprobe prints one line per audio stream; if stdout is empty, no audio.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.trim().lines().any(|l| l.trim() == "audio"))
+}
+
+/// Extract the audio track from a video file to a WAV file.
+///
+/// Downmixes to mono at 44.1 kHz to match the format the TS
+/// `AudioFeatureExtractor` expects. If `max_duration_secs` is provided,
+/// only the first N seconds are extracted (matches the export trim range).
+///
+/// This is the Rust-side counterpart to the TouchDesigner `Audio Movie CHOP`
+/// pattern: the user loads a video, and the app auto-extracts its audio
+/// track so audio-reactive effects work without a separate audio load.
+pub fn extract_audio_to_wav(
+    video_path: &str,
+    output_wav_path: &str,
+    max_duration_secs: Option<f64>,
+) -> Result<()> {
+    let ffmpeg = ffmpeg_binary()?;
+    let mut cmd = Command::new(&ffmpeg);
+    cmd.args(["-y", "-i", video_path, "-vn", "-ac", "1", "-ar", "44100"]);
+    if let Some(secs) = max_duration_secs {
+        if secs > 0.0 {
+            cmd.args(["-t", &format!("{secs}")]);
+        }
+    }
+    cmd.args([output_wav_path]);
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::piped());
+    let output = cmd.output().map_err(AppError::Io)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // If the source has no audio stream, ffmpeg exits non-zero with a
+        // recognizable error. Distinguish this from a real failure.
+        let stderr_lower = stderr.to_lowercase();
+        if stderr_lower.contains("no audio streams")
+            || stderr_lower.contains("could not find audio codec")
+            || stderr_lower.contains("stream specifier ':a': no stream")
+        {
+            return Err(AppError::Ffmpeg(
+                "Source video has no audio stream".to_string(),
+            ));
+        }
+        return Err(AppError::Ffmpeg(format!(
+            "FFmpeg audio extract failed (exit {}): {}",
+            output.status.code().unwrap_or(-1),
+            stderr.chars().take(1500).collect::<String>()
+        )));
+    }
+    Ok(())
 }

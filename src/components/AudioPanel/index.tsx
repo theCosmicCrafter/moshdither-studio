@@ -1,9 +1,10 @@
 import React, { useRef, useCallback } from "react";
 import { useAppStore } from "../../store";
 import { useAudioEngine } from "../../hooks/useAudioEngine";
-import { STANDARD_BANDS } from "../../engine/audio/types";
 import { detectBeats, decodeAudioFile } from "../../utils/beatDetection";
 import { generateBeatKeyframes } from "../../utils/beatKeyframeGenerator";
+import { getFileName } from "../../utils/fileName";
+import AudioVisualizer from "../common/AudioVisualizer";
 
 export default function AudioPanel() {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -19,10 +20,12 @@ export default function AudioPanel() {
   const audioFilePath = useAppStore((s) => s.audioFilePath);
   const audioManifestProgress = useAppStore((s) => s.audioManifestProgress);
   const audioManifestPhase = useAppStore((s) => s.audioManifestPhase);
+  const audioIsSilent = useAppStore((s) => s.audioIsSilent);
 
   const setAudioEnabled = useAppStore((s) => s.setAudioEnabled);
   const setAudioVolume = useAppStore((s) => s.setAudioVolume);
   const setAudioFilePath = useAppStore((s) => s.setAudioFilePath);
+  const setStatusMessage = useAppStore((s) => s.setStatusMessage);
 
   const {
     loadAudioFile,
@@ -39,9 +42,16 @@ export default function AudioPanel() {
       audioFileRef.current = file;
       setAudioEnabled(true);
       setAudioFilePath(file.name);
-      await loadAudioFile(file);
+      try {
+        await loadAudioFile(file);
+      } catch (err) {
+        console.error("Audio file load failed:", err);
+        setStatusMessage(
+          `Audio load failed: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
     },
-    [loadAudioFile, setAudioEnabled, setAudioFilePath]
+    [loadAudioFile, setAudioEnabled, setAudioFilePath, setStatusMessage]
   );
 
   const handleDrop = useCallback(
@@ -52,14 +62,20 @@ export default function AudioPanel() {
       audioFileRef.current = file;
       setAudioEnabled(true);
       setAudioFilePath(file.name);
-      await loadAudioFile(file);
+      try {
+        await loadAudioFile(file);
+      } catch (err) {
+        console.error("Audio file load failed:", err);
+        setStatusMessage(
+          `Audio load failed: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
     },
-    [loadAudioFile, setAudioEnabled, setAudioFilePath]
+    [loadAudioFile, setAudioEnabled, setAudioFilePath, setStatusMessage]
   );
 
   const selectedStackId = useAppStore((s) => s.selectedStackId);
   const setKeyframesForTrack = useAppStore((s) => s.setKeyframesForTrack);
-  const setStatusMessage = useAppStore((s) => s.setStatusMessage);
 
   const handleAnalyzeBeats = useCallback(async () => {
     const file = audioFileRef.current;
@@ -88,7 +104,8 @@ export default function AudioPanel() {
       }
     } catch (err) {
       console.error("Beat detection failed:", err);
-      setStatusMessage("Beat detection failed");
+      const detail = err instanceof Error ? err.message : String(err);
+      setStatusMessage(`Beat detection failed: ${detail}`);
     }
   }, [selectedStackId, setKeyframesForTrack, setStatusMessage]);
 
@@ -112,6 +129,31 @@ export default function AudioPanel() {
         <span>Enable audio reactive</span>
       </label>
 
+      {audioEnabled && audioIsSilent && (
+        <div
+          role="alert"
+          style={{
+            padding: "6px 8px",
+            fontSize: 10,
+            borderRadius: 3,
+            background: "rgba(255, 180, 0, 0.15)",
+            border: "1px solid rgba(255, 180, 0, 0.4)",
+            color: "var(--accent-gold, #ffb400)",
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+          }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 12 }}>
+            warning
+          </span>
+          <span>
+            Source audio is silent or missing. Audio-reactive effects won't respond.
+            Load a separate audio file below to drive them.
+          </span>
+        </div>
+      )}
+
       {!audioEnabled ? (
         <div style={{ color: "var(--text-muted)", textAlign: "center", padding: "12px 0" }}>
           Enable audio reactive to start
@@ -123,6 +165,7 @@ export default function AudioPanel() {
             onDrop={handleDrop}
             onDragOver={(e) => e.preventDefault()}
             onClick={() => fileInputRef.current?.click()}
+            title={audioFilePath ?? undefined}
             style={{
               border: "2px dashed var(--surface-bright)",
               borderRadius: 4,
@@ -133,7 +176,7 @@ export default function AudioPanel() {
               color: audioFilePath ? "var(--accent-teal)" : "var(--text-muted)",
             }}
           >
-            {audioFilePath || "Drop audio file or click to browse"}
+            {getFileName(audioFilePath) || "Drop audio file or click to browse"}
           </div>
           <input
             ref={fileInputRef}
@@ -271,45 +314,7 @@ export default function AudioPanel() {
 }
 
 function SpectrumBars() {
-  const audioBandEnergies = useAppStore((s) => s.audioBandEnergies);
-  const bandColors = [
-    "#ff4444",
-    "#ff8844",
-    "#ffcc44",
-    "#44ff44",
-    "#44ffcc",
-    "#4488ff",
-    "#cc44ff",
-  ];
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "flex-end",
-        gap: 2,
-        height: 48,
-        padding: "4px 0",
-      }}
-    >
-      {STANDARD_BANDS.map((band, i) => {
-        const val = audioBandEnergies[band.name] ?? 0;
-        return (
-          <div
-            key={band.name}
-            style={{
-              flex: 1,
-              height: `${Math.max(2, val * 100)}%`,
-              background: bandColors[i],
-              borderRadius: 2,
-              transition: "height 60ms linear",
-              opacity: 0.85,
-            }}
-            title={`${band.name}: ${(val * 100).toFixed(1)}%`}
-          />
-        );
-      })}
-    </div>
-  );
+  return <AudioVisualizer variant="spectrum" className="h-12 py-1" />;
 }
 
 function TransportButton({

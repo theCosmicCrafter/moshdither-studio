@@ -19,7 +19,7 @@
 - [x] Implement VRAM state checking and pinned memory loading.
 - [x] Implement sequential offloading in `sam3_bridge.py`.
 - [x] Add idle timeout "kill switch" to drop model to CPU.
-- [ ] Implement progress bar event interception for model downloads.
+- [x] Implement progress bar event interception for model downloads.
 
 # PyTorch & SageAttention Optimization
 - [x] Reinstall PyTorch with CUDA 12.1+ (in progress).

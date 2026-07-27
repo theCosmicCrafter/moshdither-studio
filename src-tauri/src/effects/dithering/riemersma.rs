@@ -2,8 +2,24 @@ use crate::effects::types::*;
 use crate::effects::Effect;
 use crate::error::Result;
 
-/// Riemersma dithering — Hilbert curve-based error diffusion.
+/// Riemersma dithering — Hilbert curve traversal with an exponentially
+/// decaying error history, per Thiadmer Riemersma's "A Balanced Dithering
+/// Technique" (C/C++ Users Journal, 1998).
 pub struct RiemersmaDither;
+
+/// Number of past errors remembered along the Hilbert path.
+const HIST_LEN: usize = 16;
+/// Ratio between the largest (most recent) and smallest (oldest) weight.
+const HIST_RATIO: f32 = 16.0;
+
+/// Exponentially increasing weights: index 0 = oldest (1/ratio), last = newest (1.0).
+fn history_weights() -> [f32; HIST_LEN] {
+    let mut w = [0.0f32; HIST_LEN];
+    for (i, v) in w.iter_mut().enumerate() {
+        *v = HIST_RATIO.powf((i as f32 - (HIST_LEN as f32 - 1.0)) / (HIST_LEN as f32 - 1.0));
+    }
+    w
+}
 
 impl RiemersmaDither {
     pub fn new() -> Self {
@@ -37,27 +53,61 @@ impl Effect for RiemersmaDither {
         let w = input.width as usize;
         let h = input.height as usize;
         let n = w.max(h).next_power_of_two();
-        let mut buf: Vec<f32> = input.data.iter().map(|&v| v as f32).collect();
-        let mut err_r = 0.0f32;
-        let mut err_g = 0.0f32;
-        let mut err_b = 0.0f32;
 
-        // Simple approximation: walk pixels in Hilbert-like order
+        // Compute per-pixel luminance
+        let mut lum: Vec<f32> = vec![0.0; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                let idx = (y * w + x) * 4;
+                lum[y * w + x] = 0.299 * input.data[idx] as f32
+                    + 0.587 * input.data[idx + 1] as f32
+                    + 0.114 * input.data[idx + 2] as f32;
+            }
+        }
+
+        // Walk pixels in Hilbert order carrying a ring buffer of the last
+        // HIST_LEN quantization errors. The correction applied to each pixel
+        // is the weighted sum of that history, with recent errors weighing
+        // exponentially more than old ones.
+        let weights = history_weights();
+        let mut history = [0.0f32; HIST_LEN];
+        let mut head = 0usize; // index of the oldest entry (next overwrite target)
+
         for i in 0..(n * n) {
             let (hx, hy) = hilbert_xy(i, n);
             if hx >= w || hy >= h {
                 continue;
             }
-            let idx = (hy * w + hx) * 4;
-            for (c, err) in [(0, &mut err_r), (1, &mut err_g), (2, &mut err_b)] {
-                let old = buf[idx + c] + *err * 0.5;
-                let new = if old > 127.0 { 255.0 } else { 0.0 };
-                *err = old - new;
-                buf[idx + c] = new;
+            let pi = hy * w + hx;
+
+            let mut correction = 0.0f32;
+            for (j, wgt) in weights.iter().enumerate() {
+                correction += history[(head + j) % HIST_LEN] * wgt;
+            }
+
+            let original = lum[pi];
+            let corrected = original + correction;
+            let new = if corrected > 127.0 { 255.0 } else { 0.0 };
+
+            // Store the raw quantization error (original minus output), as in
+            // the original algorithm — this keeps the history bounded.
+            history[head] = original - new;
+            head = (head + 1) % HIST_LEN;
+
+            lum[pi] = new;
+        }
+
+        let mut data = input.data.clone();
+        for y in 0..h {
+            for x in 0..w {
+                let idx = (y * w + x) * 4;
+                let v = lum[y * w + x].clamp(0.0, 255.0) as u8;
+                data[idx] = v;
+                data[idx + 1] = v;
+                data[idx + 2] = v;
             }
         }
 
-        let data = buf.iter().map(|&v| v.clamp(0.0, 255.0) as u8).collect();
         Ok(Frame {
             width: input.width,
             height: input.height,

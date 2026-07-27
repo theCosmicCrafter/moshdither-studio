@@ -226,26 +226,11 @@ const PALETTES: &[Palette] = &[
             (255, 255, 255),
         ],
     },
+    // CGA Mode 4/5 Palette 1 (low intensity): black, cyan, magenta, light gray.
+    // This is distinct from the 16-color EGA default palette above.
     Palette {
         name: "CGA",
-        colors: &[
-            (0, 0, 0),
-            (0, 0, 170),
-            (0, 170, 0),
-            (0, 170, 170),
-            (170, 0, 0),
-            (170, 0, 170),
-            (170, 85, 0),
-            (170, 170, 170),
-            (85, 85, 85),
-            (85, 85, 255),
-            (85, 255, 85),
-            (85, 255, 255),
-            (255, 85, 85),
-            (255, 85, 255),
-            (255, 255, 85),
-            (255, 255, 255),
-        ],
+        colors: &[(0, 0, 0), (0, 170, 170), (170, 0, 170), (170, 170, 170)],
     },
     Palette {
         name: "AmigaWorkbench",
@@ -281,7 +266,7 @@ impl Default for HistoricalPalettes {
 
 impl Effect for HistoricalPalettes {
     fn meta(&self) -> EffectMeta {
-        let palette_names: Vec<String> = PALETTES.iter().map(|p| p.name.to_string()).collect();
+        let palette_names = palette_names();
         EffectMeta {
             id: "color.historical_palettes".to_string(),
             name: "Historical Palettes".to_string(),
@@ -364,6 +349,24 @@ impl Effect for HistoricalPalettes {
     }
 }
 
+/// Names of every bundled palette, in declaration order.
+///
+/// Shared with the dithering effects so the palette list cannot drift between
+/// the two places it is offered.
+pub fn palette_names() -> Vec<String> {
+    PALETTES.iter().map(|p| p.name.to_string()).collect()
+}
+
+/// Look up a bundled palette by name. Falls back to the first palette so a
+/// stale or unknown name degrades to a working palette rather than an error.
+pub fn palette_by_name(name: &str) -> &'static [(u8, u8, u8)] {
+    PALETTES
+        .iter()
+        .find(|p| p.name.eq_ignore_ascii_case(name))
+        .unwrap_or(&PALETTES[0])
+        .colors
+}
+
 fn nearest_palette_color(r: u8, g: u8, b: u8, palette: &[(u8, u8, u8)]) -> (u8, u8, u8) {
     let mut best = (0, 0, 0);
     let mut best_dist = u32::MAX;
@@ -386,21 +389,26 @@ fn nearest_palette_color(r: u8, g: u8, b: u8, palette: &[(u8, u8, u8)]) -> (u8, 
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_historical_palettes() {
+    fn run(palette: &str, pixel: [u8; 3]) -> [u8; 3] {
         let mut params = serde_json::Map::new();
-        params.insert("palette".to_string(), json!("GameBoy"));
+        params.insert("palette".to_string(), json!(palette));
         params.insert("mix".to_string(), json!(1.0));
-        let d = vec![100u8, 150, 200, 255];
         let f = Frame {
             width: 1,
             height: 1,
-            data: d,
+            data: vec![pixel[0], pixel[1], pixel[2], 255],
         };
-        let e = HistoricalPalettes;
-        let r = e.process_frame(&f, None, &params).unwrap();
-        // Pixel should be mapped to one of the 4 GameBoy colors
-        let (cr, cg, cb) = (r.data[0], r.data[1], r.data[2]);
+        HistoricalPalettes
+            .process_frame(&f, None, &params)
+            .unwrap()
+            .data[0..3]
+            .try_into()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_historical_palettes_gameboy() {
+        let [cr, cg, cb] = run("GameBoy", [100, 150, 200]);
         let gameboy_colors = [
             (15u8, 56u8, 15u8),
             (48, 98, 48),
@@ -411,5 +419,45 @@ mod tests {
             .iter()
             .any(|(pr, pg, pb)| cr == *pr && cg == *pg && cb == *pb);
         assert!(is_palette);
+    }
+
+    #[test]
+    fn cga_palette_is_four_colors() {
+        let cga = [
+            (0u8, 0u8, 0u8),
+            (0, 170, 170),
+            (170, 0, 170),
+            (170, 170, 170),
+        ];
+        let [cr, cg, cb] = run("CGA", [50, 200, 100]);
+        assert!(cga
+            .iter()
+            .any(|(pr, pg, pb)| cr == *pr && cg == *pg && cb == *pb));
+    }
+
+    #[test]
+    fn ega16_palette_is_sixteen_colors() {
+        let ega16: &[(u8, u8, u8)] = &[
+            (0, 0, 0),
+            (0, 0, 170),
+            (0, 170, 0),
+            (0, 170, 170),
+            (170, 0, 0),
+            (170, 0, 170),
+            (170, 85, 0),
+            (170, 170, 170),
+            (85, 85, 85),
+            (85, 85, 255),
+            (85, 255, 85),
+            (85, 255, 255),
+            (255, 85, 85),
+            (255, 85, 255),
+            (255, 255, 85),
+            (255, 255, 255),
+        ];
+        let [cr, cg, cb] = run("EGA16", [50, 200, 100]);
+        assert!(ega16
+            .iter()
+            .any(|(pr, pg, pb)| cr == *pr && cg == *pg && cb == *pb));
     }
 }

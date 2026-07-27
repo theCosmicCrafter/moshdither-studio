@@ -29,6 +29,17 @@ export interface FloatingWindow {
 
 export type DropPosition = "top" | "bottom" | "left" | "right" | "center";
 
+/**
+ * Composition guides available in the viewport. Each replaces a former
+ * `overlay.*` registry effect of the same name.
+ */
+export interface ViewportGuides {
+  safeArea: boolean;
+  ruleOfThirds: boolean;
+  crosshairs: boolean;
+  pixelGrid: boolean;
+}
+
 export interface EffectMeta {
   id: string;
   name: string;
@@ -40,7 +51,7 @@ export interface EffectMeta {
 export interface ParameterDef {
   id: string;
   name: string;
-  type: "slider" | "select" | "toggle" | "color" | "palette" | "mask";
+  type: "slider" | "select" | "toggle" | "color" | "palette" | "mask" | "text";
   default: unknown;
   min?: number;
   max?: number;
@@ -169,6 +180,19 @@ export interface AppState {
   audioManifestProgress: number;
   /** Manifest analysis phase description. */
   audioManifestPhase: string;
+  /** True when the loaded video's audio is silent or missing. The UI shows
+   *  a warning banner so the user knows audio-reactive effects won't respond. */
+  audioIsSilent: boolean;
+
+  /**
+   * Composition guides drawn on top of the preview and never exported.
+   *
+   * These were previously four entries in the effect registry
+   * (`overlay.safe_area` and friends), which meant framing aids sat in the same
+   * list as Datamosh and VHS and got burned into the delivered file. They are
+   * viewport furniture, so they live in view state.
+   */
+  viewportGuides: ViewportGuides;
 
   // Mask / Segmentation
   activeMask: string | null; // base64 PNG of current mask
@@ -233,7 +257,6 @@ export interface AppState {
   setDockGroupSize: (groupId: string, size: number) => void;
   /** Atomically resize two adjacent groups — grows one, shrinks the other by the same delta */
   setDockGroupSizes: (groupIdA: string, sizeA: number, groupIdB: string, sizeB: number) => void;
-  toggleBottomDock: () => void;
   getDockedPanelIds: () => Set<string>;
 
   // Floating windows
@@ -299,7 +322,8 @@ export interface AppState {
   setActiveCategory: (cat: string) => void;
   setSearchQuery: (q: string) => void;
   addToStack: (effect: EffectMeta) => void;
-  addLUTEffect: (url: string) => void;
+  setEffectStack: (stack: StackEntry[]) => void;
+  addLUTEffect: (previewUrl: string, filePath?: string) => void;
   removeFromStack: (id: string) => void;
   moveStackItem: (fromIndex: number, toIndex: number) => void;
   updateStackParams: (id: string, params: Record<string, unknown>) => void;
@@ -350,6 +374,7 @@ export interface AppState {
   setAudioBakeData: (data: AudioBakeData | null) => void;
   setAudioManifest: (manifest: AudioManifest | null) => void;
   setAudioManifestProgress: (progress: number, phase: string) => void;
+  setAudioIsSilent: (silent: boolean) => void;
 
   // Keyframe actions
   addKeyframe: (stackId: string, paramId: string, keyframe: Keyframe) => void;
@@ -368,6 +393,8 @@ export interface AppState {
   // Mask actions
   setActiveMask: (maskB64: string | null) => void;
   setMaskVisible: (v: boolean) => void;
+  toggleViewportGuide: (guide: keyof ViewportGuides) => void;
+  setViewportGuides: (guides: Partial<ViewportGuides>) => void;
   setMaskTab: (tab: "sam3" | "manual") => void;
   setMaskTool: (tool: "brush" | "eraser" | "rect" | "ellipse" | "polygon") => void;
   setBrushSize: (size: number) => void;
@@ -460,6 +487,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   audioManifest: null,
   audioManifestProgress: 0,
   audioManifestPhase: "",
+  audioIsSilent: false,
   isProcessing: false,
   showBeforeAfter: false,
   zoom: 1,
@@ -514,6 +542,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeMask: null,
   maskRevision: 0,
   maskVisible: true,
+  viewportGuides: {
+    safeArea: false,
+    ruleOfThirds: false,
+    crosshairs: false,
+    pixelGrid: false,
+  },
   maskTab: "sam3",
   maskTool: "brush",
   brushSize: 20,
@@ -578,7 +612,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
 
-  addLUTEffect: (url) => {
+  addLUTEffect: (previewUrl, filePath) => {
     const state = get();
     const effect = state.allEffects.find((e) => e.id === "color.lut_grading");
     const defaults: Record<string, unknown> = { amount: 1.0 };
@@ -587,12 +621,16 @@ export const useAppStore = create<AppState>((set, get) => ({
         defaults[p.id] = p.default;
       }
     }
+    // filePath is used by the Rust export path; for bundled presets it is the
+    // web-style URL with the leading slash removed. Custom user LUTs pass the
+    // absolute disk path instead.
+    const lut_path = filePath ?? previewUrl.replace(/^\//, "");
     instanceIdCounter += 1;
     const entry: StackEntry = {
       id: `stack-${instanceIdCounter}`,
       effectId: "color.lut_grading",
       effectName: effect?.name ?? "LUT Color Grading",
-      params: { ...defaults, tLUT: url },
+      params: { ...defaults, tLUT: previewUrl, lut_path },
       enabled: true,
       maskId: null,
       maskB64: null,
@@ -619,6 +657,14 @@ export const useAppStore = create<AppState>((set, get) => ({
             : state.selectedStackId,
       };
     }),
+
+  setEffectStack: (stack) =>
+    set((state) => ({
+      pastStacks: [...state.pastStacks, state.effectStack],
+      futureStacks: [],
+      effectStack: stack,
+      selectedStackId: stack.length > 0 ? stack[stack.length - 1].id : null,
+    })),
 
   moveStackItem: (fromIndex, toIndex) =>
     set((state) => {
@@ -662,7 +708,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (maskId === "active") {
         maskB64 = state.activeMask;
       } else if (maskId && maskId.startsWith("sam3-")) {
-        const idx = parseInt(maskId.replace("sam3-", ""), 10);
+        const idx = Number.parseInt(maskId.replace("sam3-", ""), 10);
         maskB64 = state.sam3Masks[idx] ?? null;
       }
       return {
@@ -817,14 +863,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       return { dockLayout: layout };
     }),
-
-  toggleBottomDock: () =>
-    set((state) => ({
-      dockLayout: {
-        ...state.dockLayout,
-        bottomVisible: !state.dockLayout.bottomVisible,
-      },
-    })),
 
   setLeftZoneWidth: (width) => set({ leftZoneWidth: Math.max(180, Math.min(600, width)) }),
 
@@ -1007,7 +1045,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setAspectRatio: (ratio) => set({ aspectRatio: ratio }),
   setInPoint: (t) =>
     set((state) => {
-      const val = t === null ? null : clampFinite(t, 0, 99, 0);
+      const val = t === null ? null : clampFinite(t, 0, state.duration, 0);
       return {
         inPoint: val,
         outPoint:
@@ -1016,7 +1054,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }),
   setOutPoint: (t) =>
     set((state) => {
-      const val = t === null ? null : clampFinite(t, 0, 99, 0);
+      const val = t === null ? null : clampFinite(t, 0, state.duration, 0);
       return {
         outPoint: val,
         inPoint:
@@ -1099,6 +1137,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setAudioManifest: (manifest) => set({ audioManifest: manifest }),
   setAudioManifestProgress: (progress, phase) =>
     set({ audioManifestProgress: progress, audioManifestPhase: phase }),
+  setAudioIsSilent: (silent) => set({ audioIsSilent: silent }),
 
   addKeyframe: (stackId, paramId, keyframe) =>
     set((state) => {
@@ -1177,8 +1216,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   // Mask actions
-  setActiveMask: (maskB64) => set((state) => ({ activeMask: maskB64, maskRevision: state.maskRevision + 1 })),
+  setActiveMask: (maskB64) =>
+    set((state) => ({ activeMask: maskB64, maskRevision: state.maskRevision + 1 })),
   setMaskVisible: (v) => set({ maskVisible: v }),
+  toggleViewportGuide: (guide) =>
+    set((state) => ({
+      viewportGuides: { ...state.viewportGuides, [guide]: !state.viewportGuides[guide] },
+    })),
+  setViewportGuides: (guides) =>
+    set((state) => ({ viewportGuides: { ...state.viewportGuides, ...guides } })),
   setMaskTab: (tab) => set({ maskTab: tab }),
   setMaskTool: (tool) => set({ maskTool: tool }),
   setBrushSize: (size) => set({ brushSize: clampFinite(size, 1, 200, 20) }),

@@ -74,7 +74,7 @@ impl Effect for PngChunkGlitch {
             .unwrap_or(0.3) as f32;
 
         let mut data = input.data.clone();
-        let mut rng = rand::thread_rng();
+        let mut rng = crate::effects::rng::frame_rng(input, params);
         let len = data.len();
 
         // Simulate PNG chunk boundary corruption.

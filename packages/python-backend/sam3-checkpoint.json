@@ -1,0 +1,6 @@
+{
+  "repo_id": "facebook/sam3.1",
+  "filename": "sam3.1_multiplex.pt",
+  "local_name": "sam3.pt",
+  "description": "Default SAM3 multiplex checkpoint used for segmentation"
+}

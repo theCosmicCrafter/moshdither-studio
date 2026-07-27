@@ -1,6 +1,8 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
+const isDevBuild = !!process.env.TAURI_DEBUG;
+
 export default defineConfig({
   plugins: [react()],
   clearScreen: false,
@@ -14,14 +16,34 @@ export default defineConfig({
   envPrefix: ["VITE_", "TAURI_"],
   build: {
     target: "es2022",
-    minify: !process.env.TAURI_DEBUG ? "esbuild" : false,
-    sourcemap: !!process.env.TAURI_DEBUG,
+    minify: isDevBuild ? false : "esbuild",
+    sourcemap: isDevBuild ? "inline" : false,
+    // Preload dependencies of dynamically-imported modules in parallel so
+    // panel chunks fetched via React.lazy() also fetch their shared deps
+    // (vendor, engine-webgl2) at the same time, reducing waterfall latency
+    // when a user opens a panel for the first time.
+    modulePreload: { polyfill: true },
     rollupOptions: {
       output: {
         manualChunks(id) {
+          const normalizedId = id.replace(/\\/g, "/");
+          // Vendor chunk: framework + state management libraries.
           const vendor = ["react", "react-dom", "zustand", "lucide-react"];
-          if (vendor.some((module) => id.includes(`node_modules/${module}`))) {
+          if (vendor.some((module) => normalizedId.includes(`node_modules/${module}/`))) {
             return "vendor";
+          }
+          // Panel-level code splitting: each heavy panel gets its own chunk.
+          // Handles both directory-style panels (e.g. components/AudioPanel/...)
+          // and flat file panels (e.g. components/MaskPanel.tsx).
+          const panelMatch = normalizedId.match(
+            /\/components\/(EffectBrowser|EffectStack|AudioPanel|ExportPanel|PresetPanel|MaskPanel|LUTPanel|ProxyPanel|TrackPanel|VerificationPanel)(\/|\.(?:tsx?|jsx?)|$)/
+          );
+          if (panelMatch) {
+            return `panel-${panelMatch[1].toLowerCase()}`;
+          }
+          // Engine chunk: WebGL2 renderer, shaders, LUT loader
+          if (normalizedId.includes("/engine/webgl2/")) {
+            return "engine-webgl2";
           }
         },
       },
@@ -31,6 +53,19 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
-    include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    include: ["src/**/*.{test,spec}.{ts,tsx}", "tests/**/*.{test,spec}.{ts,tsx}"],
+    exclude: ["tests/e2e/**", "node_modules/**"],
+    // Pin NODE_ENV for the test run. React's entrypoint dispatches on
+    // process.env.NODE_ENV at import time; if the ambient environment has
+    // NODE_ENV=production (common on CI runners and build agents) React
+    // resolves to react.production.min.js, where act() throws and every
+    // @testing-library render fails. Pinning it here makes the suite
+    // hermetic instead of dependent on the shell it was launched from.
+    env: { NODE_ENV: "test" },
+  },
+  define: {
+    // Belt-and-braces: ensure any bare `process.env.NODE_ENV` reference that
+    // survives into a test bundle also sees a non-production value.
+    ...(process.env.VITEST ? { "process.env.NODE_ENV": JSON.stringify("test") } : {}),
   },
 });

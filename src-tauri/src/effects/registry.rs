@@ -66,10 +66,6 @@ impl EffectRegistry {
         self.register(super::composite::Overlay::default());
 
         // Overlay (HUD-style guides)
-        self.register(super::overlay::PixelGridOverlay);
-        self.register(super::overlay::SafeArea);
-        self.register(super::overlay::RuleOfThirds);
-        self.register(super::overlay::Crosshairs);
 
         // Pixel Geometry
         self.register(super::pixel_geo::PixelSort::default());
@@ -117,7 +113,6 @@ impl EffectRegistry {
         self.register(super::datamoshing::FrameSortByDataSize);
         self.register(super::datamoshing::FrameHold);
         self.register(super::datamoshing::BloomDatamosh::default());
-        self.register(super::datamoshing::RepeatDatamosh::default());
         self.register(super::datamoshing::CombineDatamosh::default());
         self.register(super::datamoshing::MotionTransfer);
         self.register(super::datamoshing::ZoomGlitch);
@@ -145,8 +140,36 @@ impl EffectRegistry {
         self.register(super::audio_reactive::AudioDither);
     }
 
+    /// Retired effect IDs and what they now resolve to.
+    ///
+    /// An unknown effect ID is a hard error in the render pipeline -- it aborts
+    /// the whole export rather than skipping the entry -- so removing an ID that
+    /// projects may reference has to leave a forwarding address or those
+    /// projects stop rendering entirely.
+    ///
+    /// Aliases do NOT appear in `list()`, so a retired ID is invisible in the
+    /// effect browser and cannot be added to a new project. It only resolves for
+    /// work that already refers to it.
+    const ALIASES: &'static [(&'static str, &'static str)] = &[
+        // Removed 2026-07-26. Was byte-for-byte the same algorithm as
+        // datamoshing.classic -- chunk the segment, repeat each chunk N times --
+        // with identical defaults and only the parameter names differing.
+        // classic's ranges are wider on both parameters (chunk 2-30 vs 2-20,
+        // repeats 1-10 vs 2-10), so nothing is lost by forwarding here.
+        // ClassicDatamosh also reads `series_size` and `repeat_count`, so stored
+        // values carry over.
+        ("datamoshing.repeat", "datamoshing.classic"),
+    ];
+
     pub fn get(&self, id: &str) -> Option<&dyn Effect> {
-        self.effects.get(id).map(|b| b.as_ref())
+        if let Some(effect) = self.effects.get(id) {
+            return Some(effect.as_ref());
+        }
+        Self::ALIASES
+            .iter()
+            .find(|(old, _)| *old == id)
+            .and_then(|(_, new)| self.effects.get(*new))
+            .map(|b| b.as_ref())
     }
 
     pub fn list(&self) -> Vec<EffectMeta> {
@@ -158,6 +181,15 @@ impl EffectRegistry {
             .values()
             .map(|e| e.meta())
             .filter(|m| m.category == category)
+            .collect()
+    }
+
+    /// Return a map of effect ID to parameter definitions, used for input
+    /// validation and clamping without repeatedly re-instantiating metadata.
+    pub fn parameter_defs(&self) -> HashMap<String, Vec<ParameterDef>> {
+        self.effects
+            .iter()
+            .map(|(id, e)| (id.clone(), e.meta().parameters))
             .collect()
     }
 }

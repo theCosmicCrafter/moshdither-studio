@@ -1,0 +1,175 @@
+name: Release
+
+# Build, code-sign, and publish MoshDither Studio installers and updater artifacts.
+#
+# Required repository secrets:
+#   Updater signing (all platforms):
+#     - TAURI_SIGNING_PRIVATE_KEY
+#     - TAURI_SIGNING_PRIVATE_KEY_PASSWORD (optional)
+#   macOS signing + notarization:
+#     - APPLE_CERTIFICATE (Base64 .p12)
+#     - APPLE_CERTIFICATE_PASSWORD
+#     - APPLE_ID
+#     - APPLE_PASSWORD
+#     - APPLE_TEAM_ID
+#   Windows code signing:
+#     - WINDOWS_CERTIFICATE (Base64 .pfx)
+#     - WINDOWS_CERTIFICATE_PASSWORD
+#
+# If a secret is missing, the workflow falls back to an unsigned build for that
+# platform. The updater artifacts are only produced when TAURI_SIGNING_PRIVATE_KEY
+# is configured.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  publish-tauri:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: "macos-latest"
+            target: "aarch64-apple-darwin"
+            args: "--target aarch64-apple-darwin"
+            rust-targets: "aarch64-apple-darwin"
+          - platform: "macos-13"
+            target: "x86_64-apple-darwin"
+            args: "--target x86_64-apple-darwin"
+            rust-targets: "x86_64-apple-darwin"
+          - platform: "ubuntu-22.04"
+            target: "x86_64-unknown-linux-gnu"
+            args: ""
+            rust-targets: ""
+          - platform: "windows-latest"
+            target: "x86_64-pc-windows-msvc"
+            args: ""
+            rust-targets: ""
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+
+      - name: install frontend dependencies
+        run: npm ci
+
+      - name: setup Python for SAM3 sidecar build
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: cache SAM3 build environment
+        id: cache-sam3-env
+        uses: actions/cache@v4
+        with:
+          path: sam3_env
+          key: ${{ runner.os }}-${{ matrix.target }}-sam3-env-${{ hashFiles('packages/python-backend/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-sam3-env-
+            ${{ runner.os }}-sam3-env-
+
+      - name: build SAM3 environment
+        run: npm run setup:sam3-env
+        env:
+          SAM3_CUDA: ${{ vars.SAM3_CUDA }}
+
+      - name: verify HuggingFace token is configured
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        shell: bash
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "::error::HF_TOKEN secret is required to download the gated SAM3 checkpoint."
+            exit 1
+          fi
+
+      - name: download SAM3 checkpoint
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: npm run download:sam3-checkpoint
+
+      - name: cache SAM3 sidecar
+        id: cache-sam3-sidecar
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/bin/sam3-bridge-*
+          key: ${{ runner.os }}-${{ matrix.target }}-sam3-sidecar-${{ hashFiles('src-tauri/sam3_bridge.py', 'packages/python-backend/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-sam3-sidecar-
+            ${{ runner.os }}-sam3-sidecar-
+
+      - name: build SAM3 sidecar
+        if: steps.cache-sam3-sidecar.outputs.cache-hit != 'true'
+        env:
+          TAURI_TARGET_TRIPLE: ${{ matrix.target }}
+        run: npm run build:sam3-sidecar -- --target ${{ matrix.target }}
+
+      - name: generate release Tauri config overlay
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: node scripts/enable-sam3-sidecar.mjs --release
+
+      - name: Enable Windows code signing
+        if: matrix.platform == 'windows-latest'
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        shell: pwsh
+        run: |
+          if ($env:WINDOWS_CERTIFICATE) {
+            $bytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
+            $pfx = "$env:RUNNER_TEMP\cert.pfx"
+            [IO.File]::WriteAllBytes($pfx, $bytes)
+            $pwd = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
+            $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $pwd
+            $config = @{ bundle = @{ windows = @{ certificateThumbprint = $cert.Thumbprint; digestAlgorithm = 'sha256'; timestampUrl = 'http://timestamp.digicert.com' } } } | ConvertTo-Json -Depth 5
+            Set-Content -Path 'src-tauri/tauri.windows.conf.json' -Value $config
+            Write-Host "Windows signing configured with thumbprint $($cert.Thumbprint)"
+          } else {
+            Write-Host 'No WINDOWS_CERTIFICATE secret configured - building an unsigned Windows installer'
+          }
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          tagName: v__VERSION__
+          releaseName: "MoshDither Studio v__VERSION__"
+          releaseBody: "See the assets below to download this version."
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json

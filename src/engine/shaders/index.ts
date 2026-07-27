@@ -109,26 +109,14 @@ export { randomDitherShader } from "./randomDither";
 import { blueNoiseDitherShader } from "./blueNoiseDither";
 export { blueNoiseDitherShader } from "./blueNoiseDither";
 
-import { atkinsonDitherShader } from "./atkinsonDither";
-export { atkinsonDitherShader } from "./atkinsonDither";
-
-import { burkesDitherShader } from "./burkesDither";
-export { burkesDitherShader } from "./burkesDither";
-
-import { floydSteinbergDitherShader } from "./floydSteinbergDither";
-export { floydSteinbergDitherShader } from "./floydSteinbergDither";
-
-import { jarvisDitherShader } from "./jarvisDither";
-export { jarvisDitherShader } from "./jarvisDither";
-
-import { sierraDitherShader } from "./sierraDither";
-export { sierraDitherShader } from "./sierraDither";
-
-import { stuckiDitherShader } from "./stuckiDither";
-export { stuckiDitherShader } from "./stuckiDither";
-
-import { riemersmaDitherShader } from "./riemersmaDither";
-export { riemersmaDitherShader } from "./riemersmaDither";
+// Error-diffusion dithers (Floyd-Steinberg, Atkinson, Burkes, Jarvis, Sierra,
+// Stucki, Riemersma) have no WebGL shader. Error diffusion is sequential — each
+// pixel's quantisation error feeds its not-yet-processed neighbours — which a
+// fragment shader cannot express. Their previews route to the Rust CPU backend
+// via `accurate: false` in effectConverter. The seven approximation shaders that
+// used to live here were white-noise threshold dithers, identical to each other
+// apart from a hash seed, and were never rendered. See
+// recycling/2026-07-26_dead_dither_shaders/.
 
 import { ghostingShader } from "./ghosting";
 export { ghostingShader } from "./ghosting";
@@ -184,29 +172,15 @@ export { transformShader } from "./transform";
 import { colorGradeShader } from "./colorGrade";
 export { colorGradeShader } from "./colorGrade";
 
-import { blendModesShader } from "./blendModes";
-export { blendModesShader } from "./blendModes";
-
-import { curvesShader } from "./curves";
-export { curvesShader } from "./curves";
-
 import { paletteDitherShader } from "./paletteDither";
 export { paletteDitherShader } from "./paletteDither";
 
 import { liftGammaGainShader } from "./liftGammaGain";
 export { liftGammaGainShader } from "./liftGammaGain";
 
-import { pixelGridOverlayShader } from "./pixelGridOverlay";
-export { pixelGridOverlayShader } from "./pixelGridOverlay";
-
-import { safeAreaShader } from "./safeArea";
-export { safeAreaShader } from "./safeArea";
-
-import { ruleOfThirdsShader } from "./ruleOfThirds";
-export { ruleOfThirdsShader } from "./ruleOfThirds";
-
-import { crosshairsShader } from "./crosshairs";
-export { crosshairsShader } from "./crosshairs";
+// Composition guides (pixel grid, safe area, rule of thirds, crosshairs) are no
+// longer effects and no longer have shaders. They are drawn as an SVG overlay by
+// ViewportGuides.tsx so they cannot reach an export.
 
 import { maskBlendShader } from "./maskBlend";
 export { maskBlendShader } from "./maskBlend";
@@ -248,13 +222,6 @@ shaderRegistry.register(byteReverseShader);
 shaderRegistry.register(thresholdDitherShader);
 shaderRegistry.register(randomDitherShader);
 shaderRegistry.register(blueNoiseDitherShader);
-shaderRegistry.register(atkinsonDitherShader);
-shaderRegistry.register(burkesDitherShader);
-shaderRegistry.register(floydSteinbergDitherShader);
-shaderRegistry.register(jarvisDitherShader);
-shaderRegistry.register(sierraDitherShader);
-shaderRegistry.register(stuckiDitherShader);
-shaderRegistry.register(riemersmaDitherShader);
 shaderRegistry.register(ghostingShader);
 shaderRegistry.register(pixelSortShader);
 shaderRegistry.register(audioBassPulseShader);
@@ -273,12 +240,6 @@ shaderRegistry.register(h264ArtifactShader);
 shaderRegistry.register(iframeRemovalShader);
 shaderRegistry.register(transformShader);
 shaderRegistry.register(colorGradeShader);
-shaderRegistry.register(blendModesShader);
-shaderRegistry.register(curvesShader);
 shaderRegistry.register(paletteDitherShader);
 shaderRegistry.register(liftGammaGainShader);
-shaderRegistry.register(pixelGridOverlayShader);
-shaderRegistry.register(safeAreaShader);
-shaderRegistry.register(ruleOfThirdsShader);
-shaderRegistry.register(crosshairsShader);
 shaderRegistry.register(maskBlendShader);

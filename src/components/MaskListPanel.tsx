@@ -66,7 +66,7 @@ export default function MaskListPanel() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: 8 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ fontSize: 11, color: "#aaa", fontWeight: 600 }}>Masks</span>
+        <span style={{ fontSize: 11, color: "var(--text-muted, #aaa)", fontWeight: 600 }}>Masks</span>
         <div style={{ display: "flex", gap: 4 }}>
           <button
             onClick={() => setMaskVisible(!maskVisible)}
@@ -96,7 +96,7 @@ export default function MaskListPanel() {
               borderRadius: 3,
               border: "none",
               background: "#2a2a2a",
-              color: "#aaa",
+              color: "var(--text-muted, #aaa)",
               cursor: "pointer",
               display: "flex",
               alignItems: "center",
@@ -188,7 +188,7 @@ export default function MaskListPanel() {
                   </div>
                 )}
                 {mask.score !== undefined && (
-                  <div style={{ fontSize: 9, color: "#888" }}>
+                  <div style={{ fontSize: 9, color: "var(--text-muted, #888)" }}>
                     Score: {mask.score.toFixed(2)}
                   </div>
                 )}
@@ -205,7 +205,7 @@ export default function MaskListPanel() {
                   padding: "2px",
                   background: "transparent",
                   border: "none",
-                  color: "#888",
+                  color: "var(--text-muted, #888)",
                   cursor: "pointer",
                   display: "flex",
                   alignItems: "center",
@@ -226,7 +226,7 @@ export default function MaskListPanel() {
                     padding: "2px",
                     background: "transparent",
                     border: "none",
-                    color: "#888",
+                    color: "var(--text-muted, #888)",
                     cursor: "pointer",
                     display: "flex",
                     alignItems: "center",

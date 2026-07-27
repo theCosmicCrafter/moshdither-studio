@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useCallback } from "react";
 import { useAppStore, type StackEntry } from "../store";
+import { logger } from "../utils/logger";
 
 export interface ProjectFile {
   version: number;
@@ -32,14 +33,14 @@ export function useProject() {
 
   const saveProject = useCallback(async () => {
     try {
-      console.log("[SAVE] Opening save dialog...");
+      logger.log("SAVE", "Opening save dialog...");
       const path = await save({
         filters: [{ name: "MoshDither Project", extensions: ["moshdither"] }],
         defaultPath: "project.moshdither",
       });
-      console.log("[SAVE] Dialog returned path:", path);
+      logger.log("SAVE", "Dialog returned path", { path });
       if (!path) {
-        console.log("[SAVE] No path returned (user cancelled?)");
+        logger.log("SAVE", "No path returned (user cancelled?)");
         return false;
       }
 
@@ -53,13 +54,13 @@ export function useProject() {
         activeMask,
       };
 
-      console.log("[SAVE] Project object built, calling save_file...");
+      logger.log("SAVE", "Project object built, calling save_file...");
       await invoke("save_file", { path, contents: JSON.stringify(project, null, 2) });
-      console.log("[SAVE] save_file succeeded");
+      logger.log("SAVE", "save_file succeeded");
       setStatusMessage(`Project saved: ${path}`);
       return true;
     } catch (err) {
-      console.error("[SAVE] Save failed:", err);
+      logger.error("SAVE", "Save failed", { err });
       setStatusMessage(`Save failed: ${err}`);
       return false;
     }

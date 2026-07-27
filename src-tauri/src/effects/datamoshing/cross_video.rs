@@ -2,6 +2,7 @@ use crate::effects::motion::{block_match_motion_field, warp_and_blend, MotionFie
 use crate::effects::types::*;
 use crate::effects::Effect;
 use crate::error::Result;
+use crate::path_guard::validate_io_path;
 use serde_json::json;
 
 /// Cross-Video Datamosh — applies motion vectors from a second video
@@ -33,12 +34,17 @@ impl Effect for CrossVideoDatamosh {
                 ParameterDef {
                     id: "second_video_path".to_string(),
                     name: "Second Video Path".to_string(),
-                    param_type: ParamType::Select,
+                    // A path, not a choice. Declared as a Select with an empty
+                    // option list this rendered as a dropdown with nothing in
+                    // it, so the effect's one required input could not be set
+                    // from the UI at all and it always fell back to the
+                    // no-second-video branch.
+                    param_type: ParamType::Text,
                     default: json!(""),
                     min: None,
                     max: None,
                     step: None,
-                    options: Some(vec![]),
+                    options: None,
                 },
                 ParameterDef {
                     id: "block_size".to_string(),
@@ -107,6 +113,9 @@ impl Effect for CrossVideoDatamosh {
             return Ok(input.clone());
         }
 
+        let validated_second_path = validate_io_path(second_path, true)
+            .map_err(|e| crate::error::AppError::Generic(e.to_string()))?;
+
         let block_size = params
             .get("block_size")
             .and_then(|v| v.as_u64())
@@ -123,7 +132,8 @@ impl Effect for CrossVideoDatamosh {
             .unwrap_or("sequential");
 
         // Decode the second video
-        let second_segment = crate::ffmpeg::decode_video(second_path, None)?;
+        let second_segment =
+            crate::ffmpeg::decode_video(validated_second_path.to_string_lossy().as_ref(), None)?;
 
         if second_segment.frames.is_empty() {
             return Ok(input.clone());

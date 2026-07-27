@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useAppStore } from "../store";
-import { listEffects, getFrameData, getMediaInfo, loadMediaFromPath, sam3Init } from "../lib/tauri";
+import { listEffects, getFrameData, getMediaInfo, loadMediaFromPath, sam3Init, sam3LoadImage } from "../lib/tauri";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { useKeyframePlayback } from "../hooks/useKeyframePlayback";
@@ -8,6 +8,8 @@ import { usePlaybackEngine } from "../hooks/usePlaybackEngine";
 import { useProjectSession } from "../hooks/useProjectSession";
 import { useSoundManager } from "../hooks/useSoundManager";
 import { useSam3IdleShutdown } from "../hooks/useSam3IdleShutdown";
+import { useAutoAudioExtract } from "../hooks/useAutoAudioExtract";
+import { logger } from "../utils/logger";
 import DockLayout from "./DockSystem/DockLayout";
 import Toolbar from "./Toolbar";
 import StatusBar from "./StatusBar";
@@ -19,6 +21,7 @@ export default function AppLayout() {
   useKeyframePlayback();
   usePlaybackEngine();
   useSam3IdleShutdown();
+  useAutoAudioExtract();
   const { attachSounds } = useSoundManager();
   const { autoSave, recentProjects, restoreSession, clearAutoSave } = useProjectSession();
   const [showRecovery, setShowRecovery] = useState(!!autoSave);
@@ -44,7 +47,22 @@ export default function AppLayout() {
     return cleanup;
   }, [attachSounds]);
 
-  // Load effects on mount
+  // Guard window close with unsaved changes prompt
+  const effectStackLength = useAppStore((s) => s.effectStack.length);
+  const mediaLoaded = useAppStore((s) => s.mediaLoaded);
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (mediaLoaded && effectStackLength > 0) {
+        e.preventDefault();
+        e.returnValue = "You have unsaved changes in your project session.";
+        return e.returnValue;
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [mediaLoaded, effectStackLength]);
+
+  // Load effects and auto-start SAM3 in tandem on mount
   useEffect(() => {
     listEffects()
       .then((effects) => {
@@ -52,30 +70,17 @@ export default function AppLayout() {
         setStatusMessage(`${effects.length} effects loaded`);
       })
       .catch((err) => setStatusMessage(`Error: ${err}`));
-  }, [setAllEffects, setStatusMessage]);
 
-  // Auto-initialize SAM3 engine on app startup (non-blocking, runs in background)
-  const setSam3Ready = useAppStore((s) => s.setSam3Ready);
-  useEffect(() => {
-    let cancelled = false;
     sam3Init()
       .then(() => {
-        if (!cancelled) {
-          setSam3Ready(true);
-          console.log("[SAM3] Auto-initialized on startup");
-        }
+        useAppStore.getState().setSam3Ready(true);
       })
       .catch((err) => {
-        if (!cancelled) {
-          console.warn("[SAM3] Auto-init failed:", err);
-        }
+        console.warn("[AppLayout] SAM3 background auto-start notice:", err);
       });
-    return () => { cancelled = true; };
-  }, [setSam3Ready]);
+  }, [setAllEffects, setStatusMessage]);
 
   // Refresh preview on demand (called after file load / effect apply).
-  // NOT polled — polling every 500 ms held the Rust frame mutex continuously
-  // and starved SAM3 commands, causing freezes.
   const refreshPreview = useCallback(async (): Promise<boolean> => {
     try {
       const info = await getMediaInfo();
@@ -87,6 +92,11 @@ export default function AppLayout() {
         const frame = await getFrameData();
         setPreviewDataUrl(frame);
         setOriginalDataUrl(frame);
+
+        // Pre-feed frame to SAM3 background engine in tandem so AI tools are instant
+        if (frame) {
+          sam3LoadImage(frame).catch(() => {});
+        }
         return true;
       }
       return false;
@@ -106,11 +116,11 @@ export default function AppLayout() {
       try {
         // Guard: Tauri APIs are only available inside the desktop app
         if (typeof globalThis !== "undefined" && !(globalThis as Record<string, unknown>).__TAURI_INTERNALS__) {
-          console.log("[drag-drop] Running outside Tauri, skipping webview drag-drop");
+          logger.log("drag-drop", "Running outside Tauri, skipping webview drag-drop");
           return;
         }
         const webview = getCurrentWebview();
-        console.log("[drag-drop] Webview obtained:", webview);
+        logger.debug("drag-drop", "Webview obtained");
 
         unlisten = await webview.onDragDropEvent((event) => {
           const payload = event.payload;
@@ -121,7 +131,7 @@ export default function AppLayout() {
           } else if (payload.type === "drop") {
             setIsDropTarget(false);
             const path = payload.paths[0];
-            console.log("[drag-drop] Dropped file:", path);
+            logger.log("drag-drop", "Dropped file", { path });
             if (path) {
               setStatusMessage(`Loading ${path}...`);
               setFilePath(path);
@@ -138,9 +148,9 @@ export default function AppLayout() {
             }
           }
         });
-        console.log("[drag-drop] Listener registered successfully");
+        logger.log("drag-drop", "Listener registered successfully");
       } catch (err) {
-        console.error("[drag-drop] Failed to register listener:", err);
+        logger.error("drag-drop", "Failed to register listener", { err });
       }
     };
 
@@ -148,7 +158,7 @@ export default function AppLayout() {
 
     return () => {
       if (unlisten) {
-        console.log("[drag-drop] Cleaning up listener");
+        logger.log("drag-drop", "Cleaning up listener");
         unlisten();
       }
     };
@@ -173,9 +183,17 @@ export default function AppLayout() {
 
       {/* Auto-save Recovery Dialog */}
       {showRecovery && autoSave && (
-        <div className="fixed inset-0 flex items-center justify-center z-[100] bg-black/60 backdrop-blur-sm">
+        <div
+          className="fixed inset-0 flex items-center justify-center z-[100] bg-black/60 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="recovery-dialog-title"
+        >
           <div className="neo-flat rounded-lg p-5 min-w-[320px] max-w-[420px] bg-surface/60 backdrop-blur-md text-on-surface">
-            <h3 className="font-headline-md text-headline-md solar-text filigree-header mb-2">
+            <h3
+              id="recovery-dialog-title"
+              className="font-headline-md text-headline-md solar-text filigree-header mb-2"
+            >
               Recover Session?
             </h3>
             <p className="font-label-sm text-label-sm text-on-surface-variant mb-4">
@@ -197,15 +215,20 @@ export default function AppLayout() {
                   setShowRecovery(false);
                 }}
                 className="neo-btn rounded-md px-3 py-1.5 font-label-sm text-label-sm text-on-surface-variant hover:text-accent-pink transition-colors"
+                aria-label="Discard recovered session"
               >
                 Discard
               </button>
               <button
                 onClick={() => {
-                  restoreSession(autoSave);
-                  setShowRecovery(false);
+                  void (async () => {
+                    await restoreSession(autoSave, refreshPreview);
+                    setShowRecovery(false);
+                  })();
                 }}
                 className="neo-btn rounded-md px-3 py-1.5 font-label-sm text-label-sm text-on-surface bg-accent-pink/20 hover:bg-accent-pink/30 transition-colors"
+                aria-label="Restore recovered session"
+                autoFocus
               >
                 Restore Session
               </button>

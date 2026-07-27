@@ -209,7 +209,7 @@ impl Effect for BeatGlitch {
             return Ok(input.clone());
         }
 
-        let mut rng = rand::thread_rng();
+        let mut rng = crate::effects::rng::frame_rng(input, params);
         let mut out = input.data.clone();
         let len = out.len();
 
@@ -392,7 +392,7 @@ impl Effect for AudioDither {
     fn meta(&self) -> EffectMeta {
         EffectMeta {
             id: "audio_reactive.audio_dither".to_string(),
-            name: "Audio Dither".to_string(),
+            name: "Audio Reactive Dither".to_string(),
             category: EffectCategory::AudioReactive,
             media_type: MediaType::Both,
             parameters: vec![
@@ -417,8 +417,8 @@ impl Effect for AudioDither {
                     options: None,
                 },
                 ParameterDef {
-                    id: "palette_size".to_string(),
-                    name: "Palette Size".to_string(),
+                    id: "levels".to_string(),
+                    name: "Levels".to_string(),
                     param_type: ParamType::Slider,
                     default: json!(4),
                     min: Some(2.0),
@@ -444,10 +444,11 @@ impl Effect for AudioDither {
             .get("modulation")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.5) as f32;
-        let palette_size = params
-            .get("palette_size")
+        let levels = params
+            .get("levels")
             .and_then(|v| v.as_u64())
-            .unwrap_or(4) as usize;
+            .unwrap_or(4)
+            .clamp(2, 16) as usize;
 
         let energy = audio_f32(params, "_audio_energy");
         let rms = audio_f32(params, "_audio_rms");
@@ -456,21 +457,26 @@ impl Effect for AudioDither {
         let audio_mod = (energy + rms * 0.5) * modulation;
         let threshold = (base_threshold + audio_mod * 60.0).clamp(1.0, 254.0);
 
+        let step = 255.0 / (levels - 1) as f32;
         let mut out = input.data.clone();
-        let step = 255 / palette_size.max(1);
 
         for i in (0..out.len()).step_by(4) {
-            for c in 0..3 {
-                let val = out[i + c] as f32;
-                // Ordered dithering with audio-modulated threshold
-                let x = (i / 4) % input.width as usize;
-                let y = (i / 4) / input.width as usize;
-                let bayer = ((x & 1) ^ (y & 1)) as f32 * threshold * 0.5;
-                let dithered = val + bayer - threshold * 0.5;
-                let quantized =
-                    ((dithered / step as f32).round() * step as f32).clamp(0.0, 255.0) as u8;
-                out[i + c] = quantized;
-            }
+            let x = (i / 4) % input.width as usize;
+            let y = (i / 4) / input.width as usize;
+
+            let lum = 0.299 * out[i] as f32 + 0.587 * out[i + 1] as f32 + 0.114 * out[i + 2] as f32;
+
+            // 2×2 Bayer threshold, audio-modulated
+            let bayer = ((x & 1) ^ (y & 1)) as f32 * threshold * 0.5;
+            let dithered = lum + bayer - threshold * 0.5;
+
+            let q = (dithered / step).round().clamp(0.0, (levels - 1) as f32);
+            let v = (q * step).clamp(0.0, 255.0) as u8;
+
+            out[i] = v;
+            out[i + 1] = v;
+            out[i + 2] = v;
+            // Alpha preserved
         }
 
         Ok(Frame {
@@ -613,7 +619,7 @@ mod tests {
         let f = make_frame(16, 16);
         let mut params = serde_json::Map::new();
         params.insert("base_threshold".to_string(), json!(128));
-        params.insert("palette_size".to_string(), json!(4));
+        params.insert("levels".to_string(), json!(4));
         let r = e.process_frame(&f, None, &params).unwrap();
         assert_eq!(r.width, 16);
         assert_eq!(r.height, 16);
@@ -627,7 +633,7 @@ mod tests {
         let f = make_frame(16, 16);
         let mut params = audio_params(0.0, 0.0, 0.8, 1000.0);
         params.insert("base_threshold".to_string(), json!(100));
-        params.insert("palette_size".to_string(), json!(8));
+        params.insert("levels".to_string(), json!(8));
         let r = e.process_frame(&f, None, &params).unwrap();
         assert_eq!(r.width, 16);
         assert_eq!(r.height, 16);

@@ -21,6 +21,20 @@ const RESOLUTIONS = [
   { id: "480p", label: "480p", w: 854, h: 480 },
 ];
 
+// Processing resolution = internal decode + effect-processing scale.
+// "auto" lets the backend pick the largest resolution that fits the
+// adaptive memory budget (4K source → 1440p/1080p depending on clip
+// length). The final encode still scales to the output RESOLUTIONS above.
+// This matters for 4K source video — processing at native 4K would OOM
+// on most systems, but the user can still export at 4K by setting the
+// output resolution to "4K UHD" while processing at "Auto" or "1080p".
+const PROCESSING_SCALES = [
+  { id: "auto", label: "Auto", scale: undefined as number | undefined },
+  { id: "1080", label: "≤1080p", scale: 1080 },
+  { id: "720", label: "≤720p", scale: 720 },
+  { id: "480", label: "≤480p", scale: 480 },
+];
+
 const FFGITCH_MODES = [
   { id: "classic", label: "Classic" },
   { id: "classic2", label: "Classic 2" },
@@ -65,6 +79,7 @@ export default function ExportPanel() {
   const [format, setFormat] = useState<"mp4" | "webm" | "gif" | "png_seq">("mp4");
   const [codec, setCodec] = useState("h264");
   const [resolutionId, setResolutionId] = useState("source");
+  const [processingScaleId, setProcessingScaleId] = useState("auto");
   const [quality, setQuality] = useState<"draft" | "good" | "best">("good");
   const [fps, setFps] = useState(30);
   const [includeAudio, setIncludeAudio] = useState(true);
@@ -74,7 +89,7 @@ export default function ExportPanel() {
 
   const exportTriggerId = useAppStore((s) => s.exportTriggerId);
   const lastTriggerId = useRef(0);
-  const handleExportRef = useRef<() => void>(() => {});
+  const handleExportRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   const activeEffects = effectStack.filter((e) => e.enabled);
   const resolution = RESOLUTIONS.find((r) => r.id === resolutionId)!;
@@ -135,6 +150,9 @@ export default function ExportPanel() {
 
     const width = resolution.w === 0 ? undefined : resolution.w;
     const height = resolution.h === 0 ? undefined : resolution.h;
+    const processingScale = PROCESSING_SCALES.find(
+      (s) => s.id === processingScaleId
+    )?.scale;
 
     const audioBakeJson = audioBakeData ? JSON.stringify(audioBakeData) : null;
 
@@ -155,6 +173,7 @@ export default function ExportPanel() {
         format,
         quality,
         includeAudio,
+        processingScale,
       });
 
       const unlisten = await unlistenPromise;
@@ -187,7 +206,7 @@ export default function ExportPanel() {
   useEffect(() => {
     if (exportTriggerId > 0 && exportTriggerId !== lastTriggerId.current) {
       lastTriggerId.current = exportTriggerId;
-      handleExportRef.current();
+      void handleExportRef.current();
     }
   }, [exportTriggerId]);
 
@@ -234,7 +253,7 @@ export default function ExportPanel() {
     >
       {/* Format */}
       <div className="space-y-1">
-        <label style={{ fontSize: 10, color: "var(--text-muted)" }}>Format</label>
+        <span style={{ fontSize: 10, color: "var(--text-muted)" }}>Format</span>
         <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
           {(["mp4", "webm", "gif", "png_seq"] as const).map((f) => (
             <button
@@ -258,7 +277,7 @@ export default function ExportPanel() {
 
       {/* Quality */}
       <div className="space-y-1">
-        <label style={{ fontSize: 10, color: "var(--text-muted)" }}>Quality</label>
+        <span style={{ fontSize: 10, color: "var(--text-muted)" }}>Quality</span>
         <div style={{ display: "flex", gap: 2 }}>
           {(["draft", "good", "best"] as const).map((q) => (
             <button
@@ -284,7 +303,7 @@ export default function ExportPanel() {
 
       {/* FPS */}
       <div className="space-y-1">
-        <label style={{ fontSize: 10, color: "var(--text-muted)" }}>Frame Rate</label>
+        <span style={{ fontSize: 10, color: "var(--text-muted)" }}>Frame Rate</span>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <input
             aria-label="FPS"
@@ -293,7 +312,7 @@ export default function ExportPanel() {
             max={60}
             step={1}
             value={fps}
-            onChange={(e) => setFps(parseInt(e.target.value))}
+            onChange={(e) => setFps(Number.parseInt(e.target.value))}
             style={{ flex: 1 }}
           />
           <span style={{ minWidth: 28, textAlign: "right", fontFamily: "var(--font-mono)", color: "var(--text-primary)" }}>
@@ -304,14 +323,14 @@ export default function ExportPanel() {
 
       {/* Include audio */}
       {audioEnabled && audioFilePath && (
-        <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 11 }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 11 }}>
           <input
             type="checkbox"
             checked={includeAudio}
             onChange={(e) => setIncludeAudio(e.target.checked)}
           />
           Include audio track
-        </label>
+        </span>
       )}
 
       {/* Audio bake status */}
@@ -327,10 +346,10 @@ export default function ExportPanel() {
       {/* Active effects count */}
       {/* Resolution */}
       <div className="space-y-1">
-        <label style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
+        <span style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
           <span className="material-symbols-outlined" style={{ fontSize: 10 }}>monitor</span>
           Resolution
-        </label>
+        </span>
         <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
           {RESOLUTIONS.map((r) => (
             <button
@@ -353,9 +372,60 @@ export default function ExportPanel() {
         </div>
       </div>
 
+      {/* Processing resolution — internal decode + effect-processing scale.
+          "Auto" picks the largest resolution that fits the adaptive memory
+          budget. Lower this if exports OOM on 4K source. */}
+      <div className="space-y-1">
+        <span
+          style={{
+            fontSize: 10,
+            color: "var(--text-muted)",
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+          }}
+          title="Internal processing resolution. Auto picks the largest that fits memory. Lower this if 4K exports run out of memory."
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 10 }}>
+            memory
+          </span>
+          Processing
+        </span>
+        <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
+          {PROCESSING_SCALES.map((s) => (
+            <button
+              key={s.id}
+              onClick={() => setProcessingScaleId(s.id)}
+              title={
+                s.scale
+                  ? `Downscale source so longest side ≤ ${s.scale}px during processing`
+                  : "Pick largest resolution that fits memory budget (recommended)"
+              }
+              style={{
+                padding: "2px 6px",
+                fontSize: 10,
+                borderRadius: 3,
+                border: "none",
+                cursor: "pointer",
+                background:
+                  processingScaleId === s.id
+                    ? "rgba(184, 211, 0, 0.25)"
+                    : "var(--surface-container-low)",
+                color:
+                  processingScaleId === s.id
+                    ? "var(--accent-gold)"
+                    : "var(--text-muted)",
+              }}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Aspect Ratio Lock */}
       <div className="space-y-1">
-        <label style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
+        <span style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
           <input
             type="checkbox"
             checked={aspectRatioLock}
@@ -364,7 +434,7 @@ export default function ExportPanel() {
           />
           <span className="material-symbols-outlined" style={{ fontSize: 10 }}>aspect_ratio</span>
           Lock Aspect Ratio
-        </label>
+        </span>
         {aspectRatioLock && (
           <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
             {[
@@ -397,10 +467,10 @@ export default function ExportPanel() {
 
       {/* Codec */}
       <div className="space-y-1">
-        <label style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
+        <span style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
           <span className="material-symbols-outlined" style={{ fontSize: 10 }}>videocam</span>
           Codec
-        </label>
+        </span>
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           {CODECS.map((c) => (
             <button
@@ -618,7 +688,7 @@ export default function ExportPanel() {
                 }}
               />
             )}
-            <label style={{ fontSize: 10, color: "var(--text-muted)", display: "block" }}>
+            <span style={{ fontSize: 10, color: "var(--text-muted)", display: "block" }}>
               Position
               <select
                 value={watermark.position}
@@ -641,7 +711,7 @@ export default function ExportPanel() {
                 <option value="bottom-right">Bottom Right</option>
                 <option value="center">Center</option>
               </select>
-            </label>
+            </span>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <label style={{ fontSize: 10, color: "var(--text-muted)", minWidth: 42 }} htmlFor="wm-opacity">
                 Opacity
@@ -663,15 +733,22 @@ export default function ExportPanel() {
           </div>
         )}
       </div>
-
-      {/* In/Out range */}
-      {(inPoint !== null || outPoint !== null) && (
-        <div style={{ fontSize: 10, color: "var(--text-muted)", fontFamily: "var(--font-mono)", display: "flex", gap: 6, alignItems: "center" }}>
-          <span style={{ color: "var(--success)" }}>IN {inPoint ?? 0}s</span>
-          <span>→</span>
-          <span style={{ color: "var(--danger)" }}>OUT {outPoint ?? "end"}s</span>
+      {/* Frame Range Selection */}
+      <div className="space-y-1" style={{ borderTop: "1px solid var(--outline-variant)", paddingTop: 8 }}>
+        <div style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", justifyContent: "space-between" }}>
+          <span>Frame Range</span>
+          <span>
+            {inPoint !== null || outPoint !== null ? "Custom In/Out" : "Full Media"}
+          </span>
         </div>
-      )}
+        {inPoint !== null || outPoint !== null ? (
+          <div style={{ fontSize: 10, display: "flex", gap: 8, color: "var(--text-secondary)" }}>
+            <span style={{ color: "var(--success)" }}>IN {inPoint ?? 0}s</span>
+            <span>→</span>
+            <span style={{ color: "var(--danger)" }}>OUT {outPoint ?? "end"}s</span>
+          </div>
+        ) : null}
+      </div>
 
       {/* Export button */}
       {!exportIsRunning && (
@@ -693,7 +770,7 @@ export default function ExportPanel() {
             color: "var(--on-primary)",
           }}
         >
-          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>download_for_offline</span>
+          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>movie_export</span>
           Export Video
         </button>
       )}
@@ -729,7 +806,7 @@ export default function ExportPanel() {
             cursor: "pointer",
           }}
         >
-          <span className="material-symbols-outlined" style={{ fontSize: 11 }}>add</span>
+          <span className="material-symbols-outlined" style={{ fontSize: 11 }}>add_circle</span>
           Add to Queue
         </button>
         <button
@@ -748,7 +825,7 @@ export default function ExportPanel() {
             cursor: "pointer",
           }}
         >
-          <span className="material-symbols-outlined" style={{ fontSize: 11 }}>list</span>
+          <span className="material-symbols-outlined" style={{ fontSize: 11 }}>view_timeline</span>
           {queue.length}
         </button>
       </div>
@@ -764,7 +841,7 @@ export default function ExportPanel() {
           }}
         >
           {queue.length === 0 ? (
-            <div style={{ color: "#666", textAlign: "center", fontSize: 11 }}>Queue empty</div>
+            <div style={{ color: "var(--text-muted, #666)", textAlign: "center", fontSize: 11 }}>Queue empty</div>
           ) : (
             queue.map((job) => (
               <div

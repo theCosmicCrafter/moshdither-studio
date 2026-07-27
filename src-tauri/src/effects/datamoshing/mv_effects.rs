@@ -247,7 +247,7 @@ impl Effect for VibrateGlitch {
             .and_then(|v| v.as_u64())
             .unwrap_or(10) as i32;
         let bias = randomness / 2;
-        let mut rng = rand::thread_rng();
+        let mut rng = crate::effects::rng::frame_rng(input, params);
         let w = input.width as usize;
         let h = input.height as usize;
         let block_size = 16usize;
@@ -364,7 +364,14 @@ impl Effect for StopGlitch {
             .get("n_frames")
             .and_then(|v| v.as_u64())
             .unwrap_or(self.n_frames as u64) as usize;
-        let mut rng = rand::thread_rng();
+        // Video-level: seed from the first frame so the whole segment shares one
+        // reproducible sequence rather than re-rolling per render.
+        let seed = input
+            .frames
+            .first()
+            .map(|f| crate::effects::rng::frame_seed(f, params))
+            .unwrap_or_else(|| crate::effects::rng::video_seed(params, 0));
+        let mut rng = crate::effects::rng::seeded_rng(seed);
 
         if input.frames.is_empty() {
             return Ok(input.clone());

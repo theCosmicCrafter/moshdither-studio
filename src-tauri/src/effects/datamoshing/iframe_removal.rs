@@ -53,11 +53,11 @@ impl Effect for IFrameRemoval {
         &self,
         input: &Frame,
         _m: Option<&Mask>,
-        _params: &ParameterValues,
+        params: &ParameterValues,
     ) -> Result<Frame> {
         const NOISE_THRESHOLD: f32 = 0.2;
         const GRAIN_THRESHOLD: f32 = 0.4;
-        let mut rng = rand::thread_rng();
+        let mut rng = crate::effects::rng::frame_rng(input, params);
         let mut out = input.data.clone();
         let len = out.len();
         for i in (0..len).step_by(4) {

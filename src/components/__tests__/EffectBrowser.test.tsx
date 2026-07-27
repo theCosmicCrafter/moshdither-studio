@@ -2,7 +2,7 @@
  * Tests for EffectBrowser: search filtering, category switching, effect selection.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, within } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, within, act } from "@testing-library/react";
 import { useAppStore, type EffectMeta } from "../../store";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -250,7 +250,10 @@ describe("EffectBrowser — Effect Selection", () => {
     useAppStore.getState().setActiveCategory("dithering");
     render(<EffectList />);
     fireEvent.click(screen.getByText("Bayer"));
-    useAppStore.getState().setActiveCategory("analog");
+    // Mutating the store while a component is mounted must be wrapped in act
+    act(() => {
+      useAppStore.getState().setActiveCategory("analog");
+    });
     // Need to re-render to pick up new state
     cleanup();
     render(<EffectList />);

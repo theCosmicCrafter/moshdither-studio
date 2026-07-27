@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import {
   convertFileSrc,
   generateProxy,
@@ -11,11 +12,14 @@ import {
   applyEffectStack,
 } from "../lib/tauri";
 import { useAppStore } from "../store";
+import { logger } from "../utils/logger";
 import { WebGLContext, MediaUploader, EffectChain } from "../engine/webgl2";
 import { stackToRenderPasses, buildShaderMap, stackToRustPayload, stackHasApproximatePreview } from "../utils/effectConverter";
 import ManualMaskOverlay from "./ManualMaskOverlay";
 import ScopesOverlay from "./ScopesOverlay";
 import PlaybackOverlay from "./PlaybackOverlay";
+import ViewportGuides from "./ViewportGuides";
+import AudioVisualizer from "./common/AudioVisualizer";
 
 interface Props {
   isDropTarget?: boolean;
@@ -29,15 +33,7 @@ function AudioWaveform() {
   return (
     <div className="absolute bottom-10 left-1/2 -translate-x-1/2 w-1/2 h-20 neo-panel rounded-lg bg-surface/80 backdrop-blur-md p-3 flex flex-col justify-end z-50 border border-accent-teal/20 pointer-events-none">
       <div className="text-[8px] font-label-sm text-accent-teal/70 absolute top-2 left-2 uppercase">Audio/Pixel Intensity</div>
-      <div className="flex items-end h-full w-full gap-[2px] opacity-80 pt-4 overflow-hidden justify-center">
-        {Object.values(audioBandEnergies).slice(0, 32).map((v: number, i: number) => (
-          <div
-            key={i}
-            className="w-1 bg-accent-teal rounded-t audio-bar"
-            ref={(el) => { if (el) el.style.height = `${Math.max(5, Math.min(100, v * 100))}%`; }}
-          />
-        ))}
-      </div>
+      <AudioVisualizer className="h-full pt-4" />
     </div>
   );
 }
@@ -63,51 +59,122 @@ function screenToImageCoords(
   };
 }
 
-export default function PreviewViewport({ isDropTarget = false }: Props) {
-  const mediaLoaded = useAppStore((s) => s.mediaLoaded);
-  const previewDataUrl = useAppStore((s) => s.previewDataUrl);
-  const originalDataUrl = useAppStore((s) => s.originalDataUrl);
-  const mediaInfo = useAppStore((s) => s.mediaInfo);
-  const showBeforeAfter = useAppStore((s) => s.showBeforeAfter);
-  const zoom = useAppStore((s) => s.zoom);
-  // Structural signature: only changes when effects are added/removed/reordered/toggled
-  // Param value changes (e.g. from keyframes) won't trigger a render-loop rebuild
-  const stackSignature = useAppStore((s) =>
-    s.effectStack.map((e) => `${e.id}:${e.enabled}`).join("|")
+function PreviewViewport({ isDropTarget = false }: Props) {
+  // Group read-only state into shallow-equal slices so reference-stable objects
+  // (arrays/objects) don't force re-renders when their contents are unchanged.
+  const {
+    mediaLoaded,
+    previewDataUrl,
+    originalDataUrl,
+    mediaInfo,
+    showBeforeAfter,
+    zoom,
+    isPlaying,
+    useCpuPreview,
+    audioEnabled,
+    proxyUrl,
+    isVideo,
+    filePath: fileName,
+    viewportGuides,
+  } = useAppStore(
+    useShallow((s) => ({
+      mediaLoaded: s.mediaLoaded,
+      previewDataUrl: s.previewDataUrl,
+      originalDataUrl: s.originalDataUrl,
+      mediaInfo: s.mediaInfo,
+      showBeforeAfter: s.showBeforeAfter,
+      zoom: s.zoom,
+      isPlaying: s.isPlaying,
+      useCpuPreview: s.useCpuPreview,
+      audioEnabled: s.audioEnabled,
+      proxyUrl: s.proxyUrl,
+      isVideo: s.isVideo,
+      filePath: s.filePath,
+      viewportGuides: s.viewportGuides,
+    }))
   );
-  // Full signature including params + mask + maskB64 — used to re-trigger CPU preview on param/mask changes
-  const cpuRenderSignature = useAppStore((s) =>
-    s.effectStack.map((e) => `${e.id}:${e.enabled}:${JSON.stringify(e.params)}:${e.maskId}:${e.maskMode}`).join("|") + `|${s.maskRevision}`
+
+  const {
+    activeMask,
+    maskVisible,
+    sam3Ready,
+    sam3Mode,
+    sam3Points,
+    maskTab,
+    sam3HoverMask,
+    sam3FrameMasks,
+    sam3OverlayOpacity,
+    sam3OverlayColor,
+  } = useAppStore(
+    useShallow((s) => ({
+      activeMask: s.activeMask,
+      maskVisible: s.maskVisible,
+      sam3Ready: s.sam3Ready,
+      sam3Mode: s.sam3Mode,
+      sam3Points: s.sam3Points,
+      maskTab: s.maskTab,
+      sam3HoverMask: s.sam3HoverMask,
+      sam3FrameMasks: s.sam3FrameMasks,
+      sam3OverlayOpacity: s.sam3OverlayOpacity,
+      sam3OverlayColor: s.sam3OverlayColor,
+    }))
   );
-  const stackCount = useAppStore((s) => s.effectStack.length);
-  const isPlaying = useAppStore((s) => s.isPlaying);
-  const useCpuPreview = useAppStore((s) => s.useCpuPreview);
-  const isApproximatePreview = useAppStore((s) => stackHasApproximatePreview(s.effectStack));
-  const audioEnabled = useAppStore((s) => s.audioEnabled);
-  const activeMask = useAppStore((s) => s.activeMask);
-  const maskVisible = useAppStore((s) => s.maskVisible);
-  const sam3Ready = useAppStore((s) => s.sam3Ready);
-  const sam3Mode = useAppStore((s) => s.sam3Mode);
-  const sam3Points = useAppStore((s) => s.sam3Points);
-  const maskTab = useAppStore((s) => s.maskTab);
-  const sam3HoverMask = useAppStore((s) => s.sam3HoverMask);
-  const sam3FrameMasks = useAppStore((s) => s.sam3FrameMasks);
-  const sam3OverlayOpacity = useAppStore((s) => s.sam3OverlayOpacity);
-  const sam3OverlayColor = useAppStore((s) => s.sam3OverlayColor);
-  const setMediaLoaded = useAppStore((s) => s.setMediaLoaded);
-  const setMediaInfo = useAppStore((s) => s.setMediaInfo);
-  const setPreviewDataUrl = useAppStore((s) => s.setPreviewDataUrl);
-  const setOriginalDataUrl = useAppStore((s) => s.setOriginalDataUrl);
-  const setStatusMessage = useAppStore((s) => s.setStatusMessage);
-  const setSam3Masks = useAppStore((s) => s.setSam3Masks);
-  const addSam3Point = useAppStore((s) => s.addSam3Point);
-  const clearSam3Points = useAppStore((s) => s.clearSam3Points);
-  const setSam3HoverMask = useAppStore((s) => s.setSam3HoverMask);
-  const setFilePath = useAppStore((s) => s.setFilePath);
-  const setProxyUrl = useAppStore((s) => s.setProxyUrl);
-  const setIsVideo = useAppStore((s) => s.setIsVideo);
-  const proxyUrl = useAppStore((s) => s.proxyUrl);
-  const isVideo = useAppStore((s) => s.isVideo);
+
+  const { effectStack, maskRevision } = useAppStore(
+    useShallow((s) => ({ effectStack: s.effectStack, maskRevision: s.maskRevision }))
+  );
+
+  // Heavy signature computation is memoised against the (immutable) effect stack.
+  const stackSignature = useMemo(
+    () => effectStack.map((e) => `${e.id}:${e.enabled}`).join("|"),
+    [effectStack]
+  );
+  const cpuRenderSignature = useMemo(
+    () =>
+      effectStack
+        .map((e) => `${e.id}:${e.enabled}:${JSON.stringify(e.params)}:${e.maskId}:${e.maskMode}`)
+        .join("|") + `|${maskRevision}`,
+    [effectStack, maskRevision]
+  );
+  const stackCount = effectStack.length;
+  const isApproximatePreview = useMemo(
+    () => stackHasApproximatePreview(effectStack),
+    [effectStack]
+  );
+
+  // Actions are stable references in the Zustand store, but selecting them as a
+  // single object with shallow equality reduces subscription hook overhead.
+  const {
+    setMediaLoaded,
+    setMediaInfo,
+    setPreviewDataUrl,
+    setOriginalDataUrl,
+    setStatusMessage,
+    setUseCpuPreview,
+    setSam3Masks,
+    addSam3Point,
+    clearSam3Points,
+    setSam3HoverMask,
+    setFilePath,
+    setProxyUrl,
+    setIsVideo,
+  } = useAppStore(
+    useShallow((s) => ({
+      setMediaLoaded: s.setMediaLoaded,
+      setMediaInfo: s.setMediaInfo,
+      setPreviewDataUrl: s.setPreviewDataUrl,
+      setOriginalDataUrl: s.setOriginalDataUrl,
+      setStatusMessage: s.setStatusMessage,
+      setUseCpuPreview: s.setUseCpuPreview,
+      setSam3Masks: s.setSam3Masks,
+      addSam3Point: s.addSam3Point,
+      clearSam3Points: s.clearSam3Points,
+      setSam3HoverMask: s.setSam3HoverMask,
+      setFilePath: s.setFilePath,
+      setProxyUrl: s.setProxyUrl,
+      setIsVideo: s.setIsVideo,
+    }))
+  );
 
   const containerRef = useRef<HTMLDivElement>(null);
   const previewImgRef = useRef<HTMLImageElement>(null);
@@ -583,13 +650,32 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
   useEffect(() => {
     if (!webglCanvasRef.current) return;
     try {
-      const ctx = new WebGLContext(webglCanvasRef.current);
+      const ctx = new WebGLContext(webglCanvasRef.current, {
+        onContextLost: () => {
+          console.error("[Preview] WebGL context lost");
+          setStatusMessage(
+            "WebGL context lost — switched to CPU preview fallback"
+          );
+          setUseCpuPreview(true);
+        },
+        onContextRestored: () => {
+          logger.log("Preview", "WebGL context restored");
+          setStatusMessage("WebGL context restored — reinitializing preview");
+          retireSourceTexture();
+          chainRef.current?.reset();
+          setUseCpuPreview(false);
+        },
+      });
       glCtxRef.current = ctx;
       uploaderRef.current = new MediaUploader(ctx);
       chainRef.current = new EffectChain(ctx, 1024, 1024);
-      console.log('[Preview] WebGL2 context initialized OK');
+      logger.log("Preview", "WebGL2 context initialized OK");
     } catch (e) {
-      console.error('[Preview] WebGL2 not available:', e);
+      logger.error("Preview", "WebGL2 not available", { err: e });
+      setStatusMessage(
+        `WebGL2 unavailable: ${e instanceof Error ? e.message : String(e)}`
+      );
+      setUseCpuPreview(true);
     }
     return () => {
       retireSourceTexture();
@@ -600,7 +686,12 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
       uploaderRef.current = null;
       chainRef.current = null;
     };
-  }, [deleteRetiredSourceTextures, retireSourceTexture]);
+  }, [
+    deleteRetiredSourceTextures,
+    retireSourceTexture,
+    setStatusMessage,
+    setUseCpuPreview,
+  ]);
 
   // Invalidate texture when original image changes
   useEffect(() => {
@@ -912,7 +1003,7 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
     // Animation loop only when playing (for time-based effects)
     if (isPlaying) {
       let lastRenderTime = 0;
-      const MIN_RENDER_INTERVAL = 100; // ~10fps when playing
+      const MIN_RENDER_INTERVAL = 33; // ~30fps when playing
 
       const renderCpu = async () => {
         if (cancelled) return;
@@ -997,8 +1088,6 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
 
   const showDropOverlay = isDropTarget || isHtmlDropTarget;
 
-  const fileName = useAppStore((s) => s.filePath);
-
   return (
     <div
       data-testid="preview-viewport"
@@ -1008,10 +1097,18 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
       {mediaLoaded && (
         <div className="h-10 flex items-center justify-between px-4 flex-shrink-0 border-b border-outline-variant/20 bg-surface/80 backdrop-blur-xl">
           <div className="flex items-center gap-4">
-            <span className="text-label-sm font-label-sm text-on-surface-variant flex items-center gap-2 neo-flat px-3 py-1 rounded-full cursor-default" title={isApproximatePreview && !useCpuPreview ? "WebGL preview is approximate — export will use accurate CPU rendering" : undefined}>
+            <button
+              type="button"
+              onClick={() => {
+                const s = useAppStore.getState();
+                s.setUseCpuPreview(!s.useCpuPreview);
+              }}
+              className="text-label-sm font-label-sm text-on-surface-variant flex items-center gap-2 neo-flat px-3 py-1 rounded-full cursor-pointer hover:border-accent-teal/40 transition-colors"
+              title={useCpuPreview ? "Click to switch to fast WebGL GPU preview" : "Click to switch to 100% exact Rust CPU preview (exact saved output)"}
+            >
               <span className={`w-2 h-2 rounded-full ${useCpuPreview ? "bg-accent-teal" : isApproximatePreview ? "bg-amber-400" : stackCount > 0 ? "bg-accent-pink animate-pulse-glow" : "solar-bg animate-pulse-glow"}`} />
-              {useCpuPreview ? "CPU ACCURATE" : isApproximatePreview ? "APPROXIMATE" : stackCount > 0 ? "ANIMATING" : "LIVE PREVIEW"}
-            </span>
+              {useCpuPreview ? "EXACT OUTPUT (CPU)" : isApproximatePreview ? "APPROXIMATE (CLICK FOR EXACT)" : stackCount > 0 ? "ANIMATING" : "LIVE PREVIEW"}
+            </button>
             {fileName && (
               <span className="text-label-sm font-label-sm text-accent-teal/90 cursor-default hover:text-accent-teal transition-colors bg-surface/60 px-2 rounded">
                 {fileName.split(/[\\/]/).pop()?.toUpperCase() || "CLIP"}
@@ -1019,6 +1116,34 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
             )}
           </div>
           <div className="flex items-center gap-3">
+            {/* Composition guides. Preview-only: these never enter the export
+                stack, which is the whole reason they are not effects. */}
+            <div className="flex items-center gap-1" role="group" aria-label="Composition guides">
+              {(
+                [
+                  { key: "safeArea", icon: "crop_free", label: "Safe area guides" },
+                  { key: "ruleOfThirds", icon: "grid_3x3", label: "Rule of thirds" },
+                  { key: "crosshairs", icon: "add", label: "Centre crosshairs" },
+                  { key: "pixelGrid", icon: "grid_4x4", label: "Pixel grid" },
+                ] as const
+              ).map(({ key, icon, label }) => (
+                <button
+                  key={key}
+                  type="button"
+                  aria-label={label}
+                  aria-pressed={viewportGuides[key]}
+                  title={`${label} (preview only — not exported)`}
+                  onClick={() => useAppStore.getState().toggleViewportGuide(key)}
+                  className={`material-symbols-outlined text-sm neo-btn p-1.5 rounded-full transition-colors ${
+                    viewportGuides[key]
+                      ? "text-accent-teal"
+                      : "text-on-surface-variant hover:text-primary"
+                  }`}
+                >
+                  {icon}
+                </button>
+              ))}
+            </div>
             {mediaInfo && (
               <span className="text-label-sm font-label-sm text-accent-teal neo-flat px-3 py-1 rounded-full cursor-default hover:border-accent-teal/30 transition-colors">
                 {mediaInfo.width} x {mediaInfo.height}
@@ -1177,6 +1302,11 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
                     />
                   )}
 
+                  {/* Composition guides — preview only, never reach the export pipeline */}
+                  {mediaInfo && (
+                    <ViewportGuides width={mediaInfo.width} height={mediaInfo.height} />
+                  )}
+
                   {/* SAM3 interaction canvas overlay */}
                   {isSam3Interactive && mediaInfo && (
                     <canvas
@@ -1256,3 +1386,5 @@ export default function PreviewViewport({ isDropTarget = false }: Props) {
     </div>
   );
 }
+
+export default memo(PreviewViewport);

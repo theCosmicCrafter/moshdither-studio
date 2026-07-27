@@ -7,17 +7,6 @@ export class MediaUploader {
     this.gl = ctx.getGL();
   }
 
-  async uploadImage(url: string): Promise<WebGLTexture> {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    await new Promise<void>((resolve, reject) => {
-      img.onload = () => resolve();
-      img.onerror = reject;
-      img.src = url;
-    });
-    return this.createTextureFromImage(img);
-  }
-
   createTextureFromImage(
     img: HTMLImageElement | HTMLVideoElement | HTMLCanvasElement
   ): WebGLTexture {
@@ -35,23 +24,15 @@ export class MediaUploader {
     return tex;
   }
 
-  deleteTexture(texture: WebGLTexture) {
-    this.gl.deleteTexture(texture);
-  }
-
-  async uploadVideo(url: string): Promise<HTMLVideoElement> {
-    const video = document.createElement("video");
-    video.crossOrigin = "anonymous";
-    video.muted = true;
-    video.loop = true;
-    video.playsInline = true;
+  async uploadImage(url: string): Promise<WebGLTexture> {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
     await new Promise<void>((resolve, reject) => {
-      video.oncanplay = () => resolve();
-      video.onerror = reject;
-      video.src = url;
+      img.onload = () => resolve();
+      img.onerror = reject;
+      img.src = url;
     });
-    video.play();
-    return video;
+    return this.createTextureFromImage(img);
   }
 
   updateVideoTexture(tex: WebGLTexture, video: HTMLVideoElement) {
@@ -61,5 +42,9 @@ export class MediaUploader {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     gl.bindTexture(gl.TEXTURE_2D, null);
+  }
+
+  deleteTexture(texture: WebGLTexture) {
+    this.gl.deleteTexture(texture);
   }
 }

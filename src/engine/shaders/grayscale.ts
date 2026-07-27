@@ -15,13 +15,16 @@ export const grayscaleShader: EffectShader = {
   fragmentSource: `
     precision highp float;
     uniform sampler2D tDiffuse;
+    uniform float amount;
     varying vec2 vUv;
 
     void main() {
       vec4 color = texture2D(tDiffuse, vUv);
       float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-      gl_FragColor = vec4(vec3(gray), color.a);
+      // Matches the Rust implementation (artistic/grayscale.rs), which blends
+      // toward luma by 'intensity' rather than always fully desaturating.
+      gl_FragColor = vec4(mix(color.rgb, vec3(gray), clamp(amount, 0.0, 1.0)), color.a);
     }
   `,
-  uniforms: [],
+  uniforms: [{ name: 'amount', type: 'float', default: 1.0 }],
 };

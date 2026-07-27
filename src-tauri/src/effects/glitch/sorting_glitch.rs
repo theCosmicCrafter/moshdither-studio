@@ -37,6 +37,21 @@ impl Effect for SortingGlitch {
             category: EffectCategory::Glitch,
             media_type: MediaType::Image,
             parameters: vec![
+                // See pixel_geo::pixel_sort for the measurement behind this: a
+                // fixed brightness threshold decides which pixels form a sortable
+                // run, so on any image darker than the threshold the effect
+                // degenerates to short runs and looks like it is doing nothing.
+                // Auto derives it from the frame instead.
+                ParameterDef {
+                    id: "auto_threshold".to_string(),
+                    name: "Auto Threshold".to_string(),
+                    param_type: ParamType::Toggle,
+                    default: json!(true),
+                    min: None,
+                    max: None,
+                    step: None,
+                    options: None,
+                },
                 ParameterDef {
                     id: "u_threshold".to_string(),
                     name: "Threshold".to_string(),
@@ -61,7 +76,16 @@ impl Effect for SortingGlitch {
                     id: "u_direction".to_string(),
                     name: "Direction".to_string(),
                     param_type: ParamType::Select,
-                    default: json!(0),
+                    // Must be the option NAME, not an index. `clamp_params`
+                    // decides which way to normalise a select from the type of
+                    // this default: a number means "the stored value is an
+                    // index", a string means "the stored value is a name".
+                    // process_frame reads this with `as_str()`, so declaring 0
+                    // left the value a number, `as_str()` returned None, and it
+                    // fell back to "Horizontal" at every setting -- Vertical was
+                    // unreachable. `u_sort_mode` below declares a string and has
+                    // always worked, which is why only this one was stuck.
+                    default: json!("Horizontal"),
                     min: None,
                     max: None,
                     step: None,
@@ -117,6 +141,14 @@ impl Effect for SortingGlitch {
         let h = input.height as usize;
         let mut data = input.data.clone();
 
+        // Auto mode replaces the fixed threshold with the frame's own mean of
+        // whatever quantity sort_mode ranks by, so roughly half the pixels
+        // qualify at any exposure and runs are long enough to see.
+        let auto = params
+            .get("auto_threshold")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
         // Sort key function
         let sort_key = |r: u8, g: u8, b: u8| -> f32 {
             let r = r as f32 / 255.0;
@@ -149,6 +181,19 @@ impl Effect for SortingGlitch {
                 }
                 _ => 0.299 * r + 0.587 * g + 0.114 * b, // brightness
             }
+        };
+
+        // Computed here rather than with the other parameters because it depends
+        // on sort_key, which depends on sort_mode.
+        let threshold = if auto {
+            let mut sum = 0.0f64;
+            let n = (w * h).max(1) as f64;
+            for i in (0..data.len()).step_by(4) {
+                sum += sort_key(data[i], data[i + 1], data[i + 2]) as f64;
+            }
+            (sum / n) as f32
+        } else {
+            threshold
         };
 
         if direction == 0 {
@@ -361,7 +406,12 @@ mod tests {
             data: d,
         };
         let e = SortingGlitch::new(0.1, 10.0, 0);
-        let r = e.process_frame(&f, None, &serde_json::Map::new()).unwrap();
+        // auto_threshold defaults on, which would derive a threshold from this
+        // 4-pixel frame. This test pins the MANUAL path at 0.1.
+        let mut params = serde_json::Map::new();
+        params.insert("auto_threshold".to_string(), serde_json::json!(false));
+        params.insert("u_threshold".to_string(), serde_json::json!(0.1));
+        let r = e.process_frame(&f, None, &params).unwrap();
         assert_eq!(r.data[0], 128);
         assert_eq!(r.data[4], 180);
         assert_eq!(r.data[8], 200);

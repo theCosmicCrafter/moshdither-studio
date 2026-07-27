@@ -118,7 +118,7 @@ export default function VerificationPanel() {
             }}
           >
             <StatBadge label="Total" value={report.total_effects} color="var(--text-primary)" />
-            <StatBadge label="Passed" value={report.passed} color="#4ade80" />
+            <StatBadge label="Passed" value={report.passed} color="var(--accent-teal, #4ade80)" />
             <StatBadge label="Failed" value={report.failed} color="var(--accent-pink)" />
             <StatBadge label="Pass Rate" value={`${passRate}%`} color="var(--accent-cyan)" />
           </div>
@@ -269,7 +269,7 @@ function CheckIcon({ pass }: { pass: boolean }) {
         fontSize: 9,
         fontWeight: 700,
         background: pass ? "rgba(74, 222, 128, 0.2)" : "rgba(255, 80, 80, 0.2)",
-        color: pass ? "#4ade80" : "var(--accent-pink)",
+        color: pass ? "var(--accent-teal, #4ade80)" : "var(--accent-pink)",
       }}
     >
       {pass ? "✓" : "✗"}
@@ -300,7 +300,7 @@ function ResultRow({ result }: { result: EffectVerificationResult }) {
               background: result.overall_pass
                 ? "rgba(74, 222, 128, 0.15)"
                 : "rgba(255, 80, 80, 0.15)",
-              color: result.overall_pass ? "#4ade80" : "var(--accent-pink)",
+              color: result.overall_pass ? "var(--accent-teal, #4ade80)" : "var(--accent-pink)",
             }}
           >
             {result.overall_pass ? "PASS" : "FAIL"}

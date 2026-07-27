@@ -92,7 +92,7 @@ impl Effect for FractalNoise {
                 let mut amp = 1.0f32;
                 let mut freq = 1.0f32;
                 for _ in 0..octaves {
-                    noise += hash_noise(x as f32 * freq, y as f32 * freq, time) * amp;
+                    noise += value_noise(x as f32 * freq, y as f32 * freq, time) * amp;
                     amp *= persistence;
                     freq *= 2.0;
                 }
@@ -127,14 +127,40 @@ impl Effect for FractalNoise {
     }
 }
 
-fn hash_noise(x: f32, y: f32, t: u32) -> f32 {
-    let ix = x as i32;
-    let iy = y as i32;
-    let hash = ix
+/// Hash to a uniform random value in [0,1] for integer grid coordinates.
+fn rand01(x: i32, y: i32, seed: i32) -> f32 {
+    let hash = x
         .wrapping_mul(374761393)
-        .wrapping_add(iy.wrapping_mul(668265263))
-        .wrapping_add((t as i32).wrapping_mul(127));
-    ((hash.wrapping_mul(1203246503) >> 24) & 0xFF) as f32 / 255.0 - 0.5
+        .wrapping_add(y.wrapping_mul(668265263))
+        .wrapping_add(seed.wrapping_mul(127));
+    let h = (hash.wrapping_mul(1203246503) >> 24) & 0xFF;
+    h as f32 / 255.0
+}
+
+/// Smoothly interpolate between grid values using cubic Hermite (3t^2-2t^3).
+fn smooth(t: f32) -> f32 {
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// 2D value noise: deterministic, band-limited, continuously varying.
+/// At each lattice point we hash a value; the sample is bilinearly interpolated
+/// using the smoothstep curve, making it suitable for fractal layering (FBM).
+fn value_noise(x: f32, y: f32, t: u32) -> f32 {
+    let ix = x.floor() as i32;
+    let iy = y.floor() as i32;
+    let fx = x - x.floor();
+    let fy = y - y.floor();
+    let sx = smooth(fx);
+    let sy = smooth(fy);
+
+    let n00 = rand01(ix, iy, t as i32);
+    let n01 = rand01(ix, iy + 1, t as i32);
+    let n10 = rand01(ix + 1, iy, t as i32);
+    let n11 = rand01(ix + 1, iy + 1, t as i32);
+
+    let nx0 = n00 * (1.0 - sx) + n10 * sx;
+    let nx1 = n01 * (1.0 - sx) + n11 * sx;
+    (nx0 * (1.0 - sy) + nx1 * sy) - 0.5
 }
 
 #[cfg(test)]

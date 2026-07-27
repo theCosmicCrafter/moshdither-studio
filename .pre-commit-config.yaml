@@ -1,14 +1,39 @@
 # .pre-commit-config.yaml
 # Install: pip install pre-commit && pre-commit install
 # Run manually: pre-commit run --all-files
+#
+# Every hook that guards a commit lives here. TruffleHog used to be a separate
+# .git/hooks/pre-commit script instead, which meant two hook systems that did not
+# know about each other. `pre-commit install` overwrote it, and its migration
+# mode (which chains the displaced hook) fails on Windows with
+# "Executable /bin/sh not found", because the displaced hook is a shell script.
+# Declaring it as a local hook removes the chaining problem entirely.
 
 repos:
   # ── SECRETS ──────────────────────────────────────────────────
+  - repo: local
+    hooks:
+      - id: trufflehog
+        name: "trufflehog — verified secret scan"
+        # Blocks only on credentials TruffleHog confirmed live with the issuing
+        # provider, which keeps false positives near zero. That is what makes it
+        # safe to block a commit on, but it is not a guarantee: a revoked key or
+        # a provider it cannot reach will pass. `npm run secret-scan:history` is
+        # the deeper sweep.
+        entry: powershell -ExecutionPolicy Bypass -File scripts/pre-commit.ps1
+        language: system
+        pass_filenames: false
+        always_run: true
+
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.30.0
     hooks:
       - id: gitleaks
         name: "gitleaks — secret scan"
+        # .gitleaks.toml extends the stock ruleset and records deliberate
+        # exceptions -- chiefly .secrets.baseline, whose stored SHAs gitleaks
+        # otherwise reports as high-entropy secrets.
+        args: ['--config', '.gitleaks.toml']
 
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.5.0
@@ -23,12 +48,29 @@ repos:
     hooks:
       - id: semgrep
         name: "semgrep — multi-lang SAST"
+        # Scoped to this project's own source. Without the exclusion it also
+        # scans references/ (~1 GB of third-party repositories) and the vendored
+        # Python environments, where any finding belongs to someone else.
+        exclude: '^(references|sam3_env|sam3_repo|audit_venv|node_modules|recycling|dist|target|src-tauri/target)/'
+        # Manual stage, not on every commit. semgrep fetches p/security-audit,
+        # p/secrets and p/owasp-top-ten from its registry on each run, so it
+        # fails intermittently on network hiccups -- observed passing and failing
+        # across two identical back-to-back runs. A gate that fails at random is
+        # one people learn to bypass, which is the failure mode this whole pass
+        # was cleaning up.
+        #
+        # Coverage is not lost: .github/workflows/security.yml already runs
+        # semgrep in a container with SARIF upload, where a retry is cheap and
+        # the network is reliable. That is the authoritative run.
+        #
+        # On demand:  pre-commit run semgrep --hook-stage manual --all-files
+        stages: [manual]
         args:
           - '--config=p/security-audit'
           - '--config=p/secrets'
           - '--config=p/owasp-top-ten'
-          - '--error'
           - '--severity=ERROR'
+          - '--quiet'
 
   # ── PYTHON ───────────────────────────────────────────────────
   - repo: https://github.com/PyCQA/bandit
@@ -36,15 +78,34 @@ repos:
     hooks:
       - id: bandit
         name: "bandit — Python SAST"
-        args: ['-r', '.', '-ll', '-x', 'tests/,venv/,sam3_env/,audit_venv/']
+        # `-r .` was here alongside pre-commit's own filename arguments, so
+        # bandit received both a recursive target and a file list and exited 2
+        # with "unrecognized arguments" every time. pre-commit already passes
+        # the files, which also means only changed files are scanned on commit.
+        args: ['-ll']
+        #
+        # The legacy Python backend is NO LONGER excluded: its 15 B602
+        # shell=True findings are fixed, and it now reports clean.
+        #
+        # Only packages/python-backend/test_*.py stays out. Those carry 6 B108
+        # (hardcoded /tmp paths) and are tests for main.py, which the app never
+        # spawns. CI's bandit job excludes ./tests for the same reason.
+        exclude: '^(references|sam3_env|sam3_repo|audit_venv|node_modules|recycling|dist|target|src-tauri/target|packages/python-backend/(venv|sam3_repo)/|packages/python-backend/test_)'
+
 
   # ── JS / TS / NODE ────────────────────────────────────────────
-  - repo: https://github.com/ajinabraham/njsscan
-    rev: v0.4.4
-    hooks:
-      - id: njsscan
-        name: "njsscan — JS/Node SAST"
-        args: ['--exit-warning', '.']
+  #
+  # njsscan was declared here at rev v0.4.4 and never worked. That tag does not
+  # exist (the project's latest is 0.4.3, with no `v` prefix), and more
+  # fundamentally njsscan ships no .pre-commit-hooks.yaml at any tag, so
+  # pre-commit cannot consume it as a repo hook at all. The entry was never
+  # exercised because the framework itself was never wired to this repo.
+  #
+  # JS/Node coverage comes from semgrep above -- p/security-audit and
+  # p/owasp-top-ten both include JavaScript and TypeScript rules -- plus the
+  # existing `npm run lint`. To bring njsscan back, `pip install njsscan` and
+  # declare it as a `repo: local` hook the way trufflehog is above; do not
+  # restore the remote-repo form.
 
   # ── DEPS ─────────────────────────────────────────────────────
   - repo: https://github.com/pypa/pip-audit
@@ -52,4 +113,27 @@ repos:
     hooks:
       - id: pip-audit
         name: "pip-audit — Python CVE check"
-        args: ['--desc', '--progress-spinner=off']
+        # Must be pointed at a requirements file. With no target it audits the
+        # *ambient* Python environment, which here is the Anaconda install --
+        # so it reported six CVEs in Anaconda's own pip 24.3.1, none of which
+        # this project depends on or can fix. The SAM3 sidecar's requirements
+        # are the actual dependency surface.
+        args:
+          - '--requirement'
+          - 'packages/python-backend/requirements.txt'
+          - '--desc'
+          - '--progress-spinner=off'
+          # Suppressed by explicit ID, never blanket, so a NEW advisory against
+          # any dependency still fails this gate. These four are all transformers
+          # 4.57.6 issues whose only fix is transformers 5.x -- a major-version
+          # migration, tracked in docs/SECURITY_FINDINGS_2026-07-26.md. Remove
+          # these lines when that upgrade lands.
+          - '--ignore-vuln'
+          - 'PYSEC-2025-217'
+          - '--ignore-vuln'
+          - 'PYSEC-2026-2288'
+          - '--ignore-vuln'
+          - 'PYSEC-2026-2289'
+          - '--ignore-vuln'
+          - 'PYSEC-2026-2290'
+        pass_filenames: false

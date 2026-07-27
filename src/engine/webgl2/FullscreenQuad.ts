@@ -2,14 +2,18 @@ import { WebGLContext } from "./WebGLContext";
 
 export class FullscreenQuad {
   private gl: WebGL2RenderingContext;
-  private vao: WebGLVertexArrayObject;
-  private positionBuffer: WebGLBuffer;
-  private texCoordBuffer: WebGLBuffer;
+  private vao!: WebGLVertexArrayObject;
+  private positionBuffer!: WebGLBuffer;
+  private texCoordBuffer!: WebGLBuffer;
 
   constructor(ctx: WebGLContext) {
     const gl = ctx.getGL();
     this.gl = gl;
+    this.initBuffers();
+  }
 
+  private initBuffers() {
+    const gl = this.gl;
     const positions = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
     // Standard GL texCoords — image/video textures are flipped on upload via UNPACK_FLIP_Y_WEBGL
     const texCoords = new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]);
@@ -30,6 +34,11 @@ export class FullscreenQuad {
     gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 0, 0);
 
     gl.bindVertexArray(null);
+  }
+
+  /** Re-initialize geometry buffers after the WebGL context is restored. */
+  reset() {
+    this.initBuffers();
   }
 
   draw() {

@@ -89,8 +89,40 @@ impl Effect for FrameSortByDataSize {
         _mask: Option<&Mask>,
         _params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let mut frames_with_sizes: Vec<(usize, &Frame)> =
-            input.frames.iter().map(|f| (f.data.len(), f)).collect();
+        // Ordered by visual complexity, which is what "size" means for this
+        // effect: in an encoded stream a busy frame produces a larger packet
+        // than a flat one, and reordering by that is the datamosh technique.
+        //
+        // This used to sort on `f.data.len()`. By the time an effect sees a
+        // frame it has been decoded to raw RGBA, so every frame is exactly
+        // width * height * 4 bytes -- every sort key was identical, the sort
+        // was a no-op on a stable sort, and the effect returned its input
+        // unchanged. Confirmed by rendering: its output was byte-identical to
+        // seven effects that genuinely cannot act without extra input.
+        //
+        // Compressed size is unavailable post-decode, so complexity is
+        // approximated by total absolute gradient between horizontally adjacent
+        // pixels -- high-frequency detail is precisely what an encoder spends
+        // bits on, so this tracks the quantity the original intent was after.
+        fn complexity(f: &Frame) -> u64 {
+            let w = f.width as usize;
+            let h = f.height as usize;
+            let mut acc: u64 = 0;
+            for y in 0..h {
+                let row = y * w * 4;
+                for x in 1..w {
+                    let i = row + x * 4;
+                    let p = i - 4;
+                    acc += (f.data[i] as i16 - f.data[p] as i16).unsigned_abs() as u64;
+                    acc += (f.data[i + 1] as i16 - f.data[p + 1] as i16).unsigned_abs() as u64;
+                    acc += (f.data[i + 2] as i16 - f.data[p + 2] as i16).unsigned_abs() as u64;
+                }
+            }
+            acc
+        }
+
+        let mut frames_with_sizes: Vec<(u64, &Frame)> =
+            input.frames.iter().map(|f| (complexity(f), f)).collect();
         frames_with_sizes.sort_by_key(|a| a.0);
         let frames = frames_with_sizes
             .into_iter()

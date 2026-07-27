@@ -41,7 +41,6 @@ describe("Effect Pipeline E2E", () => {
       "pixel_geo",
       "datamoshing",
       "audio_reactive",
-      "overlay",
     ];
 
     for (const cat of categories) {
@@ -59,18 +58,33 @@ describe("Effect Pipeline E2E", () => {
       }
     });
 
-    it("overlay effects are mapped", () => {
-      expect(rustToWebGL["overlay.pixel_grid"]).toBeDefined();
-      expect(rustToWebGL["overlay.safe_area"]).toBeDefined();
-      expect(rustToWebGL["overlay.rule_of_thirds"]).toBeDefined();
-      expect(rustToWebGL["overlay.crosshairs"]).toBeDefined();
+    it("composition guides are not mapped — they are not effects", () => {
+      // Demoted to a viewport overlay so framing aids cannot be exported.
+      for (const id of [
+        "overlay.pixel_grid",
+        "overlay.safe_area",
+        "overlay.rule_of_thirds",
+        "overlay.crosshairs",
+      ]) {
+        expect(rustToWebGL[id]).toBeUndefined();
+      }
     });
 
-    it("overlay shader IDs match registered shader IDs", () => {
-      expect(shaderRegistry.has(rustToWebGL["overlay.pixel_grid"].shaderId)).toBe(true);
-      expect(shaderRegistry.has(rustToWebGL["overlay.safe_area"].shaderId)).toBe(true);
-      expect(shaderRegistry.has(rustToWebGL["overlay.rule_of_thirds"].shaderId)).toBe(true);
-      expect(shaderRegistry.has(rustToWebGL["overlay.crosshairs"].shaderId)).toBe(true);
+    it("every paramMap target uniform is declared in the target shader", () => {
+      for (const [effectId, mapping] of Object.entries(rustToWebGL)) {
+        if (mapping.shaderId === "pass_through") continue;
+        const shader = shaderRegistry.get(mapping.shaderId);
+        expect(shader, `Shader ${mapping.shaderId} for effect ${effectId} not registered`).toBeDefined();
+        if (!shader) continue;
+        const declaredUniforms = new Set(shader.uniforms.map((u) => u.name));
+        for (const [rustKey, webglUniform] of Object.entries(mapping.paramMap)) {
+          if (webglUniform === "tLUT" || webglUniform === "u_maskTexture") continue;
+          expect(
+            declaredUniforms.has(webglUniform),
+            `Effect ${effectId} maps param '${rustKey}' to uniform '${webglUniform}', but shader '${mapping.shaderId}' does not declare uniform '${webglUniform}'`
+          ).toBe(true);
+        }
+      }
     });
   });
 
@@ -124,15 +138,17 @@ describe("Effect Pipeline E2E", () => {
       expect(passes[0].uniforms.amount).toBe(1);
     });
 
-    it("handles overlay effects in stack", () => {
+    it("skips legacy overlay entries left in an old saved stack", () => {
+      // migrateOverlayGuides strips these on load, but a stack that slipped
+      // through must not produce a render pass for a shader that no longer
+      // exists.
       const stack: StackEntry[] = [
         makeStackEntry("s1", "dithering.bayer", { matrix_size: 4 }),
         makeStackEntry("s2", "overlay.pixel_grid", { grid_size: 32, line_width: 1, opacity: 0.5 }),
       ];
       const passes = stackToRenderPasses(stack);
-      expect(passes).toHaveLength(2);
-      expect(passes[1].shaderId).toBe("pixel_grid_overlay");
-      expect(passes[1].uniforms.gridSize).toBe(32);
+      expect(passes).toHaveLength(1);
+      expect(passes[0].shaderId).toBe("bayer_dither");
     });
 
     it("handles vec3 uniform grouping (lift_gamma_gain)", () => {
@@ -184,7 +200,7 @@ describe("Effect Pipeline E2E", () => {
   describe("hasWebGLPreview / listPreviewableEffects", () => {
     it("returns true for effects with valid mappings", () => {
       expect(hasWebGLPreview("dithering.bayer")).toBe(true);
-      expect(hasWebGLPreview("overlay.pixel_grid")).toBe(true);
+      expect(hasWebGLPreview("pixel_geo.pixelate")).toBe(true);
     });
 
     it("returns false for unknown effects", () => {
@@ -195,7 +211,9 @@ describe("Effect Pipeline E2E", () => {
       const previewable = listPreviewableEffects();
       expect(previewable.length).toBeGreaterThan(50);
       expect(previewable).toContain("dithering.bayer");
-      expect(previewable).toContain("overlay.pixel_grid");
+      expect(previewable).toContain("pixel_geo.pixelate");
+      // Composition guides are no longer effects and have no mapping.
+      expect(previewable).not.toContain("overlay.pixel_grid");
     });
   });
 

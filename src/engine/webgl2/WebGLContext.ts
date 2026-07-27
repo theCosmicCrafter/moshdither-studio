@@ -1,12 +1,24 @@
+import { logger } from "../../utils/logger";
+
+export interface WebGLContextCallbacks {
+  onContextLost?: () => void;
+  onContextRestored?: () => void;
+}
+
 export class WebGLContext {
   private canvas: HTMLCanvasElement;
   private gl: WebGL2RenderingContext;
   private programs: Map<string, WebGLProgram> = new Map();
   private textures: Map<string, WebGLTexture> = new Map();
   private framebuffers: Map<string, WebGLFramebuffer> = new Map();
+  private contextLost = false;
+  private onContextLost?: () => void;
+  private onContextRestored?: () => void;
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, callbacks?: WebGLContextCallbacks) {
     this.canvas = canvas;
+    this.onContextLost = callbacks?.onContextLost;
+    this.onContextRestored = callbacks?.onContextRestored;
     const gl = canvas.getContext("webgl2", {
       alpha: false,
       premultipliedAlpha: false,
@@ -14,13 +26,54 @@ export class WebGLContext {
     });
     if (!gl) throw new Error("WebGL2 not supported");
     this.gl = gl;
+
+    canvas.addEventListener("webglcontextlost", this.handleContextLost, false);
+    canvas.addEventListener("webglcontextrestored", this.handleContextRestored, false);
+  }
+
+  private handleContextLost = (e: Event) => {
+    // Prevent the browser's default behavior so the context can be restored.
+    e.preventDefault();
+    if (this.contextLost) return;
+    this.contextLost = true;
+    logger.error("WebGLContext", "WebGL context lost");
+    this.onContextLost?.();
+  };
+
+  private handleContextRestored = () => {
+    this.contextLost = false;
+    logger.log("WebGLContext", "Context restored — reinitializing state");
+    this.reset();
+    this.onContextRestored?.();
+  };
+
+  /**
+   * Drop all cached GL resources. Call this after the context is restored so
+   * previously allocated textures/buffers/programs are not reused.
+   */
+  reset() {
+    this.programs.clear();
+    this.textures.clear();
+    this.framebuffers.clear();
+    this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+  }
+
+  isContextLost(): boolean {
+    return this.contextLost || this.gl.isContextLost();
   }
 
   getGL(): WebGL2RenderingContext {
     return this.gl;
   }
 
+  private ensureContext() {
+    if (this.isContextLost()) {
+      throw new Error("WebGL context is lost");
+    }
+  }
+
   createShader(type: number, source: string): WebGLShader {
+    this.ensureContext();
     const gl = this.gl;
     const shader = gl.createShader(type)!;
     gl.shaderSource(shader, source);
@@ -34,6 +87,7 @@ export class WebGLContext {
   }
 
   getOrCreateProgram(name: string, vertSrc: string, fragSrc: string): WebGLProgram {
+    this.ensureContext();
     if (this.programs.has(name)) return this.programs.get(name)!;
     const gl = this.gl;
     const vs = this.createShader(gl.VERTEX_SHADER, vertSrc);
@@ -53,6 +107,7 @@ export class WebGLContext {
   }
 
   createTexture(name: string, width: number, height: number, data?: Uint8Array): WebGLTexture {
+    this.ensureContext();
     const gl = this.gl;
     const tex = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -81,6 +136,7 @@ export class WebGLContext {
   }
 
   createFramebuffer(name: string, texture: WebGLTexture): WebGLFramebuffer {
+    this.ensureContext();
     const gl = this.gl;
     const fb = gl.createFramebuffer()!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
@@ -98,6 +154,7 @@ export class WebGLContext {
   }
 
   resize(width: number, height: number) {
+    if (this.isContextLost()) return;
     const dpr = Math.min(window.devicePixelRatio, 2);
     this.canvas.width = Math.floor(width * dpr);
     this.canvas.height = Math.floor(height * dpr);
@@ -107,6 +164,8 @@ export class WebGLContext {
   }
 
   destroy() {
+    this.canvas.removeEventListener("webglcontextlost", this.handleContextLost, false);
+    this.canvas.removeEventListener("webglcontextrestored", this.handleContextRestored, false);
     const gl = this.gl;
     this.programs.forEach((p) => gl.deleteProgram(p));
     this.textures.forEach((t) => gl.deleteTexture(t));

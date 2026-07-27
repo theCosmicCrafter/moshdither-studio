@@ -27,8 +27,18 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: blob: asset: tauri:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'",
-      "capabilities": ["default"]
+      "csp": "default-src 'self'; img-src 'self' data: blob: asset: tauri: http://asset.localhost https://asset.localhost; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self' http://asset.localhost https://asset.localhost asset:",
+      "capabilities": ["default"],
+      "assetProtocol": {
+        "enable": true,
+        "scope": {
+          "allow": [
+            "$TEMP/moshdither-studio/**",
+            "$APPDATA/com.moshdither.studio/**",
+            "$APPCONFIG/com.moshdither.studio/**"
+          ]
+        }
+      }
     }
   },
   "bundle": {
@@ -43,7 +53,38 @@
     ],
     "externalBin": ["bin/ffmpeg", "bin/ffprobe", "bin/ffgac", "bin/ffedit"],
     "resources": {
-      "../packages/python-backend": "packages/python-backend"
+      "../packages/python-backend": "packages/python-backend",
+      "../public/lut": "lut",
+      "../models": "models"
+    },
+    "createUpdaterArtifacts": true,
+    "publisher": "MoshDither Studio Contributors",
+    "shortDescription": "Datamoshing, dithering, and glitch art studio",
+    "longDescription": "A unified desktop app for datamoshing, dithering, AI segmentation, and glitch art with a real-time WebGL preview and export pipeline.",
+    "macOS": {
+      "hardenedRuntime": true,
+      "minimumSystemVersion": "10.13",
+      "signingIdentity": null,
+      "entitlements": null
+    },
+    "windows": {
+      "certificateThumbprint": null,
+      "signCommand": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "http://timestamp.digicert.com",
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "dialog": true,
+      "endpoints": [
+        "https://github.com/theCosmicCrafter/moshdither-studio/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEEyRjJFRDc0OUVGQkU1NwpSV1JYdnU5SjF5NHZDaW9HS2dKNmZHVVJXdmZ4VmpwOUFPd05qWWxhc0FuVm1oeFlZaG9ORG54YQo="
     }
   }
 }

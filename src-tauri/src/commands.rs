@@ -5,9 +5,10 @@ use crate::effects::{
     EffectCategory, EffectMeta, EffectRegistry, Frame,
 };
 use crate::ffmpeg::{
-    decode_video, encode_video, ffedit_binary, ffgac_binary, ffmpeg_binary, generate_proxy,
-    probe_metadata,
+    decode_video, encode_video, extract_audio_to_wav, ffedit_binary, ffgac_binary, ffmpeg_binary,
+    generate_proxy, has_audio_stream, probe_metadata,
 };
+use crate::path_guard::validate_io_path;
 use crate::sam3_engine::Sam3Engine;
 use crate::utils::image_io::{load_image, load_image_from_memory, save_image};
 use image::ImageFormat;
@@ -16,8 +17,20 @@ use serde_json::json;
 use std::io::Cursor;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tauri::{Emitter, State};
+use tauri_plugin_updater::UpdaterExt;
+
+/// Maximum number of pixels kept in the in-memory preview frame. Very large
+/// still images are downscaled on load so that preview/effect processing does
+/// not consume unbounded RAM.
+const MAX_PREVIEW_PIXELS: u64 = 32_000_000; // ~8K x 4K or 4K x 8K
+
+/// Soft memory budget for the effect preview cache. Each cache entry stores a
+/// full RGBA frame, so the cache is trimmed to stay under this limit.
+const MAX_CACHE_BYTES: usize = 256 * 1024 * 1024; // 256 MiB
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,6 +69,8 @@ pub struct AppState {
     pub current_frame: Mutex<Option<Frame>>,
     pub sam3: Mutex<Option<Sam3Engine>>,
     pub frame_cache: Mutex<EffectCache>,
+    pub export_cancel: Arc<AtomicBool>,
+    pub export_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl Default for AppState {
@@ -65,8 +80,42 @@ impl Default for AppState {
             current_frame: Mutex::new(None),
             sam3: Mutex::new(None),
             frame_cache: Mutex::new(EffectCache::default()),
+            export_cancel: Arc::new(AtomicBool::new(false)),
+            export_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
         }
     }
+}
+
+/// Trim cached intermediate frames so the total byte size stays under budget.
+/// Oldest entries are evicted first.
+fn trim_cache_to_budget(entries: &mut Vec<CacheEntry>, budget: usize) {
+    let mut total: usize = entries.iter().map(|e| e.output_frame.data.len()).sum();
+    while total > budget && !entries.is_empty() {
+        let removed = entries.remove(0);
+        total = total.saturating_sub(removed.output_frame.data.len());
+    }
+}
+
+/// Downscale a Frame so it fits within a pixel budget while preserving aspect ratio.
+fn fit_to_preview_budget(frame: Frame) -> crate::error::Result<Frame> {
+    let pixels = frame.width as u64 * frame.height as u64;
+    if pixels <= MAX_PREVIEW_PIXELS {
+        return Ok(frame);
+    }
+    let scale = (MAX_PREVIEW_PIXELS as f64 / pixels as f64).sqrt();
+    let new_w = ((frame.width as f64 * scale) as u32).max(1);
+    let new_h = ((frame.height as f64 * scale) as u32).max(1);
+    let img =
+        image::RgbaImage::from_raw(frame.width, frame.height, frame.data).ok_or_else(|| {
+            crate::error::AppError::Generic("frame buffer does not match dimensions".to_string())
+        })?;
+    let resized =
+        image::imageops::resize(&img, new_w, new_h, image::imageops::FilterType::Triangle);
+    Ok(Frame {
+        width: new_w,
+        height: new_h,
+        data: resized.into_raw(),
+    })
 }
 
 /// Load an image or video file into the app.
@@ -76,31 +125,38 @@ pub async fn load_media(
     path: String,
 ) -> std::result::Result<String, String> {
     let path_clone = path.clone();
-    let frame = tauri::async_runtime::spawn_blocking(move || {
-        let ext = Path::new(&path_clone)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
+    let frame =
+        tauri::async_runtime::spawn_blocking(move || -> std::result::Result<Frame, String> {
+            validate_io_path(&path_clone, true)?;
 
-        let video_exts = [
-            "mp4", "avi", "mov", "mkv", "webm", "m4v", "flv", "wmv", "mpeg", "mpg",
-        ];
+            let ext = Path::new(&path_clone)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
 
-        if video_exts.contains(&ext.as_str()) {
-            // Decode first frame of video
-            let segment = decode_video(&path_clone, Some(1)).map_err(|e| e.to_string())?;
-            segment
-                .frames
-                .into_iter()
-                .next()
-                .ok_or("No frames decoded".to_string())
-        } else {
-            load_image(&path_clone).map_err(|e| e.to_string())
-        }
-    })
-    .await
-    .map_err(|e| format!("Task failed: {}", e))??;
+            let video_exts = [
+                "mp4", "avi", "mov", "mkv", "webm", "m4v", "flv", "wmv", "mpeg", "mpg",
+            ];
+
+            let raw_frame = if video_exts.contains(&ext.as_str()) {
+                // Decode first frame of video
+                let segment = decode_video(&path_clone, Some(1)).map_err(|e| e.to_string())?;
+                segment
+                    .frames
+                    .into_iter()
+                    .next()
+                    .ok_or("No frames decoded".to_string())?
+            } else {
+                load_image(&path_clone).map_err(|e| e.to_string())?
+            };
+
+            // Keep the in-memory preview frame within a sane pixel budget so that
+            // giant stills do not blow up RAM and the effect cache.
+            fit_to_preview_budget(raw_frame).map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| format!("Task failed: {}", e))??;
 
     *state
         .current_frame
@@ -254,6 +310,7 @@ pub fn apply_effect(
     } else {
         None
     };
+    let params = crate::effects::clamp_for_effect(effect, &params);
     working = effect
         .process_frame(&working, mask.as_ref(), &params)
         .map_err(|e| e.to_string())?;
@@ -263,7 +320,7 @@ pub fn apply_effect(
     // so applying it again would cause double-mask corruption.
     if !effect_handles_mask {
         if let (Some(previous), Some(m)) = (previous.as_ref(), mask.as_ref()) {
-            blend_mask(&mut working, previous, m, "inside");
+            blend_mask(&mut working, previous, m, "inside").map_err(|e| e.to_string())?;
         }
     }
 
@@ -385,15 +442,16 @@ pub fn apply_effect_stack(
             None
         };
 
+        let params = crate::effects::clamp_for_effect(effect, &call.params);
         working = effect
-            .process_frame(&working, active_mask, &call.params)
+            .process_frame(&working, active_mask, &params)
             .map_err(|e| e.to_string())?;
 
         // Only apply post-process mask blend for effects that don't handle masking internally.
         if !effect_handles_mask {
             if let (Some(previous), Some(m)) = (previous.as_ref(), active_mask) {
                 let mode = call.mask_mode.as_deref().unwrap_or("inside");
-                blend_mask(&mut working, previous, m, mode);
+                blend_mask(&mut working, previous, m, mode).map_err(|e| e.to_string())?;
             }
         }
 
@@ -415,6 +473,7 @@ pub fn apply_effect_stack(
         cache_lock.scale = preview_scale;
         cache_lock.global_mask_b64 = mask_b64;
         cache_lock.entries = new_cache;
+        trim_cache_to_budget(&mut cache_lock.entries, MAX_CACHE_BYTES);
     }
 
     // Upscale back to original resolution if we downscaled
@@ -509,6 +568,7 @@ pub fn save_media(
     format: Option<String>,
     quality: Option<u8>,
 ) -> std::result::Result<String, String> {
+    validate_io_path(&path, false)?;
     let frame_lock = state
         .current_frame
         .lock()
@@ -522,6 +582,13 @@ pub fn save_media(
 /// Audio-reactive effects receive per-frame audio params when `audio_bake_json` is provided.
 /// Temporal effects (datamoshing) use `process_video` for cross-frame correctness.
 /// Non-temporal effects are processed frame-by-frame with audio params injected.
+///
+/// `processing_scale`: optional max dimension (px) for the internal decode
+/// and effect-processing pipeline. `None` means "auto" — the backend picks
+/// the largest resolution that fits in the adaptive memory budget. The
+/// final encode is scaled to `width`/`height` (or source dimensions if
+/// unspecified) regardless of the processing scale, so a 4K export can
+/// still process at 1080p internally and upscale on output.
 #[tauri::command]
 pub async fn export_video(
     state: State<'_, AppState>,
@@ -541,10 +608,27 @@ pub async fn export_video(
     format: Option<String>,
     quality: Option<String>,
     include_audio: Option<bool>,
+    processing_scale: Option<usize>,
 ) -> std::result::Result<String, String> {
+    let validated_source = validate_io_path(&source_path, true)?;
+    let validated_output = validate_io_path(&output_path, false)?;
     let registry = state.registry.clone();
+    let cancel = state.export_cancel.clone();
+    cancel.store(false, Ordering::Relaxed);
+
+    let source_path = validated_source.to_string_lossy().into_owned();
+    let output_path = validated_output.to_string_lossy().into_owned();
+
+    // Serialize expensive exports so only one runs at a time.
+    let permit = state
+        .export_semaphore
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|e| format!("Export queue error: {}", e))?;
 
     tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
         export_video_blocking(
             registry,
             app_handle,
@@ -563,6 +647,8 @@ pub async fn export_video(
             format,
             quality,
             include_audio,
+            processing_scale,
+            cancel,
         )
     })
     .await
@@ -587,6 +673,8 @@ fn export_video_blocking(
     format: Option<String>,
     quality: Option<String>,
     include_audio: Option<bool>,
+    processing_scale: Option<usize>,
+    cancel: Arc<AtomicBool>,
 ) -> std::result::Result<String, String> {
     // Parse optional trim suffix from output filename (e.g. name_trim_0.5-2.3.mp4)
     let (mut trim_start, mut trim_end) = (trim_start, trim_end);
@@ -610,13 +698,52 @@ fn export_video_blocking(
         }
     }
 
+    // Plan the decode: pick a processing scale that fits the adaptive
+    // memory budget. This runs BEFORE decode so we don't silently truncate.
+    // `processing_scale = None` means "auto" — the backend picks the
+    // largest resolution that fits. `Some(n)` means the user explicitly
+    // chose n px on the longest side.
+    eprintln!(
+        "[export] Planning decode for source: {} (preferred scale: {:?})",
+        source_path, processing_scale
+    );
+    let _ = app_handle.emit(
+        "export-progress",
+        serde_json::json!({"stage": "planning", "progress": 0}),
+    );
+    let (decode_scale, budget_bytes) =
+        crate::ffmpeg::plan_decode(&source_path, processing_scale).map_err(|e| e.to_string())?;
+    let budget_mb = budget_bytes as f64 / (1024.0 * 1024.0);
+    eprintln!(
+        "[export] Decode plan: scale={:?}, memory budget={:.0} MB",
+        decode_scale, budget_mb
+    );
+    if let Some(s) = decode_scale {
+        let message = format!(
+            "Source exceeds memory budget at native resolution; \
+             processing at {}p. Final encode will scale to target dimensions.",
+            s
+        );
+        eprintln!("[export] {}", message);
+        let _ = app_handle.emit(
+            "export-progress",
+            serde_json::json!({
+                "stage": "planning",
+                "progress": 0,
+                "warning": message,
+                "downscaled_to": s
+            }),
+        );
+    }
+
     // Decode the full source video
     eprintln!("[export] Decoding source: {}", source_path);
     let _ = app_handle.emit(
         "export-progress",
         serde_json::json!({"stage": "decoding", "progress": 0}),
     );
-    let mut segment = decode_video(&source_path, None).map_err(|e| e.to_string())?;
+    let mut segment = crate::ffmpeg::decode_video_with_options(&source_path, None, decode_scale)
+        .map_err(|e| e.to_string())?;
     eprintln!(
         "[export] Decoded {} frames, {}x{}, fps={}",
         segment.frames.len(),
@@ -625,33 +752,24 @@ fn export_video_blocking(
         segment.fps
     );
 
-    // Memory guard: reject exports that would likely OOM
+    // Post-decode memory report. The budget is already enforced inside
+    // decode_video_with_options (it truncates frame count to fit), so this
+    // is informational only — but we still warn loudly if the clip was
+    // truncated so the user knows to lower the processing scale or trim.
     if let Some(first) = segment.frames.first() {
         let frame_mb = (first.data.len() as f64) / (1024.0 * 1024.0);
         let total_mb = frame_mb * segment.frames.len() as f64;
         eprintln!(
-            "[export] Memory estimate: {:.1} MB per frame, {:.1} MB total for {} frames",
+            "[export] Memory estimate: {:.1} MB per frame, {:.1} MB total for {} frames (budget {:.0} MB)",
             frame_mb,
             total_mb,
-            segment.frames.len()
+            segment.frames.len(),
+            budget_mb
         );
-        if total_mb > 4000.0 {
-            let msg = format!(
-                "Video too large to export safely: {:.0} MB for {} frames. Try trimming the range or lowering resolution.",
-                total_mb,
-                segment.frames.len()
-            );
-            eprintln!("[export] REJECTED: {}", msg);
-            let _ = app_handle.emit(
-                "export-progress",
-                serde_json::json!({"stage": "error", "message": msg}),
-            );
-            return Err(msg);
-        }
-        if total_mb > 2000.0 {
+        if total_mb > budget_mb * 0.95 {
             eprintln!(
-                "[export] WARNING: Large memory usage ({:.0} MB). May cause OOM crash.",
-                total_mb
+                "[export] WARNING: decode used >=95% of memory budget. If the clip \
+                 was truncated, lower the processing resolution or trim the range."
             );
         }
     }
@@ -722,6 +840,9 @@ fn export_video_blocking(
             effect.is_temporal()
         );
 
+        // Clamp parameters to declared min/max before any processing.
+        let params = crate::effects::clamp_for_effect(effect, &call.params);
+
         // Per-effect mask overrides global mask
         let per_effect_mask = if let Some(ref b64) = call.mask_b64 {
             decode_mask_b64(Some(b64.as_str()))?
@@ -743,12 +864,12 @@ fn export_video_blocking(
         if effect.is_temporal() {
             // Temporal effects: must use sequential process_video for cross-frame correctness
             segment = effect
-                .process_video(&segment, active_mask, &call.params)
+                .process_video(&segment, active_mask, &params)
                 .map_err(|e| e.to_string())?;
         } else if audio_data.is_none() {
             // Non-temporal, no audio: parallelize frame processing with rayon
             let mask_ref = active_mask;
-            let params_ref = &call.params;
+            let params_ref = &params;
             let fps_val = segment.fps;
             let results: std::result::Result<Vec<_>, _> = segment
                 .frames
@@ -769,7 +890,7 @@ fn export_video_blocking(
             let mut frames = Vec::with_capacity(segment.frames.len());
             let fps_val = segment.fps;
             for (frame_idx, frame) in segment.frames.iter().enumerate() {
-                let mut frame_params = call.params.clone();
+                let mut frame_params = params.clone();
                 frame_params.insert(
                     "time".to_string(),
                     serde_json::Value::from(frame_idx as f64 / fps_val),
@@ -801,9 +922,9 @@ fn export_video_blocking(
                 .frames
                 .par_iter_mut()
                 .enumerate()
-                .for_each(|(i, frame)| {
-                    blend_mask(frame, &prev[i], m, mode);
-                });
+                .try_for_each(|(i, frame)| {
+                    blend_mask(frame, &prev[i], m, mode).map_err(|e| e.to_string())
+                })?;
         }
 
         eprintln!("[export] Effect {}/{} done", effect_idx + 1, stack.len());
@@ -829,6 +950,10 @@ fn export_video_blocking(
     // If include_audio is set, skip audio bake (we'll copy source audio directly)
     let effective_include_audio = include_audio.unwrap_or(false) && !has_audio_bake;
 
+    // Cap a single encode at 30 minutes. This is generous for high-resolution
+    // exports while preventing a hung FFmpeg process from blocking indefinitely.
+    const ENCODE_TIMEOUT: Duration = Duration::from_secs(1800);
+
     encode_video(
         &segment,
         &output_path,
@@ -842,6 +967,8 @@ fn export_video_blocking(
         trim_end,
         width,
         height,
+        Some(cancel.as_ref()),
+        Some(ENCODE_TIMEOUT),
     )
     .map_err(|e| e.to_string())?;
     let _ = app_handle.emit(
@@ -852,11 +979,62 @@ fn export_video_blocking(
     Ok(output_path)
 }
 
+/// Request cancellation of an in-progress export. The export command polls
+/// this flag while feeding frames to FFmpeg and aborts early if it is set.
+#[tauri::command]
+pub fn cancel_export(state: State<'_, AppState>) -> std::result::Result<(), String> {
+    state.export_cancel.store(true, Ordering::Relaxed);
+    Ok(())
+}
+
 /// Get metadata for a media file.
 #[tauri::command]
 pub fn get_media_metadata(path: String) -> std::result::Result<serde_json::Value, String> {
+    validate_io_path(&path, true)?;
     let meta = probe_metadata(&path).map_err(|e| e.to_string())?;
     Ok(json!(meta))
+}
+
+/// Extract the audio track from a loaded video to a temp WAV file.
+///
+/// Returns the path to the extracted WAV, or an error if the video has no
+/// audio stream. The frontend uses this to auto-bake `AudioBakeData` for
+/// audio-reactive effects when a video is loaded — matching the
+/// TouchDesigner `Audio Movie CHOP` pattern where audio is auto-extracted
+/// from the loaded video, no separate load required.
+///
+/// `max_duration_secs` optionally limits extraction to the first N seconds
+/// (used to match the export trim range).
+#[tauri::command]
+pub fn extract_audio_from_video(
+    video_path: String,
+    max_duration_secs: Option<f64>,
+) -> std::result::Result<String, String> {
+    let validated = validate_io_path(&video_path, true)?;
+    let video_path = validated.to_string_lossy().into_owned();
+
+    // Fast path: if there's no audio stream, fail fast with a clear message
+    // so the frontend can show a "no audio" warning instead of a generic error.
+    if !has_audio_stream(&video_path).map_err(|e| e.to_string())? {
+        return Err("Source video has no audio stream".to_string());
+    }
+
+    // Write to a per-video temp file so repeated loads overwrite cleanly.
+    // Hash the path to keep filenames stable across calls for the same video.
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    video_path.hash(&mut hasher);
+    let hash = format!("{:016x}", hasher.finish());
+    let out_dir = std::env::temp_dir()
+        .join("moshdither-studio")
+        .join("extracted-audio");
+    std::fs::create_dir_all(&out_dir).map_err(|e| format!("Failed to create temp dir: {e}"))?;
+    let out_path = out_dir.join(format!("{hash}.wav"));
+
+    extract_audio_to_wav(&video_path, &out_path.to_string_lossy(), max_duration_secs)
+        .map_err(|e| e.to_string())?;
+    Ok(out_path.to_string_lossy().into_owned())
 }
 
 /// Get the current image dimensions.
@@ -878,15 +1056,67 @@ pub fn get_media_info(
     }
 }
 
+fn with_sam3<F, R>(
+    app: &tauri::AppHandle,
+    state: &State<'_, AppState>,
+    f: F,
+) -> std::result::Result<R, String>
+where
+    F: Fn(&Sam3Engine) -> crate::error::Result<R>,
+{
+    let mut sam3_lock = state
+        .sam3
+        .lock()
+        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
+
+    if sam3_lock.is_none() {
+        match Sam3Engine::new(app) {
+            Ok(engine) => {
+                *sam3_lock = Some(engine);
+            }
+            Err(e) => return Err(format!("Failed to start SAM3 engine: {e}")),
+        }
+    }
+
+    let engine = sam3_lock.as_ref().unwrap();
+    match f(engine) {
+        Ok(res) => Ok(res),
+        Err(e) => {
+            let err_str = e.to_string();
+            // If the sidecar IPC pipe broke or died, drop the dead engine lock and attempt auto-restart
+            if err_str.contains("pipe")
+                || err_str.contains("closed")
+                || err_str.contains("os error")
+            {
+                eprintln!(
+                    "[SAM3 Engine] Pipe error detected ({err_str}), auto-restarting SAM3 engine..."
+                );
+                *sam3_lock = None;
+                if let Ok(new_engine) = Sam3Engine::new(app) {
+                    if let Ok(retry_res) = f(&new_engine) {
+                        *sam3_lock = Some(new_engine);
+                        return Ok(retry_res);
+                    }
+                    *sam3_lock = Some(new_engine);
+                }
+            }
+            Err(err_str)
+        }
+    }
+}
+
 /// ── SAM3 Segmentation Commands ─────────────────────────────
 #[tauri::command]
-pub fn sam3_init(state: State<'_, AppState>) -> std::result::Result<String, String> {
+pub fn sam3_init(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> std::result::Result<String, String> {
     let mut sam3_lock = state
         .sam3
         .lock()
         .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
     if sam3_lock.is_none() {
-        match Sam3Engine::new() {
+        match Sam3Engine::new(&app) {
             Ok(engine) => {
                 *sam3_lock = Some(engine);
                 Ok("SAM3 engine initialized".into())
@@ -901,34 +1131,22 @@ pub fn sam3_init(state: State<'_, AppState>) -> std::result::Result<String, Stri
 /// Load an image into SAM3 for segmentation.
 #[tauri::command]
 pub fn sam3_load_image(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     image_b64: String,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
-    let engine = sam3_lock
-        .as_ref()
-        .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
-    let (w, h) = engine.load_image(image_b64).map_err(|e| e.to_string())?;
+    let (w, h) = with_sam3(&app, &state, |engine| engine.load_image(image_b64.clone()))?;
     Ok(json!({ "width": w, "height": h }))
 }
 
 /// Run a text prompt on the currently loaded SAM3 image.
 #[tauri::command]
 pub fn sam3_text_prompt(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     prompt: String,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
-    let engine = sam3_lock
-        .as_ref()
-        .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
-    let masks = engine.text_prompt(prompt).map_err(|e| e.to_string())?;
+    let masks = with_sam3(&app, &state, |engine| engine.text_prompt(prompt.clone()))?;
     let count = masks.len();
     let (mask_b64s, scores): (Vec<String>, Vec<f64>) = masks.into_iter().unzip();
     Ok(json!({
@@ -941,24 +1159,19 @@ pub fn sam3_text_prompt(
 /// Run a point-click prompt on the currently loaded SAM3 image.
 #[tauri::command]
 pub fn sam3_point_prompt(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     points: Vec<[f64; 2]>,
     labels: Option<Vec<i32>>,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
-    let engine = sam3_lock
-        .as_ref()
-        .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
     let f32_points: Vec<[f32; 2]> = points
         .into_iter()
         .map(|[x, y]| [x as f32, y as f32])
         .collect();
-    let masks = engine
-        .point_prompt(f32_points, labels)
-        .map_err(|e| e.to_string())?;
+    let labels_clone = labels.clone();
+    let masks = with_sam3(&app, &state, |engine| {
+        engine.point_prompt(f32_points.clone(), labels_clone.clone())
+    })?;
     let count = masks.len();
     let (mask_b64s, scores): (Vec<String>, Vec<f64>) = masks.into_iter().unzip();
     Ok(json!({
@@ -971,21 +1184,15 @@ pub fn sam3_point_prompt(
 /// Run a box prompt on the currently loaded SAM3 image.
 #[tauri::command]
 pub fn sam3_box_prompt(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     boxes: Vec<[f64; 4]>,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
-    let engine = sam3_lock
-        .as_ref()
-        .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
     let f32_boxes: Vec<[f32; 4]> = boxes
         .into_iter()
         .map(|[x1, y1, x2, y2]| [x1 as f32, y1 as f32, x2 as f32, y2 as f32])
         .collect();
-    let masks = engine.box_prompt(f32_boxes).map_err(|e| e.to_string())?;
+    let masks = with_sam3(&app, &state, |engine| engine.box_prompt(f32_boxes.clone()))?;
     let count = masks.len();
     let (mask_b64s, scores): (Vec<String>, Vec<f64>) = masks.into_iter().unzip();
     Ok(json!({
@@ -998,21 +1205,15 @@ pub fn sam3_box_prompt(
 /// Run auto-mask grid generation on the currently loaded SAM3 image.
 #[tauri::command]
 pub fn sam3_auto_mask(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     grid_size: u32,
     iou_threshold: f32,
     min_mask_region_area: u32,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
-    let engine = sam3_lock
-        .as_ref()
-        .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
-    let masks = engine
-        .auto_mask(grid_size, iou_threshold, min_mask_region_area)
-        .map_err(|e| e.to_string())?;
+    let masks = with_sam3(&app, &state, |engine| {
+        engine.auto_mask(grid_size, iou_threshold, min_mask_region_area)
+    })?;
     let count = masks.len();
     let (mask_b64s, scores): (Vec<String>, Vec<f64>) = masks.into_iter().unzip();
     Ok(json!({
@@ -1051,25 +1252,25 @@ pub fn sam3_video_predictor(
 /// refined candidate masks sorted by IoU with the input mask.
 #[tauri::command]
 pub fn sam3_refine_mask(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     mask_b64: String,
     points: Vec<[f64; 2]>,
     labels: Option<Vec<i32>>,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
-    let engine = sam3_lock
-        .as_ref()
-        .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
     let f32_points: Vec<[f32; 2]> = points
         .into_iter()
         .map(|[x, y]| [x as f32, y as f32])
         .collect();
-    let masks = engine
-        .refine_mask(mask_b64, f32_points, labels)
-        .map_err(|e| e.to_string())?;
+    let mask_b64_clone = mask_b64.clone();
+    let labels_clone = labels.clone();
+    let masks = with_sam3(&app, &state, |engine| {
+        engine.refine_mask(
+            mask_b64_clone.clone(),
+            f32_points.clone(),
+            labels_clone.clone(),
+        )
+    })?;
     let count = masks.len();
     let (mask_b64s, scores): (Vec<String>, Vec<f64>) = masks.into_iter().unzip();
     Ok(json!({
@@ -1083,6 +1284,7 @@ pub fn sam3_refine_mask(
 /// Post-process a single mask (grow/shrink/feather/fill holes).
 #[tauri::command]
 pub fn sam3_postprocess_mask(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     mask_b64: String,
     grow: i32,
@@ -1090,16 +1292,10 @@ pub fn sam3_postprocess_mask(
     feather: i32,
     fill_holes: bool,
 ) -> std::result::Result<String, String> {
-    let sam3_lock = state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
-    let engine = sam3_lock
-        .as_ref()
-        .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
-    engine
-        .postprocess_mask(mask_b64, grow, shrink, feather, fill_holes)
-        .map_err(|e| e.to_string())
+    let mask_b64_clone = mask_b64.clone();
+    with_sam3(&app, &state, |engine| {
+        engine.postprocess_mask(mask_b64_clone.clone(), grow, shrink, feather, fill_holes)
+    })
 }
 
 /// Clear SAM3 state (image + masks).
@@ -1356,7 +1552,7 @@ mod integration_tests {
         let mut working = effect
             .process_frame(&frame, None, &serde_json::Map::new())
             .unwrap();
-        blend_mask(&mut working, &previous, &mask, "inside");
+        blend_mask(&mut working, &previous, &mask, "inside").unwrap();
         assert_eq!(working.data.len(), frame.data.len());
     }
 
@@ -1491,7 +1687,7 @@ mod integration_tests {
             .unwrap();
 
         // Apply mask blend with "inside" mode
-        blend_mask(&mut working, &previous, &mask, "inside");
+        blend_mask(&mut working, &previous, &mask, "inside").unwrap();
 
         // Pixel 0: mask=255 → inverted (255-100=155)
         assert_eq!(working.data[0], 155);
@@ -1522,7 +1718,7 @@ mod integration_tests {
             .unwrap();
 
         // Apply mask blend with "outside" mode
-        blend_mask(&mut working, &previous, &mask, "outside");
+        blend_mask(&mut working, &previous, &mask, "outside").unwrap();
 
         // Pixel 0: mask=255 → original (100) — outside mode preserves masked area
         assert_eq!(working.data[0], 100);
@@ -1550,7 +1746,7 @@ mod integration_tests {
 
         // Invert produces 155 for input 100
         // Apply alpha mode: working = effect_output * mask_val
-        blend_mask(&mut working, &previous, &mask, "alpha");
+        blend_mask(&mut working, &previous, &mask, "alpha").unwrap();
 
         // Pixel 0: mask=255 → 155 * 1.0 = 155
         assert_eq!(working.data[0], 155);
@@ -1578,7 +1774,7 @@ mod integration_tests {
             .process_frame(&frame, None, &serde_json::Map::new())
             .unwrap();
 
-        blend_mask(&mut working, &previous, &mask, "inside");
+        blend_mask(&mut working, &previous, &mask, "inside").unwrap();
 
         // Pixel 0: mask=255 → grayscale (luminance of red ≈ 76)
         // Grayscale converts to luminance: 0.299*255 ≈ 76
@@ -1616,7 +1812,7 @@ mod integration_tests {
             .unwrap();
 
         // Blend with decoded mask using "inside" mode
-        blend_mask(&mut working, &previous, &mask, "inside");
+        blend_mask(&mut working, &previous, &mask, "inside").unwrap();
 
         // Invert(100,150,200) = (155,105,55)
         // Pixel 0: mask=255 → fully inverted
@@ -1668,7 +1864,7 @@ mod integration_tests {
 
         // Simulate the pipeline check: only blend if effect doesn't handle masking
         if !effect.handles_masking() {
-            blend_mask(&mut working, &previous, &mask, "inside");
+            blend_mask(&mut working, &previous, &mask, "inside").unwrap();
         }
 
         // After pipeline: MaskIsolate output should be unchanged (no double-blend)
@@ -1706,7 +1902,7 @@ mod integration_tests {
             .unwrap();
         // After second invert: pixel 0 = (50, 50, 50), pixel 1 = (200, 200, 200)
 
-        blend_mask(&mut working, &previous, &mask, "inside");
+        blend_mask(&mut working, &previous, &mask, "inside").unwrap();
 
         // Pixel 0: mask=255 → second invert applied (50, 50, 50)
         assert_eq!(working.data[0], 50);
@@ -1722,16 +1918,24 @@ const PROJECT_FILE_MAX_SIZE: usize = 10 * 1024 * 1024;
 const ALLOWED_PROJECT_EXTS: &[&str] = &["moshdither", "json"];
 
 /// Validate that a file path is safe for project read/write operations.
-/// Blocks system directories and enforces allowed extensions.
-fn validate_project_path(path: &str, is_write: bool) -> std::result::Result<(), String> {
-    let p = std::path::Path::new(path);
+/// Delegates to path_guard for canonicalization, UNC blocking, and system path checks,
+/// and enforces allowed project extensions.
+fn validate_project_path(
+    path: &str,
+    is_write: bool,
+) -> std::result::Result<std::path::PathBuf, String> {
+    let resolved = crate::path_guard::validate_io_path(path, !is_write)?;
 
-    let file_name = p
+    let file_name = resolved
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| "Invalid path: no file name".to_string())?;
 
-    let ext = p
+    if file_name.starts_with('.') {
+        return Err("Access denied: hidden files are not allowed".to_string());
+    }
+
+    let ext = resolved
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
@@ -1745,50 +1949,7 @@ fn validate_project_path(path: &str, is_write: bool) -> std::result::Result<(), 
         ));
     }
 
-    let canonical = p
-        .canonicalize()
-        .or_else(|_| {
-            if is_write {
-                if let Some(parent) = p.parent() {
-                    return parent.canonicalize().map(|_| p.to_path_buf());
-                }
-            }
-            Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "Path not found",
-            ))
-        })
-        .map_err(|e| format!("Cannot resolve path: {}", e))?;
-
-    let canonical_str = canonical.to_string_lossy().to_lowercase();
-    let blocked_prefixes: &[&str] = &[
-        "c:\\windows\\",
-        "c:\\program files\\",
-        "c:\\program files (x86)\\",
-        "c:\\programdata\\",
-        "/etc/",
-        "/usr/",
-        "/bin/",
-        "/sbin/",
-        "/boot/",
-        "/sys/",
-        "/proc/",
-    ];
-
-    for prefix in blocked_prefixes {
-        if canonical_str.starts_with(prefix) {
-            return Err(format!(
-                "Access denied: path '{}' is in a protected system directory",
-                canonical.display()
-            ));
-        }
-    }
-
-    if file_name.starts_with('.') {
-        return Err("Access denied: hidden files are not allowed".to_string());
-    }
-
-    Ok(())
+    Ok(resolved)
 }
 
 /// Save a JSON string to a file path.
@@ -1802,16 +1963,16 @@ pub async fn save_file(path: String, contents: String) -> std::result::Result<()
             PROJECT_FILE_MAX_SIZE
         ));
     }
-    validate_project_path(&path, true)?;
-    std::fs::write(&path, contents).map_err(|e| e.to_string())
+    let valid_path = validate_project_path(&path, true)?;
+    std::fs::write(&valid_path, contents).map_err(|e| e.to_string())
 }
 
 /// Read a file as a string.
 /// Validates path safety and enforces a maximum file size.
 #[tauri::command]
 pub async fn read_file(path: String) -> std::result::Result<String, String> {
-    validate_project_path(&path, false)?;
-    let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    let valid_path = validate_project_path(&path, false)?;
+    let meta = std::fs::metadata(&valid_path).map_err(|e| e.to_string())?;
     if meta.len() as usize > PROJECT_FILE_MAX_SIZE {
         return Err(format!(
             "File too large: {} bytes (max {} bytes)",
@@ -1819,7 +1980,97 @@ pub async fn read_file(path: String) -> std::result::Result<String, String> {
             PROJECT_FILE_MAX_SIZE
         ));
     }
-    std::fs::read_to_string(&path).map_err(|e| e.to_string())
+    std::fs::read_to_string(&valid_path).map_err(|e| e.to_string())
+}
+
+/// Maximum size for a user-supplied custom LUT (PNG or .cube).
+const LUT_MAX_SIZE: u64 = 50 * 1024 * 1024;
+const ALLOWED_LUT_EXTS: &[&str] = &["png", "cube"];
+
+/// Copies a user-selected custom LUT into the app's temporary LUT directory.
+///
+/// The Tauri asset protocol is scoped to `$TEMP/moshdither-studio/**`, so files
+/// outside that directory cannot be previewed directly from the webview.
+/// This command validates the source path and copies it into the allowed scope,
+/// returning the destination path to use for both WebGL preview and the Rust
+/// export pipeline.
+#[tauri::command]
+pub async fn prepare_custom_lut(path: String) -> std::result::Result<String, String> {
+    let validated = validate_io_path(&path, true)?;
+
+    let ext = validated
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    if !ALLOWED_LUT_EXTS.contains(&ext.as_str()) {
+        return Err(format!("Unsupported LUT extension: .{}", ext));
+    }
+
+    let meta = std::fs::metadata(&validated).map_err(|e| e.to_string())?;
+    if meta.len() > LUT_MAX_SIZE {
+        return Err(format!(
+            "LUT file too large: {} bytes (max {} bytes)",
+            meta.len(),
+            LUT_MAX_SIZE
+        ));
+    }
+
+    let file_name = validated
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| "Invalid LUT file name".to_string())?;
+    let dest_dir = std::env::temp_dir().join("moshdither-studio").join("luts");
+    std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
+    let dest = dest_dir.join(file_name);
+    std::fs::copy(&validated, &dest).map_err(|e| e.to_string())?;
+
+    Ok(dest.to_string_lossy().into_owned())
+}
+
+/// Information about an available updater release.
+#[derive(serde::Serialize)]
+pub struct UpdateInfo {
+    pub version: String,
+    pub date: Option<String>,
+    pub body: Option<String>,
+    pub url: String,
+    pub signature: String,
+}
+
+/// Check whether a newer signed release is available from the configured
+/// updater endpoint.
+#[tauri::command]
+pub async fn check_update(
+    app: tauri::AppHandle,
+) -> std::result::Result<Option<UpdateInfo>, String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    match updater.check().await.map_err(|e| e.to_string())? {
+        Some(update) => Ok(Some(UpdateInfo {
+            version: update.version,
+            date: update.date.map(|d| d.to_string()),
+            body: update.body,
+            url: update.download_url.to_string(),
+            signature: update.signature,
+        })),
+        None => Ok(None),
+    }
+}
+
+/// Download, verify, and install the latest signed update, then restart the app.
+#[tauri::command]
+pub async fn install_update(app: tauri::AppHandle) -> std::result::Result<String, String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    match updater.check().await.map_err(|e| e.to_string())? {
+        Some(update) => {
+            update
+                .download_and_install(|_chunk, _total| {}, || {})
+                .await
+                .map_err(|e| e.to_string())?;
+            app.restart();
+        }
+        None => Ok("up to date".to_string()),
+    }
 }
 
 /// Locate the Python mosh_cli.py bridge script.
@@ -1889,6 +2140,11 @@ pub async fn apply_ffglitch(
     mode: String,
     params: serde_json::Value,
 ) -> std::result::Result<String, String> {
+    let validated_input = validate_io_path(&input_path, true)?;
+    let validated_output = validate_io_path(&output_path, false)?;
+    let input_path = validated_input.to_string_lossy().into_owned();
+    let output_path = validated_output.to_string_lossy().into_owned();
+
     let python = find_python()
         .ok_or("Python interpreter not found. Install sam3_env or add python to PATH")?;
 
@@ -1994,10 +2250,112 @@ pub async fn generate_proxy_command(
     max_width: u32,
     crf: u32,
 ) -> std::result::Result<String, String> {
-    let path = source_path.clone();
+    let validated = validate_io_path(&source_path, true)?;
+    let path = validated.to_string_lossy().into_owned();
     tauri::async_runtime::spawn_blocking(move || {
         generate_proxy(&path, max_width, crf).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| format!("Task failed: {}", e))?
+}
+
+#[cfg(test)]
+mod project_path_tests {
+    use super::*;
+    use std::fs;
+
+    fn temp_project(name: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(name);
+        fs::write(&p, b"{}").expect("write temp project file");
+        p
+    }
+
+    #[test]
+    fn accepts_allowed_project_extensions() {
+        for name in [
+            "mosh_guard_ok.moshdither",
+            "mosh_guard_ok.json",
+            "mosh_guard_ok.JSON",
+        ] {
+            let p = temp_project(name);
+            let result = validate_project_path(p.to_string_lossy().as_ref(), false);
+            let _ = fs::remove_file(&p);
+            assert!(result.is_ok(), "{} should be accepted: {:?}", name, result);
+        }
+    }
+
+    #[test]
+    fn rejects_disallowed_extensions() {
+        // The extension allowlist is the main thing limiting the blast radius
+        // of read_file/save_file, so it needs direct coverage.
+        for name in [
+            "mosh_guard_bad.exe",
+            "mosh_guard_bad.dll",
+            "mosh_guard_bad.txt",
+            "mosh_guard_bad",
+        ] {
+            let p = temp_project(name);
+            let result = validate_project_path(p.to_string_lossy().as_ref(), false);
+            let _ = fs::remove_file(&p);
+            assert!(result.is_err(), "{} should be rejected", name);
+        }
+    }
+
+    #[test]
+    fn rejects_hidden_files() {
+        let p = temp_project(".mosh_guard_hidden.json");
+        let result = validate_project_path(p.to_string_lossy().as_ref(), false);
+        let _ = fs::remove_file(&p);
+        assert!(
+            result.is_err(),
+            "hidden files should be rejected: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn rejects_relative_paths() {
+        assert!(validate_project_path("project.json", false).is_err());
+        assert!(validate_project_path("../project.json", true).is_err());
+    }
+
+    #[test]
+    fn rejects_system_directories() {
+        // Regression guard: the previous implementation compared against
+        // lowercase "c:\\windows\\" prefixes, but std::fs::canonicalize returns
+        // verbatim paths like \\?\C:\Windows\..., so the check never fired on
+        // the primary target platform.
+        #[cfg(target_os = "windows")]
+        {
+            assert!(validate_project_path(r"C:\Windows\System32\config.json", true).is_err());
+            assert!(validate_project_path(r"C:\ProgramData\secrets.json", true).is_err());
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(validate_project_path("/etc/config.json", true).is_err());
+            assert!(validate_project_path("/usr/share/app.json", true).is_err());
+        }
+    }
+
+    #[test]
+    fn returns_canonicalized_path_for_io() {
+        // save_file/read_file must operate on the returned PathBuf rather than
+        // the caller-supplied string, so the returned value has to be usable.
+        let p = temp_project("mosh_guard_roundtrip.json");
+        let resolved = validate_project_path(p.to_string_lossy().as_ref(), false)
+            .expect("temp project file should validate");
+        assert!(resolved.is_absolute());
+        assert_eq!(
+            resolved.extension().and_then(|e| e.to_str()),
+            Some("json"),
+            "extension should survive canonicalization"
+        );
+        let _ = fs::remove_file(&p);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn rejects_unc_project_paths() {
+        assert!(validate_project_path(r"\\attacker\share\project.json", true).is_err());
+    }
 }

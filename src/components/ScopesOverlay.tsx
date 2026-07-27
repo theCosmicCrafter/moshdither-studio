@@ -53,9 +53,12 @@ function drawHistogram(
   drawChannel(bHist, "rgba(50, 100, 255, 0.5)");
   drawChannel(lHist, "rgba(255, 255, 255, 0.4)");
 
-  // Grid lines
+  // Grid lines & axis labels
   ctx.strokeStyle = "rgba(255,255,255,0.1)";
   ctx.lineWidth = 1;
+  ctx.font = "9px monospace";
+  ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+  
   for (let i = 0; i <= 4; i++) {
     const x = (w / 4) * i;
     ctx.beginPath();
@@ -63,6 +66,11 @@ function drawHistogram(
     ctx.lineTo(x, h);
     ctx.stroke();
   }
+
+  // Label 0, 128, 255
+  ctx.fillText("0", 4, 10);
+  ctx.fillText("128", w / 2 - 8, 10);
+  ctx.fillText("255", w - 20, 10);
 }
 
 function drawWaveform(

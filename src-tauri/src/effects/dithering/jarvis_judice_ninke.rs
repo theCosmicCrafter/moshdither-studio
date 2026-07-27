@@ -24,7 +24,7 @@ impl Effect for JarvisJudiceNinke {
             name: "Jarvis-Judice-Ninke".to_string(),
             category: EffectCategory::Dithering,
             media_type: MediaType::Image,
-            parameters: vec![],
+            parameters: super::error_diffusion::param_defs(),
         }
     }
 
@@ -32,61 +32,23 @@ impl Effect for JarvisJudiceNinke {
         &self,
         input: &Frame,
         _m: Option<&Mask>,
-        _p: &ParameterValues,
+        params: &ParameterValues,
     ) -> Result<Frame> {
-        let w = input.width as usize;
-        let h = input.height as usize;
-        let mut buf: Vec<f32> = input.data.iter().map(|&v| v as f32).collect();
-
-        for y in 0..h {
-            let reverse = y % 2 == 1;
-            let dir: isize = if reverse { -1 } else { 1 };
-            let x_range: Vec<usize> = if reverse {
-                (0..w).rev().collect()
-            } else {
-                (0..w).collect()
-            };
-
-            for x in x_range {
-                let idx = (y * w + x) * 4;
-                for c in 0..3 {
-                    let old = buf[idx + c];
-                    let new = if old > 127.0 { 255.0 } else { 0.0 };
-                    let err = old - new;
-                    buf[idx + c] = new;
-
-                    let distr = [
-                        (1isize, 0, 7.0 / 48.0),
-                        (2, 0, 5.0 / 48.0),
-                        (-2, 1, 3.0 / 48.0),
-                        (-1, 1, 5.0 / 48.0),
-                        (0, 1, 7.0 / 48.0),
-                        (1, 1, 5.0 / 48.0),
-                        (2, 1, 3.0 / 48.0),
-                        (-2, 2, 1.0 / 48.0),
-                        (-1, 2, 3.0 / 48.0),
-                        (0, 2, 5.0 / 48.0),
-                        (1, 2, 3.0 / 48.0),
-                        (2, 2, 1.0 / 48.0),
-                    ];
-                    for (dx, dy, factor) in distr {
-                        let nx = x as isize + dx * dir;
-                        let ny = y as isize + dy;
-                        if nx >= 0 && nx < w as isize && ny >= 0 && ny < h as isize {
-                            let nidx = (ny as usize * w + nx as usize) * 4 + c;
-                            buf[nidx] += err * factor;
-                        }
-                    }
-                }
-            }
-        }
-
-        let data = buf.iter().map(|&v| v.clamp(0.0, 255.0) as u8).collect();
-        Ok(Frame {
-            width: input.width,
-            height: input.height,
-            data,
-        })
+        let kernel = &[
+            (1, 0, 7.0 / 48.0),
+            (2, 0, 5.0 / 48.0),
+            (-2, 1, 3.0 / 48.0),
+            (-1, 1, 5.0 / 48.0),
+            (0, 1, 7.0 / 48.0),
+            (1, 1, 5.0 / 48.0),
+            (2, 1, 3.0 / 48.0),
+            (-2, 2, 1.0 / 48.0),
+            (-1, 2, 3.0 / 48.0),
+            (0, 2, 5.0 / 48.0),
+            (1, 2, 3.0 / 48.0),
+            (2, 2, 1.0 / 48.0),
+        ];
+        super::error_diffusion::apply(input, kernel, 2, true, params)
     }
 
     fn process_video(

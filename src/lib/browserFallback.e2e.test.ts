@@ -21,20 +21,22 @@ describe("Browser Fallback E2E", () => {
       }
     });
 
-    it("includes overlay effects", () => {
-      const effects = getFallbackEffects();
-      const ids = effects.map((e) => e.id);
-      expect(ids).toContain("overlay.pixel_grid");
-      expect(ids).toContain("overlay.safe_area");
-      expect(ids).toContain("overlay.rule_of_thirds");
-      expect(ids).toContain("overlay.crosshairs");
+    it("excludes composition guides — they are not effects", () => {
+      // safe area / rule of thirds / crosshairs / pixel grid were demoted out of
+      // the registry to a viewport overlay so they cannot reach an export.
+      const ids = getFallbackEffects().map((e) => e.id);
+      for (const id of [
+        "overlay.pixel_grid",
+        "overlay.safe_area",
+        "overlay.rule_of_thirds",
+        "overlay.crosshairs",
+      ]) {
+        expect(ids).not.toContain(id);
+      }
     });
 
     it("derives correct categories from effect IDs", () => {
       const effects = getFallbackEffects();
-      const overlay = effects.find((e) => e.id === "overlay.pixel_grid");
-      expect(overlay?.category).toBe("overlay");
-
       const dithering = effects.find((e) => e.id === "dithering.bayer");
       expect(dithering?.category).toBe("dithering");
 
@@ -44,12 +46,9 @@ describe("Browser Fallback E2E", () => {
 
     it("derives parameters from shader uniforms", () => {
       const effects = getFallbackEffects();
-      const pixelGrid = effects.find((e) => e.id === "overlay.pixel_grid");
-      expect(pixelGrid).toBeDefined();
-      const paramIds = pixelGrid!.parameters.map((p) => p.id);
-      expect(paramIds).toContain("grid_size");
-      expect(paramIds).toContain("line_width");
-      expect(paramIds).toContain("opacity");
+      const pixelate = effects.find((e) => e.id === "pixel_geo.pixelate");
+      expect(pixelate).toBeDefined();
+      expect(pixelate!.parameters.map((p) => p.id)).toContain("block_size");
     });
 
     it("every fallback effect's shaderId exists in registry", () => {

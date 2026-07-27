@@ -307,10 +307,12 @@ impl Effect for OrderedDitherVariants {
             .and_then(|v| v.as_str())
             .unwrap_or("clustereddot4x4");
         let levels = params.get("levels").and_then(|v| v.as_f64()).unwrap_or(2.0) as u32;
+        let levels = levels.max(2);
 
         let (matrix, rows, cols) = get_matrix(matrix_name);
         let max_val = (rows * cols) as f32; // Use count, not count-1, so thresholds are [0,1)
         let quant_levels = (levels - 1) as f32;
+        let step = 255.0 / quant_levels;
 
         let w = input.width as usize;
         let h = input.height as usize;
@@ -319,22 +321,18 @@ impl Effect for OrderedDitherVariants {
         for y in 0..h {
             for x in 0..w {
                 let idx = (y * w + x) * 4;
-                let r = input.data[idx] as f32;
-                let g = input.data[idx + 1] as f32;
-                let b = input.data[idx + 2] as f32;
+                let lum = 0.299 * input.data[idx] as f32
+                    + 0.587 * input.data[idx + 1] as f32
+                    + 0.114 * input.data[idx + 2] as f32;
 
                 let threshold = matrix[y % rows][x % cols] as f32 / max_val;
-                let step = 255.0 / quant_levels;
+                let dithered = lum + (threshold - 0.5) * step;
+                let q = (dithered / step).round().clamp(0.0, quant_levels);
+                let v = (q * step).clamp(0.0, 255.0) as u8;
 
-                let quantize = |c: f32| -> u8 {
-                    let dithered = c + (threshold - 0.5) * step;
-                    let q = (dithered / step).round().clamp(0.0, quant_levels);
-                    (q * step).clamp(0.0, 255.0) as u8
-                };
-
-                data[idx] = quantize(r);
-                data[idx + 1] = quantize(g);
-                data[idx + 2] = quantize(b);
+                data[idx] = v;
+                data[idx + 1] = v;
+                data[idx + 2] = v;
                 // Alpha preserved
             }
         }

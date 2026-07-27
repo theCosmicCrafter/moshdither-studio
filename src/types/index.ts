@@ -16,7 +16,7 @@ export type EffectCategory =
 export interface ParameterDef {
   id: string;
   name: string;
-  type: "slider" | "toggle" | "color" | "palette" | "select" | "mask";
+  type: "slider" | "toggle" | "color" | "palette" | "select" | "mask" | "text";
   default: unknown;
   min?: number;
   max?: number;

@@ -25,7 +25,7 @@ impl Effect for AtkinsonDither {
             name: "Atkinson".to_string(),
             category: EffectCategory::Dithering,
             media_type: MediaType::Image,
-            parameters: vec![],
+            parameters: super::error_diffusion::param_defs(),
         }
     }
 
@@ -33,60 +33,17 @@ impl Effect for AtkinsonDither {
         &self,
         input: &Frame,
         _mask: Option<&Mask>,
-        _params: &ParameterValues,
+        params: &ParameterValues,
     ) -> Result<Frame> {
-        let w = input.width as isize;
-        let h = input.height as isize;
-        let mut buf: Vec<f32> = input.data.iter().map(|&v| v as f32).collect();
-
-        for y in 0..h {
-            let reverse = y % 2 == 1;
-            let dir: isize = if reverse { -1 } else { 1 };
-            let x_range: Vec<isize> = if reverse {
-                (0..w).rev().collect()
-            } else {
-                (0..w).collect()
-            };
-
-            for x in x_range {
-                let idx = ((y * w + x) * 4) as usize;
-                let old_r = buf[idx];
-                let old_g = buf[idx + 1];
-                let old_b = buf[idx + 2];
-
-                let new_r = if old_r > 127.0 { 255.0 } else { 0.0 };
-                let new_g = if old_g > 127.0 { 255.0 } else { 0.0 };
-                let new_b = if old_b > 127.0 { 255.0 } else { 0.0 };
-
-                buf[idx] = new_r;
-                buf[idx + 1] = new_g;
-                buf[idx + 2] = new_b;
-
-                let err_r = (old_r - new_r) / 8.0;
-                let err_g = (old_g - new_g) / 8.0;
-                let err_b = (old_b - new_b) / 8.0;
-
-                let offsets = [(1, 0), (2, 0), (-1, 1), (0, 1), (1, 1), (0, 2)];
-
-                for (dx, dy) in offsets {
-                    let nx = x + dx * dir;
-                    let ny = y + dy;
-                    if nx >= 0 && nx < w && ny >= 0 && ny < h {
-                        let nidx = ((ny * w + nx) * 4) as usize;
-                        buf[nidx] += err_r;
-                        buf[nidx + 1] += err_g;
-                        buf[nidx + 2] += err_b;
-                    }
-                }
-            }
-        }
-
-        let data = buf.iter().map(|&v| v.clamp(0.0, 255.0) as u8).collect();
-        Ok(Frame {
-            width: input.width,
-            height: input.height,
-            data,
-        })
+        let kernel = &[
+            (1, 0, 1.0 / 8.0),
+            (2, 0, 1.0 / 8.0),
+            (-1, 1, 1.0 / 8.0),
+            (0, 1, 1.0 / 8.0),
+            (1, 1, 1.0 / 8.0),
+            (0, 2, 1.0 / 8.0),
+        ];
+        super::error_diffusion::apply(input, kernel, 2, true, params)
     }
 
     fn process_video(

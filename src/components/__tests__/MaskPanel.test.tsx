@@ -2,7 +2,7 @@
  * Tests for MaskPanel: mask creation, SAM3 points, tab switching, mode selection.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
 import { useAppStore } from "../../store";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -18,7 +18,12 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 vi.mock("../../lib/tauri", () => ({
   invoke: vi.fn(() => Promise.resolve({})),
   convertFileSrc: vi.fn((path: string) => path),
-  getFrameData: vi.fn(() => Promise.resolve("data:image/png;base64,abc")),
+  getFrameData: vi.fn(
+    () =>
+      new Promise((resolve) =>
+        setTimeout(() => resolve("data:image/png;base64,abc"), 50)
+      )
+  ),
   sam3LoadImage: vi.fn(() => Promise.resolve({ width: 100, height: 100 })),
   sam3TextPrompt: vi.fn(() => Promise.resolve({ count: 1, masks: ["mask1"], scores: [0.95] })),
   sam3PointPrompt: vi.fn(() => Promise.resolve({ count: 1, masks: ["mask1"], scores: [0.9] })),
@@ -195,7 +200,9 @@ describe("MaskPanel", () => {
       useAppStore.getState().setSam3Mode("point");
       render(<MaskPanel />);
       // Add a point via store directly (simulating viewport click)
-      useAppStore.getState().addSam3Point({ x: 50, y: 60, label: 1 });
+      act(() => {
+        useAppStore.getState().addSam3Point({ x: 50, y: 60, label: 1 });
+      });
       expect(useAppStore.getState().sam3Points.length).toBe(1);
       expect(useAppStore.getState().sam3Points[0]).toEqual({ x: 50, y: 60, label: 1 });
     });

@@ -25,6 +25,9 @@ export default function PanelRail() {
     <div
       className="dock-rail flex flex-col items-center gap-1 py-2 px-1 border-r border-outline/20 bg-surface/40 backdrop-blur-sm"
       data-testid="panel-rail"
+      role="toolbar"
+      aria-label="Available panels"
+      aria-orientation="vertical"
     >
       {availablePanels.map((panel) => {
         const zoneIndicators: Record<DockZone, string> = {
@@ -52,6 +55,7 @@ export default function PanelRail() {
             }}
             className="dock-rail-btn group relative flex flex-col items-center justify-center w-12 h-12 rounded-lg hover:bg-accent-teal/10 transition-colors cursor-grab active:cursor-grabbing"
             title={`Add ${panel.label} to ${panel.defaultZone}`}
+            aria-label={`Add ${panel.label} panel to ${panel.defaultZone} dock`}
           >
             <span
               className="material-symbols-outlined text-on-surface-variant group-hover:text-accent-teal transition-colors"

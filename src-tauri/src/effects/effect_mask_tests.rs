@@ -1566,7 +1566,6 @@ mod tests {
     mod composite_overlay {
         use super::*;
         use crate::effects::composite::Overlay;
-        use crate::effects::overlay::*;
 
         #[test]
         fn test_overlay_modifies_rgb() {
@@ -1585,49 +1584,6 @@ mod tests {
             let mask = left_half_mask(4, 2);
             let result = run_effect_with_mask(&Overlay::default(), &frame, Some(&mask), "inside");
             assert_pixel_unchanged(&result, &frame, 2, 0, "unmasked should be original");
-        }
-
-        #[test]
-        fn test_pixel_grid_overlay_modifies_rgb() {
-            let frame = solid_frame(32, 32, 128, 128, 128, 255);
-            let effect = PixelGridOverlay;
-            let result = effect
-                .process_frame(&frame, None, &serde_json::Map::new())
-                .unwrap();
-            let p = pixel_at(&result, 0, 0);
-            assert!(p.0 <= 255, "should produce valid output");
-        }
-
-        #[test]
-        fn test_pixel_grid_inside_mask() {
-            let frame = solid_frame(32, 2, 128, 128, 128, 255);
-            let mask = left_half_mask(32, 2);
-            let result = run_effect_with_mask(&PixelGridOverlay, &frame, Some(&mask), "inside");
-            assert_pixel_unchanged(&result, &frame, 16, 0, "unmasked should be original");
-        }
-
-        #[test]
-        fn test_safe_area_inside_mask() {
-            let frame = solid_frame(32, 2, 128, 128, 128, 255);
-            let mask = left_half_mask(32, 2);
-            let result = run_effect_with_mask(&SafeArea, &frame, Some(&mask), "inside");
-            assert_pixel_unchanged(&result, &frame, 16, 0, "unmasked should be original");
-        }
-
-        #[test]
-        fn test_rule_of_thirds_inside_mask() {
-            let frame = solid_frame(32, 2, 128, 128, 128, 255);
-            let mask = left_half_mask(32, 2);
-            let result = run_effect_with_mask(&RuleOfThirds, &frame, Some(&mask), "inside");
-            assert_pixel_unchanged(&result, &frame, 16, 0, "unmasked should be original");
-        }
-
-        #[test]
-        fn test_crosshairs_inside_mask() {
-            let frame = solid_frame(32, 2, 128, 128, 128, 255);
-            let mask = left_half_mask(32, 2);
-            let result = run_effect_with_mask(&Crosshairs, &frame, Some(&mask), "inside");
-            assert_pixel_unchanged(&result, &frame, 16, 0, "unmasked should be original");
         }
     }
 
@@ -2008,7 +1964,7 @@ mod tests {
 
             if !effect.handles_masking() {
                 if let Some(m) = mask {
-                    crate::effects::blend_mask(&mut working, &previous, m, mask_mode);
+                    crate::effects::blend_mask(&mut working, &previous, m, mask_mode).unwrap();
                 }
             }
 
@@ -2323,7 +2279,9 @@ mod tests {
         }
 
         #[test]
-        fn test_lut_grading_nonexistent_path_returns_unchanged() {
+        fn test_lut_grading_nonexistent_path_errors() {
+            // Missing LUT files should surface a clear error instead of silently
+            // returning the original frame.
             let frame = solid_frame(2, 2, 100, 150, 200, 255);
             let effect = LutGrading::default();
             let mut params = serde_json::Map::new();
@@ -2331,11 +2289,8 @@ mod tests {
                 "lut_path".to_string(),
                 serde_json::json!("/nonexistent/lut.png"),
             );
-            let result = effect.process_frame(&frame, None, &params).unwrap();
-            assert_eq!(
-                result.data, frame.data,
-                "LUT grading with non-existent file should be a no-op"
-            );
+            let result = effect.process_frame(&frame, None, &params);
+            assert!(result.is_err(), "missing LUT file must return an error");
         }
 
         #[test]
@@ -2631,12 +2586,19 @@ mod tests {
             assert_eq!(pixel_at(&result, 0, 2), (255, 0, 0, 255));
         }
 
-        // ── RepeatDatamosh ─────────────────────────────────────
+        // ── Former RepeatDatamosh, now folded into ClassicDatamosh ──
+        //
+        // datamoshing.repeat was removed: its process_video was identical to
+        // ClassicDatamosh's. Its process_frame was NOT -- it smeared rows
+        // vertically where classic smears pixels along a row -- so that survives
+        // as smear_direction = "vertical". These tests pin both halves.
 
         #[test]
         fn test_repeat_datamosh_modifies_output() {
             let seg = make_color_segment(6);
-            let effect = RepeatDatamosh::new(2, 3);
+            // ClassicDatamosh::new(chunk_size, repeats) -- the old
+            // RepeatDatamosh::new(repeat_count, series_size) took them reversed.
+            let effect = ClassicDatamosh::new(3, 2);
             let result = effect
                 .process_video(&seg, None, &serde_json::Map::new())
                 .unwrap();
@@ -2660,9 +2622,12 @@ mod tests {
                     (64, 64, 64, 255),
                 ],
             );
-            let effect = RepeatDatamosh::new(2, 3);
+            let effect = ClassicDatamosh::new(3, 2);
             let mut params = serde_json::Map::new();
+            // series_size is accepted as an alias for chunk_size, and
+            // smear_direction selects the old repeat behaviour.
             params.insert("series_size".to_string(), serde_json::json!(3));
+            params.insert("smear_direction".to_string(), serde_json::json!("vertical"));
             let result = effect.process_frame(&frame, None, &params).unwrap();
             // Row 0 is source, rows 1-2 should be copies of row 0
             assert_eq!(pixel_at(&result, 0, 1), (255, 0, 0, 255));

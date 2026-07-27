@@ -1,8 +1,8 @@
-import { EffectShader } from '../webgl2/types';
+import { EffectShader } from "../webgl2/types";
 
 export const audioReactiveDitherShader: EffectShader = {
-  id: 'audioReactiveDither',
-  name: 'Audio Reactive Dither',
+  id: "audioReactiveDither",
+  name: "Audio Reactive Dither",
   vertexSource: `
     attribute vec2 a_position;
     attribute vec2 a_texCoord;
@@ -16,28 +16,36 @@ export const audioReactiveDitherShader: EffectShader = {
     precision highp float;
     uniform sampler2D tDiffuse;
     uniform float u_bass;
+    uniform float u_threshold;
     uniform float u_intensity;
     uniform float u_levels;
 
     varying vec2 vUv;
 
-    float rand(vec2 n) {
-      return fract(sin(dot(n, vec2(12.9898, 78.233))) * 43758.5453);
-    }
-
     void main() {
       vec4 color = texture2D(tDiffuse, vUv);
-      float strength = u_bass * u_intensity;
+      ivec2 pixel = ivec2(gl_FragCoord.xy);
+
       float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-      float noise = rand(vUv * 1000.0) - 0.5;
-      float dithered = floor((gray + noise * strength * 0.5) * u_levels + 0.5) / u_levels;
-      color.rgb = mix(color.rgb, vec3(dithered), strength);
+
+      // Audio modulates the ordered-dither threshold, matching the Rust CPU path.
+      float audio = u_bass * u_intensity * 0.235; // 60.0 / 255.0
+      float threshold = clamp(u_threshold + audio, 0.0, 1.0);
+
+      // 2x2 Bayer pattern
+      float bayer = float((pixel.x & 1) ^ (pixel.y & 1));
+      float dithered = gray + bayer * threshold - threshold * 0.5;
+
+      float step = 1.0 / (u_levels - 1.0);
+      float q = floor(dithered / step + 0.5) * step;
+      color.rgb = vec3(clamp(q, 0.0, 1.0));
       gl_FragColor = color;
     }
   `,
   uniforms: [
-    { name: 'u_bass', type: 'float', default: 0.0 },
-    { name: 'u_intensity', type: 'float', default: 1.0 },
-    { name: 'u_levels', type: 'float', default: 4.0 },
+    { name: "u_bass", type: "float", default: 0.0 },
+    { name: "u_threshold", type: "float", default: 0.5 },
+    { name: "u_intensity", type: "float", default: 0.5 },
+    { name: "u_levels", type: "float", default: 4.0 },
   ],
 };
