@@ -97,6 +97,12 @@ processor = None         # Sam3Processor (text / box grounding)
 model_manager = None     # Manages GPU/CPU offloading
 current_image = None
 orig_hw = None
+# Only ever assigned inside cmd_load_image. Without this initialiser, the
+# `if inference_state is None` guard in cmd_text_prompt / cmd_point_prompt /
+# cmd_box_prompt raised NameError instead of returning "Image not loaded" --
+# so a prompt sent before an image crashed the bridge rather than reporting a
+# usable error to the UI.
+inference_state = None
 _raw_stdout = sys.stdout.buffer
 sys.stdout = sys.stderr
 
