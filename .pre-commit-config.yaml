@@ -84,18 +84,13 @@ repos:
         # the files, which also means only changed files are scanned on commit.
         args: ['-ll']
         #
-        # packages/python-backend/ is excluded for 6 remaining B108
-        # (hardcoded_tmp_directory) findings only. The 15 B602 shell=True
-        # findings that were the real problem are FIXED -- see
-        # docs/SECURITY_FINDINGS_2026-07-26.md section 1.
+        # The legacy Python backend is NO LONGER excluded: its 15 B602
+        # shell=True findings are fixed, and it now reports clean.
         #
-        # The B108 hits are bandit matching the literal strings "tmp.mpg",
-        # "tmp.json" and "cache_ffg"; it cannot see that those now resolve
-        # inside a per-run tempfile.mkdtemp() scratch directory, so the
-        # underlying risk (collision, leftover files) is already addressed.
-        # Kept as an exclusion rather than nosec markers because the strings are
-        # scattered across four functions.
-        exclude: '^(references|sam3_env|sam3_repo|audit_venv|node_modules|recycling|dist|target|src-tauri/target|packages/python-backend)/'
+        # Only packages/python-backend/test_*.py stays out. Those carry 6 B108
+        # (hardcoded /tmp paths) and are tests for main.py, which the app never
+        # spawns. CI's bandit job excludes ./tests for the same reason.
+        exclude: '^(references|sam3_env|sam3_repo|audit_venv|node_modules|recycling|dist|target|src-tauri/target|packages/python-backend/(venv|sam3_repo)/|packages/python-backend/test_)'
 
 
   # ── JS / TS / NODE ────────────────────────────────────────────
