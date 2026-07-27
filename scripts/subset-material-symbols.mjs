@@ -137,13 +137,48 @@ function extractIconNames(source) {
     /<(?:span|button|i|em|b|strong|div|small)\b[^>]*?className\s*=\s*(?:\{`?|`?{["'][^}]*?material-symbols-outlined[^}]*?`?["']}?|"[^"]*?material-symbols-outlined[^"]*?"|{[^}]*?`[^`]*?material-symbols-outlined[^`]*?`[^}]*?})[^>]*?>([\s\S]*?)<\/\1>/g;
   const classNameClassRe = /className\s*=\s*(?:\{[^}]*?\}|"[^"]*"|`[^`]*`)/;
 
-  // Simpler, more reliable: scan every element with className containing the
-  // symbol class and a single text/conditional child.
-  const tagRe = /<(span|button|i|em|b|strong|div|small)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/g;
-  while ((m = tagRe.exec(source))) {
-    const attrs = m[0].slice(0, m[0].indexOf(">"));
+  // Scan every element whose className contains the symbol class and take its
+  // text / conditional children as icon names.
+  //
+  // The attribute region is walked character by character rather than matched
+  // with `[^>]*`, because that stops at the FIRST `>` in the tag -- and an
+  // `onClick={() => ...}` prop contains one. Every element with an arrow
+  // function in its props was therefore cut short before its className was
+  // seen, and its icon silently dropped out of the subset. Since a missing
+  // glyph renders as the ligature's literal text, that shipped buttons reading
+  // "save", "download", "upload" and "bolt" instead of icons.
+  //
+  // Brace depth is enough to fix it: in JSX an arrow function is always inside
+  // `{...}`, so the tag's real `>` is the first one at depth zero outside a
+  // string.
+  const openRe = /<(span|button|i|em|b|strong|div|small)\b/g;
+  while ((m = openRe.exec(source))) {
+    const tag = m[1];
+    let depth = 0;
+    let quote = null;
+    let end = -1;
+    for (let i = m.index + m[0].length; i < source.length; i++) {
+      const c = source[i];
+      if (quote) {
+        if (c === quote && source[i - 1] !== "\\") quote = null;
+        continue;
+      }
+      if (c === '"' || c === "'" || c === "`") quote = c;
+      else if (c === "{") depth++;
+      else if (c === "}") depth--;
+      else if (c === ">" && depth === 0) {
+        end = i;
+        break;
+      }
+    }
+    if (end < 0) continue;
+    const attrs = source.slice(m.index, end);
     if (!attrs.includes("material-symbols-outlined")) continue;
-    const content = m[2];
+    if (source[end - 1] === "/") continue; // self-closing, no children
+    const close = source.indexOf(`</${tag}>`, end);
+    if (close < 0) continue;
+    const content = source.slice(end + 1, close);
+
     // Static text like `>image<`
     const staticText = content.trim();
     if (/^[a-z0-9_]+$/.test(staticText)) {
