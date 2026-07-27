@@ -100,6 +100,12 @@ path = hf_hub_download(
 print(path)
 """
     print(f"Downloading {args.repo_id}/{args.filename}...")
+    # `python` is not user input: find_python() picks from a fixed candidate
+    # list (the project's own sam3_env, then `python`/`python3` resolved with
+    # shutil.which) and confirms each exists before returning it. This is a list
+    # with shell=False, so the OS receives argv directly and no shell parses it;
+    # `script` is a constant defined immediately above.
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
     subprocess.run([python, "-c", script], check=True)
 
     downloaded = Path(args.local_dir) / args.filename

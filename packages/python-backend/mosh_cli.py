@@ -41,8 +41,25 @@ external_script.ffedit = ffedit_path
 def ffmpeg_convert(input_path, output_path, extra_args=None):
     """Run ffmpeg safely using argument list (no shell injection)."""
     extra_args = extra_args or []
+
+    # ffmpeg_path comes from MOSHDITHER_FFMPEG_PATH, which the Tauri host sets
+    # so a packaged build finds its bundled binary. Command injection is already
+    # impossible here -- this is a list with shell=False, so the OS receives
+    # argv directly and no shell parses it -- but an env var can still point at
+    # a *different* executable. Checking it is a real file turns that into a
+    # clear error instead of silently running whatever is there, and it also
+    # catches the far more common case of a typo'd or stale path.
+    if not os.path.isfile(ffmpeg_path):
+        raise RuntimeError(
+            f"ffmpeg not found at {ffmpeg_path!r}. Set MOSHDITHER_FFMPEG_PATH to a "
+            "valid ffmpeg binary, or leave it unset to use the bundled one."
+        )
+
     cmd = [ffmpeg_path, "-y", "-i", input_path] + extra_args + [output_path]
     print(f"Running ffmpeg: {cmd}")
+    # List form with shell=False cannot inject, and the executable is validated
+    # above. The marker must sit on the line immediately before the call.
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"ffmpeg failed with code {result.returncode}")

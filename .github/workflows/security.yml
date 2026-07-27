@@ -169,6 +169,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # Table format first, purely so the findings are READABLE in the job log.
+      # The SARIF step below writes to a file, and the upload cannot succeed on
+      # this repository, so a failure there was undiagnosable -- the job went
+      # red with no indication of what it found. exit-code 0 here: this step
+      # reports, the next one gates.
+      - name: Trivy (human-readable report)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: '0'
+          skip-dirs: references,sam3_env,sam3_repo,audit_venv,node_modules,recycling,dist,src-tauri/target,packages/python-backend/venv
+
       - uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
