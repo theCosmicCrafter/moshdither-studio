@@ -223,6 +223,11 @@ fn build_default_params(
                         ParamType::Palette => json!("auto"),
                         ParamType::Select => json!(null),
                         ParamType::Mask => json!(null),
+                        // Text params name external resources (a second video,
+                        // a LUT). There is no stand-in that verification could
+                        // supply, so leave it empty and let the effect take its
+                        // own no-resource branch.
+                        ParamType::Text => json!(""),
                     }
                 }
             }

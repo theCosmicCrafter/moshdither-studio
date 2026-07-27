@@ -46,6 +46,9 @@ pub enum ParamType {
     Palette,
     Select,
     Mask,
+    /// Free-form text. Used for values that cannot be enumerated, such as a
+    /// path to a second media file.
+    Text,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

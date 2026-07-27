@@ -280,6 +280,25 @@ export default function ParameterPanel() {
               </select>
             )}
 
+            {String(param.type).toLowerCase() === "text" && (
+              <input
+                type="text"
+                aria-label={param.name}
+                title={param.name}
+                value={typeof value === "string" ? value : ""}
+                placeholder={String(param.default ?? "")}
+                onChange={(e) =>
+                  updateStackParams(entry.id, { [param.id]: e.target.value })
+                }
+                className="w-full text-xs rounded px-2 py-1.5 outline-none"
+                style={{
+                  background: "var(--bg-input)",
+                  border: "1px solid var(--border-secondary)",
+                  color: "var(--text-primary)",
+                }}
+              />
+            )}
+
             {String(param.type).toLowerCase() === "toggle" && (
               <button
                 aria-label={param.name}

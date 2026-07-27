@@ -34,12 +34,17 @@ impl Effect for CrossVideoDatamosh {
                 ParameterDef {
                     id: "second_video_path".to_string(),
                     name: "Second Video Path".to_string(),
-                    param_type: ParamType::Select,
+                    // A path, not a choice. Declared as a Select with an empty
+                    // option list this rendered as a dropdown with nothing in
+                    // it, so the effect's one required input could not be set
+                    // from the UI at all and it always fell back to the
+                    // no-second-video branch.
+                    param_type: ParamType::Text,
                     default: json!(""),
                     min: None,
                     max: None,
                     step: None,
-                    options: Some(vec![]),
+                    options: None,
                 },
                 ParameterDef {
                     id: "block_size".to_string(),

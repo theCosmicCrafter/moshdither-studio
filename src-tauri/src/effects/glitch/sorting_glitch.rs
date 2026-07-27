@@ -76,7 +76,16 @@ impl Effect for SortingGlitch {
                     id: "u_direction".to_string(),
                     name: "Direction".to_string(),
                     param_type: ParamType::Select,
-                    default: json!(0),
+                    // Must be the option NAME, not an index. `clamp_params`
+                    // decides which way to normalise a select from the type of
+                    // this default: a number means "the stored value is an
+                    // index", a string means "the stored value is a name".
+                    // process_frame reads this with `as_str()`, so declaring 0
+                    // left the value a number, `as_str()` returned None, and it
+                    // fell back to "Horizontal" at every setting -- Vertical was
+                    // unreachable. `u_sort_mode` below declares a string and has
+                    // always worked, which is why only this one was stuck.
+                    default: json!("Horizontal"),
                     min: None,
                     max: None,
                     step: None,

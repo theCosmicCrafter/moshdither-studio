@@ -51,7 +51,7 @@ export interface EffectMeta {
 export interface ParameterDef {
   id: string;
   name: string;
-  type: "slider" | "select" | "toggle" | "color" | "palette" | "mask";
+  type: "slider" | "select" | "toggle" | "color" | "palette" | "mask" | "text";
   default: unknown;
   min?: number;
   max?: number;

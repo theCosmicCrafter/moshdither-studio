@@ -636,3 +636,168 @@ fn auto_threshold_can_be_disabled() {
          untouched; if it changed, the slider is being ignored"
     );
 }
+
+/// Every `Select` parameter must declare a default that is a usable option, and
+/// every effect must be able to read back what the UI would send for it.
+///
+/// The UI has one convention for selects: `ParameterPanel.tsx` sends the option
+/// INDEX, and `clamp_params` normalises option names to indices for any select
+/// whose declared default is a number. An effect that reads the parameter as
+/// something other than an index therefore receives values it will misread, and
+/// the failure is silent -- a control that moves but does not do what it says.
+///
+/// `dithering.bayer` was exactly that. Its options were the matrix sizes
+/// ["2","4","8","16"] and its default was `4`, which is not an index into a
+/// four-element list at all; the effect then read the index as a size, so three
+/// of the four settings produced the same 2x2 screen and the two largest
+/// matrices could not be selected. Every existing test passed against it,
+/// because they all used the default.
+///
+/// Two invariants close that off:
+///   - a numeric default must be in range for the option list, and
+///   - a string default must actually be one of the options.
+#[test]
+fn every_select_default_is_a_usable_option() {
+    let reg = EffectRegistry::new();
+    let mut problems = Vec::new();
+
+    for meta in reg.list() {
+        for p in &meta.parameters {
+            if !matches!(p.param_type, crate::effects::types::ParamType::Select) {
+                continue;
+            }
+            let Some(options) = p.options.as_ref() else {
+                problems.push(format!("{}.{}: Select with no options", meta.id, p.id));
+                continue;
+            };
+            if options.is_empty() {
+                problems.push(format!("{}.{}: Select with empty options", meta.id, p.id));
+                continue;
+            }
+            match &p.default {
+                serde_json::Value::Number(n) => {
+                    let idx = n.as_f64().unwrap_or(-1.0);
+                    if idx < 0.0 || idx.fract() != 0.0 || (idx as usize) >= options.len() {
+                        problems.push(format!(
+                            "{}.{}: default {} is not a valid index into {} options {:?}",
+                            meta.id,
+                            p.id,
+                            n,
+                            options.len(),
+                            options
+                        ));
+                    }
+                }
+                serde_json::Value::String(s) => {
+                    if !options.iter().any(|o| o.eq_ignore_ascii_case(s)) {
+                        problems.push(format!(
+                            "{}.{}: default {:?} is not one of {:?}",
+                            meta.id, p.id, s, options
+                        ));
+                    }
+                }
+                other => problems.push(format!(
+                    "{}.{}: Select default {} is neither an index nor an option name",
+                    meta.id, p.id, other
+                )),
+            }
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "Select parameters whose default the UI cannot round-trip:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
+/// Selecting a different option must actually change the frame.
+///
+/// A select whose options all render identically is a dead control, and that is
+/// how the bayer defect presented: the parameter varied, the output did not.
+/// This walks every option of every image-domain select and requires that at
+/// least one of them differs from the first -- weak enough that genuinely
+/// subtle modes pass, strong enough that a wholly inert control fails.
+#[test]
+fn image_select_options_are_not_all_identical() {
+    let reg = EffectRegistry::new();
+    let frame = detail_frame();
+    let mut dead = Vec::new();
+
+    for meta in reg.list() {
+        let Some(effect) = reg.get(&meta.id) else {
+            continue;
+        };
+        for p in &meta.parameters {
+            if !matches!(p.param_type, crate::effects::types::ParamType::Select) {
+                continue;
+            }
+            let Some(options) = p.options.as_ref() else {
+                continue;
+            };
+            if options.len() < 2 {
+                continue;
+            }
+
+            // Some parameters only apply when another one enables them, and
+            // testing those against the defaults would call a working control
+            // dead. The dithers are the case in point: `palette` and
+            // `palette_source` are read only when `color_mode` is "palette"
+            // (error_diffusion.rs, `if mode == ColorMode::Palette`), and
+            // `color_mode` defaults to grayscale.
+            //
+            // Rather than excuse them, switch the gate on so the palette choice
+            // is actually exercised. An enabler is only applied when the effect
+            // declares that parameter, so it is inert everywhere else.
+            // Gates nest: `palette` is only read when `palette_source` is
+            // "preset", which is itself only read when `color_mode` is
+            // "palette". Both have to be on for the named-palette list to be a
+            // live control.
+            const ENABLERS: &[(&str, &str)] =
+                &[("color_mode", "palette"), ("palette_source", "preset")];
+
+            // Send the option INDEX, which is what the UI sends, then clamp --
+            // the same order the render pipeline uses. Clamping is what turns an
+            // index into an option name for selects that declare a string
+            // default, so skipping it would hand those effects a number they
+            // cannot read, and every one of them would look dead.
+            let render = |idx: usize| {
+                let mut params = serde_json::Map::new();
+                for (gate, value) in ENABLERS {
+                    if *gate != p.id && meta.parameters.iter().any(|q| q.id == *gate) {
+                        params.insert((*gate).to_string(), serde_json::json!(value));
+                    }
+                }
+                params.insert(p.id.clone(), serde_json::json!(idx));
+                let params = crate::effects::params::clamp_params(&meta.id, &params);
+                effect
+                    .process_frame(&frame, None, &params)
+                    .ok()
+                    .map(|f| f.data)
+            };
+
+            let Some(first) = render(0) else { continue };
+            // Some effects are video-only and no-op on a single frame; those are
+            // covered by `single_frame_noops_are_the_expected_set`, not here.
+            if first == frame.data {
+                continue;
+            }
+            let varies = (1..options.len()).any(|i| render(i).is_some_and(|d| d != first));
+            if !varies {
+                dead.push(format!(
+                    "{}.{} renders identically for all {} options {:?}",
+                    meta.id,
+                    p.id,
+                    options.len(),
+                    options
+                ));
+            }
+        }
+    }
+
+    assert!(
+        dead.is_empty(),
+        "select controls that do nothing:\n  {}",
+        dead.join("\n  ")
+    );
+}

@@ -326,11 +326,34 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "dithering.bayer": {
     shaderId: "bayer_dither",
     paramMap: { matrix_size: "scale" },
-    // Rust param is the actual Bayer matrix size (2, 4, 8, 16)
+    // matrix_size is an INDEX into [2,4,8,16], not the size -- every Select in
+    // this app sends the option index (ParameterPanel.tsx). Clamping the raw
+    // value to 2..16 treated the index as a size and collapsed three of the four
+    // options onto the same screen.
     transform: (_k, v) => {
-      const size = typeof v === "number" ? v : 4;
-      return Math.max(2, Math.min(16, size));
+      const sizes = [2, 4, 8, 16];
+      const i = typeof v === "number" && Number.isInteger(v) ? v : 1;
+      return sizes[i] ?? 4;
     },
+    // Ordered dithering IS shader-expressible -- unlike error diffusion, each
+    // pixel's threshold depends only on its own coordinates. So this flag is not
+    // a statement about the algorithm; it is a statement about THIS shader,
+    // which does not implement the Rust one. bayerDither.ts differs three ways:
+    //
+    //   1. It pixelates. It samples the source once per scale x scale block
+    //      (`block = floor(pixel/s)*s`) so every pixel in a block shares one
+    //      colour. The Rust dithers at full resolution, per pixel.
+    //   2. It always uses the 4x4 matrix regardless of the setting, and indexes
+    //      it by BLOCK rather than by pixel -- so `scale` acts as a pixelation
+    //      size, not a matrix size. 8x8 and 16x16 screens do not exist in it.
+    //   3. Its threshold polarity is inverted: it lights a pixel when
+    //      `luma > 1 - B/16`, where the Rust uses `luma > B/n^2`. Where one puts
+    //      a dot the other puts a hole.
+    //
+    // Keeping the preview on the Rust CPU path is therefore correct today.
+    // Restoring an accurate GPU preview means rewriting the shader to match --
+    // per-pixel thresholds, a matrix built for the selected size, and the Rust
+    // polarity -- not flipping this flag.
     accurate: false,
   },
   "dithering.palette": {
