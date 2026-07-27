@@ -26,8 +26,19 @@ Thumbs.db
 /test-outputs
 *.tsbuildinfo
 
-# Downloaded SAM3 checkpoint (fetched at build time)
-/models
+# Downloaded SAM3 checkpoint (fetched at build time).
+#
+# The WEIGHTS are ignored (see the /models/**/*.pt rules below), but the
+# DIRECTORY must exist: tauri.conf.json lists "../models" under `resources`, and
+# Tauri's build script aborts with
+#
+#     resource path `../models` doesn't exist
+#
+# if it is missing. This used to be a blanket `/models`, which contradicted the
+# comment further down saying "the directory is tracked" and meant a fresh clone
+# could not build at all -- not just in CI, for anyone cloning the repository.
+/models/*
+!/models/sam3/
 
 # Ignore .git files/worktrees to prevent Tauri build scanner issues
 **/.git
