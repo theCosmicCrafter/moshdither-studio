@@ -80,7 +80,12 @@ impl Effect for GlitchProfile {
         for i in (0..len).step_by(4) {
             if rng.gen_range(0.0..1.0) < intensity * 0.3 {
                 for c in 0..3 {
-                    let noise = rng.gen_range(0..60) as i32;
+                    // No `as i32`: the range literal already fixes this to i32,
+                    // and clippy 1.97 rejects the redundant cast under
+                    // -D warnings. It was inferred differently under
+                    // thread_rng(); switching to a seeded StdRng made the type
+                    // concrete here.
+                    let noise: i32 = rng.gen_range(0..60);
                     out[i + c] = (out[i + c] as i32 + noise).clamp(0, 255) as u8;
                 }
             }
