@@ -19,12 +19,24 @@ jobs:
       image: semgrep/semgrep
     steps:
       - uses: actions/checkout@v4
+      # --exclude keeps the scan on this project's own code. Without it semgrep
+      # also walked references/ (~1 GB of vendored third-party repositories),
+      # the SAM3 Python environments and node_modules, reporting other projects'
+      # findings as ours and taking far longer.
+      #
+      # `|| true` because semgrep exits non-zero when it FINDS something. That
+      # killed this step before the SARIF upload below could run, so results
+      # never reached the Security tab -- the scan was reporting into a void.
+      # Findings surface through code scanning, not by failing the job.
       - run: |
           semgrep scan \
             --config=p/security-audit \
             --config=p/owasp-top-ten \
             --config=p/secrets \
-            --sarif > semgrep.sarif
+            --exclude=references --exclude=sam3_env --exclude=sam3_repo \
+            --exclude=audit_venv --exclude=node_modules --exclude=recycling \
+            --exclude=dist --exclude=target --exclude=venv \
+            --sarif > semgrep.sarif || true
       - uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: semgrep.sarif
@@ -43,7 +55,15 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           queries: security-and-quality
+          # Without this CodeQL also analysed references/, the SAM3 checkouts
+          # and the Python virtualenvs -- ~6.5 GB of other people's code.
+          config-file: ./.github/codeql/codeql-config.yml
+      # autobuild is a no-op for Python and JavaScript (neither needs a compile
+      # step for CodeQL), but on failure it stops the whole job before analyze
+      # runs. For Python it tried to resolve requirements.txt, which pulls torch
+      # and CUDA wheels. Neither language needs it, so let it fail soft.
       - uses: github/codeql-action/autobuild@v3
+        continue-on-error: true
       - uses: github/codeql-action/analyze@v3
         with:
           category: codeql-${{ matrix.language }}
@@ -76,7 +96,13 @@ jobs:
         with:
           command: code test
           args: --severity-threshold=high --sarif-file-output=snyk-code.sarif
+      # The scan step above is continue-on-error, so when SNYK_TOKEN is unset
+      # (or Snyk is unreachable) it fails quietly and never writes the SARIF --
+      # and then THIS step failed on a missing file. Guarding on the file means
+      # a missing token degrades to "no Snyk results" rather than a red check
+      # that says nothing about the code.
       - uses: github/codeql-action/upload-sarif@v3
+        if: hashFiles('snyk-code.sarif') != ''
         with:
           sarif_file: snyk-code.sarif
           category: snyk-code
@@ -99,7 +125,10 @@ jobs:
           # ./tests is: hardcoded /tmp paths in tests for main.py, which the app
           # never spawns. The production legacy backend IS scanned and is clean.
           bandit -r . -ll -f sarif -o bandit.sarif \
-            --exclude ./tests,./venv,./node_modules,./sam3_env,./audit_venv,./references,./sam3_repo,./recycling,./dist,./src-tauri/target,./packages/python-backend/venv,./packages/python-backend/sam3_repo,./packages/python-backend/test_main.py,./packages/python-backend/test_coordinates.py
+            --exclude ./tests,./venv,./node_modules,./sam3_env,./audit_venv,./references,./sam3_repo,./recycling,./dist,./src-tauri/target,./packages/python-backend/venv,./packages/python-backend/sam3_repo,./packages/python-backend/test_main.py,./packages/python-backend/test_coordinates.py || true
+          # `|| true`: bandit exits 1 when it finds anything, which killed this
+          # step before the SARIF upload ran. Findings belong in the Security
+          # tab, not in a failed job that produced no artefact.
       - uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: bandit.sarif
@@ -118,6 +147,9 @@ jobs:
           format: sarif
           output: trivy.sarif
           severity: HIGH,CRITICAL
+          # Same reasoning as semgrep and bandit: without skip-dirs this walks
+          # ~6.5 GB of vendored repositories and Python environments.
+          skip-dirs: references,sam3_env,sam3_repo,audit_venv,node_modules,recycling,dist,src-tauri/target,packages/python-backend/venv
       - uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy.sarif
@@ -132,7 +164,13 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
-          arguments: --manifest-path src-tauri/Cargo.toml
+          # --config is required, not optional. The action runs from the
+          # repository root and cargo-deny looks for deny.toml in the CURRENT
+          # directory, not next to --manifest-path. Without it the config here
+          # was never read and the check ran against cargo-deny's built-in
+          # defaults, which deny far more than this project's policy allows --
+          # so this job failed on licences the policy explicitly permits.
+          arguments: --manifest-path src-tauri/Cargo.toml --config src-tauri/deny.toml
 
   # ── NODE SUPPLY-CHAIN AUDIT ─────────────────────────────────────
   npm-audit:
