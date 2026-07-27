@@ -10,6 +10,23 @@ permissions:
   security-events: write
   actions: read
 
+# NOTE ON SARIF UPLOADS
+#
+# This repository is PRIVATE and does not have GitHub Advanced Security, so
+# `github/codeql-action/upload-sarif` fails with:
+#
+#     Code scanning is not enabled for this repository.
+#
+# That is a repository/billing setting, not a code defect -- and it was failing
+# every scanning job here regardless of what the scanners actually found. A red
+# check that means "SARIF plumbing unavailable" trains people to ignore red
+# checks.
+#
+# So the gate is now the SCANNER'S OWN EXIT CODE: each tool fails this workflow
+# when it finds something at its configured severity. The SARIF upload is
+# best-effort telemetry (`continue-on-error: true`) and starts working
+# automatically if Advanced Security is ever enabled.
+
 jobs:
   # ── SEMGREP ──────────────────────────────────────────────────
   semgrep:
@@ -24,10 +41,9 @@ jobs:
       # the SAM3 Python environments and node_modules, reporting other projects'
       # findings as ours and taking far longer.
       #
-      # `|| true` because semgrep exits non-zero when it FINDS something. That
-      # killed this step before the SARIF upload below could run, so results
-      # never reached the Security tab -- the scan was reporting into a void.
-      # Findings surface through code scanning, not by failing the job.
+      # --error makes semgrep exit non-zero on findings. That IS the gate here,
+      # because the SARIF upload cannot work on this repository (see the note at
+      # the top of this file).
       - run: |
           semgrep scan \
             --config=p/security-audit \
@@ -36,8 +52,11 @@ jobs:
             --exclude=references --exclude=sam3_env --exclude=sam3_repo \
             --exclude=audit_venv --exclude=node_modules --exclude=recycling \
             --exclude=dist --exclude=target --exclude=venv \
-            --sarif > semgrep.sarif || true
+            --severity=ERROR \
+            --error \
+            --sarif > semgrep.sarif
       - uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
         with:
           sarif_file: semgrep.sarif
           category: semgrep
@@ -64,7 +83,14 @@ jobs:
       # and CUDA wheels. Neither language needs it, so let it fail soft.
       - uses: github/codeql-action/autobuild@v3
         continue-on-error: true
+      # analyze() uploads its results the same way, so it cannot succeed while
+      # code scanning is disabled for this repository. The database build and
+      # query evaluation still run and their output is in the job log, which is
+      # the useful part today. Drop continue-on-error the moment Advanced
+      # Security is enabled -- CodeQL is the strongest analyser here and should
+      # be a hard gate.
       - uses: github/codeql-action/analyze@v3
+        continue-on-error: true
         with:
           category: codeql-${{ matrix.language }}
 
@@ -103,6 +129,7 @@ jobs:
       # that says nothing about the code.
       - uses: github/codeql-action/upload-sarif@v3
         if: hashFiles('snyk-code.sarif') != ''
+        continue-on-error: true
         with:
           sarif_file: snyk-code.sarif
           category: snyk-code
@@ -113,7 +140,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: pip install bandit[toml]
+      # bandit has no built-in SARIF writer -- `-f sarif` fails with
+      # "invalid choice: 'sarif'". The formatter is a separate package.
+      - run: pip install bandit[toml] bandit-sarif-formatter
       - run: |
           # Exclusions must match .pre-commit-config.yaml, or CI and the local
           # gate disagree about what "clean" means. The original list missed
@@ -125,11 +154,11 @@ jobs:
           # ./tests is: hardcoded /tmp paths in tests for main.py, which the app
           # never spawns. The production legacy backend IS scanned and is clean.
           bandit -r . -ll -f sarif -o bandit.sarif \
-            --exclude ./tests,./venv,./node_modules,./sam3_env,./audit_venv,./references,./sam3_repo,./recycling,./dist,./src-tauri/target,./packages/python-backend/venv,./packages/python-backend/sam3_repo,./packages/python-backend/test_main.py,./packages/python-backend/test_coordinates.py || true
-          # `|| true`: bandit exits 1 when it finds anything, which killed this
-          # step before the SARIF upload ran. Findings belong in the Security
-          # tab, not in a failed job that produced no artefact.
+            --exclude ./tests,./venv,./node_modules,./sam3_env,./audit_venv,./references,./sam3_repo,./recycling,./dist,./src-tauri/target,./packages/python-backend/venv,./packages/python-backend/sam3_repo,./packages/python-backend/test_main.py,./packages/python-backend/test_coordinates.py
+          # No `|| true`: bandit exiting 1 on a finding IS the gate, since the
+          # SARIF upload cannot work on this repository.
       - uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
         with:
           sarif_file: bandit.sarif
           category: bandit
@@ -150,7 +179,12 @@ jobs:
           # Same reasoning as semgrep and bandit: without skip-dirs this walks
           # ~6.5 GB of vendored repositories and Python environments.
           skip-dirs: references,sam3_env,sam3_repo,audit_venv,node_modules,recycling,dist,src-tauri/target,packages/python-backend/venv
+          # trivy-action defaults to exit-code 0, i.e. it reports findings but
+          # never fails. With the SARIF upload unavailable that made this job
+          # incapable of gating anything. 1 makes a HIGH/CRITICAL finding fail.
+          exit-code: '1'
       - uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
         with:
           sarif_file: trivy.sarif
           category: trivy
@@ -161,16 +195,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check
-          # --config is required, not optional. The action runs from the
-          # repository root and cargo-deny looks for deny.toml in the CURRENT
-          # directory, not next to --manifest-path. Without it the config here
-          # was never read and the check ran against cargo-deny's built-in
-          # defaults, which deny far more than this project's policy allows --
-          # so this job failed on licences the policy explicitly permits.
-          arguments: --manifest-path src-tauri/Cargo.toml --config src-tauri/deny.toml
+      - uses: dtolnay/rust-toolchain@stable
+      # The EmbarkStudios action was replaced with a plain invocation.
+      #
+      # The action supplies its own --manifest-path, so passing one in
+      # `arguments` produced:
+      #
+      #     error: the argument '--manifest-path <MANIFEST_PATH>' cannot be used
+      #     multiple times
+      #
+      # and adding --config to work around a separate problem only compounded
+      # it. cargo-deny also resolves deny.toml relative to the CURRENT
+      # directory, not the manifest, so running from the repository root never
+      # read src-tauri/deny.toml and fell back to built-in defaults that deny
+      # far more than this project's policy.
+      #
+      # Running the binary from src-tauri sidesteps both: deny.toml and
+      # Cargo.toml are both right there. This is exactly what the cargo-deny job
+      # in ci.yml already does, and that one has always passed.
+      - run: cargo install cargo-deny --locked
+      - run: cargo deny check
+        working-directory: src-tauri
 
   # ── NODE SUPPLY-CHAIN AUDIT ─────────────────────────────────────
   npm-audit:
