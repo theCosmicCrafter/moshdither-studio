@@ -83,6 +83,17 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
     // Rust threshold is 0-255 luma; shader compares against normalized luma.
     paramMap: { threshold: "threshold" },
     transform: (_k, v) => (typeof v === "number" ? v / 255 : 0.5),
+    // Rust defaults auto_threshold on, deriving the threshold from the frame's
+    // mean luminance. A fragment shader cannot do that: the mean is a reduction
+    // over every pixel, and this chain has no reduction pass -- a fragment only
+    // sees its own texel. The shader therefore uses whatever fixed threshold it
+    // is given, which is precisely the behaviour that made this effect look like
+    // a no-op on dark images.
+    //
+    // Marked inaccurate so the preview routes to the Rust CPU path and matches
+    // the export. Restore an accurate GPU preview by adding a mean-luminance
+    // reduction pass, not by dropping auto_threshold.
+    accurate: false,
   },
 
   // Analog
