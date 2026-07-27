@@ -548,3 +548,91 @@ fn both_smear_directions_survive_the_merge() {
          datamoshing.repeat contributed has been lost"
     );
 }
+
+/// Threshold-driven effects must still work on a dark image.
+///
+/// Effects that build sortable runs from "pixels brighter than T" degenerate
+/// when T is a fixed constant and the image is darker than it: almost nothing
+/// qualifies, runs are a few pixels long, and the effect is mathematically
+/// working while visually doing nothing.
+///
+/// Measured on a real photograph with mean luminance 68, `pixel_geo.pixel_sort`
+/// at its old fixed default of 128 qualified 0.8% of pixels in runs averaging
+/// 9px across a 2528px-wide frame. Every other check in this file passed it,
+/// because "changed some pixels" and "differs from other effects" were both true.
+///
+/// Both effects now derive the threshold from the frame unless `auto_threshold`
+/// is turned off.
+#[test]
+fn threshold_effects_work_on_a_dark_image() {
+    let reg = EffectRegistry::new();
+
+    // Mean luminance ~40: darker than any sensible fixed threshold, which is
+    // exactly the case that used to fail.
+    //
+    // The values must be NON-MONOTONIC along each row. A first version used
+    // (x*3 + y*5) % 60, which rises steadily left to right, so every run was
+    // already in sorted order and a correct sort changed nothing -- the fixture
+    // failed the effect rather than the other way round.
+    let (w, h) = (128u32, 128u32);
+    let mut data = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let scramble = (x * 37 + y * 61) % 251;
+            let v = ((scramble % 60) + 10) as u8;
+            data.extend_from_slice(&[v, v.saturating_add(8), v.saturating_sub(4), 255]);
+        }
+    }
+    let dark = Frame {
+        width: w,
+        height: h,
+        data,
+    };
+
+    for id in ["pixel_geo.pixel_sort", "glitch.sorting_glitch"] {
+        let effect = reg.get(id).unwrap_or_else(|| panic!("{id} is registered"));
+        let out = effect
+            .process_frame(&dark, None, &serde_json::Map::new())
+            .expect("ok");
+
+        let changed = out
+            .data
+            .chunks_exact(4)
+            .zip(dark.data.chunks_exact(4))
+            .filter(|(a, b)| {
+                a[0].abs_diff(b[0])
+                    .max(a[1].abs_diff(b[1]))
+                    .max(a[2].abs_diff(b[2]))
+                    > 8
+            })
+            .count();
+        let pct = changed as f64 / (w * h) as f64 * 100.0;
+
+        assert!(
+            pct > 2.0,
+            "{id} changed only {pct:.2}% of a dark frame. A fixed brightness \
+             threshold has made it a no-op on under-exposed images -- check that \
+             auto_threshold is honoured."
+        );
+    }
+}
+
+/// Turning auto off must hand control back to the slider.
+#[test]
+fn auto_threshold_can_be_disabled() {
+    let reg = EffectRegistry::new();
+    let effect = reg.get("pixel_geo.pixel_sort").expect("registered");
+    let frame = detail_frame();
+
+    // 255 means nothing is brighter than the threshold, so no run can form.
+    let mut manual = serde_json::Map::new();
+    manual.insert("auto_threshold".into(), serde_json::json!(false));
+    manual.insert("threshold".into(), serde_json::json!(255));
+    let pinned = effect.process_frame(&frame, None, &manual).expect("ok");
+
+    assert_eq!(
+        pinned.data, frame.data,
+        "with auto off and threshold 255 no run can form, so the frame must be \
+         untouched; if it changed, the slider is being ignored"
+    );
+}

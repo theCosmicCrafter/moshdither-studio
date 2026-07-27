@@ -169,6 +169,10 @@ fn test_pixel_sort_makes_monotonic_rows() {
     let frame = mono_ramp_frame(16, 4);
     let effect = PixelSort::new(0);
     let mut params = serde_json::Map::new();
+    // Threshold 0 means every pixel joins one run spanning the row, so the whole
+    // row must come out sorted. auto_threshold is disabled because it would
+    // derive its own value and this test is about the manual path.
+    params.insert("auto_threshold".to_string(), json!(false));
     params.insert("threshold".to_string(), json!(0));
     let result = effect.process_frame(&frame, None, &params).unwrap();
     let w = result.width as usize;
