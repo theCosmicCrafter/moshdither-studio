@@ -637,8 +637,15 @@ fn auto_threshold_can_be_disabled() {
     );
 }
 
-/// Every `Select` parameter must declare a default that is a usable option, and
-/// every effect must be able to read back what the UI would send for it.
+/// Every `Select` parameter must declare a default that is a usable option.
+///
+/// Scope, stated precisely because an earlier version of this comment claimed
+/// more: this is a STATIC check on metadata. It never invokes the effect, so it
+/// cannot see whether the declared default's TYPE agrees with the accessor the
+/// effect reads it with. `glitch.sorting_glitch.u_direction` declared `json!(0)`
+/// against two options and read the value with `as_str()`; 0 is a perfectly
+/// valid index, so this test would have passed it. That mismatch is caught
+/// behaviourally by `image_select_options_are_not_all_identical`, not here.
 ///
 /// The UI has one convention for selects: `ParameterPanel.tsx` sends the option
 /// INDEX, and `clamp_params` normalises option names to indices for any select
@@ -713,11 +720,19 @@ fn every_select_default_is_a_usable_option() {
 
 /// Selecting a different option must actually change the frame.
 ///
-/// A select whose options all render identically is a dead control, and that is
-/// how the bayer defect presented: the parameter varied, the output did not.
-/// This walks every option of every image-domain select and requires that at
-/// least one of them differs from the first -- weak enough that genuinely
-/// subtle modes pass, strong enough that a wholly inert control fails.
+/// A select whose options all render identically is a dead control. This walks
+/// every option of every image-domain select and requires at least one to differ
+/// from the first -- weak enough that genuinely subtle modes pass, strong enough
+/// that a wholly inert control fails. It is what caught
+/// `glitch.sorting_glitch.u_direction`, which was pinned to "Horizontal".
+///
+/// Its limit, stated because an earlier version of this comment overstated the
+/// reach: requiring only ONE option to differ means a control can be mostly dead
+/// and still pass. Pre-fix `dithering.bayer` is the case in point -- indices 0-2
+/// all gave a 2x2 screen and index 3 gave 4x4, so it varied, and this test would
+/// NOT have reported it. Proving that a specific option selects a specific
+/// behaviour needs a per-effect test; see `bayer.rs`, where the screen size is
+/// pinned against the canonical matrices.
 #[test]
 fn image_select_options_are_not_all_identical() {
     let reg = EffectRegistry::new();
@@ -777,8 +792,17 @@ fn image_select_options_are_not_all_identical() {
             };
 
             let Some(first) = render(0) else { continue };
-            // Some effects are video-only and no-op on a single frame; those are
-            // covered by `single_frame_noops_are_the_expected_set`, not here.
+            // Option 0 leaving the frame untouched means there is no baseline to
+            // compare against -- typically a video-only effect, which cannot act
+            // on a single frame at any setting.
+            //
+            // This is a real blind spot, not a covered case: it silently drops
+            // the select entirely, including `datamoshing.cross_video.interleave`
+            // and `composite.overlay.blend_mode`. An earlier comment here cited
+            // `single_frame_noops_are_the_expected_set` as covering them, which
+            // was wrong -- that test runs with EMPTY params, so it says nothing
+            // about behaviour under option 0. Video-domain selects need a
+            // process_video equivalent of this test.
             if first == frame.data {
                 continue;
             }

@@ -306,23 +306,143 @@ mod tests {
         }
     }
 
-    /// Smallest p in {1,2,4,8,16} for which row 0 of `f` repeats with period p.
-    fn horizontal_period(f: &Frame) -> u32 {
-        let w = f.width;
-        [1u32, 2, 4, 8, 16]
-            .into_iter()
-            .find(|&p| (0..w).all(|x| f.data[(x * 4) as usize] == f.data[((x % p) * 4) as usize]))
-            .unwrap_or(w)
+    /// The canonical 4x4 and 8x8 Bayer matrices, pinned in full.
+    ///
+    /// These are externally known tables, not something re-derived from the
+    /// production generator, so they anchor the whole family: 8x8 and 16x16 are
+    /// built from 4x4 by the same recursion, and a wrong quadrant offset shows
+    /// up here first. Swapping the `v*4+2` and `v*4+3` offsets, for example,
+    /// changes m[0][2] and m[2][0] of the 4x4 -- which the three cells the old
+    /// tests pinned all happened to miss.
+    const BAYER_4: [[u8; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+    const BAYER_8: [[u8; 8]; 8] = [
+        [0, 32, 8, 40, 2, 34, 10, 42],
+        [48, 16, 56, 24, 50, 18, 58, 26],
+        [12, 44, 4, 36, 14, 46, 6, 38],
+        [60, 28, 52, 20, 62, 30, 54, 22],
+        [3, 35, 11, 43, 1, 33, 9, 41],
+        [51, 19, 59, 27, 49, 17, 57, 25],
+        [15, 47, 7, 39, 13, 45, 5, 37],
+        [63, 31, 55, 23, 61, 29, 53, 21],
+    ];
+
+    /// The matrix is stored as `u8`, and the 16x16 case fills it exactly: its
+    /// largest threshold is 255, the top of the type, with zero headroom.
+    ///
+    /// So this is a guard on MATRIX_SIZES, not on the generator. Adding 32 to
+    /// that table would make the recursion compute 255 * 4 + 3 = 1023 and
+    /// overflow -- a panic in debug, a silent wrap in release. Nothing else in
+    /// the file would stop it, because every other test only exercises the four
+    /// sizes that are currently listed.
+    #[test]
+    fn every_offered_matrix_size_fits_in_the_u8_it_is_stored_in() {
+        for &n in MATRIX_SIZES.iter() {
+            let largest = (n as usize) * (n as usize) - 1;
+            assert!(
+                largest <= u8::MAX as usize,
+                "a {n}x{n} Bayer matrix needs thresholds up to {largest}, which does                  not fit the u8 in Vec<Vec<u8>>; widen the matrix type before                  offering this size"
+            );
+        }
+    }
+
+    #[test]
+    fn the_generated_matrices_are_the_canonical_bayer_tables() {
+        let m4 = BayerDither::generate_bayer_matrix(4);
+        for y in 0..4 {
+            assert_eq!(m4[y], BAYER_4[y].to_vec(), "4x4 row {y}");
+        }
+        let m8 = BayerDither::generate_bayer_matrix(8);
+        for y in 0..8 {
+            assert_eq!(m8[y], BAYER_8[y].to_vec(), "8x8 row {y}");
+        }
+        // 16x16 is too large to pin by hand, but a Bayer matrix is by definition
+        // a permutation of 0..n^2-1, which rules out duplicated or missing
+        // thresholds -- and it maxes at exactly 255, the top of the u8 it is
+        // stored in.
+        let m16 = BayerDither::generate_bayer_matrix(16);
+        let mut seen: Vec<u8> = m16.iter().flatten().copied().collect();
+        seen.sort_unstable();
+        assert_eq!(
+            seen,
+            (0..=255u8).collect::<Vec<u8>>(),
+            "the 16x16 matrix must be a permutation of 0..=255"
+        );
+    }
+
+    /// The rendered screen must use the matrix ROW-MAJOR, per pixel, at full
+    /// resolution -- `matrix[y % n][x % n]`, not its transpose, not row 0 alone,
+    /// and not a block-averaged copy.
+    ///
+    /// This replaces a test that sampled only row 0 of the output. That test
+    /// passed against `threshold = matrix[0][x % ms]` -- a 1-D stripe pattern
+    /// with no y dependence at all, which is not a dither. Checking every pixel
+    /// against a pinned table closes transposition, y-independence, wrong
+    /// quadrant offsets, inverted polarity and mis-scaled thresholds together.
+    #[test]
+    fn the_rendered_screen_matches_the_pinned_matrix_at_every_pixel() {
+        for (idx, n, table) in [
+            (
+                1usize,
+                4usize,
+                &BAYER_4[..].iter().map(|r| r.to_vec()).collect::<Vec<_>>(),
+            ),
+            (
+                2usize,
+                8usize,
+                &BAYER_8[..].iter().map(|r| r.to_vec()).collect::<Vec<_>>(),
+            ),
+        ] {
+            // Not a multiple of either matrix size, so a wrapping bug cannot hide
+            // behind an exact tiling.
+            let (w, h) = (26u32, 22u32);
+            for grey in [1u8, 17, 64, 128, 200, 254] {
+                let out = run_with(json!(idx), &make_solid_frame(w, h, grey, grey, grey));
+                for y in 0..h as usize {
+                    for x in 0..w as usize {
+                        let t = table[y % n][x % n];
+                        let scaled = (t as f32 / (n * n) as f32) * 255.0;
+                        let want = if grey as f32 > scaled { 255u8 } else { 0u8 };
+                        let got = out.data[(y * w as usize + x) * 4];
+                        assert_eq!(
+                            got,
+                            want,
+                            "size {n} grey {grey} at ({x},{y}): matrix[{}][{}]={t}",
+                            y % n,
+                            x % n
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Smallest p in `candidates` for which `f` repeats along the given axis,
+    /// checked over EVERY pixel rather than a single line.
+    fn period(f: &Frame, vertical: bool) -> u32 {
+        let (w, h) = (f.width, f.height);
+        let px = |x: u32, y: u32| f.data[((y * w + x) * 4) as usize];
+        let limit = if vertical { h } else { w };
+        (1..=limit)
+            .find(|&p| {
+                (0..h).all(|y| {
+                    (0..w).all(|x| {
+                        let (rx, ry) = if vertical { (x, y % p) } else { (x % p, y) };
+                        px(x, y) == px(rx, ry)
+                    })
+                })
+            })
+            .unwrap_or(limit)
     }
 
     /// The parameter is an index into MATRIX_SIZES, and each index must select a
     /// screen of that actual size.
     ///
-    /// Proving the size rather than merely "the output changed" is the point: the
-    /// bug this replaces DID vary with the parameter (index 3 gave 4x4 where the
-    /// others gave 2x2), so any test that only asserted "different settings look
-    /// different" would have passed against it. An NxN Bayer screen on a uniform
-    /// field tiles with period exactly N, so the period is the size.
+    /// An NxN Bayer screen on a uniform field tiles with period exactly N in
+    /// BOTH axes, so both periods are the size. The frame is 48x48 -- three
+    /// whole tiles of the largest matrix -- because on a 16-wide frame a period
+    /// of 16 is satisfied by anything at all (`x % 16 == x` for every x), which
+    /// made the 16x16 case, the one that was unreachable before this fix and so
+    /// has no legacy coverage, effectively untested.
     #[test]
     fn every_option_index_selects_a_screen_of_that_size() {
         for (idx, &expected) in MATRIX_SIZES.iter().enumerate() {
@@ -330,21 +450,21 @@ mod tests {
             // grey level it reaches it -- at other levels neighbouring
             // thresholds can fall on the same side of the input and collapse the
             // visible period, which is a property of the grey, not the screen.
-            let mut best = 0;
+            let mut best = (0, 0);
             for grey in 1u8..=254 {
-                let out = run_with(json!(idx), &make_solid_frame(16, 16, grey, grey, grey));
-                let p = horizontal_period(&out);
+                let out = run_with(json!(idx), &make_solid_frame(48, 48, grey, grey, grey));
+                let (ph, pv) = (period(&out, false), period(&out, true));
                 assert!(
-                    p <= expected,
-                    "index {idx} (size {expected}) produced period {p} at grey {grey}, \
-                     which is larger than the matrix"
+                    ph <= expected && pv <= expected,
+                    "index {idx} (size {expected}) produced periods h={ph} v={pv} at grey                      {grey}, larger than the matrix"
                 );
-                best = best.max(p);
+                best = (best.0.max(ph), best.1.max(pv));
             }
             assert_eq!(
-                best, expected,
+                best,
+                (expected, expected),
                 "index {idx} should select a {expected}x{expected} screen, but the \
-                 widest period observed over all grey levels was {best}"
+                 widest periods observed over all grey levels were {best:?}"
             );
         }
     }
