@@ -594,15 +594,12 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
     },
     accurate: false,
   },
-  "datamoshing.repeat": {
-    shaderId: "temporalDatamoshing",
-    paramMap: { repeat_count: "u_intensity", series_size: "u_blockSize" },
-    transform: (_k, v) => {
-      if (_k === "u_blockSize") return typeof v === "number" ? v * 4 : 16;
-      return typeof v === "number" ? v / 10 : 0.3;
-    },
-    accurate: false,
-  },
+  // "datamoshing.repeat" was removed 2026-07-26 -- it was the same algorithm as
+  // datamoshing.classic with renamed parameters. The Rust registry aliases the
+  // old ID to classic so existing projects still render, and classic accepts
+  // `series_size`/`repeat_count` as parameter aliases. No mapping is needed
+  // here: an aliased ID never reaches this table, because the effect list the
+  // UI builds comes from the registry, which does not advertise aliases.
   "datamoshing.shuffle": {
     shaderId: "temporalDatamoshing",
     paramMap: { chunk_size: "u_blockSize" },

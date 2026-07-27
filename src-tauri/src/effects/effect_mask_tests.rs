@@ -2586,12 +2586,19 @@ mod tests {
             assert_eq!(pixel_at(&result, 0, 2), (255, 0, 0, 255));
         }
 
-        // ── RepeatDatamosh ─────────────────────────────────────
+        // ── Former RepeatDatamosh, now folded into ClassicDatamosh ──
+        //
+        // datamoshing.repeat was removed: its process_video was identical to
+        // ClassicDatamosh's. Its process_frame was NOT -- it smeared rows
+        // vertically where classic smears pixels along a row -- so that survives
+        // as smear_direction = "vertical". These tests pin both halves.
 
         #[test]
         fn test_repeat_datamosh_modifies_output() {
             let seg = make_color_segment(6);
-            let effect = RepeatDatamosh::new(2, 3);
+            // ClassicDatamosh::new(chunk_size, repeats) -- the old
+            // RepeatDatamosh::new(repeat_count, series_size) took them reversed.
+            let effect = ClassicDatamosh::new(3, 2);
             let result = effect
                 .process_video(&seg, None, &serde_json::Map::new())
                 .unwrap();
@@ -2615,9 +2622,12 @@ mod tests {
                     (64, 64, 64, 255),
                 ],
             );
-            let effect = RepeatDatamosh::new(2, 3);
+            let effect = ClassicDatamosh::new(3, 2);
             let mut params = serde_json::Map::new();
+            // series_size is accepted as an alias for chunk_size, and
+            // smear_direction selects the old repeat behaviour.
             params.insert("series_size".to_string(), serde_json::json!(3));
+            params.insert("smear_direction".to_string(), serde_json::json!("vertical"));
             let result = effect.process_frame(&frame, None, &params).unwrap();
             // Row 0 is source, rows 1-2 should be copies of row 0
             assert_eq!(pixel_at(&result, 0, 1), (255, 0, 0, 255));

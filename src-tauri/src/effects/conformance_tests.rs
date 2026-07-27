@@ -396,15 +396,12 @@ fn video_effects_are_pairwise_distinct() {
 }
 
 /// Video effect pairs known to produce identical output, with a reason.
-const ALLOWED_VIDEO_DUPLICATES: &[(&str, &str, &str)] = &[(
-    "datamoshing.classic",
-    "datamoshing.repeat",
-    "Same algorithm: both chunk the segment and repeat each chunk N times, with \
-     identical defaults (5, 3) and only the parameter names differing \
-     (chunk_size/repeats vs series_size/repeat_count). Consolidating them means \
-     removing an effect ID that saved projects may reference, so it is recorded \
-     here rather than done unilaterally.",
-)];
+///
+/// Empty. `datamoshing.repeat` used to be listed here as a duplicate of
+/// `datamoshing.classic`; it was removed on 2026-07-26 rather than tolerated,
+/// so there is no longer a pair to exempt. Adding an entry here should require
+/// the same justification a suppression does.
+const ALLOWED_VIDEO_DUPLICATES: &[(&str, &str, &str)] = &[];
 
 /// `frame_sort_by_size` must actually reorder frames.
 ///
@@ -455,5 +452,99 @@ fn frame_sort_by_size_reorders_frames() {
         before, after,
         "frame_sort_by_size returned the input order; it is sorting on a key \
          that is identical for every decoded frame"
+    );
+}
+
+/// A retired effect ID must still resolve, and must not reappear in the browser.
+///
+/// Removing an ID outright is not a cosmetic change: the render pipeline treats
+/// an unknown ID as a hard error and aborts the whole export, so a project
+/// referencing it would stop rendering entirely rather than losing one effect.
+/// `EffectRegistry::ALIASES` forwards retired IDs; this pins both halves of that
+/// contract.
+#[test]
+fn retired_effect_ids_still_resolve_but_are_not_listed() {
+    let reg = EffectRegistry::new();
+
+    // Resolves, so existing projects keep rendering.
+    let aliased = reg
+        .get("datamoshing.repeat")
+        .expect("retired ID must still resolve or saved projects fail to render");
+    assert_eq!(
+        aliased.meta().id,
+        "datamoshing.classic",
+        "the alias should forward to the surviving effect"
+    );
+
+    // Absent from list(), so it cannot be added to a NEW project and does not
+    // show up as a duplicate entry in the effect browser.
+    let listed: Vec<String> = reg.list().into_iter().map(|m| m.id).collect();
+    assert!(
+        !listed.contains(&"datamoshing.repeat".to_string()),
+        "a retired ID must not be advertised in the effect list"
+    );
+}
+
+/// The surviving effect must honour the retired effect's parameter names.
+///
+/// `datamoshing.repeat` used `series_size` / `repeat_count`; classic uses
+/// `chunk_size` / `repeats`. Without the aliases a project saved against the old
+/// effect would resolve to classic and then silently ignore every value the user
+/// set, falling back to defaults.
+#[test]
+fn retired_parameter_names_are_still_honoured() {
+    let reg = EffectRegistry::new();
+    let effect = reg.get("datamoshing.repeat").expect("resolves");
+
+    let frames: Vec<Frame> = (0..6).map(|_| detail_frame()).collect();
+    let segment = VideoSegment { frames, fps: 24.0 };
+
+    // Old names.
+    let mut old = serde_json::Map::new();
+    old.insert("series_size".into(), serde_json::json!(3));
+    old.insert("repeat_count".into(), serde_json::json!(2));
+
+    // New names, same values.
+    let mut new = serde_json::Map::new();
+    new.insert("chunk_size".into(), serde_json::json!(3));
+    new.insert("repeats".into(), serde_json::json!(2));
+
+    let a = effect.process_video(&segment, None, &old).expect("ok");
+    let b = effect.process_video(&segment, None, &new).expect("ok");
+
+    assert_eq!(
+        a.frames.len(),
+        b.frames.len(),
+        "old parameter names must produce the same result as the new ones"
+    );
+    assert_eq!(a.frames.len(), 12, "6 frames, chunks of 3, repeated twice");
+}
+
+/// The vertical smear from the retired effect must survive as a mode.
+///
+/// `datamoshing.repeat` and `datamoshing.classic` had identical `process_video`
+/// but DIFFERENT `process_frame`: repeat duplicated rows downward, classic
+/// repeats a pixel along a row. Consolidating on the video behaviour alone would
+/// have quietly deleted the vertical look.
+#[test]
+fn both_smear_directions_survive_the_merge() {
+    let reg = EffectRegistry::new();
+    let effect = reg.get("datamoshing.classic").expect("registered");
+    let frame = detail_frame();
+
+    let mut horizontal = serde_json::Map::new();
+    horizontal.insert("smear_direction".into(), serde_json::json!("horizontal"));
+    let mut vertical = serde_json::Map::new();
+    vertical.insert("smear_direction".into(), serde_json::json!("vertical"));
+
+    let h = effect.process_frame(&frame, None, &horizontal).expect("ok");
+    let v = effect.process_frame(&frame, None, &vertical).expect("ok");
+
+    assert_ne!(h.data, frame.data, "horizontal smear must change the frame");
+    assert_ne!(v.data, frame.data, "vertical smear must change the frame");
+    assert_ne!(
+        h.data, v.data,
+        "the two directions must differ; if they match, the vertical branch that \
+         datamoshing.repeat contributed has been lost"
     );
 }
