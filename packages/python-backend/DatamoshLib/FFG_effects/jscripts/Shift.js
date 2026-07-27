@@ -12,7 +12,11 @@ var TRIGGERED = 0;
 var frameCount = 10;
 var count = 0;
 
-function glitch_frame(frame)
+// FFglitch 0.10 requires entry points to be exported. Before this the
+// function was declared bare and ffedit aborted with "Could not find
+// function glitch_frame()", which subprocess.call swallowed -- so every
+// JS datamosh effect silently produced no output.
+export function glitch_frame(frame)
 {
 	var do_or_not = Math.random() * 100;
 	// only do the glitch if our random number crosses the threshold

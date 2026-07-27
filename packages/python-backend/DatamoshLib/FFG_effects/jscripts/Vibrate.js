@@ -1,6 +1,10 @@
 var randomness = 10;
 var bias = (randomness/2);
-function glitch_frame(frame)
+// FFglitch 0.10 requires entry points to be exported. Before this the
+// function was declared bare and ffedit aborted with "Could not find
+// function glitch_frame()", which subprocess.call swallowed -- so every
+// JS datamosh effect silently produced no output.
+export function glitch_frame(frame)
 {
     // bail out if we have no motion vectors
     let mvs = frame["mv"];

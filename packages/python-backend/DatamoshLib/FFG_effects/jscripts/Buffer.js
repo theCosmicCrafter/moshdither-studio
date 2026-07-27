@@ -15,7 +15,11 @@ var feedback = 0.5;			// a number between 0.000001 and .... yeah - controls how 
 
 var divisor = 1.0/feedback;
 
-function glitch_frame(frame)
+// FFglitch 0.10 requires entry points to be exported. Before this the
+// function was declared bare and ffedit aborted with "Could not find
+// function glitch_frame()", which subprocess.call swallowed -- so every
+// JS datamosh effect silently produced no output.
+export function glitch_frame(frame)
 {
     // bail out if we have no motion vectors
     let mvs = frame["mv"];
