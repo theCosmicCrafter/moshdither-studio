@@ -67,7 +67,7 @@ export const bayerDitherShader: EffectShader = {
       // bottom-to-top on screen. The Rust backend indexes the matrix top-down,
       // so flip the y coordinate to match.
       int px = int(pixel.x);
-      int py = int(res.y - 1.0 - pixel.y);
+      int py = int(res.y - pixel.y);
       int b = bayerIndex(px, py, n);
       float threshold = float(b) / float(n * n);
 
