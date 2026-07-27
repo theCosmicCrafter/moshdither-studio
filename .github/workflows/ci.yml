@@ -77,6 +77,31 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
+      # tauri.conf.json declares externalBin: bin/ffmpeg, ffprobe, ffgac, ffedit.
+      # Tauri's build script requires a file to exist for the HOST target triple
+      # and aborts otherwise:
+      #
+      #     resource path `bin/ffmpeg-x86_64-unknown-linux-gnu` doesn't exist
+      #
+      # src-tauri/bin/ is gitignored -- the real binaries are ~250 MB and are
+      # fetched per-developer -- so CI has none, for any platform. That means
+      # this job has never actually compiled: it failed in the build script
+      # before reaching fmt, clippy or a single test.
+      #
+      # Empty placeholders are enough. The build script only checks the path
+      # resolves; fmt/clippy/test never execute these binaries. Anything that
+      # does run them belongs in the E2E job, which builds a real bundle.
+      - name: Stub externalBin for the host triple
+        run: |
+          TRIPLE=$(rustc -vV | awk '/^host:/ {print $2}')
+          mkdir -p src-tauri/bin
+          for b in ffmpeg ffprobe ffgac ffedit; do
+            touch "src-tauri/bin/${b}-${TRIPLE}"
+            chmod +x "src-tauri/bin/${b}-${TRIPLE}"
+          done
+          echo "Stubbed externalBin for ${TRIPLE}:"
+          ls -l src-tauri/bin/
+
       - name: Check formatting
         run: cargo fmt -- --check
         working-directory: src-tauri
@@ -137,6 +162,26 @@ jobs:
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
+
+      # Same externalBin build-script requirement as the rust job above. This
+      # job builds a real binary, so it hits it too.
+      #
+      # ffgac/ffedit stay empty: mosh-verify exercises the Rust effect engine,
+      # which never invokes them (they are the FFglitch datamosh path, driven
+      # from Python). ffmpeg/ffprobe are symlinked to the apt-installed ffmpeg
+      # from the step above so anything that does shell out gets a working
+      # binary rather than a zero-byte file.
+      - name: Stub externalBin for the host triple
+        run: |
+          TRIPLE=$(rustc -vV | awk '/^host:/ {print $2}')
+          mkdir -p src-tauri/bin
+          ln -sf "$(command -v ffmpeg)"  "src-tauri/bin/ffmpeg-${TRIPLE}"
+          ln -sf "$(command -v ffprobe)" "src-tauri/bin/ffprobe-${TRIPLE}"
+          for b in ffgac ffedit; do
+            touch "src-tauri/bin/${b}-${TRIPLE}"
+            chmod +x "src-tauri/bin/${b}-${TRIPLE}"
+          done
+          ls -l src-tauri/bin/
 
       - name: Build mosh-verify binary
         run: cargo build --release --bin mosh-verify --manifest-path src-tauri/Cargo.toml
