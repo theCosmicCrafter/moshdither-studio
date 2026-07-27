@@ -21,7 +21,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::effects::types::Frame;
+use crate::effects::types::{Frame, VideoSegment};
 use crate::effects::EffectRegistry;
 
 fn flat_frame(w: u32, h: u32, gray: u8) -> Frame {
@@ -305,5 +305,155 @@ fn effects_that_modify_a_frame_are_pairwise_distinct() {
         "distinct effect IDs produced identical output — one of each pair is \
          not the algorithm it claims to be:\n  {}",
         collisions.join("\n  ")
+    );
+}
+
+/// Frame-sequence effects must be pairwise distinct too.
+///
+/// `effects_that_modify_a_frame_are_pairwise_distinct` above only exercises
+/// `process_frame`, so it cannot see a video effect at all. Two findings came
+/// out of running every effect over a real clip, and neither was reachable from
+/// the single-frame checks:
+///
+/// * `datamoshing.frame_sort_by_size` sorted on `Frame::data.len()`. Frames
+///   arrive decoded to raw RGBA, so every frame is exactly width*height*4 bytes
+///   -- every sort key was equal and the effect returned its input untouched.
+/// * `datamoshing.classic` and `datamoshing.repeat` are the same algorithm with
+///   renamed parameters and identical defaults.
+#[test]
+fn video_effects_are_pairwise_distinct() {
+    let reg = EffectRegistry::new();
+
+    // A clip whose frames genuinely differ, including in complexity, so that
+    // reordering and dropping are both observable.
+    let frames: Vec<Frame> = (0..8u32)
+        .map(|i| {
+            let (w, h) = (32u32, 32u32);
+            let mut data = Vec::with_capacity((w * h * 4) as usize);
+            for y in 0..h {
+                for x in 0..w {
+                    // Detail scales with frame index, so complexity is ordered.
+                    let v = ((x * (i + 1) * 7 + y * (i + 1) * 13) % 256) as u8;
+                    data.extend_from_slice(&[v, v.wrapping_add(i as u8 * 20), 255 - v, 255]);
+                }
+            }
+            Frame {
+                width: w,
+                height: h,
+                data,
+            }
+        })
+        .collect();
+    let segment = VideoSegment { frames, fps: 24.0 };
+    let empty = serde_json::Map::new();
+
+    let mut outputs: Vec<(String, Vec<u8>)> = Vec::new();
+    for meta in reg.list() {
+        let Some(effect) = reg.get(&meta.id) else {
+            continue;
+        };
+        if !effect.is_temporal() {
+            continue;
+        }
+        let Ok(out) = effect.process_video(&segment, None, &empty) else {
+            continue;
+        };
+        // Flatten the whole segment: frame ORDER is the thing under test.
+        let mut flat = Vec::new();
+        for f in &out.frames {
+            flat.extend_from_slice(&f.data);
+        }
+        if flat
+            != segment
+                .frames
+                .iter()
+                .flat_map(|f| f.data.clone())
+                .collect::<Vec<u8>>()
+        {
+            outputs.push((meta.id.clone(), flat));
+        }
+    }
+
+    let allowed = |a: &str, b: &str| {
+        ALLOWED_VIDEO_DUPLICATES
+            .iter()
+            .any(|(x, y, _)| (*x == a && *y == b) || (*x == b && *y == a))
+    };
+
+    let mut collisions = Vec::new();
+    for i in 0..outputs.len() {
+        for j in (i + 1)..outputs.len() {
+            if outputs[i].1 == outputs[j].1 && !allowed(&outputs[i].0, &outputs[j].0) {
+                collisions.push(format!("{} == {}", outputs[i].0, outputs[j].0));
+            }
+        }
+    }
+    assert!(
+        collisions.is_empty(),
+        "distinct video effects produced identical frame sequences:\n  {}",
+        collisions.join("\n  ")
+    );
+}
+
+/// Video effect pairs known to produce identical output, with a reason.
+const ALLOWED_VIDEO_DUPLICATES: &[(&str, &str, &str)] = &[(
+    "datamoshing.classic",
+    "datamoshing.repeat",
+    "Same algorithm: both chunk the segment and repeat each chunk N times, with \
+     identical defaults (5, 3) and only the parameter names differing \
+     (chunk_size/repeats vs series_size/repeat_count). Consolidating them means \
+     removing an effect ID that saved projects may reference, so it is recorded \
+     here rather than done unilaterally.",
+)];
+
+/// `frame_sort_by_size` must actually reorder frames.
+///
+/// It sorted on `Frame::data.len()`, which is constant across decoded RGBA
+/// frames, so the sort was a no-op and the effect silently passed its input
+/// through.
+#[test]
+fn frame_sort_by_size_reorders_frames() {
+    let reg = EffectRegistry::new();
+    let effect = reg
+        .get("datamoshing.frame_sort_by_size")
+        .expect("registered");
+
+    // Deliberately fed in descending complexity so a working sort must reverse
+    // them; a no-op sort would return them unchanged.
+    let frames: Vec<Frame> = (0..6u32)
+        .rev()
+        .map(|i| {
+            let (w, h) = (24u32, 24u32);
+            let mut data = Vec::with_capacity((w * h * 4) as usize);
+            for y in 0..h {
+                for x in 0..w {
+                    let v = ((x * (i + 1) * 11 + y * (i + 1) * 5) % 256) as u8;
+                    data.extend_from_slice(&[v, v, v, 255]);
+                }
+            }
+            Frame {
+                width: w,
+                height: h,
+                data,
+            }
+        })
+        .collect();
+    let segment = VideoSegment {
+        frames: frames.clone(),
+        fps: 24.0,
+    };
+
+    let out = effect
+        .process_video(&segment, None, &serde_json::Map::new())
+        .expect("ok");
+
+    assert_eq!(out.frames.len(), frames.len(), "no frames may be lost");
+
+    let before: Vec<&Vec<u8>> = frames.iter().map(|f| &f.data).collect();
+    let after: Vec<&Vec<u8>> = out.frames.iter().map(|f| &f.data).collect();
+    assert_ne!(
+        before, after,
+        "frame_sort_by_size returned the input order; it is sorting on a key \
+         that is identical for every decoded frame"
     );
 }
