@@ -25,13 +25,14 @@ Never suppress a scanner finding without an explicit comment and user sign-off.
 
 ## Skills Registry
 
-| Skill          | Path                                                         | Purpose                           |
-| -------------- | ------------------------------------------------------------ | --------------------------------- |
-| /security-scan | global `/.codeium/windsurf/skills/security/security-scan/SKILL.md` | Multi-tool SAST pipeline          |
-| /vuln-triage   | global `/.codeium/windsurf/skills/security/vuln-triage/SKILL.md`   | Classify findings                 |
-| /sast-fix      | global `/.codeium/windsurf/skills/security/sast-fix/SKILL.md`      | Generate secure fixes             |
-| /secret-gate   | global `/.codeium/windsurf/skills/security/secret-gate/SKILL.md`   | Pre-commit secrets check          |
-| /best-skill    | global `/.codeium/windsurf/skills/security/best-skill/SKILL.md`    | Secure code generation guidelines |
+| Skill                     | Path                                                               | Purpose                                                    |
+| ------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------- |
+| /security-scan            | global `/.codeium/windsurf/skills/security/security-scan/SKILL.md` | Multi-tool SAST pipeline                                   |
+| /vuln-triage              | global `/.codeium/windsurf/skills/security/vuln-triage/SKILL.md`   | Classify findings                                          |
+| /sast-fix                 | global `/.codeium/windsurf/skills/security/sast-fix/SKILL.md`      | Generate secure fixes                                      |
+| /secret-gate              | global `/.codeium/windsurf/skills/security/secret-gate/SKILL.md`   | Pre-commit secrets check                                   |
+| /best-skill               | global `/.codeium/windsurf/skills/security/best-skill/SKILL.md`    | Secure code generation guidelines                          |
+| testing-moshdither-studio | `.agents/skills/testing-moshdither-studio/SKILL.md`                | WebGL preview E2E testing when Rust backend is unavailable |
 
 ## Session Start Checklist
 
