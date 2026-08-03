@@ -333,8 +333,12 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
     transform: (_k, v) => {
       const sizes = [2, 4, 8, 16];
       if (typeof v === "string") {
-        const n = Number(v.trim());
-        if (Number.isInteger(n) && sizes.includes(n)) return n;
+        const s = v.trim();
+        // Match Rust's parse::<u32>(): optional leading +, then decimal digits.
+        if (/^[+]?\d+$/.test(s)) {
+          const n = Number(s);
+          if (sizes.includes(n)) return n;
+        }
         return sizes[1];
       }
       if (typeof v === "number" && Number.isInteger(v)) {
