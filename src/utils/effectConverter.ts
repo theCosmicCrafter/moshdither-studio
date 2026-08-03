@@ -326,13 +326,22 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "dithering.bayer": {
     shaderId: "bayer_dither",
     paramMap: { matrix_size: "scale" },
-    // matrix_size is an INDEX into [2,4,8,16], not the size -- every Select in
-    // this app sends the option index (ParameterPanel.tsx). The index is resolved
-    // to the actual matrix size before being passed to the shader.
+    // matrix_size is an INDEX into [2,4,8,16] in normal UI usage
+    // (ParameterPanel.tsx sends the option index). Older saved projects may store
+    // the literal size as a string, e.g. "8" -- the Rust backend parses both, so
+    // the WebGL transform must do the same to keep preview and export aligned.
     transform: (_k, v) => {
       const sizes = [2, 4, 8, 16];
-      const i = typeof v === "number" && Number.isInteger(v) ? v : 1;
-      return sizes[i] ?? 4;
+      if (typeof v === "string") {
+        const n = Number(v.trim());
+        if (Number.isInteger(n) && sizes.includes(n)) return n;
+        return sizes[1];
+      }
+      if (typeof v === "number" && Number.isInteger(v)) {
+        const idx = v;
+        if (idx >= 0 && idx < sizes.length) return sizes[idx];
+      }
+      return sizes[1];
     },
     // The shader now implements the same per-pixel Bayer threshold matrix as the
     // Rust backend, so the GPU preview matches the export.
