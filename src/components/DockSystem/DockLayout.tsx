@@ -1,149 +1,153 @@
-import { useRef, useCallback } from "react";
+import { useEffect, useState, Suspense } from "react";
+import { Layout, Model, TabNode, Actions, DockLocation } from "flexlayout-react";
+import "flexlayout-react/style/dark.css";
 import { useAppStore } from "../../store";
+import { PANEL_REGISTRY } from "./panelRegistry";
 import PanelRail from "./PanelRail";
-import DockZoneComponent from "./DockZone";
-import FloatingWindowComponent from "./FloatingWindow";
+import { DockContext } from "./DockContext";
+import { DEFAULT_LAYOUT } from "./defaultLayout";
+
+// Import components that are hardcoded into the layout
 import PreviewViewport from "../PreviewViewport";
 import Timeline from "../Timeline";
 
-interface DockLayoutProps {
-  isDropTarget?: boolean;
-}
-
-export default function DockLayout({ isDropTarget = false }: DockLayoutProps) {
-  const dockLayout = useAppStore((s) => s.dockLayout);
+export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) {
   const panelOpacity = useAppStore((s) => s.panelOpacity);
-  const floatingWindows = useAppStore((s) => s.floatingWindows);
-  const leftZoneWidth = useAppStore((s) => s.leftZoneWidth);
-  const rightZoneWidth = useAppStore((s) => s.rightZoneWidth);
-  const setLeftZoneWidth = useAppStore((s) => s.setLeftZoneWidth);
-  const setRightZoneWidth = useAppStore((s) => s.setRightZoneWidth);
-  const layoutRef = useRef<HTMLDivElement>(null);
+  const theme = useAppStore((s) => s.theme);
+  const layoutTrigger = useAppStore(s => s.layoutTrigger);
+  
+  // We'll manage the flexlayout model in local state
+  const [model, setModel] = useState<Model | null>(null);
 
-  const hasLeft = dockLayout.left.length > 0;
-  const hasRight = dockLayout.right.length > 0;
-  const hasBottom = dockLayout.bottom.length > 0 && dockLayout.bottomVisible;
+  // Initialize model on mount (or if the user resets it)
+  useEffect(() => {
+    // We could potentially load from localStorage or the store here
+    // For now, we load the default layout
+    const newModel = Model.fromJson(DEFAULT_LAYOUT);
+    setModel(newModel);
+    
+    // Initial sync
+    const activePanels: string[] = [];
+    newModel.visitNodes((n) => {
+      if (n.getType() === "tab") activePanels.push((n as TabNode).getComponent() as string);
+    });
+    useAppStore.getState().setDockedPanels(activePanels);
+  }, []);
 
-  // Zone divider drag handlers
-  const handleLeftDividerStart = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const startX = e.clientX;
-      const startWidth = leftZoneWidth;
 
-      const handleMove = (ev: MouseEvent) => {
-        const delta = ev.clientX - startX;
-        setLeftZoneWidth(startWidth + delta);
-      };
 
-      const handleUp = () => {
-        window.removeEventListener("mousemove", handleMove);
-        window.removeEventListener("mouseup", handleUp);
-        document.body.classList.remove("zone-resizing");
-      };
+  const factory = (node: TabNode) => {
+    const componentStr = node.getComponent() as string;
 
-      document.body.classList.add("zone-resizing");
-      window.addEventListener("mousemove", handleMove);
-      window.addEventListener("mouseup", handleUp);
-    },
-    [leftZoneWidth, setLeftZoneWidth]
-  );
-
-  const handleRightDividerStart = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const startX = e.clientX;
-      const startWidth = rightZoneWidth;
-
-      const handleMove = (ev: MouseEvent) => {
-        // Dragging left shrinks right zone, dragging right grows it
-        const delta = startX - ev.clientX;
-        setRightZoneWidth(startWidth + delta);
-      };
-
-      const handleUp = () => {
-        window.removeEventListener("mousemove", handleMove);
-        window.removeEventListener("mouseup", handleUp);
-        document.body.classList.remove("zone-resizing");
-      };
-
-      document.body.classList.add("zone-resizing");
-      window.addEventListener("mousemove", handleMove);
-      window.addEventListener("mouseup", handleUp);
-    },
-    [rightZoneWidth, setRightZoneWidth]
-  );
-
-  return (
-    <div
-      ref={layoutRef}
-      className="dock-layout flex flex-row h-full w-full min-h-0 overflow-hidden"
-      style={{ ["--panel-opacity" as string]: panelOpacity }}
-    >
-      {/* Panel Rail — available panels */}
-      <PanelRail />
-
-      {/* Left dock zone */}
-      {hasLeft && (
-        <>
-          <div
-            className="dock-zone-wrapper dock-zone-left-wrapper h-full border-r border-outline/20 overflow-hidden flex-shrink-0"
-            style={{ width: leftZoneWidth }}
-          >
-            <DockZoneComponent zone="left" side="vertical" />
-          </div>
-          {/* Zone divider between left and center */}
-          <div
-            className="zone-divider zone-divider-vertical w-1 flex-shrink-0 cursor-ew-resize bg-outline/10 hover:bg-accent-teal/40 transition-colors relative group"
-            onMouseDown={handleLeftDividerStart}
-            data-testid="zone-divider-left"
-          >
-            <div className="absolute inset-y-0 -left-1 -right-1 z-10" />
-          </div>
-        </>
-      )}
-
-      {/* Center — Preview + Timeline (always visible) */}
-      <div className="dock-center flex flex-col flex-1 min-w-0 min-h-0 overflow-hidden">
-        <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+    if (componentStr === "preview") {
+      return (
+        <div className="w-full h-full flex flex-col">
           <PreviewViewport isDropTarget={isDropTarget} />
         </div>
-        <Timeline />
-      </div>
-
-      {/* Right dock zone */}
-      {hasRight && (
-        <>
-          {/* Zone divider between center and right */}
-          <div
-            className="zone-divider zone-divider-vertical w-1 flex-shrink-0 cursor-ew-resize bg-outline/10 hover:bg-accent-teal/40 transition-colors relative group"
-            onMouseDown={handleRightDividerStart}
-            data-testid="zone-divider-right"
-          >
-            <div className="absolute inset-y-0 -left-1 -right-1 z-10" />
-          </div>
-          <div
-            className="dock-zone-wrapper dock-zone-right-wrapper h-full border-l border-outline/20 overflow-hidden flex-shrink-0"
-            style={{ width: rightZoneWidth }}
-          >
-            <DockZoneComponent zone="right" side="vertical" />
-          </div>
-        </>
-      )}
-
-      {/* Bottom dock zone (toggleable) */}
-      {hasBottom && (
-        <div className="dock-zone-wrapper dock-zone-bottom-wrapper absolute bottom-0 left-0 right-0 h-[200px] border-t border-outline/20 bg-surface/60 backdrop-blur-xl z-[100]">
-          <DockZoneComponent zone="bottom" side="horizontal" />
+      );
+    }
+    
+    if (componentStr === "timeline") {
+      return (
+        <div className="w-full h-full flex flex-col">
+          <Timeline />
         </div>
-      )}
+      );
+    }
 
-      {/* Floating windows */}
-      {floatingWindows.map((win) => (
-        <FloatingWindowComponent key={win.id} win={win} />
-      ))}
-    </div>
+    const panelMeta = PANEL_REGISTRY.find((p) => p.id === componentStr);
+    if (panelMeta) {
+      const Component = panelMeta.component;
+      return (
+        <div className="w-full h-full overflow-hidden" style={{ ["--panel-opacity" as string]: panelOpacity }}>
+          <Suspense fallback={<div className="p-4 text-xs text-on-surface-variant">Loading...</div>}>
+            <Component />
+          </Suspense>
+        </div>
+      );
+    }
+
+    return <div>Unknown Component</div>;
+  };
+
+  const addPanel = (panelId: string) => {
+    if (!model) return;
+    
+    let exists = false;
+    model.visitNodes((n) => {
+      if (n.getType() === "tab" && (n as TabNode).getComponent() === panelId) {
+        exists = true;
+      }
+    });
+
+    if (exists) return;
+
+    const panelMeta = PANEL_REGISTRY.find((p) => p.id === panelId);
+    if (!panelMeta) return;
+
+    model.doAction(Actions.addNode({
+      type: "tab",
+      id: panelId,
+      component: panelId,
+      name: panelMeta.label
+    }, panelMeta.defaultZone === "right" ? "right-zone" : "left-zone", DockLocation.CENTER, -1));
+  };
+
+  const removePanel = (panelId: string) => {
+    if (!model) return;
+    model.visitNodes((n) => {
+      if (n.getType() === "tab" && (n as TabNode).getComponent() === panelId) {
+        model.doAction(Actions.deleteTab(n.getId()));
+      }
+    });
+  };
+
+
+  useEffect(() => {
+    if (!model || !layoutTrigger) return;
+    
+    if (layoutTrigger.action === "reset") {
+      const newModel = Model.fromJson(DEFAULT_LAYOUT);
+      setModel(newModel);
+      const activePanels: string[] = [];
+      newModel.visitNodes((n) => {
+        if (n.getType() === "tab") activePanels.push((n as TabNode).getComponent() as string);
+      });
+      useAppStore.getState().setDockedPanels(activePanels);
+    } else if (layoutTrigger.action === "add" && layoutTrigger.panelId) {
+      addPanel(layoutTrigger.panelId);
+    } else if (layoutTrigger.action === "remove" && layoutTrigger.panelId) {
+      removePanel(layoutTrigger.panelId);
+    }
+  }, [layoutTrigger?.ts]);
+
+  if (!model) return null;
+
+  return (
+    <DockContext.Provider value={{ model, addPanel }}>
+      <div
+        className={`dock-layout flex flex-row h-full w-full min-h-0 overflow-hidden theme-${theme}`}
+        style={{ ["--panel-opacity" as string]: panelOpacity }}
+      >
+        <PanelRail />
+        <div className="flex-1 relative min-w-0 min-h-0 bg-surface">
+          <Layout
+            model={model}
+            factory={factory}
+            onModelChange={(m) => {
+              const activePanels: string[] = [];
+              m.visitNodes((n) => {
+                if (n.getType() === "tab") {
+                  const tabNode = n as TabNode;
+                  const componentStr = tabNode.getComponent() as string;
+                  if (componentStr) activePanels.push(componentStr);
+                }
+              });
+              useAppStore.getState().setDockedPanels(activePanels);
+            }}
+          />
+        </div>
+      </div>
+    </DockContext.Provider>
   );
 }

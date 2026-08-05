@@ -57,16 +57,11 @@ export default function Toolbar({ onFileLoaded }: Props) {
   const viewMenuRef = useRef<HTMLDivElement>(null);
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const fileMenuRef = useRef<HTMLDivElement>(null);
-  const dockLayout = useAppStore((s) => s.dockLayout);
-  const addPanelToDock = useAppStore((s) => s.addPanelToDock);
-  const removePanelFromDock = useAppStore((s) => s.removePanelFromDock);
+  const dockedPanels = useAppStore((s) => s.dockedPanels) || [];
+  const triggerLayoutAction = useAppStore((s) => s.triggerLayoutAction);
+  const setTheme = useAppStore((s) => s.setTheme);
 
-  const dockedIds = new Set<string>();
-  for (const z of ["left", "right", "bottom"] as const) {
-    for (const g of dockLayout[z]) {
-      for (const p of g.panels) dockedIds.add(p);
-    }
-  }
+  const dockedIds = new Set(dockedPanels);
 
   useEffect(() => {
     if (!fileMenuOpen) return;
@@ -279,8 +274,23 @@ export default function Toolbar({ onFileLoaded }: Props) {
     >
       {/* Left: Logo + Nav */}
       <div className="flex items-center gap-6">
+        {theme === "custom" ? (
+          <img
+            src="/logo.png"
+            alt="Brand Logo"
+            className="h-7 ml-6 object-contain"
+            aria-hidden="true"
+            onError={(e) => {
+              // Fallback to text if no custom logo is found
+              e.currentTarget.style.display = 'none';
+              if (e.currentTarget.nextElementSibling) {
+                e.currentTarget.nextElementSibling.classList.remove('hidden');
+              }
+            }}
+          />
+        ) : null}
         <span
-          className="font-headline-lg text-headline-lg solar-text tracking-wider filigree-header ml-6 cursor-default toolbar-logo"
+          className={`font-headline-lg text-headline-lg solar-text tracking-wider filigree-header cursor-default toolbar-logo ${theme === "custom" ? "hidden ml-2" : "ml-6"}`}
           aria-hidden="true"
         >
           MoshDither Studio
@@ -395,9 +405,9 @@ export default function Toolbar({ onFileLoaded }: Props) {
                       key={p.id}
                       onClick={() => {
                         if (isDocked) {
-                          removePanelFromDock(p.id);
+                          triggerLayoutAction("remove", p.id);
                         } else {
-                          addPanelToDock(p.id, p.defaultZone);
+                          triggerLayoutAction("add", p.id);
                         }
                       }}
                       className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors"
@@ -419,7 +429,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                     onClick={() => {
                       PANEL_REGISTRY.forEach((p) => {
                         if (!dockedIds.has(p.id)) {
-                          useAppStore.getState().addPanelToDock(p.id, p.defaultZone);
+                          useAppStore.getState().triggerLayoutAction("add", p.id);
                         }
                       });
                     }}
@@ -430,7 +440,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   <button
                     onClick={() => {
                       PANEL_REGISTRY.forEach((p) => {
-                        useAppStore.getState().removePanelFromDock(p.id);
+                        useAppStore.getState().triggerLayoutAction("remove", p.id);
                       });
                     }}
                     className="text-[10px] text-on-surface-variant hover:text-accent-pink transition-colors"
@@ -484,12 +494,37 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   />
                 </div>
                 <div className="border-t border-outline/20 my-1" />
+                <div className="px-3 py-1 text-[10px] uppercase font-bold text-on-surface-variant/70 tracking-wider">
+                  Theme Presets
+                </div>
+                {(["cosmic", "dark", "high-contrast", "light", "custom"] as const).map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => {
+                      if (t === "custom") {
+                        useAppStore.getState().setCustomUiModalOpen(true);
+                      } else {
+                        setTheme(t);
+                      }
+                      setViewMenuOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-3 py-1.5 text-[12px] transition-colors ${theme === t ? "text-accent-teal font-bold bg-accent-teal/10" : "text-on-surface hover:bg-accent-teal/5"}`}
+                  >
+                    <span className="capitalize">{t === "custom" ? "Custom UI..." : t.replace("-", " ")}</span>
+                    {theme === t && <span className="material-symbols-outlined text-xs">check</span>}
+                  </button>
+                ))}
+                <div className="border-t border-outline/20 my-1" />
+
                 <button
-                  onClick={() => { toggleTheme(); setViewMenuOpen(false); }}
+                  onClick={() => {
+                    useAppStore.getState().triggerLayoutAction("reset");
+                    setViewMenuOpen(false);
+                  }}
                   className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors"
                 >
-                  <span className="material-symbols-outlined menu-item-icon">{theme === "dark" ? "light_mode" : "dark_mode"}</span>
-                  {theme === "dark" ? "Light Theme" : "Dark Theme"}
+                  <span className="material-symbols-outlined menu-item-icon">dashboard_customize</span>
+                  Reset Standard Layout
                 </button>
               </div>
             )}

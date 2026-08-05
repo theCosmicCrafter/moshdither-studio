@@ -97,4 +97,21 @@ describe("migrateOverlayGuides", () => {
     expect(result.migrated).toBe(false);
     expect(result.stack.map((e) => e.effectId)).toEqual(["composite.overlay"]);
   });
+
+  it("updates historical effect IDs before they reach the strict Rust registry", () => {
+    const result = migrateOverlayGuides([
+      entry("noise.gaussian_noise"),
+      entry("color.contrast_brightness"),
+      entry("dithering.palette_dither"),
+      entry("analog.scanlines"),
+    ]);
+
+    expect(result.migrated).toBe(true);
+    expect(result.stack.map((e) => e.effectId)).toEqual([
+      "noise.gaussian",
+      "color.brightness_contrast",
+      "dithering.palette",
+      "analog.scanlines",
+    ]);
+  });
 });

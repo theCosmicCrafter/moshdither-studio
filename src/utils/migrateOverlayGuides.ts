@@ -23,6 +23,28 @@ const OVERLAY_TO_GUIDE: Record<string, keyof ViewportGuides> = {
   "overlay.pixel_grid": "pixelGrid",
 };
 
+/**
+ * Effect IDs emitted by builds before the registry names were consolidated.
+ * These aliases must be normalized before a preset reaches Rust, where an
+ * unknown ID aborts the complete effect stack.
+ */
+const LEGACY_EFFECT_IDS: Record<string, string> = {
+  "noise.gaussian_noise": "noise.gaussian",
+  "color.contrast_brightness": "color.brightness_contrast",
+  "color.saturation": "color.brightness_contrast",
+  "dithering.palette_dither": "dithering.palette",
+  "dithering.ordered": "dithering.ordered_variants",
+  "audio_reactive.chromatic": "audio_reactive.spectral_shift",
+  "analog.film_grain": "noise.gaussian",
+};
+
+// These effects were removed without a direct equivalent. Dropping them is
+// preferable to making the entire saved stack unrenderable.
+const REMOVED_LEGACY_EFFECT_IDS = new Set([
+  "analog.vignette",
+  "color.temperature_tint",
+]);
+
 export interface OverlayMigrationResult {
   /** The stack with any legacy `overlay.*` entries removed. */
   stack: StackEntry[];
@@ -50,11 +72,17 @@ export function migrateOverlayGuides(stack: StackEntry[]): OverlayMigrationResul
   for (const entry of stack) {
     const guide = OVERLAY_TO_GUIDE[entry.effectId];
     if (!guide) {
-      kept.push(entry);
+      if (REMOVED_LEGACY_EFFECT_IDS.has(entry.effectId)) continue;
+      const effectId = LEGACY_EFFECT_IDS[entry.effectId];
+      kept.push(effectId ? { ...entry, effectId } : entry);
       continue;
     }
     if (entry.enabled) guides[guide] = true;
   }
 
-  return { stack: kept, guides, migrated: kept.length !== stack.length };
+  return {
+    stack: kept,
+    guides,
+    migrated: kept.length !== stack.length || kept.some((entry, index) => entry.effectId !== stack[index]?.effectId),
+  };
 }

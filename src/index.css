@@ -123,6 +123,93 @@
   --neo-light-strong: rgba(255, 255, 255, 0.07);
 }
 
+/* ── Light Theme Preset ────────────────────────────────── */
+[data-theme="light"] {
+  --background: #f4f4f6;
+  --on-background: #18181b;
+  --surface: #ffffff;
+  --surface-dim: #e4e4e7;
+  --surface-bright: #ffffff;
+  --surface-container-lowest: #ffffff;
+  --surface-container-low: #f4f4f6;
+  --surface-container: #e4e4e7;
+  --surface-container-high: #d4d4d8;
+  --surface-container-highest: #a1a1aa;
+  --surface-main: #f4f4f6;
+  --surface-variant: #e4e4e7;
+  --on-surface: #18181b;
+  --on-surface-variant: #52525b;
+  --outline: #71717a;
+  --outline-variant: #d4d4d8;
+  --primary: #d62884;
+  --on-primary: #ffffff;
+  --accent: #d62884;
+  --accent-pink: #d62884;
+  --accent-teal: #008899;
+  --accent-gold: #859900;
+  --text-primary: #18181b;
+  --text-secondary: #52525b;
+  --text-muted: #71717a;
+  --neo-dark: rgba(0, 0, 0, 0.12);
+  --neo-light: rgba(255, 255, 255, 0.8);
+}
+
+/* ── High-Contrast Dark Theme Preset ──────────────────── */
+[data-theme="high-contrast"] {
+  --background: #000000;
+  --on-background: #ffffff;
+  --surface: #0a0a0a;
+  --surface-dim: #000000;
+  --surface-bright: #262626;
+  --surface-container-lowest: #000000;
+  --surface-container-low: #121212;
+  --surface-container: #1a1a1a;
+  --surface-container-high: #262626;
+  --surface-container-highest: #404040;
+  --surface-main: #000000;
+  --surface-variant: #262626;
+  --on-surface: #ffffff;
+  --on-surface-variant: #e5e5e5;
+  --outline: #ffffff;
+  --outline-variant: #737373;
+  --primary: #00ffff;
+  --on-primary: #000000;
+  --accent: #00ffff;
+  --accent-pink: #ff007f;
+  --accent-teal: #00ffff;
+  --accent-gold: #ccff00;
+  --text-primary: #ffffff;
+  --text-secondary: #e5e5e5;
+  --text-muted: #a3a3a3;
+  --neo-dark: rgba(0, 0, 0, 0.8);
+  --neo-light: rgba(255, 255, 255, 0.15);
+}
+
+/* ── Signature Cosmic Theme Preset (Default) ────────── */
+[data-theme="cosmic"],
+[data-theme="dark"] {
+  --background: #000000;
+  --on-background: #e5e2e3;
+  --surface: #131314;
+  --surface-main: #0a0a0b;
+  --on-surface: #e5e2e3;
+  --primary: #ffade0;
+  --accent: #ffade0;
+  --accent-pink: #ffade0;
+  --accent-gold: #b8d300;
+  --accent-teal: #00f4fe;
+}
+
+/* ── Custom UI Theme Preset ───────────────────────────── */
+[data-theme="custom"] {
+  --primary: var(--custom-primary, #00f4fe);
+  --accent: var(--custom-primary, #00f4fe);
+  --accent-teal: var(--custom-primary, #00f4fe);
+  --accent-pink: var(--custom-secondary, #ffade0);
+  --background: var(--custom-bg, #131314);
+  --surface-main: var(--custom-bg, #131314);
+}
+
 @layer base {
   * {
     box-sizing: border-box;
@@ -134,16 +221,12 @@
     width: 100%;
     height: 100%;
     overflow: hidden;
+    background: transparent;
   }
 
   body {
     font-family: var(--font-body);
-    background-color: #000000;
-    background-image: url(/cosmic-crafter-bg.png);
-    background-size: cover;
-    background-position: center;
-    background-repeat: no-repeat;
-    background-attachment: fixed;
+    background-color: transparent;
     color: var(--text-primary);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;

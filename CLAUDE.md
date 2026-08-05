@@ -1,41 +1,55 @@
-# CLAUDE.md — MoshDither Studio
+# CLAUDE.md — MoshDither Studio (IDE-Specific Agent Rules)
+
+# This file mirrors AGENTS.md for Claude Code / Windsurf / IDE agents.
+# For the full governance rulebook, see AGENTS.md.
 
 ## Project
 
-Desktop creative tool combining image/video processing with AI-powered segmentation (SAM3). Rust + Tauri backend, React + Vite frontend, Python SAM3 bridge.
+Desktop creative tool combining image/video processing with AI-powered
+segmentation (SAM3). Rust + Tauri v2 backend, React + Vite frontend,
+Python SAM3 bridge, FFmpeg/FFglitch sidecars.
+
+## Quick Reference
+
+| Task | Command |
+|------|---------|
+| Dev server | `npm run tauri:dev` |
+| Build | `npm run build` |
+| Type-check | `npx tsc --noEmit` |
+| Unit tests | `npm run test` |
+| E2E tests | `npm run test:e2e` |
+| Lint | `npm run lint` |
+| Secret scan | `npm run secret-scan` |
+| Checkpoint | `pwsh scripts/checkpoint.ps1` |
+| Regression | `pwsh evals/regression.ps1` |
+
+## Before Coding
+
+1. Read `AGENTS.md` for full governance rules
+2. Read `docs/structure.md` for naming conventions
+3. Read `docs/ARCHITECTURE.md` for stack overview
+4. Check `SECURITY.md` for active security toolchain
 
 ## Security — Always Active
 
-Before writing any code that touches: user input, DB queries, file paths, subprocess calls, or crypto operations — run `/security-scan` mentally and apply the patterns from `/sast-fix`.
+Before writing code touching: user input, file paths, subprocess calls,
+or crypto — apply `/security-scan` patterns mentally.
 
-Before any commit: run `/secret-gate`.
+Before commit: run `/secret-gate`.
 
-When reviewing output from CI scanners: use `/vuln-triage` to classify findings before proposing fixes.
+Never suppress scanner findings without explicit comment and user sign-off.
 
-Never suppress a scanner finding without an explicit comment and user sign-off.
+### Security Stack
 
-### Security Stack (this project)
+- **Pre-commit**: `.pre-commit-config.yaml` — gitleaks, detect-secrets, semgrep, bandit
+- **CI/CD**: `.github/workflows/security.yml` — Semgrep, CodeQL, TruffleHog, Snyk
+- **Local gate**: `../tools/scan-gate.ps1`
 
-- **Pre-commit**: `.pre-commit-config.yaml` — gitleaks, detect-secrets, semgrep, bandit, njsscan, pip-audit
-- **CI/CD**: `.github/workflows/security.yml` — Semgrep, CodeQL, TruffleHog, Snyk, Bandit, Trivy
-- **Local gate**: `../tools/scan-gate.ps1` — PowerShell pre-push security gate (shared)
-- **SARIF digest**: `../tools/sarif-digest.py` — Multi-tool SARIF aggregator (shared)
-- **MCP bridge**: `../tools/mcp-security.py` — Scanner tools exposed on localhost:9991 (shared)
-- **Skills**: global `/.codeium/windsurf/skills/security/` — security-scan, vuln-triage, sast-fix, secret-gate, best-skill (shared)
+## Key Rules
 
-## Skills Registry
-
-| Skill          | Path                                                         | Purpose                           |
-| -------------- | ------------------------------------------------------------ | --------------------------------- |
-| /security-scan | global `/.codeium/windsurf/skills/security/security-scan/SKILL.md` | Multi-tool SAST pipeline          |
-| /vuln-triage   | global `/.codeium/windsurf/skills/security/vuln-triage/SKILL.md`   | Classify findings                 |
-| /sast-fix      | global `/.codeium/windsurf/skills/security/sast-fix/SKILL.md`      | Generate secure fixes             |
-| /secret-gate   | global `/.codeium/windsurf/skills/security/secret-gate/SKILL.md`   | Pre-commit secrets check          |
-| /best-skill    | global `/.codeium/windsurf/skills/security/best-skill/SKILL.md`    | Secure code generation guidelines |
-
-## Session Start Checklist
-
-1. Read `SECURITY.md` for current toolchain status
-2. If modifying Python/Rust/JS: consider running `../tools/scan-gate.ps1`
-3. If adding dependencies: check for CVEs with pip-audit / npm audit
-4. Never commit `.env` files, secret keys, or hardcoded credentials
+- Never commit `.env` files or hardcoded secrets
+- Feature branches only — never push to main directly
+- Conventional commits: `feat:`, `fix:`, `chore:`, `docs:`
+- Create checkpoint before modifying Rust code
+- If build/test fails 3 times, stop and escalate
+- Instruction budget: AGENTS.md stays under 300 lines

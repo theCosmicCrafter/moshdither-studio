@@ -564,7 +564,7 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "audio_reactive.spectral_shift": {
     shaderId: "audioSpectralShift",
     paramMap: { shift_amount: "u_intensity" },
-    transform: (_k, v) => (typeof v === "number" ? v / 100 : 0.5),
+    transform: (_k, v) => (typeof v === "number" ? v : 0.5),
   },
   "audio_reactive.audio_dither": {
     shaderId: "audioReactiveDither",

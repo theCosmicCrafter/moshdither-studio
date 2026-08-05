@@ -120,14 +120,20 @@ export default function AudioPanel() {
         fontFamily: "var(--font-body)",
       }}
     >
-      <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
-        <input
-          type="checkbox"
-          checked={audioEnabled}
-          onChange={(e) => setAudioEnabled(e.target.checked)}
-        />
-        <span>Enable audio reactive</span>
-      </label>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingBottom: 4, borderBottom: "1px solid var(--outline-variant)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span className="material-symbols-outlined" style={{ fontSize: 14, color: "var(--accent-teal)" }}>graphic_eq</span>
+          <span style={{ fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Audio Engine</span>
+        </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 11, color: "var(--text-secondary)" }}>
+          <input
+            type="checkbox"
+            checked={audioEnabled}
+            onChange={(e) => setAudioEnabled(e.target.checked)}
+          />
+          <span>Active</span>
+        </label>
+      </div>
 
       {audioEnabled && audioIsSilent && (
         <div
@@ -154,13 +160,7 @@ export default function AudioPanel() {
         </div>
       )}
 
-      {!audioEnabled ? (
-        <div style={{ color: "var(--text-muted)", textAlign: "center", padding: "12px 0" }}>
-          Enable audio reactive to start
-        </div>
-      ) : (
-        <>
-          {/* File drop zone */}
+      {/* File drop zone */}
           <div
             onDrop={handleDrop}
             onDragOver={(e) => e.preventDefault()}
@@ -213,7 +213,10 @@ export default function AudioPanel() {
 
           {/* Mic toggle */}
           <button
-            onClick={startMicrophone}
+            onClick={() => {
+              setAudioEnabled(true);
+              startMicrophone();
+            }}
             style={{
               padding: "4px 8px",
               fontSize: 11,
@@ -229,7 +232,14 @@ export default function AudioPanel() {
 
           {/* Transport */}
           <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
-            <TransportButton onClick={play} label="Play" active={audioPlaying} />
+            <TransportButton
+              onClick={() => {
+                setAudioEnabled(true);
+                play();
+              }}
+              label="Play"
+              active={audioPlaying}
+            />
             <TransportButton onClick={pause} label="Pause" active={!audioPlaying} />
             <TransportButton onClick={stop} label="Stop" />
           </div>
@@ -307,8 +317,6 @@ export default function AudioPanel() {
             <span>Pres</span>
             <span>Bril</span>
           </div>
-        </>
-      )}
     </div>
   );
 }

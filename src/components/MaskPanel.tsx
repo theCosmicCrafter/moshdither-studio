@@ -257,7 +257,7 @@ export default function MaskPanel() {
       ) : !sam3Ready ? (
         <div className="flex flex-col gap-2 py-2">
           <div className="flex items-center justify-center gap-2 text-xs text-[var(--text-muted)]">
-            <span className="inline-block w-3 h-3 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+            <span className="inline-block w-2 h-2 rounded-full bg-[var(--accent)]" aria-hidden="true" />
             SAM3 idle — enter a prompt to restart
           </div>
           {/* Mode selector */}

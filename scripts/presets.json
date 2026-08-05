@@ -2,92 +2,380 @@
   {
     "name": "vhs-analog",
     "stack": [
-      { "effect_id": "analog.scanlines", "params": { "gap": 2, "intensity": 0.4 } },
-      { "effect_id": "analog.chromatic_aberration", "params": { "shift": 6 } },
-      { "effect_id": "noise.gaussian", "params": { "amount": 0.08 } },
-      { "effect_id": "analog.vhs", "params": { "tracking": 0.3, "noise": 0.2 } },
-      { "effect_id": "color.brightness_contrast", "params": { "contrast": 0.2, "brightness": -0.05 } }
+      {
+        "effect_id": "analog.scanlines",
+        "enabled": true,
+        "params": {
+          "gap": 2,
+          "intensity": 0.4
+        }
+      },
+      {
+        "effect_id": "analog.chromatic_aberration",
+        "enabled": true,
+        "params": {
+          "shift": 6
+        }
+      },
+      {
+        "effect_id": "noise.gaussian",
+        "enabled": true,
+        "params": {
+          "std_dev": 20
+        }
+      },
+      {
+        "effect_id": "analog.vhs",
+        "enabled": true,
+        "params": {
+          "tracking": 0.3,
+          "noise": 0.2
+        }
+      },
+      {
+        "effect_id": "color.brightness_contrast",
+        "enabled": true,
+        "params": {
+          "contrast": 1.2,
+          "brightness": -0.05
+        }
+      }
     ]
   },
   {
     "name": "cyberpunk-dither",
     "stack": [
-      { "effect_id": "dithering.palette", "params": { "scale": 1.0, "angle": 0, "palette_size": 4, "amount": 1.0, "palette_0": [255, 0, 128], "palette_1": [0, 255, 255], "palette_2": [255, 255, 0], "palette_3": [0, 0, 0], "palette_4": [0, 0, 0], "palette_5": [0, 0, 0], "palette_6": [0, 0, 0], "palette_7": [0, 0, 0] } },
-      { "effect_id": "color.lift_gamma_gain", "params": { "lift_r": 0.1, "lift_g": 0.0, "lift_b": 0.15, "gamma_r": 0.0, "gamma_g": 0.05, "gamma_b": -0.1, "gain_r": 0.2, "gain_g": 0.0, "gain_b": 0.3, "amount": 0.8 } },
-      { "effect_id": "analog.chromatic_aberration", "params": { "shift": 3 } },
-      { "effect_id": "glitch.slice_shift", "params": { "slice_height": 8, "max_shift": 12 } }
+      {
+        "effect_id": "dithering.palette",
+        "enabled": true,
+        "params": {
+          "scale": 1,
+          "angle": 0,
+          "palette_size": 4,
+          "amount": 1
+        }
+      },
+      {
+        "effect_id": "color.lift_gamma_gain",
+        "enabled": true,
+        "params": {
+          "lift_r": 0.1,
+          "lift_g": 0,
+          "lift_b": 0.15,
+          "gamma_r": 0,
+          "gamma_g": 0.05,
+          "gamma_b": -0.1,
+          "gain_r": 0.2,
+          "gain_g": 0,
+          "gain_b": 0.3,
+          "amount": 0.8
+        }
+      },
+      {
+        "effect_id": "analog.chromatic_aberration",
+        "enabled": true,
+        "params": {
+          "shift": 3
+        }
+      },
+      {
+        "effect_id": "glitch.slice_shift",
+        "enabled": true,
+        "params": {
+          "slice_height": 8,
+          "max_shift": 12
+        }
+      }
     ]
   },
   {
-    "name": "bw-halftone",
+    "name": "b&w-halftone",
     "stack": [
-      { "effect_id": "artistic.grayscale", "params": {} },
-      { "effect_id": "dithering.halftone", "params": { "dot_size": 4, "angle": 45 } },
-      { "effect_id": "color.brightness_contrast", "params": { "contrast": 0.3, "brightness": 0.0 } }
+      {
+        "effect_id": "artistic.grayscale",
+        "enabled": true,
+        "params": {}
+      },
+      {
+        "effect_id": "dithering.halftone",
+        "enabled": true,
+        "params": {
+          "dot_size": 4,
+          "screen_angle": 45
+        }
+      },
+      {
+        "effect_id": "color.brightness_contrast",
+        "enabled": true,
+        "params": {
+          "contrast": 1.3,
+          "brightness": 0
+        }
+      }
     ]
   },
   {
     "name": "glitch-storm",
     "stack": [
-      { "effect_id": "glitch.slice_shift", "params": { "slice_height": 3, "max_shift": 40 } },
-      { "effect_id": "glitch.databend", "params": { "intensity": 0.6 } },
-      { "effect_id": "glitch.jpeg_quantize", "params": { "quality": 30 } },
-      { "effect_id": "color.rgb_shift", "params": { "r_offset": 4, "g_offset": 0, "b_offset": -4 } },
-      { "effect_id": "analog.scanlines", "params": { "gap": 2, "intensity": 0.25 } }
+      {
+        "effect_id": "glitch.slice_shift",
+        "enabled": true,
+        "params": {
+          "slice_height": 3,
+          "max_shift": 40
+        }
+      },
+      {
+        "effect_id": "glitch.databend",
+        "enabled": true,
+        "params": {
+          "amount": 0.6
+        }
+      },
+      {
+        "effect_id": "glitch.jpeg_quantize",
+        "enabled": true,
+        "params": {
+          "quality": 30
+        }
+      },
+      {
+        "effect_id": "color.rgb_shift",
+        "enabled": true,
+        "params": {
+          "r_shift": 4,
+          "g_shift": 0,
+          "b_shift": -4
+        }
+      },
+      {
+        "effect_id": "analog.scanlines",
+        "enabled": true,
+        "params": {
+          "gap": 2,
+          "intensity": 0.25
+        }
+      }
     ]
   },
   {
     "name": "pixel-crush",
     "stack": [
-      { "effect_id": "pixel_geo.pixelate", "params": { "block_size": 12 } },
-      { "effect_id": "artistic.posterize", "params": { "levels": 4 } },
-      { "effect_id": "dithering.bayer", "params": { "matrix_size": 1 } },
-      { "effect_id": "color.brightness_contrast", "params": { "saturation": 1.4 } }
+      {
+        "effect_id": "pixel_geo.pixelate",
+        "enabled": true,
+        "params": {
+          "block_size": 12
+        }
+      },
+      {
+        "effect_id": "artistic.posterize",
+        "enabled": true,
+        "params": {
+          "bits": 4
+        }
+      },
+      {
+        "effect_id": "dithering.bayer",
+        "enabled": true,
+        "params": {
+          "matrix_size": 1
+        }
+      },
+      {
+        "effect_id": "color.brightness_contrast",
+        "enabled": true,
+        "params": {
+          "saturation": 1.4
+        }
+      }
     ]
   },
   {
     "name": "deep-bass-pulse",
     "stack": [
-      { "effect_id": "audio_reactive.bass_pulse", "params": { "scale": 0.8, "threshold": 0.3, "_audio_bass": 0.8, "_audio_beat_bass": 1.0 } },
-      { "effect_id": "audio_reactive.beat_glitch", "params": { "intensity": 0.5, "_audio_beat_bass": 1.0, "_audio_beat_energy": 0.7 } },
-      { "effect_id": "color.lift_gamma_gain", "params": { "lift_r": 0.0, "lift_g": 0.0, "lift_b": 0.0, "gamma_r": 0.0, "gamma_g": 0.0, "gamma_b": 0.0, "gain_r": 0.3, "gain_g": 0.0, "gain_b": 0.2, "amount": 0.6 } },
-      { "effect_id": "analog.scanlines", "params": { "gap": 2, "intensity": 0.2 } }
+      {
+        "effect_id": "audio_reactive.bass_pulse",
+        "enabled": true,
+        "params": {
+          "sensitivity": 0.8,
+          "block_size": 16
+        }
+      },
+      {
+        "effect_id": "audio_reactive.spectral_shift",
+        "enabled": true,
+        "params": {
+          "shift_amount": 0.5
+        }
+      },
+      {
+        "effect_id": "color.lift_gamma_gain",
+        "enabled": true,
+        "params": {
+          "lift_r": 0,
+          "lift_g": 0,
+          "lift_b": 0,
+          "gamma_r": 0,
+          "gamma_g": 0,
+          "gamma_b": 0,
+          "gain_r": 0.3,
+          "gain_g": 0,
+          "gain_b": 0.2,
+          "amount": 0.6
+        }
+      },
+      {
+        "effect_id": "analog.scanlines",
+        "enabled": true,
+        "params": {
+          "gap": 2,
+          "intensity": 0.2
+        }
+      }
     ]
   },
   {
     "name": "datamosh-classic",
     "stack": [
-      { "effect_id": "datamoshing.classic", "params": { "strength": 0.7, "block_size": 16 } },
-      { "effect_id": "glitch.byte_flip", "params": { "probability": 0.05 } },
-      { "effect_id": "color.channel_swap", "params": { "mode": 2 } },
-      { "effect_id": "analog.chromatic_aberration", "params": { "shift": 2 } }
+      {
+        "effect_id": "datamoshing.classic",
+        "enabled": true,
+        "params": {
+          "chunk_size": 16,
+          "repeats": 3,
+          "smear_direction": "horizontal"
+        }
+      },
+      {
+        "effect_id": "glitch.byte_flip",
+        "enabled": true,
+        "params": {
+          "amount": 0.05
+        }
+      },
+      {
+        "effect_id": "color.channel_swap",
+        "enabled": true,
+        "params": {
+          "mode": 2
+        }
+      },
+      {
+        "effect_id": "analog.chromatic_aberration",
+        "enabled": true,
+        "params": {
+          "shift": 2
+        }
+      }
     ]
   },
   {
     "name": "vintage-film",
     "stack": [
-      { "effect_id": "color.brightness_contrast", "params": { "saturation": 0.7 } },
-      { "effect_id": "noise.salt_pepper", "params": { "amount": 0.03 } },
-      { "effect_id": "noise.fractal", "params": { "amount": 0.25 } },
-      { "effect_id": "artistic.solarize", "params": { "threshold": 128 } }
+      {
+        "effect_id": "color.brightness_contrast",
+        "enabled": true,
+        "params": {
+          "saturation": 0.7
+        }
+      },
+      {
+        "effect_id": "noise.salt_pepper",
+        "enabled": true,
+        "params": {
+          "density": 0.03
+        }
+      },
+      {
+        "effect_id": "noise.gaussian",
+        "enabled": true,
+        "params": {
+          "std_dev": 10
+        }
+      },
+      {
+        "effect_id": "artistic.solarize",
+        "enabled": true,
+        "params": {
+          "threshold": 128
+        }
+      }
     ]
   },
   {
     "name": "spectral-shift",
     "stack": [
-      { "effect_id": "audio_reactive.spectral_shift", "params": { "intensity": 0.8, "_audio_centroid": 2000.0, "_audio_flux": 50.0 } },
-      { "effect_id": "color.lift_gamma_gain", "params": { "lift_r": 0.0, "lift_g": 0.0, "lift_b": 0.0, "gamma_r": -0.1, "gamma_g": 0.0, "gamma_b": 0.1, "gain_r": 0.1, "gain_g": 0.2, "gain_b": 0.0, "amount": 0.7 } },
-      { "effect_id": "dithering.floyd_steinberg", "params": {} },
-      { "effect_id": "pixel_geo.pixel_sort", "params": { "threshold": 0.3, "length": 20 } }
+      {
+        "effect_id": "audio_reactive.spectral_shift",
+        "enabled": true,
+        "params": {
+          "shift_amount": 0.8
+        }
+      },
+      {
+        "effect_id": "color.lift_gamma_gain",
+        "enabled": true,
+        "params": {
+          "lift_r": 0,
+          "lift_g": 0,
+          "lift_b": 0,
+          "gamma_r": -0.1,
+          "gamma_g": 0,
+          "gamma_b": 0.1,
+          "gain_r": 0.1,
+          "gain_g": 0.2,
+          "gain_b": 0,
+          "amount": 0.7
+        }
+      },
+      {
+        "effect_id": "dithering.floyd_steinberg",
+        "enabled": true,
+        "params": {}
+      },
+      {
+        "effect_id": "pixel_geo.pixel_sort",
+        "enabled": true,
+        "params": {
+          "auto_threshold": false,
+          "threshold": 77
+        }
+      }
     ]
   },
   {
     "name": "kaleidoscope",
     "stack": [
-      { "effect_id": "pixel_geo.kaleidoscope", "params": { "segments": 6, "rotation": 0 } },
-      { "effect_id": "color.brightness_contrast", "params": { "saturation": 1.5 } },
-      { "effect_id": "dithering.bayer", "params": { "scale": 1 } },
-      { "effect_id": "analog.hue_shift", "params": { "shift": 30 } }
+      {
+        "effect_id": "pixel_geo.kaleidoscope",
+        "enabled": true,
+        "params": {
+          "segments": 6
+        }
+      },
+      {
+        "effect_id": "color.brightness_contrast",
+        "enabled": true,
+        "params": {
+          "saturation": 1.5
+        }
+      },
+      {
+        "effect_id": "dithering.ordered_variants",
+        "enabled": true,
+        "params": {
+          "matrix": "clustereddot4x4",
+          "levels": 2
+        }
+      },
+      {
+        "effect_id": "analog.hue_shift",
+        "enabled": true,
+        "params": {
+          "degrees": 30
+        }
+      }
     ]
   }
 ]

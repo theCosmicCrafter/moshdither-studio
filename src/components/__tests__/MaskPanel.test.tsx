@@ -94,6 +94,13 @@ describe("MaskPanel", () => {
     expect(screen.getByText(/SAM3 idle/i)).toBeInTheDocument();
   });
 
+  it("uses a static status indicator while SAM3 is idle", () => {
+    useAppStore.getState().setMediaLoaded(true);
+    render(<MaskPanel />);
+
+    expect(screen.getByText(/SAM3 idle/i).parentElement?.querySelector(".animate-spin")).toBeNull();
+  });
+
   it("shows Load Current Image button when sam3 is ready", () => {
     useAppStore.getState().setMediaLoaded(true);
     useAppStore.getState().setSam3Ready(true);

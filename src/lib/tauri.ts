@@ -9,16 +9,19 @@ export { convertFileSrc };
 // ── SAM3 Segmentation ────────────────────────────────────────
 
 export async function sam3Init(): Promise<string> {
+  if (!isTauriAvailable()) return "browser-fallback";
   return invoke("sam3_init");
 }
 
 export async function sam3LoadImage(imageB64: string): Promise<{ width: number; height: number }> {
+  if (!isTauriAvailable()) return { width: 0, height: 0 };
   return invoke("sam3_load_image", { imageB64 });
 }
 
 export async function sam3TextPrompt(
   prompt: string
 ): Promise<{ count: number; masks: string[]; scores: number[] }> {
+  if (!isTauriAvailable()) return { count: 0, masks: [], scores: [] };
   return invoke("sam3_text_prompt", { prompt });
 }
 
@@ -26,12 +29,14 @@ export async function sam3PointPrompt(
   points: [number, number][],
   labels?: number[]
 ): Promise<{ count: number; masks: string[]; scores: number[] }> {
+  if (!isTauriAvailable()) return { count: 0, masks: [], scores: [] };
   return invoke("sam3_point_prompt", { points, labels });
 }
 
 export async function sam3BoxPrompt(
   boxes: [number, number, number, number][]
 ): Promise<{ count: number; masks: string[]; scores: number[] }> {
+  if (!isTauriAvailable()) return { count: 0, masks: [], scores: [] };
   return invoke("sam3_box_prompt", { boxes });
 }
 
@@ -40,12 +45,14 @@ export async function sam3AutoMask(
   iouThreshold: number = 0.7,
   minMaskRegionArea: number = 100
 ): Promise<{ count: number; masks: string[]; scores: number[] }> {
+  if (!isTauriAvailable()) return { count: 0, masks: [], scores: [] };
   return invoke("sam3_auto_mask", {
     gridSize,
     iouThreshold,
     minMaskRegionArea,
   });
 }
+
 export async function sam3RefineMask(
   maskB64: string,
   points: [number, number][],
@@ -56,6 +63,7 @@ export async function sam3RefineMask(
   masks: string[];
   scores: number[];
 }> {
+  if (!isTauriAvailable()) return { status: "browser-fallback", count: 0, masks: [], scores: [] };
   return invoke("sam3_refine_mask", { maskB64, points, labels });
 }
 
@@ -66,6 +74,7 @@ export async function sam3PostprocessMask(
   feather: number = 0,
   fillHoles: boolean = false
 ): Promise<string> {
+  if (!isTauriAvailable()) return maskB64;
   return invoke("sam3_postprocess_mask", {
     maskB64,
     grow,
@@ -76,6 +85,7 @@ export async function sam3PostprocessMask(
 }
 
 export async function sam3Clear(): Promise<string> {
+  if (!isTauriAvailable()) return "ok";
   return invoke("sam3_clear");
 }
 
@@ -87,10 +97,12 @@ export async function sam3VideoPredictor(
   frame_masks: string[][];
   frame_scores: number[][];
 }> {
+  if (!isTauriAvailable()) return { status: "browser-fallback", frame_masks: [], frame_scores: [] };
   return invoke("sam3_video_predictor", { frames, prompt });
 }
 
 export async function sam3Shutdown(): Promise<string> {
+  if (!isTauriAvailable()) return "ok";
   return invoke("sam3_shutdown");
 }
 
@@ -180,6 +192,7 @@ export async function loadMediaFile(): Promise<string | null> {
 }
 
 export async function loadMediaFromPath(path: string): Promise<void> {
+  if (!isTauriAvailable()) return;
   await invoke("load_media", { path });
 }
 
@@ -504,4 +517,41 @@ export async function loadPresetsFile(): Promise<string> {
 export async function savePresetsFile(json: string): Promise<void> {
   if (!isTauriAvailable()) return;
   await invoke("save_presets", { json });
+}
+
+// ── Window Edge Snapping & AppBar Docking ─────────────────────
+
+export interface MonitorInfo {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  scaleFactor: number;
+}
+
+/** Returns the current monitor's position and size for edge proximity calculations. */
+export async function getMonitorInfo(): Promise<MonitorInfo | null> {
+  if (!isTauriAvailable()) return null;
+  return invoke<MonitorInfo>("get_monitor_info");
+}
+
+/** Snaps the window to the specified display edge (`left`, `right`, `top`, `bottom`). */
+export async function snapToEdge(edge: string): Promise<void> {
+  if (!isTauriAvailable()) return;
+  await invoke("snap_to_edge", { edge });
+}
+
+/**
+ * Registers the window as a native Win32 AppBar, reserving screen space
+ * on the specified edge. Windows-only — errors on other platforms.
+ */
+export async function dockWindowAppbar(edge: string, size: number): Promise<void> {
+  if (!isTauriAvailable()) return;
+  await invoke("dock_window_appbar", { edge, size });
+}
+
+/** Unregisters the AppBar, releasing the reserved screen space. */
+export async function undockWindowAppbar(): Promise<void> {
+  if (!isTauriAvailable()) return;
+  await invoke("undock_window_appbar");
 }

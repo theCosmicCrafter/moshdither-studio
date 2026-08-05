@@ -105,6 +105,8 @@ const EXTRA_ICONS = new Set([
   "maximize",
   "filter_none",
   "fullscreen_exit",
+  "unfold_more",
+  "magnet"
 ]);
 
 async function* walk(dir) {

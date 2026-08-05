@@ -22,7 +22,7 @@ import ViewportGuides from "./ViewportGuides";
 import AudioVisualizer from "./common/AudioVisualizer";
 
 interface Props {
-  isDropTarget?: boolean;
+  readonly isDropTarget?: boolean;
 }
 
 /** Isolated audio waveform overlay so it re-renders on audio data without
@@ -57,6 +57,27 @@ function screenToImageCoords(
     x: Math.max(0, Math.min(mediaW - 1, x)),
     y: Math.max(0, Math.min(mediaH - 1, y)),
   };
+}
+
+async function prepareSourceTexture(
+  uploader: MediaUploader,
+  isVideo: boolean,
+  proxyUrl: string | null,
+  video: HTMLVideoElement | null,
+  originalDataUrl: string,
+  currentTex: WebGLTexture | null
+): Promise<WebGLTexture | null> {
+  if (isVideo && proxyUrl && video && video.readyState >= 2) {
+    if (!currentTex) {
+      return uploader.createTextureFromImage(video);
+    }
+    uploader.updateVideoTexture(currentTex, video);
+    return currentTex;
+  }
+  if (!currentTex) {
+    return await uploader.uploadImage(originalDataUrl);
+  }
+  return currentTex;
 }
 
 function PreviewViewport({ isDropTarget = false }: Props) {
@@ -193,6 +214,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
   const splitterRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number>(0);
   const cpuAnimRafRef = useRef<number>(0);
+  const cpuRenderRevisionRef = useRef(0);
   const lastFrameTimeRef = useRef<number>(0);
   const sam3CanvasRef = useRef<HTMLCanvasElement>(null);
   const hoverTimeoutRef = useRef<number | null>(null);
@@ -245,12 +267,14 @@ function PreviewViewport({ isDropTarget = false }: Props) {
 
   useEffect(() => {
     if (beforeClipRef.current) {
-      beforeClipRef.current.style.width = `${splitPosition}%`;
+      beforeClipRef.current.style.clipPath = showBeforeAfter
+        ? `inset(0 0 0 ${splitPosition}%)`
+        : "none";
     }
     if (splitterRef.current) {
       splitterRef.current.style.left = `${splitPosition}%`;
     }
-  }, [splitPosition]);
+  }, [splitPosition, showBeforeAfter]);
 
   useEffect(() => {
     if (maskImgRef.current) {
@@ -373,7 +397,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
           const dataUrl = await new Promise<string>((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = () => resolve(reader.result as string);
-            reader.onerror = () => reject(reader.error);
+            reader.onerror = () => reject(reader.error ?? new Error("Failed to read dropped file"));
             reader.readAsDataURL(file);
           });
           await loadMediaFromBase64(dataUrl);
@@ -792,21 +816,16 @@ function PreviewViewport({ isDropTarget = false }: Props) {
         }
 
         // Upload source texture: video frame for video sources, image for stills
-        let tex = sourceTexRef.current;
-        const video = videoRef.current;
-        if (isVideo && proxyUrl && video && video.readyState >= 2) {
-          if (!tex) {
-            tex = uploader.createTextureFromImage(video);
-            sourceTexRef.current = tex;
-          } else {
-            uploader.updateVideoTexture(tex, video);
-          }
-        } else {
-          if (!tex) {
-            tex = await uploader.uploadImage(originalDataUrl);
-            sourceTexRef.current = tex;
-          }
-        }
+        const tex = await prepareSourceTexture(
+          uploader,
+          isVideo,
+          proxyUrl,
+          videoRef.current,
+          originalDataUrl,
+          sourceTexRef.current
+        );
+        sourceTexRef.current = tex;
+        if (!tex) return;
 
         // Build render passes from active effect stack (read from store for live params)
         const s = useAppStore.getState();
@@ -954,7 +973,12 @@ function PreviewViewport({ isDropTarget = false }: Props) {
   useEffect(() => {
     if (!useCpuPreview || !mediaLoaded) return;
     const state = useAppStore.getState();
-    if (state.effectStack.length === 0) return;
+    if (state.effectStack.length === 0) {
+      if (state.originalDataUrl && state.previewDataUrl !== state.originalDataUrl) {
+        state.setPreviewDataUrl(state.originalDataUrl);
+      }
+      return;
+    }
 
     let cancelled = false;
     let inFlight = false;
@@ -967,6 +991,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
         return;
       }
       inFlight = true;
+      const renderRevision = ++cpuRenderRevisionRef.current;
       try {
         const s = useAppStore.getState();
         const animTime = s.isPlaying ? s.currentTime : 0;
@@ -974,7 +999,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
         const activeMaskForFrame = s.sam3FrameMasks[currentFrameIndex] || s.activeMask;
         const activeStack = stackToRustPayload(s.effectStack, activeMaskForFrame, s.sam3Masks, animTime);
         const result = await applyEffectStack(activeStack, null, scale);
-        if (!cancelled) state.setPreviewDataUrl(result);
+        if (!cancelled && renderRevision === cpuRenderRevisionRef.current) state.setPreviewDataUrl(result);
       } catch (e) {
         console.error('CPU preview render failed:', e);
         if (!cancelled) {
@@ -1013,6 +1038,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
           return;
         }
         lastRenderTime = now;
+        const renderRevision = ++cpuRenderRevisionRef.current;
         try {
           const s = useAppStore.getState();
           const animTime = s.currentTime;
@@ -1020,7 +1046,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
           const activeMaskForFrame = s.sam3FrameMasks[currentFrameIndex] || s.activeMask;
           const activeStack = stackToRustPayload(s.effectStack, activeMaskForFrame, s.sam3Masks, animTime);
           const result = await applyEffectStack(activeStack, null, 0.5); // Playing uses 0.5 for performance
-          if (!cancelled) s.setPreviewDataUrl(result);
+          if (!cancelled && renderRevision === cpuRenderRevisionRef.current) s.setPreviewDataUrl(result);
         } catch (e) {
           console.error('CPU preview render failed:', e);
           if (!cancelled) {
@@ -1088,6 +1114,26 @@ function PreviewViewport({ isDropTarget = false }: Props) {
 
   const showDropOverlay = isDropTarget || isHtmlDropTarget;
 
+  let statusDotBg = "solar-bg animate-pulse-glow";
+  let statusText = "LIVE PREVIEW";
+  if (useCpuPreview) {
+    statusDotBg = "bg-accent-teal";
+    statusText = "EXACT OUTPUT (CPU)";
+  } else if (isApproximatePreview) {
+    statusDotBg = "bg-amber-400";
+    statusText = "APPROXIMATE (CLICK FOR EXACT)";
+  } else if (stackCount > 0) {
+    statusDotBg = "bg-accent-pink animate-pulse-glow";
+    statusText = "ANIMATING";
+  }
+
+  let canvasCursor = "cursor-default";
+  if (isPanDragging) {
+    canvasCursor = "cursor-grabbing";
+  } else if ((isSam3Interactive && (sam3Mode === "point" || sam3Mode === "box")) || isManualMaskActive) {
+    canvasCursor = "cursor-crosshair";
+  }
+
   return (
     <div
       data-testid="preview-viewport"
@@ -1095,8 +1141,8 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     >
       {/* Viewport Header Bar */}
       {mediaLoaded && (
-        <div className="h-10 flex items-center justify-between px-4 flex-shrink-0 border-b border-outline-variant/20 bg-surface/80 backdrop-blur-xl">
-          <div className="flex items-center gap-4">
+        <div className="flex-shrink-0 flex items-center justify-between px-4 py-2 border-b border-outline-variant/30 bg-surface-main/80 backdrop-blur-md filigree-header">
+          <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={() => {
@@ -1106,8 +1152,8 @@ function PreviewViewport({ isDropTarget = false }: Props) {
               className="text-label-sm font-label-sm text-on-surface-variant flex items-center gap-2 neo-flat px-3 py-1 rounded-full cursor-pointer hover:border-accent-teal/40 transition-colors"
               title={useCpuPreview ? "Click to switch to fast WebGL GPU preview" : "Click to switch to 100% exact Rust CPU preview (exact saved output)"}
             >
-              <span className={`w-2 h-2 rounded-full ${useCpuPreview ? "bg-accent-teal" : isApproximatePreview ? "bg-amber-400" : stackCount > 0 ? "bg-accent-pink animate-pulse-glow" : "solar-bg animate-pulse-glow"}`} />
-              {useCpuPreview ? "EXACT OUTPUT (CPU)" : isApproximatePreview ? "APPROXIMATE (CLICK FOR EXACT)" : stackCount > 0 ? "ANIMATING" : "LIVE PREVIEW"}
+              <span className={`w-2 h-2 rounded-full ${statusDotBg}`} />
+              {statusText}
             </button>
             {fileName && (
               <span className="text-label-sm font-label-sm text-accent-teal/90 cursor-default hover:text-accent-teal transition-colors bg-surface/60 px-2 rounded">
@@ -1118,7 +1164,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
           <div className="flex items-center gap-3">
             {/* Composition guides. Preview-only: these never enter the export
                 stack, which is the whole reason they are not effects. */}
-            <div className="flex items-center gap-1" role="group" aria-label="Composition guides">
+            <div className="flex items-center gap-1" aria-label="Composition guides">
               {(
                 [
                   { key: "safeArea", icon: "crop_free", label: "Safe area guides" },
@@ -1168,15 +1214,15 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       )}
 
       {/* Canvas Area */}
-      <div
+      <section
         ref={containerRef}
-        className={`flex-1 relative overflow-hidden ${!mediaLoaded ? "checkerboard" : "bg-black/95"} ${isFullscreen ? "bg-black" : ""} group/main ${
-          isPanDragging ? "cursor-grabbing" : (isSam3Interactive && (sam3Mode === "point" || sam3Mode === "box")) || isManualMaskActive ? "cursor-crosshair" : "cursor-default"
-        }`}
+        aria-label="Media preview viewport"
+        className={`flex-1 relative overflow-hidden ${!mediaLoaded ? "checkerboard" : "bg-black/95"} ${isFullscreen ? "bg-black" : ""} group/main ${canvasCursor}`}
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
+        onDoubleClick={() => useAppStore.getState().setZoom(1)}
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -1214,56 +1260,21 @@ function PreviewViewport({ isDropTarget = false }: Props) {
             ref={zoomWrapperRef}
             className="relative zoom-wrapper"
           >
-            {showBeforeAfter && originalDataUrl ? (
-              <div className="relative">
-                {/* After (full) */}
+            <div className="relative">
+              {/* Original image acts as the BEFORE background layer when split mode is active */}
+              {showBeforeAfter && originalDataUrl && (
                 <img
-                  src={previewDataUrl || ""}
-                  alt="Preview"
+                  src={originalDataUrl}
+                  alt="Original"
                   draggable={false}
                   className="preview-img"
                 />
-                {/* Before (clipped) */}
-                <div
-                  ref={beforeClipRef}
-                  className="absolute inset-0 overflow-hidden before-clip"
-                >
-                  <img
-                    src={originalDataUrl}
-                    alt="Original"
-                    draggable={false}
-                    className="preview-img absolute top-0 left-0"
-                  />
-                </div>
-                {/* Splitter */}
-                <div
-                  ref={splitterRef}
-                  className="absolute top-0 bottom-0 w-px splitter-handle"
-                  onMouseDown={(e) => {
-                    e.stopPropagation();
-                    setIsSplitDragging(true);
-                  }}
-                >
-                  <div
-                    className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-5 h-8 rounded flex items-center justify-center splitter-knob"
-                  >
-                    <span className="material-symbols-outlined mi-sm text-black">center_focus_strong</span>
-                  </div>
-                </div>
-                {/* Labels */}
-                <div
-                  className="absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded split-label"
-                >
-                  BEFORE
-                </div>
-                <div
-                  className="absolute top-2 right-2 text-[10px] font-bold px-2 py-0.5 rounded split-label-after"
-                >
-                  AFTER
-                </div>
-              </div>
-            ) : (
-              <div className="relative">
+              )}
+              {/* The preview surface (CPU image or WebGL canvas) — stays mounted across split mode toggles */}
+              <div
+                ref={beforeClipRef}
+                className={showBeforeAfter && originalDataUrl ? "absolute top-0 left-0 w-full h-full" : "relative"}
+              >
                 {useCpuPreview ? (
                   /* CPU-processed preview image (accurate algorithms via Rust backend) */
                   <img
@@ -1280,16 +1291,42 @@ function PreviewViewport({ isDropTarget = false }: Props) {
                     className="preview-canvas"
                   />
                 )}
-                {/* Hidden img for SAM3 coord reference and fallback */}
-                {!useCpuPreview && (
-                  <img
-                    ref={previewImgRef}
-                    src={previewDataUrl || ""}
-                    alt="Preview"
-                    draggable={false}
-                    className="preview-hidden"
-                  />
-                )}
+              </div>
+              {/* Hidden img for SAM3 coord reference and fallback */}
+              {!useCpuPreview && (
+                <img
+                  ref={previewImgRef}
+                  src={previewDataUrl || ""}
+                  alt="Preview"
+                  draggable={false}
+                  className="preview-hidden"
+                />
+              )}
+              {/* Splitter handle and labels */}
+              {showBeforeAfter && originalDataUrl && (
+                <>
+                  <button
+                    ref={splitterRef as unknown as React.RefObject<HTMLButtonElement>}
+                    type="button"
+                    aria-label="Before and after view splitter"
+                    className="absolute top-0 bottom-0 w-px splitter-handle cursor-col-resize"
+                    onMouseDown={(e) => {
+                      e.stopPropagation();
+                      setIsSplitDragging(true);
+                    }}
+                  >
+                    <div className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-5 h-8 rounded flex items-center justify-center splitter-knob">
+                      <span className="material-symbols-outlined mi-sm text-black">center_focus_strong</span>
+                    </div>
+                  </button>
+                  <div className="absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded split-label">
+                    BEFORE
+                  </div>
+                  <div className="absolute top-2 right-2 text-[10px] font-bold px-2 py-0.5 rounded split-label-after">
+                    AFTER
+                  </div>
+                </>
+              )}
 
                   {/* Mask overlay — hover mask takes precedence; hide when manual mask canvas is active */}
                   {(Object.keys(sam3FrameMasks).length > 0 || activeMask || sam3HoverMask) && maskVisible && !isManualMaskActive && (
@@ -1335,7 +1372,6 @@ function PreviewViewport({ isDropTarget = false }: Props) {
                   {/* Playback overlay */}
                   {mediaInfo && <PlaybackOverlay />}
                 </div>
-              )}
             </div>
           </div>
 
@@ -1350,7 +1386,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
             </div>
           </div>
         )}
-      </div>
+      </section>
 
       {/* Bottom Info */}
       {mediaInfo && (

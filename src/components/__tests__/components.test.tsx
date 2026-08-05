@@ -242,16 +242,8 @@ function resetStore() {
       browser: true, preview: true, stack: true, audio: true,
       export: true, presets: true, mask: true, lut: true, proxy: true, tracks: true,
     },
-    dockLayout: {
-      left: [{ id: "dock-left-0", panels: ["browser", "proxy", "tracks"], activeTab: "browser", size: 1 }],
-      right: [
-        { id: "dock-right-0", panels: ["stack"], activeTab: "stack", size: 0.35 },
-        { id: "dock-right-1", panels: ["audio", "export", "presets", "mask", "lut"], activeTab: "audio", size: 0.65 },
-      ],
-      bottom: [],
-      bottomVisible: false,
-    },
-    floatingWindows: [],
+    dockedPanels: [],
+    layoutTrigger: null,
     theme: "dark",
     panelOpacity: 0.65,
     aspectRatioLock: false,
@@ -434,8 +426,8 @@ describe("Component Test Suite", () => {
       // "browser" is docked by default
       const browserBtn = screen.getByText("Effects").closest("button")!;
       fireEvent.click(browserBtn);
-      const docked = useAppStore.getState().getDockedPanelIds();
-      expect(docked.has("browser")).toBe(false);
+      const docked = useAppStore.getState().dockedPanels;
+      expect(docked.includes("browser")).toBe(false);
     });
   });
 

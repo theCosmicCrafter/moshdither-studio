@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "../store";
 import { registerCommand, getCommands, fuzzyMatch, type Command } from "../utils/commands";
+import { dockWindowAppbar, undockWindowAppbar } from "../lib/tauri";
 
 export default function CommandPalette() {
   const [open, setOpen] = useState(false);
@@ -77,6 +78,22 @@ export default function CommandPalette() {
     registerCommand({ id: "set-out-point", label: "Set out point", category: "Timeline", shortcut: "O", action: () => setOutPoint(300) });
     registerCommand({ id: "clear-in-out", label: "Clear in/out points", category: "Timeline", shortcut: "X", action: () => clearInOut() });
     registerCommand({ id: "toggle-scopes", label: "Toggle scopes", category: "View", action: () => setScopesVisible(!useAppStore.getState().scopesVisible) });
+    
+    // Layout and Docking
+    registerCommand({ id: "reset-workspace", label: "Reset workspace layout", category: "View", action: () => useAppStore.getState().triggerLayoutAction("reset") });
+    registerCommand({ id: "toggle-edge-snap", label: "Toggle edge snapping", category: "Window", action: () => { const s = useAppStore.getState(); s.setEdgeSnapEnabled(!s.edgeSnapEnabled); } });
+    registerCommand({ id: "dock-left", label: "Dock window left", category: "Window", action: async () => {
+      const s = useAppStore.getState();
+      if (s.appBarDocked) await undockWindowAppbar();
+      await dockWindowAppbar("left", 300);
+      s.setAppBarDocked(true, "left", 300);
+    } });
+    registerCommand({ id: "dock-right", label: "Dock window right", category: "Window", action: async () => {
+      const s = useAppStore.getState();
+      if (s.appBarDocked) await undockWindowAppbar();
+      await dockWindowAppbar("right", 300);
+      s.setAppBarDocked(true, "right", 300);
+    } });
   }, [
     setCurrentTime, setAudioPlaying, audioPlaying, undo, redo, canUndo, canRedo,
     clearStack, setFilePath, setMediaLoaded, setMediaInfo, setPreviewDataUrl,

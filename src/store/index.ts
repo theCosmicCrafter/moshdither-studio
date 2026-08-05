@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import type { DockZone } from "../components/DockSystem/panelRegistry";
 import type { AudioBakeData, AudioManifest } from "../engine/audio/types";
 import { type WatermarkSettings, DEFAULT_WATERMARK } from "../utils/watermark";
 
@@ -120,6 +119,8 @@ export interface Keyframe {
 /** Per-stack-entry-id, per-parameter-id keyframes */
 export type KeyframeTrack = Record<string, Keyframe[]>;
 
+export type AppTheme = "dark" | "high-contrast" | "light" | "cosmic" | "custom";
+
 export interface AppState {
   // Timeline
   currentTime: number;
@@ -232,59 +233,28 @@ export interface AppState {
   panelVisibility: Record<string, boolean>;
 
   // Dock system
-  dockLayout: DockLayoutState;
-  floatingWindows: FloatingWindow[];
-  leftZoneWidth: number;
-  rightZoneWidth: number;
-  setLeftZoneWidth: (width: number) => void;
-  setRightZoneWidth: (width: number) => void;
-  addPanelToDock: (panelId: string, zone: DockZone, groupId?: string) => void;
-  removePanelFromDock: (panelId: string) => void;
-  movePanelInDock: (
-    panelId: string,
-    toZone: DockZone,
-    toGroupId?: string,
-    toIndex?: number
-  ) => void;
-  /** Split a group by inserting a new group above/below/left/right of it */
-  splitDockGroup: (
-    panelId: string,
-    targetGroupId: string,
-    targetZone: DockZone,
-    position: DropPosition
-  ) => void;
-  setDockActiveTab: (groupId: string, panelId: string) => void;
-  setDockGroupSize: (groupId: string, size: number) => void;
-  /** Atomically resize two adjacent groups — grows one, shrinks the other by the same delta */
-  setDockGroupSizes: (groupIdA: string, sizeA: number, groupIdB: string, sizeB: number) => void;
-  getDockedPanelIds: () => Set<string>;
+  dockedPanels: string[];
+  setDockedPanels: (panels: string[]) => void;
+  layoutTrigger: { action: "add" | "remove" | "reset"; panelId?: string; ts: number } | null;
+  triggerLayoutAction: (action: "add" | "remove" | "reset", panelId?: string) => void;
 
-  // Floating windows
-  tearOffToFloat: (panelId: string, x: number, y: number, width?: number, height?: number) => void;
-  /** Tear off all panels in a group into a single floating window (only first panel visible, rest as tabs) */
-  tearOffGroupToFloat: (
-    groupId: string,
-    x: number,
-    y: number,
-    width?: number,
-    height?: number
-  ) => void;
-  dockFloatingWindow: (
-    windowId: string,
-    zone: DockZone,
-    groupId?: string,
-    position?: DropPosition
-  ) => void;
-  updateFloatingWindow: (
-    id: string,
-    updates: Partial<Pick<FloatingWindow, "x" | "y" | "width" | "height" | "zIndex">>
-  ) => void;
-  closeFloatingWindow: (id: string) => void;
-  focusFloatingWindow: (id: string) => void;
+  // Window edge snapping & AppBar docking
+  edgeSnapEnabled: boolean;
+  appBarDocked: boolean;
+  appBarEdge: "left" | "right" | "top" | "bottom" | null;
+  appBarSize: number;
+  setEdgeSnapEnabled: (enabled: boolean) => void;
+  setAppBarDocked: (docked: boolean, edge?: "left" | "right" | "top" | "bottom", size?: number) => void;
 
   // Theme
-  theme: "dark" | "light";
+  theme: AppTheme;
   panelOpacity: number;
+  customPrimary: string;
+  customSecondary: string;
+  customBg: string;
+  customUiModalOpen: boolean;
+  setCustomThemeColors: (primary: string, secondary: string, bg: string) => void;
+  setCustomUiModalOpen: (open: boolean) => void;
 
   // Output sizing
   aspectRatioLock: boolean;
@@ -342,7 +312,7 @@ export interface AppState {
   setScopesVisible: (v: boolean) => void;
   togglePanel: (id: string) => void;
   setPanelVisible: (id: string, visible: boolean) => void;
-  setTheme: (theme: "dark" | "light") => void;
+  setTheme: (theme: AppTheme) => void;
   toggleTheme: () => void;
   setPanelOpacity: (v: number) => void;
   setAspectRatioLock: (v: boolean) => void;
@@ -437,6 +407,35 @@ export interface AppState {
 
 let instanceIdCounter = 0;
 
+/** Generate a unique stack entry ID that survives HMR reloads */
+function nextStackId(prefix = "stack"): string {
+  instanceIdCounter += 1;
+  // Use crypto.randomUUID when available for true uniqueness,
+  // falling back to timestamp + counter for environments without it
+  const suffix = typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID().slice(0, 8)
+    : `${Date.now()}-${instanceIdCounter}`;
+  return `${prefix}-${suffix}`;
+}
+
+
+export const DEFAULT_DOCK_LAYOUT: DockLayoutState = {
+  left: [
+    { id: "dock-left-0", panels: ["browser", "presets", "proxy", "tracks"], activeTab: "browser", size: 1 },
+  ],
+  right: [
+    { id: "dock-right-0", panels: ["stack"], activeTab: "stack", size: 0.4 },
+    {
+      id: "dock-right-1",
+      panels: ["audio", "mask"],
+      activeTab: "audio",
+      size: 0.6,
+    },
+  ],
+  bottom: [],
+  bottomVisible: false,
+};
+
 /** Clamp a value to [min, max], returning fallback for NaN */
 function clampFinite(value: number, min: number, max: number, fallback: number): number {
   if (Number.isNaN(value)) return fallback;
@@ -507,27 +506,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     proxy: true,
     tracks: true,
   } as Record<string, boolean>,
-  dockLayout: {
-    left: [
-      { id: "dock-left-0", panels: ["browser", "proxy", "tracks"], activeTab: "browser", size: 1 },
-    ],
-    right: [
-      { id: "dock-right-0", panels: ["stack"], activeTab: "stack", size: 0.35 },
-      {
-        id: "dock-right-1",
-        panels: ["audio", "export", "presets", "mask", "lut"],
-        activeTab: "audio",
-        size: 0.65,
-      },
-    ],
-    bottom: [],
-    bottomVisible: false,
-  } as DockLayoutState,
-  floatingWindows: [],
-  leftZoneWidth: 280,
-  rightZoneWidth: 320,
+  dockedPanels: [],
+  layoutTrigger: null,
+  edgeSnapEnabled: true,
+  appBarDocked: false,
+  appBarEdge: null,
+  appBarSize: 300,
   theme: "dark",
   panelOpacity: 0.65,
+  customPrimary: "#00f4fe",
+  customSecondary: "#ffade0",
+  customBg: "#131314",
+  customUiModalOpen: false,
   aspectRatioLock: false,
   aspectRatio: null,
   proxyEnabled: false,
@@ -588,14 +578,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSearchQuery: (q) => set({ searchQuery: q }),
 
   addToStack: (effect) => {
-    instanceIdCounter += 1;
     const defaults: Record<string, unknown> = {};
     const params = effect.parameters ?? [];
     for (const p of params) {
       defaults[p.id] = p.default;
     }
     const entry: StackEntry = {
-      id: `stack-${instanceIdCounter}`,
+      id: nextStackId(),
       effectId: effect.id,
       effectName: effect.name,
       params: defaults,
@@ -625,9 +614,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     // web-style URL with the leading slash removed. Custom user LUTs pass the
     // absolute disk path instead.
     const lut_path = filePath ?? previewUrl.replace(/^\//, "");
-    instanceIdCounter += 1;
     const entry: StackEntry = {
-      id: `stack-${instanceIdCounter}`,
+      id: nextStackId(),
       effectId: "color.lut_grading",
       effectName: effect?.name ?? "LUT Color Grading",
       params: { ...defaults, tLUT: previewUrl, lut_path },
@@ -751,296 +739,21 @@ export const useAppStore = create<AppState>((set, get) => ({
     })),
 
   // ── Dock system actions ──
-  addPanelToDock: (panelId, zone, groupId) =>
-    set((state) => {
-      const layout = { ...state.dockLayout };
-      const zones: DockZone[] = ["left", "right", "bottom"];
-      for (const z of zones) {
-        layout[z] = layout[z].map((g) => ({
-          ...g,
-          panels: g.panels.filter((p) => p !== panelId),
-          activeTab: g.activeTab === panelId ? null : g.activeTab,
-        }));
-      }
-      if (groupId) {
-        layout[zone] = layout[zone].map((g) =>
-          g.id === groupId ? { ...g, panels: [...g.panels, panelId], activeTab: panelId } : g
-        );
-      } else {
-        const newGroup: DockTabGroup = {
-          id: `dock-${zone}-${Date.now()}`,
-          panels: [panelId],
-          activeTab: panelId,
-          size: 1,
-        };
-        layout[zone] = [...layout[zone], newGroup];
-      }
-      return { dockLayout: layout };
-    }),
-
-  removePanelFromDock: (panelId) =>
-    set((state) => {
-      const layout = { ...state.dockLayout };
-      const zones: DockZone[] = ["left", "right", "bottom"];
-      for (const z of zones) {
-        layout[z] = layout[z]
-          .map((g) => ({
-            ...g,
-            panels: g.panels.filter((p) => p !== panelId),
-            activeTab: g.activeTab === panelId ? null : g.activeTab,
-          }))
-          .filter((g) => g.panels.length > 0);
-      }
-      return { dockLayout: layout };
-    }),
-
-  movePanelInDock: (panelId, toZone, toGroupId, toIndex) =>
-    set((state) => {
-      const layout = { ...state.dockLayout };
-      const zones: DockZone[] = ["left", "right", "bottom"];
-      for (const z of zones) {
-        layout[z] = layout[z].map((g) => ({
-          ...g,
-          panels: g.panels.filter((p) => p !== panelId),
-          activeTab: g.activeTab === panelId ? null : g.activeTab,
-        }));
-      }
-      if (toGroupId) {
-        layout[toZone] = layout[toZone].map((g) => {
-          if (g.id !== toGroupId) return g;
-          const panels = [...g.panels];
-          const idx =
-            toIndex !== undefined ? Math.max(0, Math.min(toIndex, panels.length)) : panels.length;
-          panels.splice(idx, 0, panelId);
-          return { ...g, panels, activeTab: panelId };
-        });
-      } else {
-        const newGroup: DockTabGroup = {
-          id: `dock-${toZone}-${Date.now()}`,
-          panels: [panelId],
-          activeTab: panelId,
-          size: 1,
-        };
-        layout[toZone] = [...layout[toZone], newGroup];
-      }
-      layout[toZone] = layout[toZone].filter((g) => g.panels.length > 0);
-      return { dockLayout: layout };
-    }),
-
-  setDockActiveTab: (groupId, panelId) =>
-    set((state) => {
-      const layout = { ...state.dockLayout };
-      const zones: DockZone[] = ["left", "right", "bottom"];
-      for (const z of zones) {
-        layout[z] = layout[z].map((g) => (g.id === groupId ? { ...g, activeTab: panelId } : g));
-      }
-      return { dockLayout: layout };
-    }),
-
-  setDockGroupSize: (groupId, size) =>
-    set((state) => {
-      const layout = { ...state.dockLayout };
-      const zones: DockZone[] = ["left", "right", "bottom"];
-      for (const z of zones) {
-        layout[z] = layout[z].map((g) =>
-          g.id === groupId ? { ...g, size: Math.max(0.1, Math.min(4, size)) } : g
-        );
-      }
-      return { dockLayout: layout };
-    }),
-
-  setDockGroupSizes: (groupIdA, sizeA, groupIdB, sizeB) =>
-    set((state) => {
-      const layout = { ...state.dockLayout };
-      const zones: DockZone[] = ["left", "right", "bottom"];
-      const clamp = (s: number) => Math.max(0.1, Math.min(4, s));
-      for (const z of zones) {
-        layout[z] = layout[z].map((g) => {
-          if (g.id === groupIdA) return { ...g, size: clamp(sizeA) };
-          if (g.id === groupIdB) return { ...g, size: clamp(sizeB) };
-          return g;
-        });
-      }
-      return { dockLayout: layout };
-    }),
-
-  setLeftZoneWidth: (width) => set({ leftZoneWidth: Math.max(180, Math.min(600, width)) }),
-
-  setRightZoneWidth: (width) => set({ rightZoneWidth: Math.max(220, Math.min(700, width)) }),
-
-  getDockedPanelIds: () => {
-    const state = get();
-    const ids = new Set<string>();
-    for (const z of ["left", "right", "bottom"] as DockZone[]) {
-      for (const g of state.dockLayout[z]) {
-        for (const p of g.panels) ids.add(p);
-      }
-    }
-    return ids;
-  },
-
-  splitDockGroup: (panelId, targetGroupId, targetZone, position) =>
-    set((state) => {
-      const layout = { ...state.dockLayout };
-      const zones: DockZone[] = ["left", "right", "bottom"];
-      // Remove panel from all zones first
-      for (const z of zones) {
-        layout[z] = layout[z]
-          .map((g) => ({
-            ...g,
-            panels: g.panels.filter((p) => p !== panelId),
-            activeTab: g.activeTab === panelId ? null : g.activeTab,
-          }))
-          .filter((g) => g.panels.length > 0);
-      }
-      const newGroup: DockTabGroup = {
-        id: `dock-${targetZone}-${Date.now()}`,
-        panels: [panelId],
-        activeTab: panelId,
-        size: 0.5,
-      };
-      const groups = [...layout[targetZone]];
-      const targetIdx = groups.findIndex((g) => g.id === targetGroupId);
-      if (targetIdx === -1) {
-        layout[targetZone] = [...groups, newGroup];
-        return { dockLayout: layout };
-      }
-      if (position === "center") {
-        // Add to existing group
-        const target = groups[targetIdx];
-        groups[targetIdx] = { ...target, panels: [...target.panels, panelId], activeTab: panelId };
-        layout[targetZone] = groups;
-        return { dockLayout: layout };
-      }
-      // For top/bottom: insert before/after in the same zone (vertical split)
-      // For left/right: also insert before/after — the zone's flex direction handles layout
-      const insertIdx = position === "top" || position === "left" ? targetIdx : targetIdx + 1;
-      // Halve the target group's size
-      groups[targetIdx] = { ...groups[targetIdx], size: groups[targetIdx].size * 0.5 };
-      groups.splice(insertIdx, 0, newGroup);
-      layout[targetZone] = groups;
-      return { dockLayout: layout };
-    }),
-
-  tearOffToFloat: (panelId, x, y, width, height) =>
-    set((state) => {
-      const layout = { ...state.dockLayout };
-      const zones: DockZone[] = ["left", "right", "bottom"];
-      for (const z of zones) {
-        layout[z] = layout[z]
-          .map((g) => ({
-            ...g,
-            panels: g.panels.filter((p) => p !== panelId),
-            activeTab: g.activeTab === panelId ? null : g.activeTab,
-          }))
-          .filter((g) => g.panels.length > 0);
-      }
-      const maxZ = state.floatingWindows.reduce((mx, w) => Math.max(mx, w.zIndex), 100);
-      const newWin: FloatingWindow = {
-        id: `float-${Date.now()}`,
-        panelId,
-        x,
-        y,
-        width: width ?? 320,
-        height: height ?? 400,
-        zIndex: maxZ + 1,
-      };
-      return { dockLayout: layout, floatingWindows: [...state.floatingWindows, newWin] };
-    }),
-
-  tearOffGroupToFloat: (groupId, x, y, width, height) =>
-    set((state) => {
-      const layout = { ...state.dockLayout };
-      const zones: DockZone[] = ["left", "right", "bottom"];
-      let tornPanels: string[] = [];
-      for (const z of zones) {
-        const group = layout[z].find((g) => g.id === groupId);
-        if (group) {
-          tornPanels = group.panels;
-          layout[z] = layout[z].filter((g) => g.id !== groupId);
-          break;
-        }
-      }
-      if (tornPanels.length === 0) return {};
-      const maxZ = state.floatingWindows.reduce((mx, w) => Math.max(mx, w.zIndex), 100);
-      const newWindows: FloatingWindow[] = tornPanels.map((panelId, i) => ({
-        id: `float-${Date.now()}-${i}`,
-        panelId,
-        x: x + i * 20,
-        y: y + i * 20,
-        width: width ?? 320,
-        height: height ?? 400,
-        zIndex: maxZ + 1 + i,
-      }));
-      return { dockLayout: layout, floatingWindows: [...state.floatingWindows, ...newWindows] };
-    }),
-
-  dockFloatingWindow: (windowId, zone, groupId, position) =>
-    set((state) => {
-      const win = state.floatingWindows.find((w) => w.id === windowId);
-      if (!win) return {};
-      const layout = { ...state.dockLayout };
-      if (groupId && position && position !== "center") {
-        // Split existing group
-        const groups = [...layout[zone]];
-        const targetIdx = groups.findIndex((g) => g.id === groupId);
-        if (targetIdx !== -1) {
-          const newGroup: DockTabGroup = {
-            id: `dock-${zone}-${Date.now()}`,
-            panels: [win.panelId],
-            activeTab: win.panelId,
-            size: 0.5,
-          };
-          groups[targetIdx] = { ...groups[targetIdx], size: groups[targetIdx].size * 0.5 };
-          const insertIdx = position === "top" || position === "left" ? targetIdx : targetIdx + 1;
-          groups.splice(insertIdx, 0, newGroup);
-          layout[zone] = groups;
-        }
-      } else if (groupId) {
-        // Add to existing group
-        layout[zone] = layout[zone].map((g) =>
-          g.id === groupId
-            ? { ...g, panels: [...g.panels, win.panelId], activeTab: win.panelId }
-            : g
-        );
-      } else {
-        // New group in zone
-        const newGroup: DockTabGroup = {
-          id: `dock-${zone}-${Date.now()}`,
-          panels: [win.panelId],
-          activeTab: win.panelId,
-          size: 1,
-        };
-        layout[zone] = [...layout[zone], newGroup];
-      }
-      return {
-        dockLayout: layout,
-        floatingWindows: state.floatingWindows.filter((w) => w.id !== windowId),
-      };
-    }),
-
-  updateFloatingWindow: (id, updates) =>
+  setDockedPanels: (panels) => set({ dockedPanels: panels }),
+  triggerLayoutAction: (action, panelId) => set({ layoutTrigger: { action, panelId, ts: Date.now() } }),
+  setEdgeSnapEnabled: (enabled) => set({ edgeSnapEnabled: enabled }),
+  setAppBarDocked: (docked, edge, size) =>
     set((state) => ({
-      floatingWindows: state.floatingWindows.map((w) => (w.id === id ? { ...w, ...updates } : w)),
+      appBarDocked: docked,
+      appBarEdge: docked ? (edge ?? null) : null,
+      appBarSize: size ?? state.appBarSize,
     })),
-
-  closeFloatingWindow: (id) =>
-    set((state) => ({
-      floatingWindows: state.floatingWindows.filter((w) => w.id !== id),
-    })),
-
-  focusFloatingWindow: (id) =>
-    set((state) => {
-      const maxZ = state.floatingWindows.reduce((mx, w) => Math.max(mx, w.zIndex), 100);
-      return {
-        floatingWindows: state.floatingWindows.map((w) =>
-          w.id === id ? { ...w, zIndex: maxZ + 1 } : w
-        ),
-      };
-    }),
   setTheme: (theme) => set({ theme }),
   toggleTheme: () => set((state) => ({ theme: state.theme === "dark" ? "light" : "dark" })),
   setPanelOpacity: (v) => set({ panelOpacity: Math.max(0.2, Math.min(1, v)) }),
+  setCustomThemeColors: (primary, secondary, bg) =>
+    set({ customPrimary: primary, customSecondary: secondary, customBg: bg, theme: "custom" }),
+  setCustomUiModalOpen: (open) => set({ customUiModalOpen: open }),
   setAspectRatioLock: (v) => set({ aspectRatioLock: v }),
   setAspectRatio: (ratio) => set({ aspectRatio: ratio }),
   setInPoint: (t) =>
@@ -1274,8 +987,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // Track actions
   addTrack: (name) => {
-    instanceIdCounter += 1;
-    const id = `track-${instanceIdCounter}`;
+    const id = nextStackId("track");
     const track: Track = {
       id,
       name: name || `Track ${get().tracks.length + 1}`,

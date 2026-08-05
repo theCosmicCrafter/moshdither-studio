@@ -1,19 +1,19 @@
-import { useAppStore } from "../../store";
+import { useDock } from "./DockContext";
 import { PANEL_REGISTRY, type DockZone } from "./panelRegistry";
+import { useAppStore } from "../../store";
 
 export default function PanelRail() {
-  const dockLayout = useAppStore((s) => s.dockLayout);
-  const addPanelToDock = useAppStore((s) => s.addPanelToDock);
+  const { model, addPanel } = useDock();
   const panelVisibility = useAppStore((s) => s.panelVisibility);
-  const floatingWindows = useAppStore((s) => s.floatingWindows);
 
   const dockedIds = new Set<string>();
-  for (const z of ["left", "right", "bottom"] as DockZone[]) {
-    for (const g of dockLayout[z]) {
-      for (const p of g.panels) dockedIds.add(p);
-    }
+  if (model) {
+    model.visitNodes((n) => {
+      if (n.getType() === "tab") {
+        dockedIds.add((n as any).getComponent());
+      }
+    });
   }
-  for (const w of floatingWindows) dockedIds.add(w.panelId);
 
   const availablePanels = PANEL_REGISTRY.filter(
     (p) => !dockedIds.has(p.id) && panelVisibility[p.id] !== false
@@ -51,7 +51,7 @@ export default function PanelRail() {
               e.dataTransfer.effectAllowed = "move";
             }}
             onClick={() => {
-              addPanelToDock(panel.id, panel.defaultZone);
+              addPanel(panel.id);
             }}
             className="dock-rail-btn group relative flex flex-col items-center justify-center w-12 h-12 rounded-lg hover:bg-accent-teal/10 transition-colors cursor-grab active:cursor-grabbing"
             title={`Add ${panel.label} to ${panel.defaultZone}`}
