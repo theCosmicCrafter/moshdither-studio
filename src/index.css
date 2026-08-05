@@ -210,6 +210,64 @@
   --surface-main: var(--custom-bg, #131314);
 }
 
+/* ── flexlayout-react dock chrome, re-themed ──────────────
+   DockLayout.tsx imports flexlayout-react/style/dark.css, whose variables are
+   scoped to .flexlayout__layout and completely independent of this app's own
+   tokens above. Left alone, switching to Light/High-Contrast/Custom restyled
+   every native panel but left the dock tab strip, tabset backgrounds and
+   splitters stuck in dark.css's hardcoded palette -- a visibly mismatched UI.
+
+   Only the base palette slots need overriding; dark.css defines every
+   role-specific variable (tabset background, tab content, splitter, etc.) as
+   `var(--color-N)`, so overriding color-1..6 here cascades through those
+   automatically without restating each one.
+
+   `[data-theme="x"] .flexlayout__layout` has specificity (0,2,0), higher than
+   dark.css's bare `.flexlayout__layout` (0,1,0), so these win regardless of
+   which stylesheet loads later in the bundle. Dark/cosmic need no override --
+   dark.css's own palette already suits them. */
+[data-theme="light"] .flexlayout__layout {
+  --color-text: var(--on-surface);
+  --color-background: var(--surface-main);
+  --color-base: var(--surface-main);
+  --color-1: var(--surface);
+  --color-2: var(--surface-container-low);
+  --color-3: var(--surface-container-high);
+  --color-4: var(--outline-variant);
+  --color-5: var(--outline);
+  --color-6: var(--surface-container-highest);
+  --color-focus: var(--accent);
+  --color-tab-selected: var(--on-surface);
+  --color-tab-unselected: var(--text-muted);
+  --color-icon: var(--text-muted);
+  --color-overflow: var(--text-muted);
+  --color-edge-icon: var(--on-surface);
+}
+
+[data-theme="high-contrast"] .flexlayout__layout {
+  --color-text: var(--on-surface);
+  --color-background: var(--surface-main);
+  --color-base: var(--surface-main);
+  --color-1: var(--surface);
+  --color-2: var(--surface-container-low);
+  --color-3: var(--surface-container-high);
+  --color-4: var(--outline-variant);
+  --color-5: var(--outline);
+  --color-6: var(--surface-bright);
+  --color-focus: var(--accent);
+  --color-tab-selected: var(--on-surface);
+  --color-tab-unselected: var(--text-muted);
+  --color-icon: var(--text-muted);
+  --color-overflow: var(--text-muted);
+  --color-edge-icon: var(--on-surface);
+}
+
+[data-theme="custom"] .flexlayout__layout {
+  --color-background: var(--background);
+  --color-base: var(--background);
+  --color-focus: var(--accent);
+}
+
 @layer base {
   * {
     box-sizing: border-box;
@@ -937,172 +995,6 @@
 
 .dock-rail-btn:active {
   border-color: var(--accent-teal);
-}
-
-.dock-zone {
-  background: transparent;
-  overflow: hidden;
-}
-
-.dock-zone-empty {
-  min-width: 60px;
-  min-height: 60px;
-  border: 1px dashed var(--outline-variant);
-  border-radius: 8px;
-  margin: 4px;
-  opacity: 0.5;
-  transition: opacity 0.2s;
-}
-
-.dock-zone-empty:hover {
-  opacity: 1;
-  border-color: var(--accent-teal);
-}
-
-.dock-tab-group {
-  background: color-mix(
-    in srgb,
-    var(--surface-container-lowest) calc(var(--panel-opacity, 0.85) * 100%),
-    transparent
-  );
-  border-radius: 6px;
-  margin: 2px;
-  overflow: hidden;
-}
-
-.dock-tab-bar::-webkit-scrollbar {
-  height: 3px;
-}
-
-.dock-tab-bar::-webkit-scrollbar-thumb {
-  background: var(--outline-variant);
-  border-radius: 2px;
-}
-
-.dock-tab {
-  border-bottom: 2px solid transparent;
-  transition: all 0.15s;
-}
-
-.dock-tab.dock-tab-active {
-  border-bottom-color: var(--accent-teal);
-  background: var(--surface-container);
-}
-
-.dock-tab-content {
-  background: var(--surface);
-}
-
-.dock-divider {
-  transition: background 0.15s;
-  z-index: 5;
-}
-
-.dock-divider:hover,
-.dock-divider:active {
-  background: var(--accent-teal);
-  opacity: 0.5;
-}
-
-.dock-zone-wrapper {
-  background: color-mix(
-    in srgb,
-    var(--surface-dim) calc(var(--panel-opacity, 0.85) * 100%),
-    transparent
-  );
-  transition:
-    width 0.15s ease,
-    height 0.15s ease;
-}
-
-.dock-zone-left-wrapper {
-  overflow: hidden;
-}
-
-.dock-zone-right-wrapper {
-  overflow: hidden;
-}
-
-.dock-zone-bottom-wrapper {
-  overflow: hidden;
-}
-
-/* Zone dividers — between left/center/right dock zones */
-.zone-divider {
-  transition: background 0.15s;
-  z-index: 20;
-}
-
-.zone-divider:hover,
-.zone-divider:active {
-  background: var(--accent-teal);
-  opacity: 0.6;
-}
-
-/* Prevent text selection while dragging zone dividers */
-body.zone-resizing {
-  -webkit-user-select: none !important;
-  user-select: none !important;
-  cursor: ew-resize !important;
-}
-
-body.zone-resizing * {
-  pointer-events: none !important;
-}
-
-body.group-resizing {
-  -webkit-user-select: none !important;
-  user-select: none !important;
-}
-
-body.group-resizing * {
-  pointer-events: none !important;
-}
-
-body.floating-resizing {
-  -webkit-user-select: none !important;
-  user-select: none !important;
-}
-
-:root[data-theme="light"] .dock-tab-group {
-  background: color-mix(
-    in srgb,
-    var(--surface-container-lowest) calc(var(--panel-opacity, 0.85) * 100%),
-    transparent
-  );
-}
-
-:root[data-theme="light"] .dock-zone-wrapper {
-  background: color-mix(
-    in srgb,
-    var(--surface-dim) calc(var(--panel-opacity, 0.85) * 100%),
-    transparent
-  );
-}
-
-:root[data-theme="light"] .dock-tab.dock-tab-active {
-  background: var(--surface-container);
-}
-
-/* Floating windows */
-.floating-window {
-  animation: float-window-appear 120ms ease-out;
-}
-
-@keyframes float-window-appear {
-  from {
-    opacity: 0;
-    transform: scale(0.96);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-.floating-window-titlebar {
-  -webkit-user-select: none;
-  user-select: none;
 }
 
 /* ─── PreviewViewport & Toolbar utility classes ─── */

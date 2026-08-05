@@ -84,6 +84,13 @@ export function useKeyboardShortcuts() {
           case "view:fullscreen":
             void toggleFullscreen();
             break;
+          case "accessibility:zoomIn":
+            // Matches the toolbar's own zoom-in step (Toolbar.tsx).
+            useAppStore.getState().setZoom(useAppStore.getState().zoom + 0.25);
+            break;
+          case "accessibility:zoomOut":
+            useAppStore.getState().setZoom(useAppStore.getState().zoom - 0.25);
+            break;
           default:
             break;
         }

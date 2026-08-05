@@ -211,7 +211,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
   const panWrapperRef = useRef<HTMLDivElement>(null);
   const zoomWrapperRef = useRef<HTMLDivElement>(null);
   const beforeClipRef = useRef<HTMLDivElement>(null);
-  const splitterRef = useRef<HTMLDivElement>(null);
+  const splitterRef = useRef<HTMLButtonElement>(null);
   const rafRef = useRef<number>(0);
   const cpuAnimRafRef = useRef<number>(0);
   const cpuRenderRevisionRef = useRef(0);
@@ -1164,7 +1164,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
           <div className="flex items-center gap-3">
             {/* Composition guides. Preview-only: these never enter the export
                 stack, which is the whole reason they are not effects. */}
-            <div className="flex items-center gap-1" aria-label="Composition guides">
+            <div className="flex items-center gap-1" role="group" aria-label="Composition guides">
               {(
                 [
                   { key: "safeArea", icon: "crop_free", label: "Safe area guides" },
@@ -1306,7 +1306,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
               {showBeforeAfter && originalDataUrl && (
                 <>
                   <button
-                    ref={splitterRef as unknown as React.RefObject<HTMLButtonElement>}
+                    ref={splitterRef}
                     type="button"
                     aria-label="Before and after view splitter"
                     className="absolute top-0 bottom-0 w-px splitter-handle cursor-col-resize"
@@ -1328,8 +1328,12 @@ function PreviewViewport({ isDropTarget = false }: Props) {
                 </>
               )}
 
-                  {/* Mask overlay — hover mask takes precedence; hide when manual mask canvas is active */}
-                  {(Object.keys(sam3FrameMasks).length > 0 || activeMask || sam3HoverMask) && maskVisible && !isManualMaskActive && (
+                  {/* Mask overlay — hover mask takes precedence; hide when manual mask canvas is active.
+                      Also hidden during Before/After split: it used to live in the branch that only
+                      rendered when split mode was off, and merging that branch into this always-mounted
+                      tree dropped the guard, so the colored mask painted over both halves of the
+                      comparison it exists to let the user check. */}
+                  {(Object.keys(sam3FrameMasks).length > 0 || activeMask || sam3HoverMask) && maskVisible && !isManualMaskActive && !showBeforeAfter && (
                     <img
                       ref={maskImgRef}
                       src={sam3HoverMask || sam3FrameMasks[Math.floor((useAppStore.getState().currentTime || 0) * 10)] || activeMask || undefined}
@@ -1339,8 +1343,9 @@ function PreviewViewport({ isDropTarget = false }: Props) {
                     />
                   )}
 
-                  {/* Composition guides — preview only, never reach the export pipeline */}
-                  {mediaInfo && (
+                  {/* Composition guides — preview only, never reach the export pipeline.
+                      Hidden during split view for the same reason as the mask overlay above. */}
+                  {mediaInfo && !showBeforeAfter && (
                     <ViewportGuides width={mediaInfo.width} height={mediaInfo.height} />
                   )}
 
@@ -1361,16 +1366,16 @@ function PreviewViewport({ isDropTarget = false }: Props) {
                   {/* Manual mask overlay — draws directly on the preview canvas */}
                   {isManualMaskActive && <ManualMaskOverlay />}
 
-                  {/* Scopes overlay */}
-                  {mediaInfo && (
+                  {/* Scopes overlay — hidden during split view; see the mask-overlay comment above. */}
+                  {mediaInfo && !showBeforeAfter && (
                     <ScopesOverlay
                       width={Math.min(mediaInfo.width, 256)}
                       height={Math.min(mediaInfo.height, 128)}
                     />
                   )}
 
-                  {/* Playback overlay */}
-                  {mediaInfo && <PlaybackOverlay />}
+                  {/* Playback overlay — hidden during split view; see the mask-overlay comment above. */}
+                  {mediaInfo && !showBeforeAfter && <PlaybackOverlay />}
                 </div>
             </div>
           </div>

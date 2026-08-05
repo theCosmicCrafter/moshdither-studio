@@ -1,6 +1,8 @@
+import type { TabNode } from "flexlayout-react";
 import { useDock } from "./DockContext";
 import { PANEL_REGISTRY, type DockZone } from "./panelRegistry";
 import { useAppStore } from "../../store";
+import { setActiveDragPanelId } from "./tabDropState";
 
 export default function PanelRail() {
   const { model, addPanel } = useDock();
@@ -10,7 +12,7 @@ export default function PanelRail() {
   if (model) {
     model.visitNodes((n) => {
       if (n.getType() === "tab") {
-        dockedIds.add((n as any).getComponent());
+        dockedIds.add((n as TabNode).getComponent() as string);
       }
     });
   }
@@ -49,6 +51,13 @@ export default function PanelRail() {
             onDragStart={(e) => {
               e.dataTransfer.setData("text/panel-id", panel.id);
               e.dataTransfer.effectAllowed = "move";
+              setActiveDragPanelId(panel.id);
+            }}
+            onDragEnd={() => {
+              // Fires whether or not a drop was accepted; clears the id so a
+              // later, unrelated drag over the layout can't be mistaken for
+              // this one.
+              setActiveDragPanelId(null);
             }}
             onClick={() => {
               addPanel(panel.id);

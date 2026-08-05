@@ -6,6 +6,8 @@ import { PANEL_REGISTRY } from "./panelRegistry";
 import PanelRail from "./PanelRail";
 import { DockContext } from "./DockContext";
 import { DEFAULT_LAYOUT } from "./defaultLayout";
+import { getActiveDragPanelId, setActiveDragPanelId } from "./tabDropState";
+import { resolveExternalDrag } from "./externalDrag";
 
 // Import components that are hardcoded into the layout
 import PreviewViewport from "../PreviewViewport";
@@ -93,6 +95,23 @@ export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) 
     }, panelMeta.defaultZone === "right" ? "right-zone" : "left-zone", DockLocation.CENTER, -1));
   };
 
+  // PanelRail's icons are `draggable` with directional hints suggesting a
+  // drop-to-position gesture, but nothing consumed the drag: PanelRail set
+  // `dataTransfer` data that had no reader, and flexlayout's `Layout` rejects
+  // any drag it doesn't recognize unless `onExternalDrag` opts in. Only the
+  // click-to-add-to-default-zone fallback worked. The decision logic itself
+  // lives in `resolveExternalDrag` (pure, unit-tested); this just supplies it
+  // the current drag id and the live set of docked panels.
+  const onExternalDrag = () => {
+    if (!model) return undefined;
+    const dockedComponentIds = new Set<string>();
+    model.visitNodes((n) => {
+      if (n.getType() === "tab") dockedComponentIds.add((n as TabNode).getComponent() as string);
+    });
+    const target = resolveExternalDrag(getActiveDragPanelId(), dockedComponentIds);
+    return target && { ...target, onDrop: () => setActiveDragPanelId(null) };
+  };
+
   const removePanel = (panelId: string) => {
     if (!model) return;
     model.visitNodes((n) => {
@@ -119,6 +138,14 @@ export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) 
     } else if (layoutTrigger.action === "remove" && layoutTrigger.panelId) {
       removePanel(layoutTrigger.panelId);
     }
+    // layoutTrigger.ts is a one-shot nonce: every dispatch bumps it, so this is
+    // meant to fire exactly once per dispatched action, reading the CURRENT
+    // model/addPanel/removePanel via closure rather than re-running whenever
+    // their per-render identities change. Adding them to the array (as
+    // exhaustive-deps wants) would refire this on every unrelated re-render
+    // while a stale action/panelId was still the latest dispatched, redoing
+    // that action.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layoutTrigger?.ts]);
 
   if (!model) return null;
@@ -134,6 +161,7 @@ export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) 
           <Layout
             model={model}
             factory={factory}
+            onExternalDrag={onExternalDrag}
             onModelChange={(m) => {
               const activePanels: string[] = [];
               m.visitNodes((n) => {

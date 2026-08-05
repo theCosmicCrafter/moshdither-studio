@@ -2,12 +2,16 @@ import { describe, expect, it } from "vitest";
 import type { StackEntry } from "../store";
 import { isLegacyOverlayEffect, migrateOverlayGuides } from "./migrateOverlayGuides";
 
-function entry(effectId: string, enabled = true): StackEntry {
+function entry(
+  effectId: string,
+  enabled = true,
+  params: Record<string, unknown> = {}
+): StackEntry {
   return {
     id: `${effectId}-1`,
     effectId,
     effectName: effectId,
-    params: {},
+    params,
     enabled,
     maskId: null,
     maskMode: "inside",
@@ -112,6 +116,90 @@ describe("migrateOverlayGuides", () => {
       "color.brightness_contrast",
       "dithering.palette",
       "analog.scanlines",
+    ]);
+  });
+
+  // An ID rename alone is not enough: the renamed effect's parameters are
+  // named or shaped differently on four of the seven targets, so the old
+  // params matched nothing on the new effect and were silently ignored --
+  // rendering at the new effect's defaults with no indication anything had
+  // changed. Each case below pins the actual translation, not just that
+  // *some* value survives.
+  it("renames noise.gaussian_noise's amount to std_dev", () => {
+    const result = migrateOverlayGuides([
+      entry("noise.gaussian_noise", true, { amount: 42 }),
+    ]);
+    expect(result.stack).toEqual([
+      expect.objectContaining({ effectId: "noise.gaussian", params: { std_dev: 42 } }),
+    ]);
+  });
+
+  it("renames analog.film_grain's intensity to std_dev", () => {
+    const result = migrateOverlayGuides([
+      entry("analog.film_grain", true, { intensity: 30 }),
+    ]);
+    expect(result.stack).toEqual([
+      expect.objectContaining({ effectId: "noise.gaussian", params: { std_dev: 30 } }),
+    ]);
+  });
+
+  it("renames audio_reactive.chromatic's intensity to spectral_shift's shift_amount", () => {
+    const result = migrateOverlayGuides([
+      entry("audio_reactive.chromatic", true, { intensity: 0.8 }),
+    ]);
+    expect(result.stack).toEqual([
+      expect.objectContaining({
+        effectId: "audio_reactive.spectral_shift",
+        params: { shift_amount: 0.8 },
+      }),
+    ]);
+  });
+
+  it("drops dithering.ordered's scale, which has no equivalent on ordered_variants", () => {
+    // ordered_variants replaced a continuous scale with a named matrix
+    // pattern plus a level count -- a different parameter model, not a
+    // rename. There is no honest translation, so the stale key is dropped
+    // rather than left inert.
+    const result = migrateOverlayGuides([
+      entry("dithering.ordered", true, { scale: 8 }),
+    ]);
+    expect(result.stack).toEqual([
+      expect.objectContaining({ effectId: "dithering.ordered_variants", params: {} }),
+    ]);
+  });
+
+  it("carries scale/angle/palette_size/amount through unchanged but drops palette_0..7", () => {
+    // dithering.palette's parameters already match palette_dither's names
+    // exactly. Its custom per-swatch colors have no destination on the new
+    // effect (it derives its palette from palette_size instead), so they
+    // cannot be preserved under any renaming.
+    const result = migrateOverlayGuides([
+      entry("dithering.palette_dither", true, {
+        scale: 4,
+        angle: 45,
+        palette_size: 8,
+        amount: 0.9,
+        palette_0: [0, 0, 0],
+        palette_7: [255, 255, 255],
+      }),
+    ]);
+    expect(result.stack).toEqual([
+      expect.objectContaining({
+        effectId: "dithering.palette",
+        params: { scale: 4, angle: 45, palette_size: 8, amount: 0.9 },
+      }),
+    ]);
+  });
+
+  it("leaves params of a legacy ID with no remap function untouched", () => {
+    const result = migrateOverlayGuides([
+      entry("color.contrast_brightness", true, { brightness: 10, contrast: 5 }),
+    ]);
+    expect(result.stack).toEqual([
+      expect.objectContaining({
+        effectId: "color.brightness_contrast",
+        params: { brightness: 10, contrast: 5 },
+      }),
     ]);
   });
 });

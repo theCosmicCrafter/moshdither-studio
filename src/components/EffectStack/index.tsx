@@ -29,7 +29,7 @@ export default function EffectStack() {
   const handleExpandAll = () => setExpandedIds(new Set(effectStack.map(e => e.id)));
   const handleCollapseAll = () => {
     setExpandedIds(new Set());
-    if (selectedStackId) selectStackItem("");
+    if (selectedStackId) selectStackItem(null);
   };
 
   const CAT_COLORS: Record<string, string> = {
@@ -114,10 +114,17 @@ export default function EffectStack() {
             </span>
           </div>
         ) : (
-          filteredStack.map((entry, index) => {
+          filteredStack.map((entry) => {
             const isSelected = selectedStackId === entry.id || expandedIds.has(entry.id);
             const category = entry.effectId.split(".")[0];
             const color = CAT_COLORS[category] || "var(--text-muted)";
+            // moveStackItem splices the full, unfiltered effectStack by
+            // position, so the index passed to it must be this entry's
+            // position there -- not its position within filteredStack. With a
+            // filter active those differ, and reordering by the filtered
+            // position moved a different, invisible pair of effects instead
+            // of the one the user clicked.
+            const realIndex = effectStack.findIndex((e) => e.id === entry.id);
 
             return (
               <div
@@ -211,9 +218,9 @@ export default function EffectStack() {
                     >
                       {entry.enabled ? "visibility" : "visibility_off"}
                     </button>
-                    {index > 0 && (
+                    {realIndex > 0 && (
                       <button
-                        onClick={(e) => { e.stopPropagation(); moveStackItem(index, index - 1); }}
+                        onClick={(e) => { e.stopPropagation(); moveStackItem(realIndex, realIndex - 1); }}
                         className="material-symbols-outlined neo-btn p-1 rounded-full text-on-surface-variant hover:text-accent-teal transition-colors"
                         style={{ fontSize: 14 }}
                         title="Move Up"
@@ -221,9 +228,9 @@ export default function EffectStack() {
                         arrow_upward
                       </button>
                     )}
-                    {index < stackCount - 1 && (
+                    {realIndex < stackCount - 1 && (
                       <button
-                        onClick={(e) => { e.stopPropagation(); moveStackItem(index, index + 1); }}
+                        onClick={(e) => { e.stopPropagation(); moveStackItem(realIndex, realIndex + 1); }}
                         className="material-symbols-outlined neo-btn p-1 rounded-full text-on-surface-variant hover:text-accent-teal transition-colors"
                         style={{ fontSize: 14 }}
                         title="Move Down"

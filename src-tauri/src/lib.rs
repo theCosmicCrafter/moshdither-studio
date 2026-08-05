@@ -23,10 +23,10 @@ use commands::{
     test_all_functions, verify_effects, AppState,
 };
 use environment::{get_environment_status, install_local_environment};
-use window_commands::{dock_window_appbar, get_monitor_info, snap_to_edge, undock_window_appbar};
 use tauri::utils::config::WindowEffectsConfig;
 use tauri::window::Effect;
 use tauri::Manager;
+use window_commands::{dock_window_appbar, get_monitor_info, snap_to_edge, undock_window_appbar};
 
 pub fn run() {
     println!("Initializing Tauri Builder...");

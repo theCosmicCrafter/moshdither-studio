@@ -724,6 +724,35 @@ describe("Component Test Suite", () => {
       expect(stack[0].effectName).toBe("VHS Effect");
       expect(stack[1].effectName).toBe("Bayer Dither");
     });
+
+    it("moves the filtered entry itself, not whatever sits at its position in the filtered list", () => {
+      // Reproduces the bug directly: the Move buttons are rendered from
+      // filteredStack, but moveStackItem splices the full effectStack by
+      // position. Filtering down to one entry that isn't at position 0 of
+      // the real stack used to pass its FILTERED index (0) to moveStackItem,
+      // reordering whichever two effects happened to sit at positions 0/1 of
+      // the real stack -- not the effect the user filtered to and clicked.
+      useAppStore.getState().addToStack(mockEffectMeta("dithering.bayer", "Bayer Dither", "dithering"));
+      useAppStore.getState().addToStack(mockEffectMeta("analog.vhs", "VHS Effect", "analog"));
+      useAppStore.getState().addToStack(mockEffectMeta("glitch.databend", "Databend", "glitch"));
+      render(<EffectStack />);
+
+      fireEvent.change(screen.getByPlaceholderText("Filter effects..."), {
+        target: { value: "databend" },
+      });
+      expect(screen.getByText("Databend")).toBeInTheDocument();
+      expect(screen.queryByText("Bayer Dither")).not.toBeInTheDocument();
+
+      // Databend is real index 2 (last), filtered index 0 (only match).
+      fireEvent.click(screen.getByTitle("Move Up"));
+
+      const stack = useAppStore.getState().effectStack;
+      expect(stack.map((e) => e.effectName)).toEqual([
+        "Bayer Dither",
+        "Databend",
+        "VHS Effect",
+      ]);
+    });
   });
 
   // ── EffectBrowser ──────────────────────────────────────────

@@ -22,9 +22,7 @@ pub struct MonitorInfo {
 /// compute edge proximity locally (avoiding an IPC round-trip per move event).
 #[tauri::command]
 pub fn get_monitor_info(app: AppHandle) -> Result<MonitorInfo, String> {
-    let window = app
-        .get_webview_window("main")
-        .ok_or("Window not found")?;
+    let window = app.get_webview_window("main").ok_or("Window not found")?;
     let monitor = window
         .current_monitor()
         .map_err(|e| e.to_string())?
@@ -42,13 +40,41 @@ pub fn get_monitor_info(app: AppHandle) -> Result<MonitorInfo, String> {
     })
 }
 
+/// Pure position arithmetic for [`snap_to_edge`], factored out so it can be
+/// unit-tested without a live Tauri window.
+///
+/// Only the axis named by `edge` moves. The window's current position on the
+/// OTHER axis is preserved rather than reset to the monitor's origin: a
+/// window snapping left while sitting in the vertical middle of the screen
+/// should end up flush left at its current height, not teleported to the
+/// top-left corner. Snapping right or bottom is symmetric.
+fn compute_snap_position(
+    edge: &str,
+    monitor_pos: PhysicalPosition<i32>,
+    monitor_size: PhysicalSize<u32>,
+    window_size: PhysicalSize<u32>,
+    current_pos: PhysicalPosition<i32>,
+) -> Result<PhysicalPosition<i32>, String> {
+    Ok(match edge {
+        "left" => PhysicalPosition::new(monitor_pos.x, current_pos.y),
+        "right" => PhysicalPosition::new(
+            monitor_pos.x + (monitor_size.width as i32 - window_size.width as i32),
+            current_pos.y,
+        ),
+        "top" => PhysicalPosition::new(current_pos.x, monitor_pos.y),
+        "bottom" => PhysicalPosition::new(
+            current_pos.x,
+            monitor_pos.y + (monitor_size.height as i32 - window_size.height as i32),
+        ),
+        _ => return Err(format!("Unknown edge: {edge}")),
+    })
+}
+
 /// Snaps the Tauri window to the specified display edge on the current monitor.
 /// `edge` must be one of: `"left"`, `"right"`, `"top"`, `"bottom"`.
 #[tauri::command]
 pub fn snap_to_edge(app: AppHandle, edge: String) -> Result<(), String> {
-    let window = app
-        .get_webview_window("main")
-        .ok_or("Window not found")?;
+    let window = app.get_webview_window("main").ok_or("Window not found")?;
     let monitor = window
         .current_monitor()
         .map_err(|e| e.to_string())?
@@ -57,25 +83,98 @@ pub fn snap_to_edge(app: AppHandle, edge: String) -> Result<(), String> {
     let monitor_size = monitor.size();
     let monitor_pos = monitor.position();
     let window_size = window.outer_size().map_err(|e| e.to_string())?;
+    let current_pos = window.outer_position().map_err(|e| e.to_string())?;
 
-    let new_pos = match edge.as_str() {
-        "left" => PhysicalPosition::new(monitor_pos.x, monitor_pos.y),
-        "right" => PhysicalPosition::new(
-            monitor_pos.x + (monitor_size.width as i32 - window_size.width as i32),
-            monitor_pos.y,
-        ),
-        "top" => PhysicalPosition::new(monitor_pos.x, monitor_pos.y),
-        "bottom" => PhysicalPosition::new(
-            monitor_pos.x,
-            monitor_pos.y + (monitor_size.height as i32 - window_size.height as i32),
-        ),
-        _ => return Err(format!("Unknown edge: {edge}")),
-    };
+    let new_pos =
+        compute_snap_position(&edge, *monitor_pos, *monitor_size, window_size, current_pos)?;
 
-    window
-        .set_position(new_pos)
-        .map_err(|e| e.to_string())?;
+    window.set_position(new_pos).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A monitor not anchored at the OS origin, and a window that is neither
+    // flush against an edge nor centered -- so a bug that swaps an axis, or
+    // that resets one to 0 instead of to monitor_pos, cannot hide behind a
+    // coincidental match.
+    const MONITOR_POS: PhysicalPosition<i32> = PhysicalPosition::new(1920, 100);
+    const MONITOR_SIZE: PhysicalSize<u32> = PhysicalSize::new(2560, 1440);
+    const WINDOW_SIZE: PhysicalSize<u32> = PhysicalSize::new(800, 500);
+    const CURRENT_POS: PhysicalPosition<i32> = PhysicalPosition::new(2400, 340);
+
+    #[test]
+    fn snapping_left_moves_only_x() {
+        let p = compute_snap_position("left", MONITOR_POS, MONITOR_SIZE, WINDOW_SIZE, CURRENT_POS)
+            .unwrap();
+        assert_eq!(p.x, MONITOR_POS.x, "should be flush against the left edge");
+        assert_eq!(
+            p.y, CURRENT_POS.y,
+            "vertical position must be preserved, not reset to the monitor's top"
+        );
+    }
+
+    #[test]
+    fn snapping_right_moves_only_x() {
+        let p = compute_snap_position("right", MONITOR_POS, MONITOR_SIZE, WINDOW_SIZE, CURRENT_POS)
+            .unwrap();
+        assert_eq!(
+            p.x,
+            MONITOR_POS.x + (MONITOR_SIZE.width as i32 - WINDOW_SIZE.width as i32),
+            "should be flush against the right edge"
+        );
+        assert_eq!(
+            p.y, CURRENT_POS.y,
+            "vertical position must be preserved, not reset to the monitor's top"
+        );
+    }
+
+    #[test]
+    fn snapping_top_moves_only_y() {
+        let p = compute_snap_position("top", MONITOR_POS, MONITOR_SIZE, WINDOW_SIZE, CURRENT_POS)
+            .unwrap();
+        assert_eq!(p.y, MONITOR_POS.y, "should be flush against the top edge");
+        assert_eq!(
+            p.x, CURRENT_POS.x,
+            "horizontal position must be preserved, not reset to the monitor's left"
+        );
+    }
+
+    #[test]
+    fn snapping_bottom_moves_only_y() {
+        let p = compute_snap_position(
+            "bottom",
+            MONITOR_POS,
+            MONITOR_SIZE,
+            WINDOW_SIZE,
+            CURRENT_POS,
+        )
+        .unwrap();
+        assert_eq!(
+            p.y,
+            MONITOR_POS.y + (MONITOR_SIZE.height as i32 - WINDOW_SIZE.height as i32),
+            "should be flush against the bottom edge"
+        );
+        assert_eq!(
+            p.x, CURRENT_POS.x,
+            "horizontal position must be preserved, not reset to the monitor's left"
+        );
+    }
+
+    #[test]
+    fn unknown_edge_is_rejected() {
+        let err = compute_snap_position(
+            "diagonal",
+            MONITOR_POS,
+            MONITOR_SIZE,
+            WINDOW_SIZE,
+            CURRENT_POS,
+        )
+        .unwrap_err();
+        assert!(err.contains("diagonal"));
+    }
 }
 
 // ── Method 2: Native Windows AppBar docking ─────────────────────
@@ -126,15 +225,12 @@ pub fn undock_window_appbar(app: AppHandle) -> Result<(), String> {
 #[cfg(target_os = "windows")]
 fn dock_appbar_win32(app: &AppHandle, edge: &str, size: i32) -> Result<(), String> {
     use windows_sys::Win32::UI::Shell::{
-        SHAppBarMessage, ABE_BOTTOM, ABE_LEFT, ABE_RIGHT, ABE_TOP, ABM_NEW, ABM_REMOVE,
-        ABM_SETPOS, APPBARDATA,
+        SHAppBarMessage, ABE_BOTTOM, ABE_LEFT, ABE_RIGHT, ABE_TOP, ABM_NEW, ABM_REMOVE, ABM_SETPOS,
+        APPBARDATA,
     };
 
-    let window = app
-        .get_webview_window("main")
-        .ok_or("Window not found")?;
-    let hwnd = window.hwnd().map_err(|e| e.to_string())?.0
-        as windows_sys::Win32::Foundation::HWND;
+    let window = app.get_webview_window("main").ok_or("Window not found")?;
+    let hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as windows_sys::Win32::Foundation::HWND;
 
     let monitor = window
         .current_monitor()
@@ -213,11 +309,8 @@ fn dock_appbar_win32(app: &AppHandle, edge: &str, size: i32) -> Result<(), Strin
 fn undock_appbar_win32(app: &AppHandle) -> Result<(), String> {
     use windows_sys::Win32::UI::Shell::{SHAppBarMessage, ABM_REMOVE, APPBARDATA};
 
-    let window = app
-        .get_webview_window("main")
-        .ok_or("Window not found")?;
-    let hwnd = window.hwnd().map_err(|e| e.to_string())?.0
-        as windows_sys::Win32::Foundation::HWND;
+    let window = app.get_webview_window("main").ok_or("Window not found")?;
+    let hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as windows_sys::Win32::Foundation::HWND;
 
     unsafe {
         let mut abd: APPBARDATA = std::mem::zeroed();

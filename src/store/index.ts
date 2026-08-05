@@ -2,32 +2,6 @@ import { create } from "zustand";
 import type { AudioBakeData, AudioManifest } from "../engine/audio/types";
 import { type WatermarkSettings, DEFAULT_WATERMARK } from "../utils/watermark";
 
-export interface DockTabGroup {
-  id: string;
-  panels: string[];
-  activeTab: string | null;
-  size: number;
-}
-
-export interface DockLayoutState {
-  left: DockTabGroup[];
-  right: DockTabGroup[];
-  bottom: DockTabGroup[];
-  bottomVisible: boolean;
-}
-
-export interface FloatingWindow {
-  id: string;
-  panelId: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  zIndex: number;
-}
-
-export type DropPosition = "top" | "bottom" | "left" | "right" | "center";
-
 /**
  * Composition guides available in the viewport. Each replaces a former
  * `overlay.*` registry effect of the same name.
@@ -418,23 +392,6 @@ function nextStackId(prefix = "stack"): string {
   return `${prefix}-${suffix}`;
 }
 
-
-export const DEFAULT_DOCK_LAYOUT: DockLayoutState = {
-  left: [
-    { id: "dock-left-0", panels: ["browser", "presets", "proxy", "tracks"], activeTab: "browser", size: 1 },
-  ],
-  right: [
-    { id: "dock-right-0", panels: ["stack"], activeTab: "stack", size: 0.4 },
-    {
-      id: "dock-right-1",
-      panels: ["audio", "mask"],
-      activeTab: "audio",
-      size: 0.6,
-    },
-  ],
-  bottom: [],
-  bottomVisible: false,
-};
 
 /** Clamp a value to [min, max], returning fallback for NaN */
 function clampFinite(value: number, min: number, max: number, fallback: number): number {
