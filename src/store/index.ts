@@ -926,14 +926,32 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSam3OverlayColor: (color) => set({ sam3OverlayColor: color }),
 
   // Multi-mask actions
-  setSam3Masks: (masks, scores) =>
+  setSam3Masks: (masks, scores) => {
+    // masks[0] becomes activeMask below and flows straight into the WebGL
+    // mask-texture loader (EffectChain.getMaskTexture), which awaits an
+    // <img> load with no other validation. An empty or malformed entry here
+    // -- e.g. a partial/edge-case response from the SAM3 subprocess -- used
+    // to reach that loader unfiltered and could hang it forever (img.src=""
+    // often fires neither onload nor onerror), freezing the live preview.
+    // Filtering at this boundary, where the IPC response becomes trusted
+    // app state, means every caller is protected without each one having to
+    // remember to check.
+    const paired = masks.map((m, i) => [m, scores[i]] as const).filter(([m]) => !!m);
+    if (paired.length < masks.length) {
+      console.warn(
+        `setSam3Masks: dropped ${masks.length - paired.length} empty/invalid mask candidate(s) from SAM3 response`
+      );
+    }
+    const validMasks = paired.map(([m]) => m);
+    const validScores = paired.map(([, s]) => s);
     set((state) => ({
-      sam3Masks: masks,
-      sam3MaskScores: scores,
+      sam3Masks: validMasks,
+      sam3MaskScores: validScores,
       sam3MaskIndex: 0,
-      activeMask: masks.length > 0 ? masks[0] : null,
+      activeMask: validMasks.length > 0 ? validMasks[0] : null,
       maskRevision: state.maskRevision + 1,
-    })),
+    }));
+  },
   setSam3MaskIndex: (index) =>
     set((state) => {
       const safeIndex = Math.max(0, Math.min(state.sam3Masks.length - 1, index));
