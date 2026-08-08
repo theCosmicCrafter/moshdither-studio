@@ -3,6 +3,7 @@ import { EffectShader } from '../webgl2/types';
 export const macroblockGlitchShader: EffectShader = {
   id: 'macroblockGlitch',
   name: 'Macroblock Glitch',
+  animated: true,
   vertexSource: `
     attribute vec2 a_position;
     attribute vec2 a_texCoord;

@@ -3,6 +3,7 @@ import { EffectShader } from "../webgl2/types";
 export const byteReverseShader: EffectShader = {
   id: "byte_reverse",
   name: "Byte Reverse",
+  animated: true,
   vertexSource: `
     attribute vec2 a_position;
     attribute vec2 a_texCoord;

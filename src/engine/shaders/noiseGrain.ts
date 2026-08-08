@@ -3,6 +3,7 @@ import { EffectShader } from "../webgl2/types";
 export const noiseGrainShader: EffectShader = {
   id: "noise_grain",
   name: "Noise / Grain",
+  animated: true,
   vertexSource: `
     attribute vec2 a_position;
     attribute vec2 a_texCoord;

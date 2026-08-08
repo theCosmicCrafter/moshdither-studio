@@ -66,7 +66,7 @@ test("tracks panel add button creates a track", async ({ page }) => {
 });
 
 test("tracks panel shows empty state when no tracks", async ({ page }) => {
-  await openPanelTab(page, "tracks");
+  await openPanelTab(page, "Tracks");
   const emptyState = page.locator("text=No tracks").first();
   await expect(emptyState).toBeVisible({ timeout: 10000 });
 });

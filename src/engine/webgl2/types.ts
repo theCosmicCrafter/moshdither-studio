@@ -4,6 +4,14 @@ export interface EffectShader {
   vertexSource: string;
   fragmentSource: string;
   uniforms: UniformDef[];
+  /** True when the shader's own math reads u_time/u_frame to produce a
+   * continuously-changing image (motion, flicker, scrolling noise) even
+   * with a static source and no playback. The live-preview render loop uses
+   * this to decide whether it needs to keep re-rendering every frame, or can
+   * render once and stop -- most effects (dithering, color, pixel geometry)
+   * produce identical output every frame for a static image and gain
+   * nothing from a perpetual 60fps loop. Omit (or false) for those. */
+  animated?: boolean;
 }
 
 export interface UniformDef {
