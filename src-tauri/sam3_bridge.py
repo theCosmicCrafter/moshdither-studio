@@ -261,38 +261,90 @@ def cmd_load_image(image_b64: str):
     try:
         image = pil_from_base64(image_b64)
     except ValueError as e:
+        # Safe even after a prior successful load: this failure happens
+        # BEFORE current_image/orig_hw/inference_state are touched below, so
+        # all three globals are left exactly as the previous successful load
+        # set them (mutually consistent, still describing the OLD image) —
+        # no reset needed here, unlike the set_image() failure path below.
         return {"status": "error", "message": str(e)}
 
-    orig_hw = (image.height, image.width)
-    w, h = image.width, image.height
-    max_dim = max(w, h)
-    if max_dim > MAX_SAM3_DIM:
-        scale = MAX_SAM3_DIM / float(max_dim)
-        new_w, new_h = max(1, int(w * scale)), max(1, int(h * scale))
-        scale_x = new_w / float(w)
-        scale_y = new_h / float(h)
-        log("Downscaling SAM3 backbone image from %dx%d to %dx%d for high performance", w, h, new_w, new_h)
-        sam_image = image.resize((new_w, new_h), Image.Resampling.BILINEAR)
-    else:
-        scale_x = 1.0
-        scale_y = 1.0
-        sam_image = image
-
-    current_image = sam_image
-
+    # Compute everything the new image needs into LOCAL variables, and only
+    # publish them to the module globals once every step below has succeeded.
+    #
+    # An earlier version of this function assigned orig_hw, then scale_x/
+    # scale_y, then current_image to the globals one at a time as each step
+    # completed, with only the final processor.set_image() call guarded by a
+    # reset-on-failure handler. That left a gap: image.resize() below (or
+    # anything else in this block) could raise on a SECOND-OR-LATER call
+    # (e.g. a MemoryError downscaling a large image) after orig_hw/scale_x/
+    # scale_y had already been overwritten with the NEW image's values, while
+    # current_image/inference_state still held the OLD image's — the globals
+    # would come out of this call describing two different images. A
+    # subsequent point/box prompt only checks `if inference_state is None`,
+    # which would still pass (the old state is intact), run against the old
+    # backbone features, then get resized against the new orig_hw — a
+    # geometrically wrong mask reported as "ok".
+    #
+    # Local-then-commit makes that class of bug structurally impossible:
+    # either every global moves together on success, or none of them move on
+    # any failure, regardless of which line inside this block actually raises.
     try:
+        new_orig_hw = (image.height, image.width)
+        w, h = image.width, image.height
+        max_dim = max(w, h)
+        if max_dim > MAX_SAM3_DIM:
+            scale = MAX_SAM3_DIM / float(max_dim)
+            new_w, new_h = max(1, int(w * scale)), max(1, int(h * scale))
+            new_scale_x = new_w / float(w)
+            new_scale_y = new_h / float(h)
+            log("Downscaling SAM3 backbone image from %dx%d to %dx%d for high performance", w, h, new_w, new_h)
+            new_sam_image = image.resize((new_w, new_h), Image.Resampling.BILINEAR)
+        else:
+            new_scale_x = 1.0
+            new_scale_y = 1.0
+            new_sam_image = image
+
         # Set image in the text/grounding processor and capture inference state.
         # Point/box prompts reuse the detector backbone features via model.predict_inst.
         with torch.inference_mode():
             if DEVICE == "cuda" and USE_AMP:
                 with torch.autocast(device_type="cuda", dtype=torch.float16):
-                    inference_state = processor.set_image(sam_image)
+                    new_inference_state = processor.set_image(new_sam_image)
             else:
-                inference_state = processor.set_image(sam_image)
-    except RuntimeError as e:
-        if "out of memory" in str(e).lower():
+                new_inference_state = processor.set_image(new_sam_image)
+    except Exception as e:
+        # Nothing above has touched the module globals yet, so the previous
+        # image's state (if any) is technically still intact -- reset it
+        # anyway. Silently keeping the old image loaded after a reported
+        # failure is a worse contract than requiring an explicit reload.
+        #
+        # Catches Exception (not just RuntimeError) deliberately: the
+        # original code only caught RuntimeError around set_image(), so any
+        # other exception type (a non-RuntimeError CUDA error, a bad tensor
+        # shape, a PIL resize failure, a bug in the SAM3 model internals,
+        # etc.) would propagate out of cmd_load_image entirely, past this
+        # function's own error handling, and only get caught by main()'s
+        # generic `except Exception` in the command-dispatch loop -- which
+        # builds an error response but has no knowledge of these globals and
+        # was never going to reset them.
+        current_image = None
+        orig_hw = None
+        inference_state = None
+        if isinstance(e, RuntimeError) and "out of memory" in str(e).lower():
+            if DEVICE == "cuda":
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
             return {"status": "error", "message": f"CUDA out of memory during image encoding: {e}"}
         return {"status": "error", "message": f"Image encoding failed: {e}"}
+
+    # Every step succeeded -- publish all five values together.
+    current_image = new_sam_image
+    orig_hw = new_orig_hw
+    scale_x = new_scale_x
+    scale_y = new_scale_y
+    inference_state = new_inference_state
 
     return {"status": "ok", "width": orig_hw[1], "height": orig_hw[0]}
 

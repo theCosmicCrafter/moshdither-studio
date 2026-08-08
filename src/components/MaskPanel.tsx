@@ -41,6 +41,7 @@ export default function MaskPanel() {
 
   const [isLoading, setIsLoading] = useState(false);
   const setSam3Ready = useAppStore((s) => s.setSam3Ready);
+  const setSam3ImageLoaded = useAppStore((s) => s.setSam3ImageLoaded);
 
   // Ensure SAM3 is running before executing a command. Restarts if idle-shutdown occurred.
   const ensureSam3Ready = useCallback(async (): Promise<boolean> => {
@@ -75,11 +76,22 @@ export default function MaskPanel() {
       setStatusMessage("Loading image into SAM3...");
       getFrameData()
         .then((b64) => sam3LoadImage(b64))
-        .then(() => setStatusMessage("SAM3 ready — image loaded"))
-        .catch((e) => setStatusMessage(`SAM3 auto-load failed: ${e}`))
+        .then(() => {
+          setSam3ImageLoaded(true);
+          setStatusMessage("SAM3 ready — image loaded");
+        })
+        .catch((e) => {
+          // Without this, a failed load left inference_state (Python side)
+          // and the UI's interactivity gate both silently believing the
+          // previous image was still current, so point/box prompts could
+          // still be dispatched against a load that never actually
+          // succeeded. See isSam3Interactive in PreviewViewport.tsx.
+          setSam3ImageLoaded(false);
+          setStatusMessage(`SAM3 auto-load failed: ${e}`);
+        })
         .finally(() => setIsLoading(false));
     }
-  }, [sam3Ready, mediaLoaded, setStatusMessage]);
+  }, [sam3Ready, mediaLoaded, setStatusMessage, setSam3ImageLoaded]);
 
   const handleLoadImage = async () => {
     const ready = await ensureSam3Ready();
@@ -90,8 +102,14 @@ export default function MaskPanel() {
       const b64 = await getFrameData();
       await sam3LoadImage(b64);
       setStatusMessage("Image loaded into SAM3");
+      // The auto-load effect above sets this on its own load path; this is
+      // the manual "Load Image" button's path and needs the same signal, or
+      // isSam3Interactive (PreviewViewport.tsx) stays gated off even after a
+      // successful manual load, silently blocking point/box clicks.
+      setSam3ImageLoaded(true);
     } catch (e) {
       setStatusMessage(`SAM3 load failed: ${e}`);
+      setSam3ImageLoaded(false);
     }
     setIsLoading(false);
   };

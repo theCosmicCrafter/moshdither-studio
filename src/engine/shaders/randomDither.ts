@@ -25,7 +25,13 @@ export const randomDitherShader: EffectShader = {
     void main() {
       vec4 color = texture2D(tDiffuse, vUv);
       float lum = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-      float noise = (rand(vUv) - 0.5) * amount;
+      // Rust (random_noise.rs) perturbs luminance by a per-pixel random
+      // value spanning the FULL [0, 255] range before thresholding at the
+      // midpoint -- equivalent to +/-0.5 in this shader's normalized [0,1]
+      // luma space. The previous '* amount' alone only reached +/-0.25 at
+      // amount's default of 0.5; the extra *2.0 restores the full range at
+      // that same default.
+      float noise = (rand(vUv) - 0.5) * amount * 2.0;
       float t = step(0.5 - noise, lum);
       gl_FragColor = vec4(vec3(t), color.a);
     }

@@ -23,16 +23,25 @@ export const channelSwapShader: EffectShader = {
       vec3 c = color.rgb;
       vec3 outColor = c;
 
-      if (mode == 0) {      // R ↔ G
-        outColor = c.gbr;
-      } else if (mode == 1) { // R ↔ B
-        outColor = c.bgr;
-      } else if (mode == 2) { // G ↔ B
+      // Rust's map table (channel_swap.rs) is indexed by mode and gives
+      // (r_idx, g_idx, b_idx) meaning new_r=old[r_idx], new_g=old[g_idx],
+      // new_b=old[b_idx] with 0=R,1=G,2=B:
+      //   0 (0,1,2) RGB   1 (0,2,1) RBG   2 (1,0,2) GRB
+      //   3 (1,2,0) GBR   4 (2,0,1) BRG   5 (2,1,0) BGR
+      // Each GLSL swizzle below spells that tuple out directly in (r,g,b)
+      // letters, so mode N reproduces map[N] exactly.
+      if (mode == 0) {        // RGB (identity)
+        outColor = c.rgb;
+      } else if (mode == 1) { // RBG
         outColor = c.rbg;
-      } else if (mode == 3) { // RGB → BGR
-        outColor = c.bgr;
-      } else if (mode == 4) { // RGB → GBR
+      } else if (mode == 2) { // GRB
+        outColor = c.grb;
+      } else if (mode == 3) { // GBR
         outColor = c.gbr;
+      } else if (mode == 4) { // BRG
+        outColor = c.brg;
+      } else if (mode == 5) { // BGR
+        outColor = c.bgr;
       }
       gl_FragColor = vec4(outColor, color.a);
     }

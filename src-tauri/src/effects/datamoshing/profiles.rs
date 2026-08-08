@@ -62,6 +62,15 @@ impl Effect for GlitchProfile {
             .get("intensity")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.7) as f32;
+
+        // A near-empty or zero-dimension frame's byte buffer has len <= 3,
+        // which would make `len.saturating_sub(3)` produce an empty `0..0`
+        // range below -- `gen_range` panics on an empty range. Nothing to
+        // corrupt in a buffer this small anyway.
+        if input.data.len() <= 3 {
+            return Ok(input.clone());
+        }
+
         let mut rng = crate::effects::rng::frame_rng(input, params);
         let mut out = input.data.clone();
         let len = out.len();
@@ -459,6 +468,14 @@ impl Effect for ExtremeProfile {
             .get("aggression")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.9) as f32;
+
+        // Same zero-dimension/near-empty-buffer guard as GlitchProfile above
+        // -- `len.saturating_sub(3)` would otherwise hand `gen_range` an
+        // empty range and panic.
+        if input.data.len() <= 3 {
+            return Ok(input.clone());
+        }
+
         let mut rng = crate::effects::rng::frame_rng(input, params);
         let mut out = input.data.clone();
         let len = out.len();
@@ -626,6 +643,13 @@ impl Effect for RainbowProfile {
             .unwrap_or(0.5) as f32;
         let w = input.width as usize;
         let h = input.height as usize;
+        // Same category of bug as GlitchProfile/ExtremeProfile's corruption
+        // loops: the databend row-shifting below calls
+        // `rng.gen_range(0..h)`, which panics on the empty range produced by
+        // a zero-height frame.
+        if w == 0 || h == 0 {
+            return Ok(input.clone());
+        }
         let mut out = input.data.clone();
 
         // Rise-style color remapping with rainbow palette
@@ -853,6 +877,67 @@ mod tests {
             .process_video(&seg, None, &serde_json::Map::new())
             .unwrap();
         assert!(!r.frames.is_empty());
+    }
+
+    #[test]
+    fn test_glitch_profile_minimal_frame_does_not_panic() {
+        // `Frame` doesn't enforce data.len() == width*height*4, so a
+        // malformed/synthetic frame (fuzzed project file, future caller)
+        // can carry a near-empty byte buffer. `len.saturating_sub(3)` would
+        // otherwise hand `gen_range` an empty range and panic once
+        // corruption_count > 0.
+        let e = GlitchProfile;
+        let f = Frame {
+            width: 1,
+            height: 1,
+            data: vec![1, 2, 3], // len == 3, deliberately malformed/truncated
+        };
+        let mut params = serde_json::Map::new();
+        // A large, unclamped intensity maximises corruption_count so the
+        // vulnerable branch would actually run if the guard were missing.
+        params.insert("intensity".to_string(), json!(1000.0));
+        let r = e.process_frame(&f, None, &params).unwrap();
+        assert_eq!(r.data, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_glitch_profile_zero_length_frame_does_not_panic() {
+        let e = GlitchProfile;
+        let f = Frame {
+            width: 0,
+            height: 0,
+            data: Vec::new(),
+        };
+        let r = e.process_frame(&f, None, &serde_json::Map::new()).unwrap();
+        assert!(r.data.is_empty());
+    }
+
+    #[test]
+    fn test_extreme_profile_minimal_frame_does_not_panic() {
+        let e = ExtremeProfile;
+        let f = Frame {
+            width: 1,
+            height: 1,
+            data: vec![1, 2, 3], // len == 3, deliberately malformed/truncated
+        };
+        let mut params = serde_json::Map::new();
+        params.insert("aggression".to_string(), json!(1000.0));
+        let r = e.process_frame(&f, None, &params).unwrap();
+        assert_eq!(r.data, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_rainbow_profile_zero_height_frame_does_not_panic() {
+        // The databend row-shifting phase calls `rng.gen_range(0..h)`, which
+        // panics on the empty range produced by a zero-height frame.
+        let e = RainbowProfile;
+        let f = Frame {
+            width: 4,
+            height: 0,
+            data: Vec::new(),
+        };
+        let r = e.process_frame(&f, None, &serde_json::Map::new()).unwrap();
+        assert!(r.data.is_empty());
     }
 
     #[test]

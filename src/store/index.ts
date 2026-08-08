@@ -177,6 +177,12 @@ export interface AppState {
   maskTool: "brush" | "eraser" | "rect" | "ellipse" | "polygon";
   brushSize: number;
   sam3Ready: boolean;
+  /** Whether the CURRENT frame's image finished loading into SAM3 successfully.
+   *  False (the default) until a load succeeds, and reset to false on a
+   *  failed (re)load, so callers can gate point/box prompts on "the image
+   *  currently loaded actually matches what's on screen" rather than just
+   *  "the engine is running". */
+  sam3ImageLoaded: boolean;
   sam3Mode: "text" | "point" | "box" | "auto";
   /** When true, the next left-click on the viewport fires a point prompt */
   sam3Clicking: boolean;
@@ -343,6 +349,7 @@ export interface AppState {
   setMaskTool: (tool: "brush" | "eraser" | "rect" | "ellipse" | "polygon") => void;
   setBrushSize: (size: number) => void;
   setSam3Ready: (v: boolean) => void;
+  setSam3ImageLoaded: (v: boolean) => void;
   setSam3Mode: (mode: "text" | "point" | "box" | "auto") => void;
   setSam3Clicking: (v: boolean) => void;
 
@@ -499,6 +506,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   maskTool: "brush",
   brushSize: 20,
   sam3Ready: false,
+  sam3ImageLoaded: false,
   sam3Mode: "text",
   sam3Clicking: false,
   sam3Points: [],
@@ -899,6 +907,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setMaskTool: (tool) => set({ maskTool: tool }),
   setBrushSize: (size) => set({ brushSize: clampFinite(size, 1, 200, 20) }),
   setSam3Ready: (v) => set({ sam3Ready: v }),
+  setSam3ImageLoaded: (v) => set({ sam3ImageLoaded: v }),
   setSam3Mode: (mode) => set({ sam3Mode: mode }),
   setSam3Clicking: (v) => set({ sam3Clicking: v }),
 

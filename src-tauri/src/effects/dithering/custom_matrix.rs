@@ -57,15 +57,27 @@ impl Effect for CustomMatrixDither {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
+        // Read as f64, not as_i64: a slider with step 1.0 may still serialise
+        // as a JSON float, and as_i64() returns None for a float -- silently
+        // dropping the parameter and falling back to the default. Round
+        // before casting since UI wheel drags can produce non-integral
+        // values. See error_diffusion.rs for the established pattern.
         let levels = params
             .get("levels")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(2)
-            .max(2) as u32;
+            .and_then(|v| v.as_f64())
+            .filter(|v| v.is_finite())
+            .map(|v| v.round().clamp(2.0, 16.0) as u32)
+            .unwrap_or(2);
         let matrix_name = params
             .get("matrix")
             .and_then(|v| v.as_str())
             .unwrap_or("bayer2");
+        // Unlike bayer.rs's `generate_bayer_matrix`, which recursively
+        // computes an NxN matrix, this is a `match` returning a small
+        // hardcoded literal -- there is no computation to cache and no
+        // `#[allow(dead_code)]` to remove. Reusing a precomputed field the
+        // way bayer.rs does its `self.matrix` would add an instance field
+        // and an interior-mutability story for zero measurable benefit here.
         let matrix: Vec<Vec<u32>> = match matrix_name {
             "bayer2" => vec![vec![0, 2], vec![3, 1]],
             "bayer4" => vec![
@@ -132,5 +144,89 @@ impl Effect for CustomMatrixDither {
             frames,
             fps: input.fps,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn gradient_frame(w: u32, h: u32) -> Frame {
+        let mut data = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let v = (((x * 255) / w.max(1) + (y * 255) / h.max(1)) / 2) as u8;
+                data.extend_from_slice(&[v, v, v, 255]);
+            }
+        }
+        Frame {
+            width: w,
+            height: h,
+            data,
+        }
+    }
+
+    /// `levels` must be read with `as_f64`, not `as_i64`: a JSON float
+    /// (whether hand-supplied or produced by `clamp_params` rewriting an
+    /// out-of-range value) would otherwise be silently dropped and the
+    /// effect would fall back to its hardcoded default of 2.
+    #[test]
+    fn levels_accepts_a_float_tagged_value_instead_of_falling_back_to_default() {
+        let frame = gradient_frame(32, 32);
+        let e = CustomMatrixDither;
+
+        let mut float_params = serde_json::Map::new();
+        float_params.insert("levels".into(), json!(8.0));
+        let mut int_params = serde_json::Map::new();
+        int_params.insert("levels".into(), json!(8));
+
+        let default_out = e
+            .process_frame(&frame, None, &serde_json::Map::new())
+            .unwrap();
+        let float_out = e.process_frame(&frame, None, &float_params).unwrap();
+        let int_out = e.process_frame(&frame, None, &int_params).unwrap();
+
+        assert_eq!(
+            float_out.data, int_out.data,
+            "levels 8 and 8.0 must resolve identically"
+        );
+        assert_ne!(
+            float_out.data, default_out.data,
+            "a float-tagged levels must not silently fall back to the default"
+        );
+    }
+
+    #[test]
+    fn levels_honours_a_clamp_then_read_round_trip() {
+        let frame = gradient_frame(32, 32);
+        let e = CustomMatrixDither;
+
+        // Out of range (declared max is 16); clamp_params rewrites this to
+        // the float-tagged representation that as_i64() cannot read.
+        let mut raw = serde_json::Map::new();
+        raw.insert("levels".into(), json!(9999));
+        let clamped = crate::effects::clamp_params("dithering.custom_matrix", &raw);
+        assert!(
+            clamped["levels"].is_f64(),
+            "clamp_params should have rewritten the out-of-range value to a float"
+        );
+
+        let mut direct_max = serde_json::Map::new();
+        direct_max.insert("levels".into(), json!(16));
+
+        let via_clamp = e.process_frame(&frame, None, &clamped).unwrap();
+        let via_direct = e.process_frame(&frame, None, &direct_max).unwrap();
+        let default_out = e
+            .process_frame(&frame, None, &serde_json::Map::new())
+            .unwrap();
+
+        assert_eq!(
+            via_clamp.data, via_direct.data,
+            "a value clamped to 16 must behave exactly like levels=16"
+        );
+        assert_ne!(
+            via_clamp.data, default_out.data,
+            "clamped levels must not silently fall back to the default"
+        );
     }
 }

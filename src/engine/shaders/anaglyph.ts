@@ -20,9 +20,12 @@ export const anaglyphShader: EffectShader = {
 
     void main() {
       float offset = amount * 0.03;
-      float r = texture2D(tDiffuse, vUv + vec2(offset, 0.0)).r;
+      // Rust (anaglyph.rs): rx = x - shift (red samples from smaller x),
+      // bx = x + shift (blue samples from larger x). vUv.x increases with x,
+      // so that is vUv - offset for red and vUv + offset for blue.
+      float r = texture2D(tDiffuse, vUv - vec2(offset, 0.0)).r;
       float g = texture2D(tDiffuse, vUv).g;
-      float b = texture2D(tDiffuse, vUv - vec2(offset, 0.0)).b;
+      float b = texture2D(tDiffuse, vUv + vec2(offset, 0.0)).b;
       float a = texture2D(tDiffuse, vUv).a;
       gl_FragColor = vec4(r, g, b, a);
     }

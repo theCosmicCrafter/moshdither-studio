@@ -119,6 +119,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     activeMask,
     maskVisible,
     sam3Ready,
+    sam3ImageLoaded,
     sam3Mode,
     sam3Points,
     maskTab,
@@ -131,6 +132,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       activeMask: s.activeMask,
       maskVisible: s.maskVisible,
       sam3Ready: s.sam3Ready,
+      sam3ImageLoaded: s.sam3ImageLoaded,
       sam3Mode: s.sam3Mode,
       sam3Points: s.sam3Points,
       maskTab: s.maskTab,
@@ -176,6 +178,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     addSam3Point,
     clearSam3Points,
     setSam3HoverMask,
+    setSam3Clicking,
     setFilePath,
     setProxyUrl,
     setIsVideo,
@@ -191,6 +194,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       addSam3Point: s.addSam3Point,
       clearSam3Points: s.clearSam3Points,
       setSam3HoverMask: s.setSam3HoverMask,
+      setSam3Clicking: s.setSam3Clicking,
       setFilePath: s.setFilePath,
       setProxyUrl: s.setProxyUrl,
       setIsVideo: s.setIsVideo,
@@ -431,8 +435,12 @@ function PreviewViewport({ isDropTarget = false }: Props) {
 
   // ── SAM3 Tree Masking ──────────────────────────────────────
 
-  /** True when the SAM3 canvas overlay should capture pointer events. */
-  const isSam3Interactive = sam3Ready && !showBeforeAfter && maskTab === "sam3" && (sam3Mode === "point" || sam3Mode === "box");
+  /** True when the SAM3 canvas overlay should capture pointer events.
+   *  Also requires sam3ImageLoaded so a failed (or not-yet-completed) image
+   *  load can't leave the UI dispatching point/box prompts against a
+   *  session that never actually has the current frame loaded. */
+  const isSam3Interactive =
+    sam3Ready && sam3ImageLoaded && !showBeforeAfter && maskTab === "sam3" && (sam3Mode === "point" || sam3Mode === "box");
   /** True when the manual mask overlay should capture pointer events. */
   const isManualMaskActive = maskTab === "manual" && mediaLoaded && !showBeforeAfter;
 
@@ -577,8 +585,12 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       setIsBoxDragging(true);
       setBoxStart({ x, y });
       setBoxCurrent({ x, y });
+      // Marks a box-drag interaction as in-progress so useSam3IdleShutdown's
+      // idle timer resets — without this, a long box-drag (or the request it
+      // fires) could be killed mid-flight by the 5-minute idle shutdown.
+      setSam3Clicking(true);
     },
-    [sam3Mode, mediaInfo]
+    [sam3Mode, mediaInfo, setSam3Clicking]
   );
 
   const handleCanvasMouseMove = useCallback(
@@ -614,11 +626,12 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       setIsBoxDragging(false);
       setBoxStart(null);
       setBoxCurrent(null);
+      setSam3Clicking(false);
 
       if (x2 - x1 < 2 || y2 - y1 < 2) return; // ignore tiny accidental clicks
       runBox(x1, y1, x2, y2);
     },
-    [sam3Mode, isBoxDragging, boxStart, boxCurrent, mediaInfo, runBox]
+    [sam3Mode, isBoxDragging, boxStart, boxCurrent, mediaInfo, runBox, setSam3Clicking]
   );
 
   const handleCanvasMouseLeave = useCallback(() => {
@@ -627,8 +640,15 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       setIsBoxDragging(false);
       setBoxStart(null);
       setBoxCurrent(null);
+      // Abandoning a drag by leaving the canvas fires mouseleave, not mouseup,
+      // so without this sam3Clicking would stay true forever -- it's only
+      // ever cleared by handleCanvasMouseUp. A stuck-true value keeps
+      // resetting the SAM3 idle-shutdown timer indefinitely (it's in that
+      // effect's dependency array), so the Python subprocess and model never
+      // get torn down even when genuinely idle.
+      setSam3Clicking(false);
     }
-  }, [cancelHover, isBoxDragging]);
+  }, [cancelHover, isBoxDragging, setSam3Clicking]);
 
   // ── Draw SAM3 UI overlay (points + drag box) ────────────────
   useEffect(() => {

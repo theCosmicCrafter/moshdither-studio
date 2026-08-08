@@ -93,6 +93,29 @@ export function useProject() {
           if (last && last.effectId === entry.effectId) {
             store.updateStackParams(last.id, entry.params);
             if (!entry.enabled) store.toggleStackItem(last.id);
+            // Restore this entry's mask assignment. Without this, a saved
+            // effect's maskId/maskMode/maskB64 were serialized correctly by
+            // saveProject but never applied back onto the restored
+            // StackEntry, so the effect silently lost its mask on reopen.
+            if (entry.maskId) {
+              store.setStackItemMask(last.id, entry.maskId);
+              if (entry.maskMode) store.setStackItemMaskMode(last.id, entry.maskMode);
+              // setStackItemMask recomputes maskB64 from the CURRENT
+              // activeMask/sam3Masks (by maskId convention), not from the
+              // saved snapshot — and SAM3 masks are session-local, so
+              // sam3Masks is normally empty right after a fresh project
+              // load. Overwrite maskB64 with the exact snapshot that was
+              // saved so a "sam3-N" mask assignment survives even though
+              // the SAM3 session itself isn't restored.
+              if (entry.maskB64 !== undefined) {
+                const savedMaskB64 = entry.maskB64;
+                useAppStore.setState((s) => ({
+                  effectStack: s.effectStack.map((e) =>
+                    e.id === last.id ? { ...e, maskB64: savedMaskB64 ?? null } : e
+                  ),
+                }));
+              }
+            }
           }
         }
         // Restore keyframes, audio bindings, and mask

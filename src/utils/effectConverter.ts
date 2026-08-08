@@ -30,18 +30,22 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   },
   "pixel_geo.kaleidoscope": {
     shaderId: "kaleidoscope",
+    // The shader computes angle/radius in true pixel space (via the
+    // `resolution` uniform) and does a pure rotational wrap with no
+    // reflection, matching Rust's angle.rem_euclid(angle_step) exactly
+    // (kaleidoscope.rs) -- see kaleidoscope.ts for the derivation.
     paramMap: { segments: "segments" },
   },
   "pixel_geo.wave_distort": {
     shaderId: "wave_distort",
-    // Rust: amplitude in pixels [0, 50]; frequency multiplies pixel-space y [0, 0.2].
-    // Shader: uv.x += sin(uv.y * frequency + t) * amount * 0.05, in UV space.
+    // Rust's amplitude (px) and frequency (radians/pixel-row) are
+    // resolution-independent pixel-space quantities (wave_distort.rs). The
+    // shader now converts to UV space internally using the `resolution`
+    // uniform, so both values pass straight through unscaled -- the
+    // previous /50 and *200 constants assumed a fixed frame size and were
+    // 2-4x wrong at other resolutions. The shader also no longer adds a
+    // second (vertical) distortion axis, which Rust never had.
     paramMap: { amplitude: "amount", frequency: "frequency" },
-    transform: (k, v) => {
-      const n = typeof v === "number" ? v : 0;
-      if (k === "amplitude") return n / 50; // px -> normalized shader amount
-      return n * 200; // pixel-space frequency -> UV-space cycles
-    },
   },
   "pixel_geo.slice_shift_advanced": {
     shaderId: "slice_shift",
@@ -64,19 +68,35 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   },
   "pixel_geo.anaglyph": {
     shaderId: "anaglyph",
-    // Rust: shift in pixels [0, 50]. Shader: offset = amount * 0.03 in UV space.
+    // Rust: shift in pixels [0, 50]. Shader: offset = amount * 0.03 in UV
+    // space, sampling red from vUv - offset and blue from vUv + offset to
+    // match Rust's rx = x - shift / bx = x + shift exactly (anaglyph.rs).
     paramMap: { shift: "amount" },
     transform: (_k, v) => (typeof v === "number" ? v / 30 : 0.2),
   },
   "pixel_geo.block_shift": {
     shaderId: "block_shift",
-    // Rust: max_shift in pixels [0, 32]. Shader: amount scales blockSize offsets.
+    // Rust: max_shift is a pixel displacement in [0, 32], independent of
+    // block_size -- each block gets a random offset in [-max_shift,
+    // max_shift] regardless of its size (block_shift.rs). The shader
+    // previously multiplied amount * blockSize, so displacement scaled
+    // 2-16x with block_size; fixed by passing max_shift straight through as
+    // a pixel quantity instead of normalizing it.
+    //
+    // The per-block PATTERN is still an approximation: Rust seeds each
+    // block with a 64-bit wrapping-multiplicative hash of (x, y, time), and
+    // WebGL1/GLSL ES 1.00 has no reliable 64-bit integer or bitwise-shift
+    // support to reproduce that exactly, so the shader uses a standard
+    // sin-based GLSL hash instead -- same displacement magnitude, different
+    // block-to-block arrangement. Marked inaccurate so the preview falls
+    // back to the Rust CPU path rather than claiming pixel-exact blocks.
     paramMap: { block_size: "blockSize", max_shift: "amount" },
     transform: (k, v) => {
       const n = typeof v === "number" ? v : 0;
-      if (k === "max_shift") return n / 32;
+      if (k === "max_shift") return Math.max(0, n);
       return Math.max(2, n);
     },
+    accurate: false,
   },
   "pixel_geo.pixel_sort": {
     shaderId: "pixel_sort",
@@ -99,18 +119,18 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   // Analog
   "analog.scanlines": {
     shaderId: "scanlines",
-    // Rust 'gap' is the row period in pixels; the shader's lineCount is the
-    // number of half-cycles across the (normalized) height. lineCount = 2H/gap,
-    // evaluated at a nominal 480px height so gap=2 lands on the shader default.
-    paramMap: { intensity: "amount", gap: "lineCount" },
-    transform: (k, v) => {
-      const n = typeof v === "number" ? v : 0;
-      if (k === "gap") return 480 / Math.max(1, n);
-      return n;
-    },
+    // Rust darkens every row except every Nth ('gap'), a hard step -- not a
+    // smooth wave -- and 'gap' is a row period measured against the frame's
+    // actual height (scanlines.rs), not a line count derived from an
+    // assumed 480px-tall frame. The shader now reads the real frame height
+    // off the `resolution` uniform and reproduces the same step function,
+    // so 'gap' passes straight through unscaled.
+    paramMap: { intensity: "amount", gap: "gap" },
   },
   "analog.chromatic_aberration": {
     shaderId: "chromatic_aberration",
+    // Shader samples red from vUv - offset and blue from vUv + offset to
+    // match Rust's rx = x - shift / bx = x + shift (chromatic_aberration.rs).
     paramMap: { shift: "amount" },
     transform: (_k, v) => (typeof v === "number" ? v / 10 : 1),
   },
@@ -156,6 +176,10 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   },
   "analog.color_bleed": {
     shaderId: "color_bleed",
+    // Rust bands the R/B shift PER ROW: r_shift = (y % (amount*2+1)) -
+    // amount, b_shift = -r_shift (color_bleed.rs). The shader now computes
+    // that same per-row banded shift from the `resolution` uniform instead
+    // of one constant, time-pulsing offset for the whole frame.
     paramMap: { amount: "amount" },
   },
   "analog.ghosting": {
@@ -361,12 +385,27 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   },
   "dithering.threshold": {
     shaderId: "threshold_dither",
+    // Rust's threshold is 0-255 luma (threshold.rs: `lum > threshold as
+    // f32`); the shader's texture2D luma is normalized [0,1]. Without this
+    // transform a default threshold of 128 made step(128.0, lum) always 0
+    // -> solid black at every practical setting. Matches the same pattern
+    // used for pixel_geo.pixel_sort's threshold above.
     paramMap: { threshold: "threshold" },
+    transform: (_k, v) => (typeof v === "number" ? v / 255 : 0.5),
   },
   "dithering.random_noise": {
     shaderId: "random_dither",
-    // The Rust effect exposes no parameters; the shader keeps its own default.
+    // Rust exposes no parameters and perturbs each pixel's luminance by a
+    // deterministic per-pixel hash spanning the FULL 0-255 range before
+    // thresholding (random_noise.rs) -- not the [0.25, 0.75] window the
+    // shader previously produced at its default amount. random_dither.ts
+    // now widens its built-in default to cover that full range, but its
+    // GLSL sin-hash is a different PRNG from Rust's x/y/time
+    // multiplicative hash, so the exact dither pattern cannot match
+    // pixel-for-pixel -> accurate: false routes the preview to the Rust CPU
+    // path instead of claiming false precision.
     paramMap: {},
+    accurate: false,
   },
   "dithering.blue_noise": {
     shaderId: "blue_noise_dither",

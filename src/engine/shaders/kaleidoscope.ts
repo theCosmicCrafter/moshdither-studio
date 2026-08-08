@@ -23,17 +23,30 @@ export const kaleidoscopeShader: EffectShader = {
     #define PI 3.14159265359
 
     void main() {
-      vec2 center = vec2(0.5);
-      vec2 uv = vUv - center;
-      float radius = length(uv);
-      float angle = atan(uv.y, uv.x);
+      // Rust (kaleidoscope.rs) works in true pixel space: dx = x - cx,
+      // dy = y - cy using the frame's actual width/height, then
+      // dy.atan2(dx). Computing the angle straight from vUv - 0.5 instead
+      // stretches it on non-square frames because uv.x and uv.y do not span
+      // the same physical distance per unit; converting to pixel space with
+      // the resolution uniform first avoids that.
+      vec2 res = (resolution.x > 0.0 && resolution.y > 0.0) ? resolution : vec2(1920.0, 1080.0);
+      vec2 pixel = vUv * res;
+      vec2 center = res * 0.5;
+      vec2 d = pixel - center;
+      float dist = length(d);
+      float angle = atan(d.y, d.x) + rotation;
 
-      float segAngle = PI / segments;
-      angle = mod(angle + rotation, 2.0 * segAngle);
-      if (angle > segAngle) angle = 2.0 * segAngle - angle;
+      // Rust does a pure rotational segment copy: wrap into [0, angleStep)
+      // with angle.rem_euclid(angle_step) and NO reflection. GLSL's mod()
+      // is a floored mod (x - y*floor(x/y)), which is exactly rem_euclid
+      // for a positive divisor, so no extra fold-back is needed -- the
+      // previous 'if (angle > segAngle) angle = 2*segAngle - angle;' mirror
+      // step does not exist in Rust and has been removed.
+      float angleStep = (2.0 * PI) / max(segments, 2.0);
+      float mappedAngle = mod(angle, angleStep);
 
-      vec2 sampleUv = vec2(cos(angle), sin(angle)) * radius + center;
-      sampleUv = clamp(sampleUv, 0.0, 1.0);
+      vec2 srcPixel = center + dist * vec2(cos(mappedAngle), sin(mappedAngle));
+      vec2 sampleUv = clamp(srcPixel / res, 0.0, 1.0);
 
       gl_FragColor = texture2D(tDiffuse, sampleUv);
     }

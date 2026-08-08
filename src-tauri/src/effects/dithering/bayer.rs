@@ -51,9 +51,7 @@ fn matrix_size_from_value(v: &Value) -> Option<u32> {
 
 /// Bayer ordered dithering effect.
 pub struct BayerDither {
-    #[allow(dead_code)]
     matrix_size: u32,
-    #[allow(dead_code)]
     matrix: Vec<Vec<u8>>,
 }
 
@@ -152,7 +150,24 @@ impl Effect for BayerDither {
             .get("matrix_size")
             .and_then(matrix_size_from_value)
             .unwrap_or(MATRIX_SIZES[DEFAULT_MATRIX_INDEX]);
-        let matrix = Self::generate_bayer_matrix(ms);
+
+        // `new()` already computed a matrix for this instance's own size.
+        // Regenerating a <=16x16 matrix costs microseconds either way, but
+        // reusing it when the resolved per-frame size matches -- the common
+        // video-export case, where every frame uses the same params -- avoids
+        // the recursive rebuild for free and gives `self.matrix` an actual
+        // reader instead of `#[allow(dead_code)]`. `process_frame` only takes
+        // `&self`, so a genuine cache keyed by an arbitrary size would need
+        // interior mutability (RefCell/Mutex); that complexity isn't worth it
+        // for a computation this cheap, so the fallback path still generates
+        // fresh when the sizes differ.
+        let generated;
+        let matrix: &Vec<Vec<u8>> = if ms == self.matrix_size {
+            &self.matrix
+        } else {
+            generated = Self::generate_bayer_matrix(ms);
+            &generated
+        };
 
         for y in 0..h {
             for x in 0..w {

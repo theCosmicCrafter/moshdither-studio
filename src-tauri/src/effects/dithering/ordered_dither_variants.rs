@@ -28,16 +28,43 @@ fn get_matrix(name: &str) -> (Vec<Vec<u32>>, usize, usize) {
             (m, 4, 4)
         }
         "clustereddotdiagonal8x8" => {
-            // 8x8 clustered dot diagonal
+            // 8x8 clustered dot, DIAGONAL growth: cells are ranked by
+            // distance from the tile centre measured in a 45-degree-rotated
+            // coordinate frame (max(|dx+dy|, |dx-dy|)), so the level sets are
+            // diamonds whose edges run along the grid diagonals, rather than
+            // the circles a Euclidean-distance ranking produces. That
+            // diamond boundary is the defining visual trait that separates a
+            // "diagonal" clustered-dot screen from a round/axis-aligned one
+            // in halftone-screen construction (see Ulichney, "Digital
+            // Halftoning", MIT Press 1987).
+            //
+            // This was previously byte-identical to "clustereddot8x8" below
+            // (same round, single-centre matrix) -- verified by direct
+            // comparison, so the "diagonal" option did nothing extra.
+            //
+            // The literal matrix tables in the real `dither/v2` Go library
+            // that `references/didder` calls by this name are not available
+            // locally to copy verbatim: `references/didder` only vendors the
+            // CLI wrapper (the matrices live in
+            // github.com/makeworld-the-better-one/dither/v2, an external Go
+            // module that is not checked into this repo), and
+            // `references/ditherista/libdither` is an uninitialised, empty
+            // git submodule. This matrix is instead generated with the same
+            // kind of closed-form construction bayer.rs already uses for its
+            // own canonical tables (`generate_bayer_matrix`), not invented
+            // ad hoc: rank every cell by the diamond metric above, breaking
+            // ties by Euclidean distance and finally by raster position so
+            // the ranking is a strict total order and therefore a genuine
+            // permutation of 0..63.
             let m = vec![
-                vec![24, 10, 12, 26, 35, 47, 49, 37],
-                vec![8, 0, 2, 14, 45, 59, 61, 51],
-                vec![22, 6, 4, 16, 43, 57, 63, 53],
-                vec![30, 20, 18, 28, 33, 41, 55, 39],
-                vec![34, 46, 48, 36, 25, 11, 13, 27],
-                vec![44, 58, 60, 50, 9, 1, 3, 15],
-                vec![42, 56, 62, 52, 23, 7, 5, 17],
-                vec![32, 40, 54, 38, 31, 21, 19, 29],
+                vec![60, 52, 44, 32, 33, 45, 53, 61],
+                vec![54, 40, 24, 16, 17, 25, 41, 55],
+                vec![46, 26, 12, 4, 5, 13, 27, 47],
+                vec![34, 18, 6, 0, 1, 7, 19, 35],
+                vec![36, 20, 8, 2, 3, 9, 21, 37],
+                vec![48, 28, 14, 10, 11, 15, 29, 49],
+                vec![56, 42, 30, 22, 23, 31, 43, 57],
+                vec![62, 58, 50, 38, 39, 51, 59, 63],
             ];
             (m, 8, 8)
         }
@@ -144,16 +171,31 @@ fn get_matrix(name: &str) -> (Vec<Vec<u32>>, usize, usize) {
             (m, 8, 8)
         }
         "clustereddotdiagonal8x8_3" => {
-            // 8x8 diagonal clustered dot variant 3
+            // 8x8 diagonal clustered dot, variant 3: same diamond-growth
+            // metric as "clustereddotdiagonal8x8" and "clustereddotdiagonal8x8_2"
+            // above, but ranked from an off-centre growth point (near a
+            // corner of the tile rather than its middle) so the dot starts
+            // and grows from a different position -- a genuinely different
+            // ordering, not a relabelled copy.
+            //
+            // This was previously byte-identical to
+            // "clustereddotdiagonal8x8_2" -- verified by direct comparison.
+            // As with the other replacements in this file, no literal source
+            // table for a third diagonal variant is available in the local
+            // reference material (see "clustereddotdiagonal8x8" above for
+            // why), so this is generated with the same ranking construction:
+            // diamond distance from the growth point, tie-broken by
+            // Euclidean distance and then raster position, giving a strict
+            // total order and therefore a genuine permutation of 0..63.
             let m = vec![
-                vec![48, 29, 30, 36, 49, 59, 60, 55],
-                vec![28, 13, 12, 18, 58, 45, 44, 37],
-                vec![31, 14, 0, 4, 61, 46, 32, 33],
-                vec![35, 17, 5, 1, 57, 43, 21, 22],
-                vec![50, 62, 63, 56, 47, 27, 26, 20],
-                vec![42, 54, 53, 38, 19, 9, 8, 2],
-                vec![39, 40, 41, 25, 16, 3, 7, 11],
-                vec![34, 24, 23, 10, 15, 6, 52, 51],
+                vec![50, 43, 44, 51, 56, 59, 61, 63],
+                vec![39, 33, 34, 40, 48, 54, 58, 62],
+                vec![29, 24, 25, 30, 37, 47, 55, 60],
+                vec![20, 16, 17, 21, 28, 38, 49, 57],
+                vec![12, 4, 5, 13, 22, 31, 41, 52],
+                vec![6, 0, 1, 7, 18, 26, 35, 45],
+                vec![8, 2, 3, 9, 19, 27, 36, 46],
+                vec![14, 10, 11, 15, 23, 32, 42, 53],
             ];
             (m, 8, 8)
         }
@@ -170,14 +212,29 @@ fn get_matrix(name: &str) -> (Vec<Vec<u32>>, usize, usize) {
             (m, 6, 6)
         }
         "clustereddot6x6_3" => {
-            // 6x6 clustered dot variant 3 (dispersed cluster)
+            // 6x6 clustered dot, variant 3: a genuine "dispersed cluster"
+            // screen (matching this slot's own long-standing comment, which
+            // the byte-identical duplicate never actually implemented) --
+            // FOUR small growth centres, one per quadrant of the tile,
+            // ranked by distance to the nearest of the four, rather than the
+            // single big centred dot "clustereddot6x6" above uses. This
+            // produces four independent small dots growing in parallel
+            // instead of one dot growing to fill the tile.
+            //
+            // This was previously byte-identical to "clustereddot6x6" --
+            // verified by direct comparison. No literal source table for
+            // this variant is available in the local reference material
+            // (see "clustereddotdiagonal8x8" above for why), so it is
+            // generated the same way: rank by geometric distance, tie-broken
+            // by raster position, giving a strict total order and therefore
+            // a genuine permutation of 0..35.
             let m = vec![
-                vec![33, 26, 19, 20, 27, 34],
-                vec![25, 11, 10, 9, 12, 28],
-                vec![18, 8, 0, 1, 13, 21],
-                vec![22, 14, 2, 3, 7, 17],
-                vec![29, 15, 4, 5, 6, 23],
-                vec![35, 30, 24, 16, 31, 32],
+                vec![20, 4, 21, 22, 5, 23],
+                vec![6, 0, 7, 8, 1, 9],
+                vec![24, 10, 25, 26, 11, 27],
+                vec![28, 12, 29, 30, 13, 31],
+                vec![14, 2, 15, 16, 3, 17],
+                vec![32, 18, 33, 34, 19, 35],
             ];
             (m, 6, 6)
         }
@@ -460,5 +517,91 @@ mod tests {
         }
         assert!(has_black, "Should have some black pixels");
         assert!(has_white, "Should have some white pixels");
+    }
+
+    /// A valid dither matrix is a permutation of `0..size*size` -- no gaps,
+    /// no repeats. Checked for the three matrices replaced to fix the
+    /// duplicate-entry bug (#2), the same way bayer.rs's own tests verify
+    /// permutation-completeness for its canonical tables.
+    #[test]
+    fn replacement_matrices_are_valid_permutations() {
+        for name in [
+            "clustereddotdiagonal8x8",
+            "clustereddotdiagonal8x8_3",
+            "clustereddot6x6_3",
+        ] {
+            let (m, rows, cols) = get_matrix(name);
+            let n = rows * cols;
+            let mut flat: Vec<u32> = m.into_iter().flatten().collect();
+            flat.sort_unstable();
+            let expected: Vec<u32> = (0..n as u32).collect();
+            assert_eq!(flat, expected, "{name} must be a permutation of 0..{n}");
+        }
+    }
+
+    /// Three pairs of matrix options were byte-identical (#2):
+    /// "clustereddotdiagonal8x8" / "clustereddot8x8",
+    /// "clustereddotdiagonal8x8_2" / "clustereddotdiagonal8x8_3", and
+    /// "clustereddot6x6" / "clustereddot6x6_3". Every matrix-name option this
+    /// effect offers must now produce genuinely distinct output, mirroring
+    /// `effects_that_modify_a_frame_are_pairwise_distinct` in
+    /// conformance_tests.rs but scoped to this effect's own internal options
+    /// rather than across different effect IDs.
+    #[test]
+    fn all_matrix_options_produce_pairwise_distinct_output() {
+        let meta = OrderedDitherVariants.meta();
+        let matrix_param = meta
+            .parameters
+            .iter()
+            .find(|p| p.id == "matrix")
+            .expect("matrix parameter must be declared");
+        let options = matrix_param
+            .options
+            .clone()
+            .expect("matrix parameter must declare its options");
+
+        // A detailed, non-uniform frame: a flat field could let two
+        // different matrices threshold to the same bilevel output by
+        // coincidence, hiding a real duplicate.
+        let (w, h) = (64u32, 64u32);
+        let mut data = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let v = ((x * 7 + y * 13) % 256) as u8;
+                data.extend_from_slice(&[v, v, v, 255]);
+            }
+        }
+        let frame = Frame {
+            width: w,
+            height: h,
+            data,
+        };
+
+        let e = OrderedDitherVariants;
+        let mut outputs: Vec<(String, Vec<u8>)> = Vec::new();
+        for name in &options {
+            let mut params = serde_json::Map::new();
+            params.insert("matrix".to_string(), json!(name));
+            let out = e.process_frame(&frame, None, &params).unwrap();
+            outputs.push((name.clone(), out.data));
+        }
+
+        let mut collisions = Vec::new();
+        for i in 0..outputs.len() {
+            for j in (i + 1)..outputs.len() {
+                if outputs[i].1 == outputs[j].1 {
+                    collisions.push(format!(
+                        "{} produces identical output to {}",
+                        outputs[i].0, outputs[j].0
+                    ));
+                }
+            }
+        }
+        assert!(
+            collisions.is_empty(),
+            "distinct matrix options produced identical output -- one of each \
+             pair is not the matrix it claims to be:\n  {}",
+            collisions.join("\n  ")
+        );
     }
 }
