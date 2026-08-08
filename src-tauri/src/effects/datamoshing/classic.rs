@@ -155,15 +155,34 @@ impl Effect for ClassicDatamosh {
         // under a second ID (see registry.rs, where the ID is now aliased here),
         // so accepting its names means a project saved against it keeps the
         // values the user chose instead of silently falling back to defaults.
+        // `series_size`/`repeat_count` aren't declared in this effect's
+        // ParameterDef list (they only exist for backward-compat with the
+        // retired `datamoshing.repeat` effect ID), so `clamp_params` never
+        // bounds them the way it bounds `chunk_size`/`repeats`. A
+        // hand-edited or corrupted legacy project file with an enormous
+        // value here would otherwise drive an unbounded
+        // `Vec::extend_from_slice` allocation below. Clamp each alias to its
+        // modern counterpart's own declared max so behaviour stays
+        // consistent whichever name a project file uses.
         let chunk_size = params
             .get("chunk_size")
-            .or_else(|| params.get("series_size"))
             .and_then(|v| v.as_u64())
+            .or_else(|| {
+                params
+                    .get("series_size")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v.min(30))
+            })
             .unwrap_or(self.chunk_size as u64) as usize;
         let repeats = params
             .get("repeats")
-            .or_else(|| params.get("repeat_count"))
             .and_then(|v| v.as_u64())
+            .or_else(|| {
+                params
+                    .get("repeat_count")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v.min(10))
+            })
             .unwrap_or(self.repeats as u64) as usize;
 
         // chunks(0) panics, and a zero repeat count silently produces an empty
@@ -207,6 +226,51 @@ mod tests {
             .process_video(&seg, None, &serde_json::Map::new())
             .unwrap();
         assert_eq!(r.frames.len(), 12); // 2 chunks * 2 frames * 3 repeats = 12
+    }
+
+    #[test]
+    fn test_legacy_repeat_count_alias_is_clamped() {
+        // `repeat_count` is the parameter name the retired
+        // `datamoshing.repeat` effect used. It isn't declared in this
+        // effect's ParameterDef list, so `clamp_params` never bounds it --
+        // an absurd value from a hand-edited/corrupted legacy project file
+        // must still be clamped here rather than driving a huge
+        // `Vec::extend_from_slice` allocation.
+        let e = ClassicDatamosh::new(2, 3);
+        let seg = make_segment(4);
+        let mut params = serde_json::Map::new();
+        params.insert("repeat_count".to_string(), serde_json::json!(1_000_000));
+        let r = e.process_video(&seg, None, &params).unwrap();
+        // 2 chunks * 2 frames * 10 (repeats' own declared max) = 40, not
+        // anywhere near 1,000,000 * 2 chunks * 2 frames.
+        assert_eq!(r.frames.len(), 40);
+    }
+
+    #[test]
+    fn test_legacy_series_size_alias_is_clamped() {
+        // Same reasoning as `repeat_count` above, for `series_size` (the
+        // `chunk_size` alias). Chunking-then-repeating preserves total frame
+        // count no matter what chunk_size is (sum of chunk lengths is always
+        // the input length), so a count assertion can't tell clamped from
+        // unclamped. Instead, check WHERE the repeat boundary lands, which
+        // does depend on chunk_size.
+        let e = ClassicDatamosh::new(2, 1);
+        let seg = make_segment(40); // frame i carries marker byte i
+        let mut params = serde_json::Map::new();
+        params.insert("series_size".to_string(), serde_json::json!(1_000_000));
+        params.insert("repeats".to_string(), serde_json::json!(2));
+        let r = e.process_video(&seg, None, &params).unwrap();
+        // Clamped to chunk_size's declared max of 30: first chunk is frames
+        // [0..30), so its repeat starts at output index 30 (marker 0).
+        // Left unclamped at 1,000,000, all 40 frames form a single chunk,
+        // and the repeat would instead start at output index 40 (marker 0
+        // would land at index 40, not 30 -- index 30 would still carry
+        // marker 30).
+        assert_eq!(
+            r.frames[30].data[0], 0,
+            "series_size should be clamped to 30 (chunk_size's declared max), \
+             so the first repeated chunk boundary falls at index 30"
+        );
     }
 
     #[test]

@@ -15,21 +15,31 @@ export const scanlinesShader: EffectShader = {
   fragmentSource: `
     precision highp float;
     uniform sampler2D tDiffuse;
+    uniform vec2 resolution;
     uniform float amount;
-    uniform float lineCount;
-    uniform float u_time;
+    uniform float gap;
     varying vec2 vUv;
 
     void main() {
       vec4 col = texture2D(tDiffuse, vUv);
-      float scan = sin(vUv.y * lineCount * 3.14159 + u_time * 2.0) * 0.5 + 0.5;
-      scan = mix(1.0, scan, amount);
-      gl_FragColor = vec4(col.rgb * scan, col.a);
+      vec2 res = (resolution.x > 0.0 && resolution.y > 0.0) ? resolution : vec2(1920.0, 1080.0);
+
+      // Rust (scanlines.rs) darkens every row except every Nth ('gap'), a
+      // hard step -- not a smooth sinusoid -- and 'gap' is a row period
+      // measured against the frame's actual height, not a line count derived
+      // from an assumed 480px-tall frame.
+      float g = max(floor(gap), 1.0);
+      // Undo the WebGL vUv.y flip (UNPACK_FLIP_Y_WEBGL=true) to get the same
+      // top-down row index Rust's 'for y in 0..h' uses.
+      float row = floor((1.0 - vUv.y) * res.y);
+      float bright = mod(row, g) < 0.5 ? 1.0 : 0.0; // y % gap == 0 -> unchanged
+      float factor = mix(1.0 - amount, 1.0, bright);
+
+      gl_FragColor = vec4(col.rgb * factor, col.a);
     }
   `,
   uniforms: [
-    { name: "amount", type: "float", default: 0.5 },
-    { name: "lineCount", type: "float", default: 240.0 },
-    { name: "u_time", type: "float", default: 0.0 },
+    { name: "amount", type: "float", default: 0.3 },
+    { name: "gap", type: "float", default: 2.0 },
   ],
 };

@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "MoshDither Studio — MCP Tool Grants (Least-Privilege)",
+  "version": "1.0.0",
+  "grants": {
+    "filesystem": {
+      "description": "File read/write operations",
+      "scope": "workspace-root and active worktree only",
+      "permissions": {
+        "read": ["src/", "src-tauri/src/", "docs/", "scripts/", "tests/", "evals/", "public/", "assets/"],
+        "write": ["src/", "src-tauri/src/", "docs/", "tests/", "evals/", "scripts/"],
+        "deny": ["node_modules/", ".git/", "sam3_env/", "models/", "dist/", "*.exe", "*.dll"]
+      }
+    },
+    "shell": {
+      "description": "Command execution",
+      "scope": "Read-only and build commands by default",
+      "allowed": [
+        "npm run build",
+        "npm run dev",
+        "npm run lint",
+        "npm run test",
+        "npm run test:e2e",
+        "npm run tauri:dev",
+        "npm run tauri:build",
+        "npx tsc --noEmit",
+        "npx vitest run",
+        "cargo build",
+        "cargo test",
+        "cargo check",
+        "cargo clippy",
+        "git status",
+        "git diff",
+        "git log",
+        "git add",
+        "git commit",
+        "git branch",
+        "git worktree",
+        "git tag",
+        "pwsh scripts/checkpoint.ps1",
+        "pwsh scripts/new-task.ps1",
+        "pwsh scripts/cleanup-stale-worktrees.ps1",
+        "pwsh evals/regression.ps1"
+      ],
+      "requires_approval": [
+        "git push",
+        "git push --force",
+        "npm publish",
+        "npm run tauri:build",
+        "cargo install",
+        "pip install",
+        "rm -rf",
+        "Remove-Item -Recurse"
+      ],
+      "denied": [
+        "git push origin main",
+        "DROP DATABASE",
+        "format",
+        "shutdown"
+      ]
+    },
+    "sequential-thinking": {
+      "description": "Internal step-by-step reasoning traces",
+      "scope": "Private reasoning only, no external API calls",
+      "permissions": { "execute": true }
+    },
+    "browser": {
+      "description": "Headless browser for E2E testing",
+      "scope": "Restricted to localhost dev-server ports (1420, 3100-9999)",
+      "permissions": {
+        "allowed_origins": ["http://localhost:*"],
+        "denied_origins": ["https://*"]
+      }
+    }
+  },
+  "security_policy": {
+    "default_permission": "read-only",
+    "write_requires": "explicit task assignment",
+    "destructive_requires": "human approval token",
+    "credential_handling": "never log, never commit, always use .env references"
+  }
+}

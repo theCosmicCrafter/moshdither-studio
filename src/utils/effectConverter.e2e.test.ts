@@ -334,6 +334,60 @@ describe("Effect Pipeline E2E", () => {
     });
   });
 
+  describe("2026 Rust/WebGL parity fixes", () => {
+    it("dithering.threshold: scales Rust's 0-255 threshold into the shader's normalized [0,1] luma", () => {
+      // Before this fix there was no transform at all, so a default
+      // threshold of 128 was compared directly against normalized luma
+      // (step(128.0, lum)), which is never true -> solid black at every
+      // practical setting.
+      const stack: StackEntry[] = [makeStackEntry("s1", "dithering.threshold", { threshold: 128 })];
+      const passes = stackToRenderPasses(stack);
+      expect(passes[0].uniforms.threshold).toBeCloseTo(128 / 255, 10);
+    });
+
+    it("pixel_geo.wave_distort: passes amplitude/frequency straight through as pixel-space quantities", () => {
+      // The shader now converts pixel-space amplitude/frequency to UV space
+      // itself using the actual canvas resolution, so effectConverter no
+      // longer applies the old fixed /50 and *200 constants that assumed a
+      // specific frame size.
+      const stack: StackEntry[] = [
+        makeStackEntry("s1", "pixel_geo.wave_distort", { amplitude: 10, frequency: 0.05 }),
+      ];
+      const passes = stackToRenderPasses(stack);
+      expect(passes[0].uniforms.amount).toBe(10);
+      expect(passes[0].uniforms.frequency).toBe(0.05);
+    });
+
+    it("pixel_geo.block_shift: max_shift is no longer scaled by block_size", () => {
+      // Rust's max_shift is an independent pixel displacement; the transform
+      // previously normalized it to max_shift/32, which the shader then
+      // re-multiplied by blockSize, producing a 2-16x scale error.
+      const stack: StackEntry[] = [
+        makeStackEntry("s1", "pixel_geo.block_shift", { block_size: 32, max_shift: 8 }),
+      ];
+      const passes = stackToRenderPasses(stack);
+      expect(passes[0].uniforms.amount).toBe(8);
+      expect(passes[0].uniforms.blockSize).toBe(32);
+      // The per-block hash pattern still can't match Rust's 64-bit
+      // wrapping-multiplicative hash in GLSL, so this stays honestly marked.
+      expect(rustToWebGL["pixel_geo.block_shift"].accurate).toBe(false);
+    });
+
+    it("analog.scanlines: 'gap' passes straight through instead of assuming a 480px frame", () => {
+      const stack: StackEntry[] = [
+        makeStackEntry("s1", "analog.scanlines", { intensity: 0.4, gap: 3 }),
+      ];
+      const passes = stackToRenderPasses(stack);
+      expect(passes[0].uniforms.gap).toBe(3);
+      expect(passes[0].uniforms.amount).toBe(0.4);
+    });
+
+    it("dithering.random_noise: honestly marked approximate (shader RNG differs from Rust's hash)", () => {
+      expect(rustToWebGL["dithering.random_noise"].accurate).toBe(false);
+      expect(rustToWebGL["dithering.random_noise"].paramMap).toEqual({});
+    });
+  });
+
   describe("resolveMaskId", () => {
     it("returns null for null maskId", () => {
       expect(resolveMaskId(null, "active", [])).toBeNull();

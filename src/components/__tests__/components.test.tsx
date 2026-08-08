@@ -242,16 +242,8 @@ function resetStore() {
       browser: true, preview: true, stack: true, audio: true,
       export: true, presets: true, mask: true, lut: true, proxy: true, tracks: true,
     },
-    dockLayout: {
-      left: [{ id: "dock-left-0", panels: ["browser", "proxy", "tracks"], activeTab: "browser", size: 1 }],
-      right: [
-        { id: "dock-right-0", panels: ["stack"], activeTab: "stack", size: 0.35 },
-        { id: "dock-right-1", panels: ["audio", "export", "presets", "mask", "lut"], activeTab: "audio", size: 0.65 },
-      ],
-      bottom: [],
-      bottomVisible: false,
-    },
-    floatingWindows: [],
+    dockedPanels: [],
+    layoutTrigger: null,
     theme: "dark",
     panelOpacity: 0.65,
     aspectRatioLock: false,
@@ -434,8 +426,8 @@ describe("Component Test Suite", () => {
       // "browser" is docked by default
       const browserBtn = screen.getByText("Effects").closest("button")!;
       fireEvent.click(browserBtn);
-      const docked = useAppStore.getState().getDockedPanelIds();
-      expect(docked.has("browser")).toBe(false);
+      const docked = useAppStore.getState().dockedPanels;
+      expect(docked.includes("browser")).toBe(false);
     });
   });
 
@@ -731,6 +723,35 @@ describe("Component Test Suite", () => {
       const stack = useAppStore.getState().effectStack;
       expect(stack[0].effectName).toBe("VHS Effect");
       expect(stack[1].effectName).toBe("Bayer Dither");
+    });
+
+    it("moves the filtered entry itself, not whatever sits at its position in the filtered list", () => {
+      // Reproduces the bug directly: the Move buttons are rendered from
+      // filteredStack, but moveStackItem splices the full effectStack by
+      // position. Filtering down to one entry that isn't at position 0 of
+      // the real stack used to pass its FILTERED index (0) to moveStackItem,
+      // reordering whichever two effects happened to sit at positions 0/1 of
+      // the real stack -- not the effect the user filtered to and clicked.
+      useAppStore.getState().addToStack(mockEffectMeta("dithering.bayer", "Bayer Dither", "dithering"));
+      useAppStore.getState().addToStack(mockEffectMeta("analog.vhs", "VHS Effect", "analog"));
+      useAppStore.getState().addToStack(mockEffectMeta("glitch.databend", "Databend", "glitch"));
+      render(<EffectStack />);
+
+      fireEvent.change(screen.getByPlaceholderText("Filter effects..."), {
+        target: { value: "databend" },
+      });
+      expect(screen.getByText("Databend")).toBeInTheDocument();
+      expect(screen.queryByText("Bayer Dither")).not.toBeInTheDocument();
+
+      // Databend is real index 2 (last), filtered index 0 (only match).
+      fireEvent.click(screen.getByTitle("Move Up"));
+
+      const stack = useAppStore.getState().effectStack;
+      expect(stack.map((e) => e.effectName)).toEqual([
+        "Bayer Dither",
+        "Databend",
+        "VHS Effect",
+      ]);
     });
   });
 

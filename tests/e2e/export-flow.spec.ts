@@ -32,8 +32,17 @@ test("export video flow produces a status message", async ({ page }) => {
   // Add an effect so the export button is enabled.
   await page.locator("text=Bayer Dither").first().click();
 
-  // Switch to the Export panel.
-  await page.locator('[data-testid="dock-tab-export"]').click();
+  // Switch to the Export panel. It isn't part of the default dock layout, so
+  // it must be added via the panel rail before its tab exists. flexlayout
+  // gives every docked tab a real role="tab" + accessible name matching its
+  // label -- more robust than a custom testid, since flexlayout also renders
+  // an aria-hidden "stamp" copy of each tab (for its drag-preview system)
+  // that a testid selector would ambiguously match too.
+  const exportTab = page.getByRole("tab", { name: "Export" });
+  if (!(await exportTab.isVisible().catch(() => false))) {
+    await page.getByRole("button", { name: /^Add Export panel/ }).click();
+  }
+  await exportTab.click();
 
   // Click the main export button and wait for the mocked backend to complete.
   await page.locator("button:has-text('Export Video')").click();

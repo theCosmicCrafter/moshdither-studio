@@ -83,11 +83,17 @@ impl Effect for LineScreen {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
+        // Read as f64, not as_i64: a slider with step 1.0 may still serialise
+        // as a JSON float, and as_i64() returns None for a float -- silently
+        // dropping the parameter and falling back to the default. Round
+        // before casting since UI wheel drags can produce non-integral
+        // values. See error_diffusion.rs for the established pattern.
         let spacing = params
             .get("line_spacing")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(4)
-            .max(2) as usize;
+            .and_then(|v| v.as_f64())
+            .filter(|v| v.is_finite())
+            .map(|v| v.round().clamp(2.0, 20.0) as usize)
+            .unwrap_or(4);
         let angle_deg = params
             .get("angle")
             .and_then(|v| v.as_f64())
@@ -317,5 +323,71 @@ mod tests {
             }
         }
         assert!(has_black && has_white);
+    }
+
+    /// `line_spacing` must be read with `as_f64`, not `as_i64`: a JSON float
+    /// (whether hand-supplied or produced by `clamp_params` rewriting an
+    /// out-of-range value) would otherwise be silently dropped and the
+    /// effect would fall back to its hardcoded default of 4.
+    #[test]
+    fn line_spacing_accepts_a_float_tagged_value_instead_of_falling_back_to_default() {
+        // A bright, uniform frame: lum_effective is constant, so the only
+        // spatially-varying input to the line pattern is line_spacing.
+        let frame = gray(32, 32, 255);
+        let e = LineScreen;
+
+        let mut float_params = serde_json::Map::new();
+        float_params.insert("line_spacing".into(), json!(12.0));
+        let mut int_params = serde_json::Map::new();
+        int_params.insert("line_spacing".into(), json!(12));
+
+        let default_out = e
+            .process_frame(&frame, None, &serde_json::Map::new())
+            .unwrap();
+        let float_out = e.process_frame(&frame, None, &float_params).unwrap();
+        let int_out = e.process_frame(&frame, None, &int_params).unwrap();
+
+        assert_eq!(
+            float_out.data, int_out.data,
+            "line_spacing 12 and 12.0 must resolve identically"
+        );
+        assert_ne!(
+            float_out.data, default_out.data,
+            "a float-tagged line_spacing must not silently fall back to the default"
+        );
+    }
+
+    #[test]
+    fn line_spacing_honours_a_clamp_then_read_round_trip() {
+        let frame = gray(32, 32, 255);
+        let e = LineScreen;
+
+        // Out of range (declared max is 20); clamp_params rewrites this to
+        // the float-tagged representation that as_i64() cannot read.
+        let mut raw = serde_json::Map::new();
+        raw.insert("line_spacing".into(), json!(9999));
+        let clamped = crate::effects::clamp_params("dithering.line_screen", &raw);
+        assert!(
+            clamped["line_spacing"].is_f64(),
+            "clamp_params should have rewritten the out-of-range value to a float"
+        );
+
+        let mut direct_max = serde_json::Map::new();
+        direct_max.insert("line_spacing".into(), json!(20));
+
+        let via_clamp = e.process_frame(&frame, None, &clamped).unwrap();
+        let via_direct = e.process_frame(&frame, None, &direct_max).unwrap();
+        let default_out = e
+            .process_frame(&frame, None, &serde_json::Map::new())
+            .unwrap();
+
+        assert_eq!(
+            via_clamp.data, via_direct.data,
+            "a value clamped to 20 must behave exactly like line_spacing=20"
+        );
+        assert_ne!(
+            via_clamp.data, default_out.data,
+            "clamped line_spacing must not silently fall back to the default"
+        );
     }
 }

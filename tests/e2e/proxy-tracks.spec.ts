@@ -24,20 +24,29 @@ test("proxy media panel is visible", async ({ page }) => {
   await expect(proxyPanel).toBeVisible({ timeout: 10000 });
 });
 
-async function openPanelTab(page: import("@playwright/test").Page, panelId: string) {
-  const tab = page.locator(`[data-testid="dock-tab-${panelId}"]`).first();
+// flexlayout gives every docked tab a real role="tab" + accessible name
+// matching its label -- more robust than a custom testid, since flexlayout
+// also renders an aria-hidden "stamp" copy of each tab (for its drag-preview
+// system) that a testid selector would ambiguously match too.
+async function openPanelTab(page: import("@playwright/test").Page, tabLabel: string) {
+  const tab = page.getByRole("tab", { name: tabLabel }).first();
+  // Not every panel is part of the default dock layout (e.g. Proxy Media) --
+  // those need adding via the panel rail before their tab exists.
+  if (!(await tab.isVisible().catch(() => false))) {
+    await page.getByRole("button", { name: new RegExp(`^Add ${tabLabel} panel`) }).click();
+  }
   await tab.click();
   await page.waitForTimeout(300);
 }
 
 test("proxy panel has generate button", async ({ page }) => {
-  await openPanelTab(page, "proxy");
+  await openPanelTab(page, "Proxy Media");
   const generateBtn = page.locator("text=Generate Proxy").first();
   await expect(generateBtn).toBeVisible({ timeout: 10000 });
 });
 
 test("proxy panel has quality slider", async ({ page }) => {
-  await openPanelTab(page, "proxy");
+  await openPanelTab(page, "Proxy Media");
   const qualityLabel = page.locator("text=/Quality \\(CRF\\):/").first();
   await expect(qualityLabel).toBeVisible({ timeout: 10000 });
 });
@@ -48,7 +57,7 @@ test("tracks panel is visible", async ({ page }) => {
 });
 
 test("tracks panel add button creates a track", async ({ page }) => {
-  await openPanelTab(page, "tracks");
+  await openPanelTab(page, "Tracks");
   const addBtn = page.locator("text=+ Add").first();
   await expect(addBtn).toBeVisible({ timeout: 10000 });
   await addBtn.click();

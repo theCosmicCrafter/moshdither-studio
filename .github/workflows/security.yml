@@ -107,7 +107,15 @@ jobs:
           path: ./
           base: ${{ github.event.repository.default_branch }}
           head: HEAD
-          extra_args: --only-verified
+          # See the identical exclusion in secret-scan.yml for the full
+          # explanation: the Lob detector has produced repeated "verified"
+          # false positives on ordinary Rust `#[test] fn test_<name>()`
+          # declarations, confirmed by direct inspection -- no real Lob
+          # credential has ever been present. Kept in sync with that job so
+          # this one (which scans default_branch..HEAD, overlapping the same
+          # content) does not start failing on the same false positive after
+          # a merge.
+          extra_args: --only-verified --exclude-detectors=Lob
 
   # ── SNYK CODE ────────────────────────────────────────────────
   snyk-code:

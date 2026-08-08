@@ -62,6 +62,9 @@ impl Effect for EdgeStretch {
 
         let w = input.width as usize;
         let h = input.height as usize;
+        if w == 0 || h == 0 {
+            return Ok(input.clone());
+        }
 
         // Step 1: Compute grayscale luminance
         let mut gray = vec![0.0f32; w * h];
@@ -264,5 +267,40 @@ mod tests {
             }
         }
         assert!(has_diff);
+    }
+
+    #[test]
+    fn test_zero_width_frame_does_not_panic() {
+        // `1..w-1` underflows in usize arithmetic when w == 0. Not reachable
+        // from the shipped UI (decoded media always has positive
+        // dimensions), but a malformed/synthetic frame (fuzzed project file,
+        // future caller) shouldn't be able to panic the process.
+        let e = EdgeStretch;
+        let input = Frame {
+            width: 0,
+            height: 4,
+            data: Vec::new(),
+        };
+        let r = e
+            .process_frame(&input, None, &serde_json::Map::new())
+            .unwrap();
+        assert_eq!(r.width, 0);
+        assert_eq!(r.height, 4);
+    }
+
+    #[test]
+    fn test_zero_height_frame_does_not_panic() {
+        // Same underflow risk as above, but for `1..h-1` when h == 0.
+        let e = EdgeStretch;
+        let input = Frame {
+            width: 4,
+            height: 0,
+            data: Vec::new(),
+        };
+        let r = e
+            .process_frame(&input, None, &serde_json::Map::new())
+            .unwrap();
+        assert_eq!(r.width, 4);
+        assert_eq!(r.height, 0);
     }
 }

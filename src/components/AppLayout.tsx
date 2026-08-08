@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useAppStore } from "../store";
-import { listEffects, getFrameData, getMediaInfo, loadMediaFromPath, sam3Init, sam3LoadImage } from "../lib/tauri";
+import { listEffects, getFrameData, getMediaInfo, loadMediaFromPath } from "../lib/tauri";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { useKeyframePlayback } from "../hooks/useKeyframePlayback";
@@ -9,12 +9,14 @@ import { useProjectSession } from "../hooks/useProjectSession";
 import { useSoundManager } from "../hooks/useSoundManager";
 import { useSam3IdleShutdown } from "../hooks/useSam3IdleShutdown";
 import { useAutoAudioExtract } from "../hooks/useAutoAudioExtract";
+import { useWindowEdgeSnap } from "../hooks/useWindowEdgeSnap";
 import { logger } from "../utils/logger";
 import DockLayout from "./DockSystem/DockLayout";
 import Toolbar from "./Toolbar";
 import StatusBar from "./StatusBar";
 import CommandPalette from "./CommandPalette";
 import OnboardingModal from "./OnboardingModal";
+import CustomUiModal from "./CustomUiModal";
 
 export default function AppLayout() {
   useKeyboardShortcuts();
@@ -22,6 +24,7 @@ export default function AppLayout() {
   usePlaybackEngine();
   useSam3IdleShutdown();
   useAutoAudioExtract();
+  useWindowEdgeSnap();
   const { attachSounds } = useSoundManager();
   const { autoSave, recentProjects, restoreSession, clearAutoSave } = useProjectSession();
   const [showRecovery, setShowRecovery] = useState(!!autoSave);
@@ -37,9 +40,21 @@ export default function AppLayout() {
 
   // Apply theme to document root
   const theme = useAppStore((s) => s.theme);
+  const customPrimary = useAppStore((s) => s.customPrimary);
+  const customSecondary = useAppStore((s) => s.customSecondary);
+  const customBg = useAppStore((s) => s.customBg);
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
-  }, [theme]);
+    if (theme === "custom") {
+      document.documentElement.style.setProperty("--custom-primary", customPrimary);
+      document.documentElement.style.setProperty("--custom-secondary", customSecondary);
+      document.documentElement.style.setProperty("--custom-bg", customBg);
+    } else {
+      document.documentElement.style.removeProperty("--custom-primary");
+      document.documentElement.style.removeProperty("--custom-secondary");
+      document.documentElement.style.removeProperty("--custom-bg");
+    }
+  }, [theme, customPrimary, customSecondary, customBg]);
 
   // Attach analog click sounds to interactive elements
   useEffect(() => {
@@ -62,7 +77,7 @@ export default function AppLayout() {
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [mediaLoaded, effectStackLength]);
 
-  // Load effects and auto-start SAM3 in tandem on mount
+  // Load available effects on mount
   useEffect(() => {
     listEffects()
       .then((effects) => {
@@ -70,14 +85,6 @@ export default function AppLayout() {
         setStatusMessage(`${effects.length} effects loaded`);
       })
       .catch((err) => setStatusMessage(`Error: ${err}`));
-
-    sam3Init()
-      .then(() => {
-        useAppStore.getState().setSam3Ready(true);
-      })
-      .catch((err) => {
-        console.warn("[AppLayout] SAM3 background auto-start notice:", err);
-      });
   }, [setAllEffects, setStatusMessage]);
 
   // Refresh preview on demand (called after file load / effect apply).
@@ -92,11 +99,6 @@ export default function AppLayout() {
         const frame = await getFrameData();
         setPreviewDataUrl(frame);
         setOriginalDataUrl(frame);
-
-        // Pre-feed frame to SAM3 background engine in tandem so AI tools are instant
-        if (frame) {
-          sam3LoadImage(frame).catch(() => {});
-        }
         return true;
       }
       return false;
@@ -270,6 +272,7 @@ export default function AppLayout() {
       )}
       <CommandPalette />
       <OnboardingModal />
+      <CustomUiModal />
     </div>
   );
 }

@@ -1,14 +1,14 @@
-// Module-level flag: set true when any dock drop handler processes a drop.
-// Prevents tear-off from firing after a successful dock drop.
-let tabDropHandled = false;
-export function markTabDropHandled() {
-  tabDropHandled = true;
+// Module-level (not React state) because the value must be readable
+// synchronously inside flexlayout's `onExternalDrag`, which fires on
+// `dragenter` -- `DataTransfer.getData()` is unreliable at that point in most
+// browsers/webviews (only `dragstart` and `drop` are guaranteed to expose it),
+// so PanelRail records the dragged panel id here instead of relying on it.
+let activeDragPanelId: string | null = null;
+
+export function setActiveDragPanelId(id: string | null) {
+  activeDragPanelId = id;
 }
-export function consumeTabDropHandled() {
-  const v = tabDropHandled;
-  tabDropHandled = false;
-  return v;
-}
-export function resetTabDropHandled() {
-  tabDropHandled = false;
+
+export function getActiveDragPanelId(): string | null {
+  return activeDragPanelId;
 }

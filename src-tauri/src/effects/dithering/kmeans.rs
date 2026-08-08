@@ -227,34 +227,128 @@ impl Effect for KMeansDither {
         }
     }
 
+    fn is_temporal(&self) -> bool {
+        // A still image has no "clip" to be consistent across, so
+        // process_frame seeding k-means from its own pixels is correct for
+        // preview/image use. But `commands.rs`'s video export path runs any
+        // non-temporal effect through an independent-per-frame `par_iter()`
+        // branch, and `frame_seed` derives from each frame's own sampled
+        // content -- so every frame reseeds an independent palette, visible
+        // as flicker across an exported clip. Declaring this effect temporal
+        // routes export through `process_video` below, which computes the
+        // palette ONCE for the whole segment instead.
+        true
+    }
+
     fn process_frame(
         &self,
         input: &Frame,
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
+        let (k, dither, max_iters) = Self::read_params(params);
+        let seed = crate::effects::rng::frame_seed(input, params);
+        let centroids = kmeans(&input.data, k, max_iters, seed);
+        Ok(Self::quantize_with_centroids(input, &centroids, dither))
+    }
+
+    fn process_video(
+        &self,
+        input: &VideoSegment,
+        _mask: Option<&Mask>,
+        params: &ParameterValues,
+    ) -> Result<VideoSegment> {
+        if input.frames.is_empty() {
+            return Ok(VideoSegment {
+                frames: Vec::new(),
+                fps: input.fps,
+            });
+        }
+
+        let (k, dither, max_iters) = Self::read_params(params);
+
+        // Derive centroids ONCE from a representative sample of the whole
+        // segment, seeded from the first frame so the result is stable and
+        // reproducible for a given clip -- never re-seeded per frame, which
+        // is exactly what caused the flicker this method exists to fix.
+        let sample = Self::sample_segment_data(input);
+        let seed = crate::effects::rng::frame_seed(&input.frames[0], params);
+        let centroids = kmeans(&sample, k, max_iters, seed);
+
+        let frames = input
+            .frames
+            .iter()
+            .map(|frame| Self::quantize_with_centroids(frame, &centroids, dither))
+            .collect();
+
+        Ok(VideoSegment {
+            frames,
+            fps: input.fps,
+        })
+    }
+}
+
+impl KMeansDither {
+    /// Read `numColors`, `dither` and `iterations`, honouring the
+    /// read-after-clamp path.
+    ///
+    /// `numColors` and `iterations` must be read with `as_f64`, not
+    /// `as_u64`: a JSON float (whether hand-supplied or produced by
+    /// `clamp_params` rewriting an out-of-range value) would otherwise be
+    /// silently dropped and the effect would fall back to its hardcoded
+    /// defaults.
+    fn read_params(params: &ParameterValues) -> (usize, bool, usize) {
         let k = params
             .get("numColors")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(8) as usize;
+            .and_then(|v| v.as_f64())
+            .filter(|v| v.is_finite())
+            .map(|v| v.round().clamp(2.0, 256.0) as usize)
+            .unwrap_or(8);
         let dither = params
             .get("dither")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
         let max_iters = params
             .get("iterations")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(10) as usize;
+            .and_then(|v| v.as_f64())
+            .filter(|v| v.is_finite())
+            .map(|v| v.round().clamp(1.0, 50.0) as usize)
+            .unwrap_or(10);
+        (k, dither, max_iters)
+    }
 
-        let k = k.clamp(2, 256);
-        let seed = crate::effects::rng::frame_seed(input, params);
-        let centroids = kmeans(&input.data, k, max_iters, seed);
+    /// Merge pixel data from a representative sample of frames spread across
+    /// the whole segment, so the palette reflects the clip as a whole rather
+    /// than any single frame. `kmeans` reads raw bytes directly and does not
+    /// care about frame boundaries.
+    fn sample_segment_data(input: &VideoSegment) -> Vec<u8> {
+        const MAX_SAMPLES: usize = 5;
+        let n = input.frames.len();
+        if n == 0 {
+            return Vec::new();
+        }
+        let count = n.min(MAX_SAMPLES);
+        let mut merged = Vec::new();
+        for i in 0..count {
+            let idx = if count == 1 {
+                0
+            } else {
+                i * (n - 1) / (count - 1)
+            };
+            merged.extend_from_slice(&input.frames[idx].data);
+        }
+        merged
+    }
 
+    /// Quantize a frame against an already-computed set of centroids.
+    /// Factored out of `process_frame` so `process_video` can apply the SAME
+    /// centroids to every frame instead of re-deriving them per frame.
+    fn quantize_with_centroids(input: &Frame, centroids: &[Centroid], dither: bool) -> Frame {
         let w = input.width as usize;
         let h = input.height as usize;
 
         if dither {
-            // Floyd-Steinberg error diffusion with K-Means palette
+            // Floyd-Steinberg error diffusion with the K-Means palette
             let mut buf: Vec<f32> = input.data.iter().map(|&v| v as f32).collect();
 
             for y in 0..h {
@@ -271,7 +365,7 @@ impl Effect for KMeansDither {
                     let old_g = buf[idx + 1] as f64;
                     let old_b = buf[idx + 2] as f64;
 
-                    let (nr, ng, nb) = nearest_centroid_color(&centroids, old_r, old_g, old_b);
+                    let (nr, ng, nb) = nearest_centroid_color(centroids, old_r, old_g, old_b);
                     let nr_f = nr as f32;
                     let ng_f = ng as f32;
                     let nb_f = nb as f32;
@@ -308,17 +402,17 @@ impl Effect for KMeansDither {
             }
 
             let data: Vec<u8> = buf.iter().map(|&v| v.clamp(0.0, 255.0) as u8).collect();
-            Ok(Frame {
+            Frame {
                 width: input.width,
                 height: input.height,
                 data,
-            })
+            }
         } else {
             // Nearest-color quantization without dithering
             let mut data = input.data.clone();
             for chunk in data.chunks_exact_mut(4) {
                 let (nr, ng, nb) = nearest_centroid_color(
-                    &centroids,
+                    centroids,
                     chunk[0] as f64,
                     chunk[1] as f64,
                     chunk[2] as f64,
@@ -327,28 +421,12 @@ impl Effect for KMeansDither {
                 chunk[1] = ng;
                 chunk[2] = nb;
             }
-            Ok(Frame {
+            Frame {
                 width: input.width,
                 height: input.height,
                 data,
-            })
+            }
         }
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
-        })
     }
 }
 
@@ -437,5 +515,257 @@ mod tests {
         let frame = make_gradient_frame(32, 32);
         let palette = extract_kmeans_palette(&frame, 6);
         assert_eq!(palette.len(), 6);
+    }
+
+    /// `numColors` must be read with `as_f64`, not `as_u64`: a JSON float
+    /// (whether hand-supplied or produced by `clamp_params` rewriting an
+    /// out-of-range value) would otherwise be silently dropped and the
+    /// effect would fall back to its hardcoded default of 8. k-means is
+    /// deterministic given the same seed, k and iteration count, and
+    /// `frame_seed` does not depend on `numColors`, so equal `k` must give
+    /// byte-identical output.
+    #[test]
+    fn num_colors_accepts_a_float_tagged_value_instead_of_falling_back_to_default() {
+        let frame = make_gradient_frame(48, 48);
+        let dither = KMeansDither::new();
+
+        let mut float_params = serde_json::Map::new();
+        float_params.insert("numColors".into(), json!(4.0));
+        float_params.insert("dither".into(), json!(false));
+        let mut int_params = serde_json::Map::new();
+        int_params.insert("numColors".into(), json!(4));
+        int_params.insert("dither".into(), json!(false));
+        let mut default_params = serde_json::Map::new();
+        default_params.insert("dither".into(), json!(false));
+
+        let default_out = dither.process_frame(&frame, None, &default_params).unwrap();
+        let float_out = dither.process_frame(&frame, None, &float_params).unwrap();
+        let int_out = dither.process_frame(&frame, None, &int_params).unwrap();
+
+        assert_eq!(
+            float_out.data, int_out.data,
+            "numColors 4 and 4.0 must resolve identically"
+        );
+        assert_ne!(
+            float_out.data, default_out.data,
+            "a float-tagged numColors must not silently fall back to the default"
+        );
+    }
+
+    #[test]
+    fn num_colors_honours_a_clamp_then_read_round_trip() {
+        let frame = make_gradient_frame(48, 48);
+        let dither = KMeansDither::new();
+
+        // Out of range (declared max is 256); clamp_params rewrites this to
+        // the float-tagged representation that as_u64() cannot read.
+        let mut raw = serde_json::Map::new();
+        raw.insert("numColors".into(), json!(99999));
+        raw.insert("dither".into(), json!(false));
+        let clamped = crate::effects::clamp_params("dithering.kmeans", &raw);
+        assert!(
+            clamped["numColors"].is_f64(),
+            "clamp_params should have rewritten the out-of-range value to a float"
+        );
+
+        let mut direct_max = serde_json::Map::new();
+        direct_max.insert("numColors".into(), json!(256));
+        direct_max.insert("dither".into(), json!(false));
+        let mut default_params = serde_json::Map::new();
+        default_params.insert("dither".into(), json!(false));
+
+        let via_clamp = dither.process_frame(&frame, None, &clamped).unwrap();
+        let via_direct = dither.process_frame(&frame, None, &direct_max).unwrap();
+        let default_out = dither.process_frame(&frame, None, &default_params).unwrap();
+
+        assert_eq!(
+            via_clamp.data, via_direct.data,
+            "a value clamped to 256 must behave exactly like numColors=256"
+        );
+        assert_ne!(
+            via_clamp.data, default_out.data,
+            "clamped numColors must not silently fall back to the default"
+        );
+    }
+
+    /// `iterations` must be read with `as_f64`, not `as_u64`, for the same
+    /// reason as `numColors` above.
+    #[test]
+    fn iterations_accepts_a_float_tagged_value_instead_of_falling_back_to_default() {
+        let frame = make_gradient_frame(48, 48);
+        let dither = KMeansDither::new();
+
+        let mut float_params = serde_json::Map::new();
+        float_params.insert("numColors".into(), json!(6));
+        float_params.insert("dither".into(), json!(false));
+        float_params.insert("iterations".into(), json!(1.0));
+        let mut int_params = serde_json::Map::new();
+        int_params.insert("numColors".into(), json!(6));
+        int_params.insert("dither".into(), json!(false));
+        int_params.insert("iterations".into(), json!(1));
+
+        let float_out = dither.process_frame(&frame, None, &float_params).unwrap();
+        let int_out = dither.process_frame(&frame, None, &int_params).unwrap();
+        assert_eq!(
+            float_out.data, int_out.data,
+            "iterations 1 and 1.0 must resolve identically"
+        );
+    }
+
+    #[test]
+    fn iterations_honours_a_clamp_then_read_round_trip() {
+        let frame = make_gradient_frame(48, 48);
+        let dither = KMeansDither::new();
+
+        // Out of range (declared max is 50); clamp_params rewrites this to
+        // the float-tagged representation that as_u64() cannot read.
+        let mut raw = serde_json::Map::new();
+        raw.insert("numColors".into(), json!(6));
+        raw.insert("dither".into(), json!(false));
+        raw.insert("iterations".into(), json!(99999));
+        let clamped = crate::effects::clamp_params("dithering.kmeans", &raw);
+        assert!(
+            clamped["iterations"].is_f64(),
+            "clamp_params should have rewritten the out-of-range value to a float"
+        );
+
+        let mut direct_max = serde_json::Map::new();
+        direct_max.insert("numColors".into(), json!(6));
+        direct_max.insert("dither".into(), json!(false));
+        direct_max.insert("iterations".into(), json!(50));
+
+        let via_clamp = dither.process_frame(&frame, None, &clamped).unwrap();
+        let via_direct = dither.process_frame(&frame, None, &direct_max).unwrap();
+        assert_eq!(
+            via_clamp.data, via_direct.data,
+            "a value clamped to 50 must behave exactly like iterations=50"
+        );
+    }
+
+    /// The defining fix for the flicker bug (#5): a video-export segment
+    /// must be quantized against ONE shared set of centroids, not centroids
+    /// re-derived per frame from each frame's own content.
+    ///
+    /// An earlier version of this test used four SOLID, well-separated
+    /// colors, one per frame. That fixture cannot actually distinguish a
+    /// correct shared-palette implementation from a silently-reverted
+    /// per-frame-independent one: a solid frame's true color is exactly
+    /// recoverable from ANY palette containing it, whether that palette came
+    /// from just that frame or from every frame merged, so both
+    /// implementations produced byte-identical output and the assertions
+    /// below passed either way -- proven by deriving both k-means runs by
+    /// hand: with k equal to the number of pairwise-distinct colors, k-means++
+    /// deterministically recovers each color as its own centroid regardless
+    /// of whether the sample is one frame or all of them.
+    ///
+    /// This fixture uses two BIMODAL frames instead, each internally
+    /// consistent but occupying a different brightness band: frame A is
+    /// {10, 60} (a tight, dark pair), frame B is {190, 245} (a tight, light
+    /// pair). With numColors=2:
+    /// - processed INDEPENDENTLY, each frame's own 2-means recovers its own
+    ///   two native tones exactly (10 and 60 for A; 190 and 245 for B) --
+    ///   the two-cluster structure is already present within a single frame.
+    /// - processed as ONE shared 2-means over the union {10,60,190,245}, the
+    ///   optimal (lowest-cost) 2-way split groups the close pair against the
+    ///   far pair -- {10,60} -> centroid ~35, {190,245} -> centroid ~217.5 --
+    ///   verified by hand: that split's total squared error is 2762.5, versus
+    ///   17266+ for every other possible 2-way split of those four values, so
+    ///   k-means has no ambiguity to converge to a different answer.
+    ///
+    /// So under the shared palette, frame A's pixels (10 and 60) BOTH map to
+    /// the single merged centroid ~35 -- a value neither of frame A's own
+    /// pixels originally had -- which is exactly what a genuinely shared
+    /// palette must do and a per-frame-independent implementation cannot.
+    #[test]
+    fn process_video_uses_one_shared_palette_for_the_whole_segment() {
+        fn bimodal_frame(w: u32, h: u32, low: u8, high: u8) -> Frame {
+            let mut data = Vec::with_capacity((w * h * 4) as usize);
+            for i in 0..(w * h) {
+                let v = if i % 2 == 0 { low } else { high };
+                data.extend_from_slice(&[v, v, v, 255]);
+            }
+            Frame {
+                width: w,
+                height: h,
+                data,
+            }
+        }
+
+        let frame_a = bimodal_frame(16, 16, 10, 60);
+        let frame_b = bimodal_frame(16, 16, 190, 245);
+        let frames = vec![frame_a.clone(), frame_b.clone()];
+        let segment = VideoSegment {
+            frames: frames.clone(),
+            fps: 24.0,
+        };
+
+        let dither = KMeansDither::new();
+        assert!(
+            dither.is_temporal(),
+            "must be temporal so commands.rs routes export through process_video"
+        );
+
+        let mut params = serde_json::Map::new();
+        params.insert("numColors".to_string(), json!(2));
+        params.insert("dither".to_string(), json!(false));
+        params.insert("iterations".to_string(), json!(10));
+
+        let out = dither.process_video(&segment, None, &params).unwrap();
+
+        // The whole segment must be drawn from ONE shared 2-color palette.
+        let mut shared_colors = std::collections::HashSet::new();
+        for f in &out.frames {
+            for px in f.data.chunks_exact(4) {
+                shared_colors.insert(px[0]);
+            }
+        }
+        assert!(
+            shared_colors.len() <= 2,
+            "process_video must quantize every frame against ONE shared set of \
+             centroids; got {} distinct grey levels across the segment, expected at most 2: {:?}",
+            shared_colors.len(),
+            shared_colors
+        );
+
+        // The decisive assertion: frame A's shared-palette output must differ
+        // from what frame A produces on its own. If process_video silently
+        // fell back to calling process_frame per frame internally (the
+        // regression this test exists to catch), these would be
+        // byte-identical, since process_frame is exactly what it would be
+        // calling.
+        let independent_a = dither.process_frame(&frame_a, None, &params).unwrap();
+        assert_ne!(
+            out.frames[0].data, independent_a.data,
+            "frame A processed through process_video must reflect the segment's \
+             SHARED palette, not the palette its own content alone would produce -- \
+             identical output means process_video is not actually sharing a palette"
+        );
+
+        // And pin the actual shared value: frame A's two native tones (10, 60)
+        // must have collapsed onto the SAME merged centroid, since the merged
+        // 2-means groups the close dark pair together rather than splitting it.
+        let frame_a_shared_values: std::collections::HashSet<u8> =
+            out.frames[0].data.chunks_exact(4).map(|px| px[0]).collect();
+        assert_eq!(
+            frame_a_shared_values.len(),
+            1,
+            "frame A's two native tones (10 and 60) must both map to the single \
+             merged dark-cluster centroid under the shared palette, not remain \
+             distinct as they would under independent per-frame quantization: got {:?}",
+            frame_a_shared_values
+        );
+
+        // Sanity check on the independent path: run on its own, frame A's
+        // native bimodal structure is exactly what 2-means recovers.
+        let mut independent_a_values = std::collections::HashSet::new();
+        for px in independent_a.data.chunks_exact(4) {
+            independent_a_values.insert(px[0]);
+        }
+        assert_eq!(
+            independent_a_values.len(),
+            2,
+            "sanity check: frame A processed independently should recover its own \
+             two native tones, demonstrating what the shared-palette fix avoids"
+        );
     }
 }

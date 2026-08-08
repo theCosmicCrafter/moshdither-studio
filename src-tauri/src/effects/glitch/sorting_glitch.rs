@@ -25,7 +25,7 @@ impl SortingGlitch {
 
 impl Default for SortingGlitch {
     fn default() -> Self {
-        Self::new(0.5, 1.0, 0)
+        Self::new(0.5, 10.0, 0)
     }
 }
 
@@ -66,7 +66,19 @@ impl Effect for SortingGlitch {
                     id: "u_intensity".to_string(),
                     name: "Intensity".to_string(),
                     param_type: ParamType::Slider,
-                    default: json!(1.0),
+                    // Before the partial-sort fix, this parameter was inert and
+                    // every run always sorted fully regardless of its value, so
+                    // "1.0" was never actually experienced as "barely sorted" --
+                    // it looked identical to 10.0. Now that intensity genuinely
+                    // gates how much of each run sorts (sort_count scales
+                    // linearly with it), keeping the old default of 1.0 would
+                    // silently change the out-of-the-box look to a near-no-op
+                    // (sort_count rounds to 1 pixel for most run lengths at
+                    // intensity=1.0, which is trivially unsorted). Defaulting to
+                    // 10.0 preserves the effect everyone has always actually
+                    // seen; lower values are now a real, reachable choice rather
+                    // than the accidental default.
+                    default: json!(10.0),
                     min: Some(0.0),
                     max: Some(10.0),
                     step: Some(0.1),
@@ -233,33 +245,29 @@ impl Effect for SortingGlitch {
                                     )
                                 })
                                 .collect();
-                            pixels.sort_by(|a, b| {
+                            // Apply intensity as a partial sort: only the first
+                            // `sort_count` pixels of the run -- by ORIGINAL
+                            // position, not by sorted rank -- are rearranged
+                            // among themselves; the remaining pixels of the run
+                            // keep their original, unsorted values. At
+                            // intensity == 10.0, sort_count == run_len, so the
+                            // whole run is sorted among itself, identical to an
+                            // unconditional full sort -- this keeps the
+                            // established look at the max setting unchanged.
+                            let sort_count = ((run_len as f32 * intensity / 10.0).ceil() as usize)
+                                .clamp(1, run_len);
+                            pixels[..sort_count].sort_by(|a, b| {
                                 a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
                             });
-                            // Apply intensity: only partially sort based on intensity
-                            if intensity < 10.0 {
-                                let _sort_count =
-                                    ((run_len as f32 * intensity / 10.0).ceil() as usize).max(1);
-                                let mut partial: Vec<(f32, [u8; 4])> = pixels.clone();
-                                partial.sort_by(|a, b| {
-                                    a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
-                                });
-                                for (i, (_, px)) in partial.iter().enumerate().take(run_len) {
-                                    let pidx = (row_start + x + i) * 4;
-                                    data[pidx] = px[0];
-                                    data[pidx + 1] = px[1];
-                                    data[pidx + 2] = px[2];
-                                    data[pidx + 3] = px[3];
-                                }
-                            } else {
-                                for (i, (_, px)) in pixels.iter().enumerate() {
-                                    let pidx = (row_start + x + i) * 4;
-                                    data[pidx] = px[0];
-                                    data[pidx + 1] = px[1];
-                                    data[pidx + 2] = px[2];
-                                    data[pidx + 3] = px[3];
-                                }
+                            for (i, (_, px)) in pixels.iter().enumerate().take(sort_count) {
+                                let pidx = (row_start + x + i) * 4;
+                                data[pidx] = px[0];
+                                data[pidx + 1] = px[1];
+                                data[pidx + 2] = px[2];
+                                data[pidx + 3] = px[3];
                             }
+                            // Positions x+sort_count..run_end keep the original
+                            // values already present in `data` -- untouched.
                         }
                         x = run_end;
                     } else {
@@ -301,16 +309,24 @@ impl Effect for SortingGlitch {
                                     )
                                 })
                                 .collect();
-                            pixels.sort_by(|a, b| {
+                            // Same partial-sort intensity gating as the
+                            // horizontal branch above -- kept consistent so
+                            // Vertical isn't the only direction where intensity
+                            // is unreachable.
+                            let sort_count = ((run_len as f32 * intensity / 10.0).ceil() as usize)
+                                .clamp(1, run_len);
+                            pixels[..sort_count].sort_by(|a, b| {
                                 a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
                             });
-                            for (i, (_, px)) in pixels.iter().enumerate() {
+                            for (i, (_, px)) in pixels.iter().enumerate().take(sort_count) {
                                 let pidx = ((y + i) * w + x) * 4;
                                 data[pidx] = px[0];
                                 data[pidx + 1] = px[1];
                                 data[pidx + 2] = px[2];
                                 data[pidx + 3] = px[3];
                             }
+                            // Positions y+sort_count..run_end keep the original
+                            // values already present in `data` -- untouched.
                         }
                         y = run_end;
                     } else {
@@ -408,6 +424,134 @@ mod tests {
         let e = SortingGlitch::new(0.1, 10.0, 0);
         // auto_threshold defaults on, which would derive a threshold from this
         // 4-pixel frame. This test pins the MANUAL path at 0.1.
+        let mut params = serde_json::Map::new();
+        params.insert("auto_threshold".to_string(), serde_json::json!(false));
+        params.insert("u_threshold".to_string(), serde_json::json!(0.1));
+        let r = e.process_frame(&f, None, &params).unwrap();
+        assert_eq!(r.data[0], 128);
+        assert_eq!(r.data[4], 180);
+        assert_eq!(r.data[8], 200);
+        assert_eq!(r.data[12], 255);
+    }
+
+    /// Builds an `n`-pixel single row/column with strictly descending gray
+    /// values, so a full ascending sort reverses the run with no fixed
+    /// points (every pixel moves) while a partial sort of just the first
+    /// pixel leaves the run byte-identical to the input.
+    fn descending_gray_row(n: usize) -> Vec<u8> {
+        let mut d = vec![0u8; n * 4];
+        for i in 0..n {
+            let g = (250 - i * 30) as u8;
+            d[i * 4] = g;
+            d[i * 4 + 1] = g;
+            d[i * 4 + 2] = g;
+            d[i * 4 + 3] = 255;
+        }
+        d
+    }
+
+    fn count_pixel_diffs(a: &[u8], b: &[u8], n: usize) -> usize {
+        (0..n).filter(|&i| a[i * 4] != b[i * 4]).count()
+    }
+
+    #[test]
+    fn test_intensity_scales_sort_extent_horizontal() {
+        // Regression/behaviour test for the partial-sort semantic: intensity
+        // 0.1 on an 8-pixel run should only ever touch a `sort_count`-sized
+        // prefix (here sort_count == 1, which sorting alone can't change),
+        // while intensity 10.0 must reproduce the historical full-sort
+        // behaviour and rearrange every pixel in this strictly-descending
+        // run.
+        let d = descending_gray_row(8);
+        let f = Frame {
+            width: 8,
+            height: 1,
+            data: d.clone(),
+        };
+        let mut params = serde_json::Map::new();
+        params.insert("auto_threshold".to_string(), serde_json::json!(false));
+        params.insert("u_threshold".to_string(), serde_json::json!(0.05));
+
+        let low = SortingGlitch::new(0.05, 0.1, 0);
+        let r_low = low.process_frame(&f, None, &params).unwrap();
+        let diffs_low = count_pixel_diffs(&r_low.data, &d, 8);
+
+        let high = SortingGlitch::new(0.05, 10.0, 0);
+        let r_high = high.process_frame(&f, None, &params).unwrap();
+        let diffs_high = count_pixel_diffs(&r_high.data, &d, 8);
+
+        assert_eq!(
+            diffs_low, 0,
+            "intensity 0.1 should only sort a 1-pixel prefix, which is a no-op"
+        );
+        assert_eq!(
+            diffs_high, 8,
+            "intensity 10.0 must fully reverse this strictly-descending run, matching the historical full-sort behaviour"
+        );
+        assert!(
+            diffs_low < diffs_high,
+            "lower intensity must produce a less-sorted (fewer changed pixels) result than higher intensity"
+        );
+    }
+
+    #[test]
+    fn test_intensity_scales_sort_extent_vertical() {
+        // Same property as the horizontal test, but for the vertical
+        // direction branch, which previously had no intensity gating at all
+        // (always a full sort regardless of intensity).
+        let d = descending_gray_row(8);
+        let f = Frame {
+            width: 1,
+            height: 8,
+            data: d.clone(),
+        };
+        let mut params = serde_json::Map::new();
+        params.insert("auto_threshold".to_string(), serde_json::json!(false));
+        params.insert("u_threshold".to_string(), serde_json::json!(0.05));
+        params.insert("u_direction".to_string(), serde_json::json!("Vertical"));
+
+        let low = SortingGlitch::new(0.05, 0.1, 1);
+        let r_low = low.process_frame(&f, None, &params).unwrap();
+        let diffs_low = count_pixel_diffs(&r_low.data, &d, 8);
+
+        let high = SortingGlitch::new(0.05, 10.0, 1);
+        let r_high = high.process_frame(&f, None, &params).unwrap();
+        let diffs_high = count_pixel_diffs(&r_high.data, &d, 8);
+
+        assert_eq!(diffs_low, 0);
+        assert_eq!(diffs_high, 8);
+        assert!(diffs_low < diffs_high);
+    }
+
+    #[test]
+    fn test_intensity_ten_matches_full_sort_regression() {
+        // Pins intensity == 10.0 to the exact byte-for-byte output of the
+        // pre-existing full-sort behaviour (same fixture as
+        // test_sorting_glitch_sorts_contiguous_run), so the max setting's
+        // established visual cannot silently change.
+        let mut d = vec![0u8; 4 * 4];
+        d[0] = 200;
+        d[1] = 200;
+        d[2] = 200;
+        d[3] = 255;
+        d[4] = 255;
+        d[5] = 255;
+        d[6] = 255;
+        d[7] = 255;
+        d[8] = 128;
+        d[9] = 128;
+        d[10] = 128;
+        d[11] = 255;
+        d[12] = 180;
+        d[13] = 180;
+        d[14] = 180;
+        d[15] = 255;
+        let f = Frame {
+            width: 4,
+            height: 1,
+            data: d,
+        };
+        let e = SortingGlitch::new(0.1, 10.0, 0);
         let mut params = serde_json::Map::new();
         params.insert("auto_threshold".to_string(), serde_json::json!(false));
         params.insert("u_threshold".to_string(), serde_json::json!(0.1));

@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { renderHook, act, waitFor } from "@testing-library/react";
+import { open } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
 import { useAppStore, type StackEntry } from "../store";
-import type { ProjectFile } from "./useProject";
+import { useProject, type ProjectFile } from "./useProject";
 
 // Mock Tauri APIs
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -227,5 +230,114 @@ describe("effectConverter mask pipeline", () => {
     // Clear mask
     useAppStore.getState().setStackItemMask(id, null);
     expect(useAppStore.getState().effectStack.find((e) => e.id === id)?.maskId).toBe(null);
+  });
+});
+
+describe("openProject restores per-effect mask assignments", () => {
+  beforeEach(() => {
+    useAppStore.setState(useAppStore.getInitialState());
+    vi.mocked(open).mockReset();
+    vi.mocked(invoke).mockReset();
+  });
+
+  it("restores a saved effect's maskId, maskMode, and maskB64 on reopen", async () => {
+    // The effect must be resolvable from allEffects for addToStack to fire
+    // during the restore loop.
+    useAppStore.getState().setAllEffects([
+      { id: "color.invert", name: "Invert", category: "Color", media_type: "image", parameters: [] },
+    ]);
+
+    const savedProject: ProjectFile = {
+      version: 1,
+      createdAt: "2024-01-01T00:00:00Z",
+      effectStack: [
+        {
+          id: "orig-1",
+          effectId: "color.invert",
+          effectName: "Invert",
+          params: {},
+          enabled: true,
+          maskId: "sam3-0",
+          maskB64: "data:image/png;base64,savedmaskdata",
+          maskMode: "outside",
+        },
+      ],
+      keyframes: {},
+      audioBindings: {},
+      mediaFilePath: null,
+      activeMask: null,
+    };
+
+    vi.mocked(open).mockResolvedValue("C:/fake/project.moshdither");
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === "read_file") return JSON.stringify(savedProject);
+      return undefined;
+    });
+
+    // sam3Masks is deliberately left empty here (as it would be right after
+    // a fresh app start / project load) to prove maskB64 is restored from
+    // the saved snapshot rather than recomputed from live SAM3 state.
+    const { result } = renderHook(() => useProject());
+
+    await act(async () => {
+      await result.current.openProject();
+    });
+
+    // The restore loop runs inside a setTimeout(fn, 0) in openProject, so
+    // wait for it to flush before asserting.
+    await waitFor(() => {
+      expect(useAppStore.getState().effectStack).toHaveLength(1);
+    });
+
+    const restored = useAppStore.getState().effectStack[0];
+    expect(restored.effectId).toBe("color.invert");
+    expect(restored.maskId).toBe("sam3-0");
+    expect(restored.maskMode).toBe("outside");
+    expect(restored.maskB64).toBe("data:image/png;base64,savedmaskdata");
+  });
+
+  it("leaves maskId/maskMode at defaults when the saved entry had no mask", async () => {
+    useAppStore.getState().setAllEffects([
+      { id: "color.invert", name: "Invert", category: "Color", media_type: "image", parameters: [] },
+    ]);
+
+    const savedProject: ProjectFile = {
+      version: 1,
+      createdAt: "2024-01-01T00:00:00Z",
+      effectStack: [
+        {
+          id: "orig-1",
+          effectId: "color.invert",
+          effectName: "Invert",
+          params: {},
+          enabled: true,
+          maskId: null,
+          maskMode: "inside",
+        },
+      ],
+      keyframes: {},
+      audioBindings: {},
+      mediaFilePath: null,
+      activeMask: null,
+    };
+
+    vi.mocked(open).mockResolvedValue("C:/fake/project2.moshdither");
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === "read_file") return JSON.stringify(savedProject);
+      return undefined;
+    });
+
+    const { result } = renderHook(() => useProject());
+
+    await act(async () => {
+      await result.current.openProject();
+    });
+
+    await waitFor(() => {
+      expect(useAppStore.getState().effectStack).toHaveLength(1);
+    });
+
+    const restored = useAppStore.getState().effectStack[0];
+    expect(restored.maskId).toBe(null);
   });
 });

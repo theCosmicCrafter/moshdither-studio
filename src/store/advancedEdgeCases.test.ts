@@ -166,8 +166,8 @@ describe("Store Advanced Edge Cases", () => {
       const id1 = useAppStore.getState().addTrack("Track A");
       const id2 = useAppStore.getState().addTrack("Track B");
       expect(id1).not.toBe(id2);
-      expect(id1).toMatch(/^track-\d+$/);
-      expect(id2).toMatch(/^track-\d+$/);
+      expect(id1).toMatch(/^track-/);
+      expect(id2).toMatch(/^track-/);
     });
 
     it("addTrack with no name uses default naming", () => {

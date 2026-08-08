@@ -62,11 +62,17 @@ impl Effect for HalftoneDither {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
+        // Read as f64, not as_u64: a slider with step 1.0 may still serialise
+        // as a JSON float, and as_u64() returns None for a float -- silently
+        // dropping the parameter and falling back to the default. Round
+        // before casting since UI wheel drags can produce non-integral
+        // values. See error_diffusion.rs for the established pattern.
         let dot_size = params
             .get("dot_size")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(self.dot_size as u64) as u32;
-        let dot_size = dot_size.max(1);
+            .and_then(|v| v.as_f64())
+            .filter(|v| v.is_finite())
+            .map(|v| v.round().clamp(2.0, 32.0) as u32)
+            .unwrap_or(self.dot_size);
         let screen_angle = params
             .get("screen_angle")
             .and_then(|v| v.as_f64())
@@ -281,5 +287,69 @@ mod screen_angle_tests {
             assert_eq!(px[1], px[2]);
             assert_eq!(px[3], 255);
         }
+    }
+
+    /// `dot_size` must be read with `as_f64`, not `as_u64`: a JSON float
+    /// (whether hand-supplied or produced by `clamp_params` rewriting an
+    /// out-of-range value) would otherwise be silently dropped and the
+    /// effect would fall back to its hardcoded default of 8.
+    #[test]
+    fn dot_size_accepts_a_float_tagged_value_instead_of_falling_back_to_default() {
+        let frame = gradient_frame(48, 48);
+        let e = HalftoneDither::default(); // default dot_size = 8
+
+        let mut float_params = serde_json::Map::new();
+        float_params.insert("dot_size".into(), json!(20.0));
+        let mut int_params = serde_json::Map::new();
+        int_params.insert("dot_size".into(), json!(20));
+
+        let default_out = e
+            .process_frame(&frame, None, &serde_json::Map::new())
+            .unwrap();
+        let float_out = e.process_frame(&frame, None, &float_params).unwrap();
+        let int_out = e.process_frame(&frame, None, &int_params).unwrap();
+
+        assert_eq!(
+            float_out.data, int_out.data,
+            "dot_size 20 and 20.0 must resolve identically"
+        );
+        assert_ne!(
+            float_out.data, default_out.data,
+            "a float-tagged dot_size must not silently fall back to the default"
+        );
+    }
+
+    #[test]
+    fn dot_size_honours_a_clamp_then_read_round_trip() {
+        let frame = gradient_frame(48, 48);
+        let e = HalftoneDither::default();
+
+        // Out of range (declared max is 32); clamp_params rewrites this to
+        // the float-tagged representation that as_u64() cannot read.
+        let mut raw = serde_json::Map::new();
+        raw.insert("dot_size".into(), json!(9999));
+        let clamped = crate::effects::clamp_params("dithering.halftone", &raw);
+        assert!(
+            clamped["dot_size"].is_f64(),
+            "clamp_params should have rewritten the out-of-range value to a float"
+        );
+
+        let mut direct_max = serde_json::Map::new();
+        direct_max.insert("dot_size".into(), json!(32));
+
+        let via_clamp = e.process_frame(&frame, None, &clamped).unwrap();
+        let via_direct = e.process_frame(&frame, None, &direct_max).unwrap();
+        let default_out = e
+            .process_frame(&frame, None, &serde_json::Map::new())
+            .unwrap();
+
+        assert_eq!(
+            via_clamp.data, via_direct.data,
+            "a value clamped to 32 must behave exactly like dot_size=32"
+        );
+        assert_ne!(
+            via_clamp.data, default_out.data,
+            "clamped dot_size must not silently fall back to the default"
+        );
     }
 }

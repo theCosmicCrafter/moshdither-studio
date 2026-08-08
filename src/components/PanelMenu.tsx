@@ -5,9 +5,7 @@ import { PANEL_REGISTRY } from "./DockSystem/panelRegistry";
 export default function PanelMenu() {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const dockLayout = useAppStore((s) => s.dockLayout);
-  const addPanelToDock = useAppStore((s) => s.addPanelToDock);
-  const removePanelFromDock = useAppStore((s) => s.removePanelFromDock);
+
 
   useEffect(() => {
     if (!open) return;
@@ -20,12 +18,11 @@ export default function PanelMenu() {
     return () => window.removeEventListener("mousedown", handler);
   }, [open]);
 
-  const dockedIds = new Set<string>();
-  for (const z of ["left", "right", "bottom"] as const) {
-    for (const g of dockLayout[z]) {
-      for (const p of g.panels) dockedIds.add(p);
-    }
-  }
+  const dockedPanels = useAppStore((s) => s.dockedPanels) || [];
+  const triggerLayoutAction = useAppStore((s) => s.triggerLayoutAction);
+  const removeLocalPanel = (id: string) => triggerLayoutAction("remove", id);
+
+  const dockedIds = new Set(dockedPanels);
 
   return (
     <div ref={ref} className="relative">
@@ -51,9 +48,9 @@ export default function PanelMenu() {
                 key={p.id}
                 onClick={() => {
                   if (isDocked) {
-                    removePanelFromDock(p.id);
+                    removeLocalPanel(p.id);
                   } else {
-                    addPanelToDock(p.id, p.defaultZone);
+                    triggerLayoutAction("add", p.id);
                   }
                 }}
                 className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors"
@@ -76,7 +73,7 @@ export default function PanelMenu() {
               onClick={() => {
                 PANEL_REGISTRY.forEach((p) => {
                   if (!dockedIds.has(p.id)) {
-                    useAppStore.getState().addPanelToDock(p.id, p.defaultZone);
+                    useAppStore.getState().triggerLayoutAction("add", p.id);
                   }
                 });
               }}
@@ -87,7 +84,7 @@ export default function PanelMenu() {
             <button
               onClick={() => {
                 PANEL_REGISTRY.forEach((p) => {
-                  useAppStore.getState().removePanelFromDock(p.id);
+                  useAppStore.getState().triggerLayoutAction("remove", p.id);
                 });
               }}
               className="text-[10px] text-on-surface-variant hover:text-accent-pink transition-colors"

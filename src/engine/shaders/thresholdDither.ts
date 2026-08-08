@@ -21,7 +21,10 @@ export const thresholdDitherShader: EffectShader = {
     void main() {
       vec4 color = texture2D(tDiffuse, vUv);
       float lum = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-      float t = mix(0.0, 1.0, step(threshold, lum));
+      // Rust: 'lum > threshold as f32' (threshold.rs) -- strictly greater
+      // than, matching that exactly (not step()'s >=) avoids a boundary flip
+      // at exact ties, e.g. a mid-grey pixel at the default threshold.
+      float t = lum > threshold ? 1.0 : 0.0;
       gl_FragColor = vec4(vec3(t), color.a);
     }
   `,

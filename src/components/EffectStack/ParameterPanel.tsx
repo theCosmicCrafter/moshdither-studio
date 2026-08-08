@@ -97,8 +97,8 @@ function ParameterWheel({
 }
 
 
-export default function ParameterPanel() {
-  const entry = useAppStore((s) => s.effectStack.find((e) => e.id === s.selectedStackId));
+export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
+  const entry = useAppStore((s) => s.effectStack.find((e) => e.id === (stackId || s.selectedStackId)));
   const effectMeta = useAppStore((s) => s.allEffects.find((e) => e.id === entry?.effectId));
   const updateStackParams = useAppStore((s) => s.updateStackParams);
   const audioBindings = useAppStore((s) =>
@@ -195,8 +195,10 @@ export default function ParameterPanel() {
           <div key={param.id} className="space-y-1.5">
             <div className="flex items-center justify-between">
               <label
-                className="text-[11px] font-medium"
+                className="text-[11px] font-medium cursor-pointer hover:text-accent-teal transition-colors"
                 style={{ color: "var(--text-secondary)" }}
+                title="Double-click to reset to default"
+                onDoubleClick={() => updateStackParams(entry.id, { [param.id]: param.default })}
               >
                 {param.name}
               </label>
