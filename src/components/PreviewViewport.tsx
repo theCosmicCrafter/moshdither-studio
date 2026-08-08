@@ -916,11 +916,26 @@ function PreviewViewport({ isDropTarget = false }: Props) {
 
     render();
 
-    // Continuous render loop — always run when there are effects so time-based
-    // shaders animate even without pressing play. Also runs when audio is active.
-    // Reads currentTime/audio/effectStack from getState() inside the loop.
-    const hasEffects = useAppStore.getState().effectStack.length > 0;
-    if (hasEffects || audioEnabled || isPlaying) {
+    // Continuous render loop — only needed when something in the active stack
+    // actually reads u_time/u_frame (motion, flicker, scrolling noise) and so
+    // produces different output frame to frame on its own. Most effects
+    // (dithering, color, pixel geometry) are static: identical output every
+    // frame for an unchanging image, so looping forever bought nothing but a
+    // perpetual 60fps GPU render call -- real, measurable cost for zero
+    // visual benefit. The shader set only changes when stackSignature changes
+    // (this effect's own dependency), so it's safe to snapshot once here
+    // rather than recompute per frame inside the loop below.
+    const snapshotState = useAppStore.getState();
+    const snapshotPasses = stackToRenderPasses(
+      snapshotState.effectStack,
+      snapshotState.currentTime,
+      snapshotState.activeMask,
+      snapshotState.sam3Masks
+    );
+    const hasAnimatedEffect = [...buildShaderMap(snapshotPasses).values()].some(
+      (shader) => shader.animated
+    );
+    if (hasAnimatedEffect || audioEnabled || isPlaying) {
       const loop = () => {
         // Advance currentTime for image sources when playing so the time slider
         // moves and keyframe-driven effects sync with export. Videos drive time

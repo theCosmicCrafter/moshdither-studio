@@ -16,7 +16,7 @@ export const DEFAULT_LAYOUT: IJsonModel = {
         id: "left-zone",
         children: [
           { type: "tab", id: "browser", name: "Effects", component: "browser" },
-          { type: "tab", id: "tracks", name: "Tracks", component: "tracks" },
+          { type: "tab", id: "stack", name: "Stack", component: "stack" },
         ]
       },
       {
@@ -55,8 +55,10 @@ export const DEFAULT_LAYOUT: IJsonModel = {
         weight: 20,
         id: "right-zone",
         children: [
-          { type: "tab", id: "stack", name: "Stack", component: "stack" },
+          { type: "tab", id: "mask", name: "Mask", component: "mask" },
           { type: "tab", id: "audio", name: "Audio Reactive", component: "audio" },
+          { type: "tab", id: "lut", name: "LUTs", component: "lut" },
+          { type: "tab", id: "export", name: "Export", component: "export" },
         ]
       }
     ]

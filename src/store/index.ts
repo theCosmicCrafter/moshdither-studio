@@ -469,6 +469,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     lut: true,
     proxy: true,
     tracks: true,
+    // Verify runs the internal effect-registry self-test suite -- a QA/dev
+    // tool for confirming the app's own effects work, not a content-creation
+    // feature. Hidden from the panel rail so it doesn't compete for space
+    // with the tools an end user actually needs day to day.
+    verify: false,
   } as Record<string, boolean>,
   dockedPanels: [],
   layoutTrigger: null,

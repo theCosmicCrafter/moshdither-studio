@@ -3,6 +3,7 @@ import { EffectShader } from "../webgl2/types";
 export const waveDistortShader: EffectShader = {
   id: "wave_distort",
   name: "Wave Distort",
+  animated: true,
   vertexSource: `
     attribute vec2 a_position;
     attribute vec2 a_texCoord;

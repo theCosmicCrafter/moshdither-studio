@@ -241,6 +241,7 @@ function resetStore() {
     panelVisibility: {
       browser: true, preview: true, stack: true, audio: true,
       export: true, presets: true, mask: true, lut: true, proxy: true, tracks: true,
+      verify: false,
     },
     dockedPanels: [],
     layoutTrigger: null,
