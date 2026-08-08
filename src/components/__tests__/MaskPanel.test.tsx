@@ -24,6 +24,7 @@ vi.mock("../../lib/tauri", () => ({
         setTimeout(() => resolve("data:image/png;base64,abc"), 50)
       )
   ),
+  sam3Init: vi.fn(() => Promise.resolve({})),
   sam3LoadImage: vi.fn(() => Promise.resolve({ width: 100, height: 100 })),
   sam3TextPrompt: vi.fn(() => Promise.resolve({ count: 1, masks: ["mask1"], scores: [0.95] })),
   sam3PointPrompt: vi.fn(() => Promise.resolve({ count: 1, masks: ["mask1"], scores: [0.9] })),
@@ -139,6 +140,35 @@ describe("MaskPanel", () => {
     useAppStore.getState().setSam3Mode("text");
     render(<MaskPanel />);
     expect(screen.getByPlaceholderText("e.g. sky, person, car...")).toBeInTheDocument();
+  });
+
+  it("offers a Start SAM3 button in point mode while idle, instead of a dead click-image hint", async () => {
+    useAppStore.getState().setMediaLoaded(true);
+    useAppStore.getState().setSam3Mode("point");
+    render(<MaskPanel />);
+
+    // While idle, PreviewViewport never mounts the click-catching overlay
+    // (isSam3Interactive requires sam3Ready), so the old "Click image to add
+    // points" hint here was a dead end with no way out of the idle state.
+    expect(screen.queryByText("Click image to add points")).not.toBeInTheDocument();
+
+    const startButton = screen.getByRole("button", { name: /Start SAM3/i });
+    fireEvent.click(startButton);
+
+    await waitFor(() => expect(useAppStore.getState().sam3Ready).toBe(true));
+  });
+
+  it("offers a Start SAM3 button in box mode while idle, instead of a dead drag-to-draw hint", async () => {
+    useAppStore.getState().setMediaLoaded(true);
+    useAppStore.getState().setSam3Mode("box");
+    render(<MaskPanel />);
+
+    expect(screen.queryByText("Drag on image to draw box")).not.toBeInTheDocument();
+
+    const startButton = screen.getByRole("button", { name: /Start SAM3/i });
+    fireEvent.click(startButton);
+
+    await waitFor(() => expect(useAppStore.getState().sam3Ready).toBe(true));
   });
 
   it("shows point instruction in point mode", () => {

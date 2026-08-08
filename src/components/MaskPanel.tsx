@@ -292,14 +292,23 @@ export default function MaskPanel() {
             </select>
             {sam3Mode === "text" ? (
               <TextPromptInput onSubmit={handleTextPrompt} isLoading={isLoading} />
-            ) : sam3Mode === "point" ? (
-              <span className="flex-1 text-[11px] text-[var(--text-muted)] flex items-center">
-                Click image to add points
-              </span>
-            ) : sam3Mode === "box" ? (
-              <span className="flex-1 text-[11px] text-[var(--text-muted)] flex items-center">
-                Drag on image to draw box
-              </span>
+            ) : sam3Mode === "point" || sam3Mode === "box" ? (
+              // Point/box clicks are only wired up once SAM3 is ready
+              // (isSam3Interactive in PreviewViewport.tsx), so while idle
+              // there is nothing on the canvas to catch them -- the old
+              // "Click image to add points"/"Drag on image to draw box" hint
+              // here was a dead end with no way to ever leave the idle state.
+              // Text and Auto mode already have their own start action
+              // (handleTextPrompt / handleAutoMask both call
+              // ensureSam3Ready); give point/box the same entry point.
+              <button
+                onClick={ensureSam3Ready}
+                disabled={isLoading}
+                className="flex-1 px-3 py-1.5 rounded bg-[var(--accent)] text-black font-semibold text-xs uppercase tracking-wider hover:brightness-110 transition-all disabled:opacity-50 flex items-center justify-center gap-1"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 12 }}>auto_awesome</span>
+                {isLoading ? "Starting..." : "Start SAM3"}
+              </button>
             ) : (
               <button
                 onClick={handleAutoMask}
