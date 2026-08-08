@@ -1,6 +1,19 @@
 import { expect, test } from "@playwright/test";
 
 test.describe("UI Stress Testing", () => {
+  // Every other E2E spec dismisses the onboarding modal before interacting
+  // (see tests/e2e/mocks/tauri-mock.ts) -- this file never did, so the
+  // full-screen onboarding overlay (role="dialog", z-[9999]) sat in front of
+  // the page for the whole test. Most tests here swallow every click failure
+  // in try/catch and so passed anyway, but "rapid preset loading" makes one
+  // unprotected `.click()` that hung for the full 30s timeout waiting for the
+  // modal to stop intercepting pointer events, since nothing ever dismissed it.
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("onboardingDismissed", "true");
+    });
+  });
+
   test("blast UI with state changes to test robustness", async ({ page }) => {
     test.setTimeout(60000);
 

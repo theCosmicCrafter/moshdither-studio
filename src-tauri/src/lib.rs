@@ -41,6 +41,11 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             println!("Tauri setup complete.");
+            // `app` is only read inside the macOS/Windows-gated block below; on
+            // every other target that block is stripped entirely, which would
+            // otherwise leave the closure's `app` parameter unused under
+            // `-D warnings` (the same class of bug window_commands.rs hit).
+            let _ = &app;
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             if let Some(window) = app.get_webview_window("main") {
                 #[cfg(target_os = "macos")]
