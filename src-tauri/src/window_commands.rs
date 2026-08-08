@@ -188,18 +188,26 @@ mod tests {
 /// No-op on macOS / Linux.
 #[tauri::command]
 pub fn dock_window_appbar(app: AppHandle, edge: String, size: i32) -> Result<(), String> {
+    // Each branch is a complete, terminal Result on its own platform -- not a
+    // shared trailing Ok(()) after both -- because on non-Windows only the
+    // `Err` branch survives cfg-stripping, and an unconditional Ok(()) after
+    // an unconditional `return Err(...)` is unreachable there. That only
+    // shows up building for a non-Windows target, which this session never
+    // did locally (Windows-only dev machine) despite `cargo clippy -D
+    // warnings` passing repeatedly -- clean on the platform it ran on says
+    // nothing about a `#[cfg(not(target_os = "..."))]` branch it never
+    // compiled.
     #[cfg(target_os = "windows")]
     {
         dock_appbar_win32(&app, &edge, size)?;
+        Ok(())
     }
 
     #[cfg(not(target_os = "windows"))]
     {
         let _ = (&app, &edge, size);
-        return Err("AppBar docking is only supported on Windows".into());
+        Err("AppBar docking is only supported on Windows".into())
     }
-
-    Ok(())
 }
 
 /// Unregisters the AppBar, releasing the reserved screen space.
@@ -209,15 +217,14 @@ pub fn undock_window_appbar(app: AppHandle) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         undock_appbar_win32(&app)?;
+        Ok(())
     }
 
     #[cfg(not(target_os = "windows"))]
     {
         let _ = &app;
-        return Err("AppBar docking is only supported on Windows".into());
+        Err("AppBar docking is only supported on Windows".into())
     }
-
-    Ok(())
 }
 
 // ── Win32 AppBar implementation ─────────────────────────────────

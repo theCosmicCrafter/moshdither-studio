@@ -23,7 +23,15 @@ use commands::{
     test_all_functions, verify_effects, AppState,
 };
 use environment::{get_environment_status, install_local_environment};
+// Only used inside the macOS/Windows-gated window-vibrancy setup below; on
+// Linux neither cfg branch compiles, which would leave these imports (and the
+// `window` binding around them) unused under `-D warnings`. CI runs on Linux
+// and this project's own dev machine is Windows-only, so this class of
+// platform-specific warning has no local signal at all -- clean locally says
+// nothing about a target this machine never builds for.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use tauri::utils::config::WindowEffectsConfig;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use tauri::window::Effect;
 use tauri::Manager;
 use window_commands::{dock_window_appbar, get_monitor_info, snap_to_edge, undock_window_appbar};
@@ -33,6 +41,7 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             println!("Tauri setup complete.");
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             if let Some(window) = app.get_webview_window("main") {
                 #[cfg(target_os = "macos")]
                 let _ = window.set_effects(WindowEffectsConfig {
