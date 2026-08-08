@@ -1,6 +1,6 @@
 ---
-name: Testing moshdither-studio WebGL preview flows
-description: How to drive the moshdither-studio Vite app from Playwright when the Rust Tauri backend is unavailable, including seeding media/effects and asserting WebGL uniforms.
+name: testing-moshdither-studio
+description: Drive the moshdither-studio Vite app from Playwright when the Rust Tauri backend is unavailable. Covers seeding media/effects and asserting WebGL uniforms for preview/export parity checks.
 ---
 
 ## When to use this skill
