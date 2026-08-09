@@ -68,9 +68,9 @@ def ffmpeg_convert(input_path, output_path, extra_args=None):
     # own kill logic clean up that specific child immediately, rather than
     # leaving it orphaned until the whole process tree is eventually reaped.
     #
-    # The marker must sit on the line immediately before the call.
-    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
     try:
+        # The marker must sit on the line immediately before the call.
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
     except subprocess.TimeoutExpired as e:
         raise RuntimeError(f"ffmpeg timed out after {e.timeout}s") from e
