@@ -195,8 +195,9 @@ pub fn generate_proxy(source_path: &str, max_width: u32, crf: u32) -> Result<Str
         .unwrap_or("proxy");
     let proxy_path = proxy_dir.join(format!("{}_proxy_{}p.mp4", source_name, max_width));
 
-    let output = Command::new(&ffmpeg)
-        .args([
+    const PROXY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+    let output = output_with_timeout(
+        Command::new(&ffmpeg).args([
             "-i",
             source_path,
             "-vf",
@@ -210,11 +211,9 @@ pub fn generate_proxy(source_path: &str, max_width: u32, crf: u32) -> Result<Str
             "-an",
             "-y",
             proxy_path.to_string_lossy().as_ref(),
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(AppError::Io)?;
+        ]),
+        PROXY_TIMEOUT,
+    )?;
 
     if !output.status.success() {
         return Err(AppError::Ffmpeg(format!(
@@ -353,11 +352,10 @@ pub fn decode_video_with_options(
         "format=rgba".to_string()
     };
     cmd.args(["-vf", &vf]);
-    cmd.args(["-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    cmd.args(["-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"]);
 
-    let output = cmd.output().map_err(AppError::Io)?;
+    const DECODE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+    let output = output_with_timeout(&mut cmd, DECODE_TIMEOUT)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(AppError::Ffmpeg(format!(
@@ -957,6 +955,105 @@ struct ProbeCache {
     order: VecDeque<String>,
 }
 
+/// Run a command to completion, piping stdout/stderr, bounded by `timeout`.
+///
+/// `Command::output()` has no timeout: if the child process hangs (a
+/// well-documented real occurrence for ffmpeg/ffprobe on malformed or
+/// truncated containers), the calling Tauri command's future never
+/// resolves. That is architecturally the same "await that never settles"
+/// bug already fixed once in this codebase (EffectChain.getMaskTexture's
+/// unguarded `<img>` load) -- just one layer down, at a subprocess instead
+/// of a DOM event. `encode_video` (below) already solves this for the
+/// export path with `child.wait_timeout` plus a stderr-draining thread (so
+/// a chatty process cannot deadlock on a full pipe buffer while we wait);
+/// this is that same pattern, generalized for callers that don't need to
+/// stream input to stdin.
+fn output_with_timeout(
+    cmd: &mut Command,
+    timeout: std::time::Duration,
+) -> Result<std::process::Output> {
+    use child_wait_timeout::ChildWT;
+    use std::io::{ErrorKind, Read};
+
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(AppError::Io)?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| AppError::Ffmpeg("Failed to open child stdout".to_string()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| AppError::Ffmpeg("Failed to open child stderr".to_string()))?;
+
+    let stdout_buf = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let stderr_buf = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+    let stdout_thread = {
+        let buf = Arc::clone(&stdout_buf);
+        std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(stdout);
+            let mut data = Vec::new();
+            let _ = reader.read_to_end(&mut data);
+            if let Ok(mut guard) = buf.lock() {
+                *guard = data;
+            }
+        })
+    };
+    let stderr_thread = {
+        let buf = Arc::clone(&stderr_buf);
+        std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(stderr);
+            let mut data = Vec::new();
+            let _ = reader.read_to_end(&mut data);
+            if let Ok(mut guard) = buf.lock() {
+                *guard = data;
+            }
+        })
+    };
+
+    let join_readers = |stdout_thread: std::thread::JoinHandle<()>,
+                        stderr_thread: std::thread::JoinHandle<()>| {
+        let _ = stdout_thread.join();
+        let _ = stderr_thread.join();
+    };
+
+    let status = match child.wait_timeout(timeout) {
+        Ok(status) => status,
+        Err(e) if e.kind() == ErrorKind::TimedOut => {
+            eprintln!(
+                "[ffmpeg] Command timed out after {:?}, killing process",
+                timeout
+            );
+            let _ = child.kill();
+            let _ = child.wait_timeout(std::time::Duration::from_secs(10));
+            join_readers(stdout_thread, stderr_thread);
+            return Err(AppError::Ffmpeg(format!(
+                "Process timed out after {:?}",
+                timeout
+            )));
+        }
+        Err(e) => {
+            let _ = child.kill();
+            join_readers(stdout_thread, stderr_thread);
+            return Err(AppError::Io(e));
+        }
+    };
+
+    join_readers(stdout_thread, stderr_thread);
+    let stdout = stdout_buf.lock().map(|g| g.clone()).unwrap_or_default();
+    let stderr = stderr_buf.lock().map(|g| g.clone()).unwrap_or_default();
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
 /// Parse an ffprobe `r_frame_rate` string, which is typically a ratio such as
 /// `30000/1001` or a decimal like `30`.
 fn parse_r_frame_rate(s: &str) -> f64 {
@@ -989,8 +1086,9 @@ pub fn probe_video(path: &str) -> Result<(u32, u32, f64)> {
 
     let bin = ffprobe_binary()?;
 
-    let output = Command::new(&bin)
-        .args([
+    const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    let output = output_with_timeout(
+        Command::new(&bin).args([
             "-v",
             "error",
             "-select_streams",
@@ -1000,9 +1098,9 @@ pub fn probe_video(path: &str) -> Result<(u32, u32, f64)> {
             "-of",
             "json",
             path,
-        ])
-        .output()
-        .map_err(AppError::Io)?;
+        ]),
+        PROBE_TIMEOUT,
+    )?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1237,4 +1335,82 @@ pub fn extract_audio_to_wav(
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod output_with_timeout_tests {
+    use super::*;
+
+    // A short, reliable "hang" for exactly `secs` seconds, without depending
+    // on a shell interactively (avoids `timeout`'s console-attachment quirk
+    // on Windows). `ping` is present on every Windows install by default;
+    // `sleep` is present on every Linux CI image (this project's `cargo
+    // test` runs on ubuntu-latest) and macOS.
+    fn hang_command(secs: u32) -> Command {
+        #[cfg(target_os = "windows")]
+        {
+            let mut cmd = Command::new("ping");
+            cmd.args(["-n", &(secs + 1).to_string(), "127.0.0.1"]);
+            cmd
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let mut cmd = Command::new("sleep");
+            cmd.arg(secs.to_string());
+            cmd
+        }
+    }
+
+    #[test]
+    fn returns_output_for_a_command_that_finishes_within_the_timeout() {
+        #[cfg(target_os = "windows")]
+        let mut cmd = {
+            let mut c = Command::new("cmd");
+            c.args(["/C", "echo hello"]);
+            c
+        };
+        #[cfg(not(target_os = "windows"))]
+        let mut cmd = {
+            let mut c = Command::new("echo");
+            c.arg("hello");
+            c
+        };
+
+        let output = output_with_timeout(&mut cmd, std::time::Duration::from_secs(10))
+            .expect("a fast, well-behaved command should succeed");
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("hello"));
+    }
+
+    #[test]
+    fn kills_a_hung_process_and_returns_an_error_instead_of_blocking_forever() {
+        // This is the exact defect class the fix closes: without a timeout,
+        // a hung ffmpeg/ffprobe call left the awaiting Tauri command's
+        // promise unresolved forever (the same "stuck at ~0% CPU, looks
+        // frozen, isn't a crash" signature diagnosed for the mask-texture
+        // bug). The command below would otherwise run far longer than the
+        // 1s timeout given to it here.
+        let mut cmd = hang_command(30);
+        let started = std::time::Instant::now();
+        let result = output_with_timeout(&mut cmd, std::time::Duration::from_secs(1));
+        let elapsed = started.elapsed();
+
+        assert!(
+            result.is_err(),
+            "a hung process must produce a timeout error, not hang the caller"
+        );
+        let message = result.unwrap_err().to_string();
+        assert!(
+            message.contains("timed out"),
+            "error should say it timed out, got: {message}"
+        );
+        // Generous upper bound (the 1s timeout, plus the 10s grace period
+        // for the post-kill wait_timeout, plus scheduler slack) -- the point
+        // isn't precise timing, it's proving this returns at all instead of
+        // hanging for the full 30s the underlying process was given.
+        assert!(
+            elapsed < std::time::Duration::from_secs(20),
+            "expected the timeout path to return well before the process's own 30s runtime, took {elapsed:?}"
+        );
+    }
 }

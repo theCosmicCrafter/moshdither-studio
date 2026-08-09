@@ -2132,9 +2132,148 @@ fn find_python() -> Option<String> {
     None
 }
 
+/// Spawn `cmd`, polling for completion while checking `cancel` and an
+/// overall `timeout`, instead of a single blocking `wait_with_output()`.
+///
+/// This is the mechanism that makes FFglitch cancellable and un-hangable
+/// (see `run_ffglitch_subprocess` below), factored out on its own so it can
+/// be exercised directly with an arbitrary command rather than only through
+/// a full mosh_cli.py invocation. Mirrors `ffmpeg::output_with_timeout`
+/// (stdout/stderr drained on separate threads while waiting, so a chatty
+/// process cannot deadlock on a full pipe buffer) with the addition of the
+/// cancel check, since this is the one subprocess path in the app a user
+/// can proactively cancel mid-run rather than only time out.
+fn run_cancellable(
+    cmd: &mut Command,
+    cancel: &AtomicBool,
+    timeout: Duration,
+    poll_interval: Duration,
+) -> std::result::Result<std::process::Output, String> {
+    use child_wait_timeout::ChildWT;
+    use std::io::{ErrorKind, Read};
+
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn process: {}", e))?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to open child stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Failed to open child stderr".to_string())?;
+    let stdout_buf = Arc::new(Mutex::new(Vec::new()));
+    let stderr_buf = Arc::new(Mutex::new(Vec::new()));
+    let stdout_thread = {
+        let buf = Arc::clone(&stdout_buf);
+        std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(stdout);
+            let mut data = Vec::new();
+            let _ = reader.read_to_end(&mut data);
+            if let Ok(mut guard) = buf.lock() {
+                *guard = data;
+            }
+        })
+    };
+    let stderr_thread = {
+        let buf = Arc::clone(&stderr_buf);
+        std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(stderr);
+            let mut data = Vec::new();
+            let _ = reader.read_to_end(&mut data);
+            if let Ok(mut guard) = buf.lock() {
+                *guard = data;
+            }
+        })
+    };
+    let join_readers = |stdout_thread: std::thread::JoinHandle<()>,
+                        stderr_thread: std::thread::JoinHandle<()>| {
+        let _ = stdout_thread.join();
+        let _ = stderr_thread.join();
+    };
+
+    let started = std::time::Instant::now();
+    let status = loop {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait_timeout(Duration::from_secs(10));
+            join_readers(stdout_thread, stderr_thread);
+            return Err("Cancelled by user".to_string());
+        }
+        if started.elapsed() > timeout {
+            let _ = child.kill();
+            let _ = child.wait_timeout(Duration::from_secs(10));
+            join_readers(stdout_thread, stderr_thread);
+            return Err(format!("Process timed out after {:?}", timeout));
+        }
+        match child.wait_timeout(poll_interval) {
+            Ok(status) => break status,
+            Err(e) if e.kind() == ErrorKind::TimedOut => continue,
+            Err(e) => {
+                let _ = child.kill();
+                join_readers(stdout_thread, stderr_thread);
+                return Err(format!("Failed to wait for process: {}", e));
+            }
+        }
+    };
+
+    join_readers(stdout_thread, stderr_thread);
+    let stdout = stdout_buf.lock().map(|g| g.clone()).unwrap_or_default();
+    let stderr = stderr_buf.lock().map(|g| g.clone()).unwrap_or_default();
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+/// FFglitch (mosh_cli.py, which itself shells out to ffgac/ffedit/ffmpeg
+/// across multiple passes) has no built-in bound on how long it can run.
+/// Without `run_cancellable`'s poll loop, a hung/stuck run could not be
+/// cancelled (via `cancel`, the same `AtomicBool` `cancel_export` sets --
+/// reused here so the one Cancel button in the UI works for both real
+/// export and FFglitch) or force-killed after an overall timeout -- the
+/// same "await that can never resolve" defect class as the mask-texture
+/// freeze already fixed, plus a Cancel button with no actual path to the
+/// subprocess it claimed to cancel.
+fn run_ffglitch_subprocess(
+    python: &str,
+    mosh_cli: &Path,
+    temp_config_path: &str,
+    ffgac: &str,
+    ffedit: &str,
+    ffmpeg: &str,
+    cancel: &AtomicBool,
+) -> std::result::Result<std::process::Output, String> {
+    // Generous: raw-frame extraction plus two ffglitch passes plus re-encode
+    // can legitimately take a while on a long/high-res clip. Doubled versus
+    // the export path's own ENCODE_TIMEOUT (1800s) since FFglitch does more
+    // total subprocess work per clip than a single ffmpeg encode.
+    const FFGLITCH_TIMEOUT: Duration = Duration::from_secs(3600);
+    const POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+    run_cancellable(
+        Command::new(python)
+            .arg(mosh_cli)
+            .arg(temp_config_path)
+            .env("MOSHDITHER_FFGAC_PATH", ffgac)
+            .env("MOSHDITHER_FFEDIT_PATH", ffedit)
+            .env("MOSHDITHER_FFMPEG_PATH", ffmpeg),
+        cancel,
+        FFGLITCH_TIMEOUT,
+        POLL_INTERVAL,
+    )
+    .map_err(|e| format!("FFglitch: {e}"))
+}
+
 /// Apply an FFglitch datamoshing effect by delegating to the Python mosh_cli.py.
 #[tauri::command]
 pub async fn apply_ffglitch(
+    state: State<'_, AppState>,
     input_path: String,
     output_path: String,
     mode: String,
@@ -2177,28 +2316,28 @@ pub async fn apply_ffglitch(
     ));
     std::fs::write(&temp_config, config.to_string()).map_err(|e| e.to_string())?;
 
+    // Mirror export_video's own cancel-flag protocol (this file, ~line 617):
+    // reset before starting so a stale `true` left over from a previously
+    // cancelled operation can't immediately abort this new one.
+    let cancel = state.export_cancel.clone();
+    cancel.store(false, Ordering::Relaxed);
+
     // Run the blocking Python process on a spawn_blocking task to avoid
     // blocking the Tauri async runtime (which can cause command timeouts
     // and leave 0-byte output files).
     let temp_config_path = temp_config.to_string_lossy().to_string();
     let output_path_clone = output_path.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let child = Command::new(&python)
-            .arg(&mosh_cli)
-            .arg(&temp_config_path)
-            .env("MOSHDITHER_FFGAC_PATH", &ffgac)
-            .env("MOSHDITHER_FFEDIT_PATH", &ffedit)
-            .env("MOSHDITHER_FFMPEG_PATH", &ffmpeg)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("Failed to spawn mosh_cli.py: {}", e))?;
-
-        let output = child
-            .wait_with_output()
-            .map_err(|e| format!("Failed to wait for mosh_cli.py: {}", e))?;
-
-        Ok::<_, String>((output, output_path_clone))
+        run_ffglitch_subprocess(
+            &python,
+            &mosh_cli,
+            &temp_config_path,
+            &ffgac,
+            &ffedit,
+            &ffmpeg,
+            &cancel,
+        )
+        .map(|output| (output, output_path_clone))
     })
     .await
     .map_err(|e| format!("Task failed: {}", e))?;
@@ -2357,5 +2496,123 @@ mod project_path_tests {
     #[test]
     fn rejects_unc_project_paths() {
         assert!(validate_project_path(r"\\attacker\share\project.json", true).is_err());
+    }
+}
+
+#[cfg(test)]
+mod run_cancellable_tests {
+    use super::*;
+
+    // A short, reliable "hang" for exactly `secs` seconds, without depending
+    // on a shell interactively (avoids `timeout`'s console-attachment quirk
+    // on Windows). `ping` is present on every Windows install by default;
+    // `sleep` is present on every Linux CI image (this project's `cargo
+    // test` runs on ubuntu-latest) and macOS.
+    fn hang_command(secs: u32) -> Command {
+        #[cfg(target_os = "windows")]
+        {
+            let mut cmd = Command::new("ping");
+            cmd.args(["-n", &(secs + 1).to_string(), "127.0.0.1"]);
+            cmd
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let mut cmd = Command::new("sleep");
+            cmd.arg(secs.to_string());
+            cmd
+        }
+    }
+
+    fn fast_command() -> Command {
+        #[cfg(target_os = "windows")]
+        {
+            let mut c = Command::new("cmd");
+            c.args(["/C", "echo hello"]);
+            c
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let mut c = Command::new("echo");
+            c.arg("hello");
+            c
+        }
+    }
+
+    #[test]
+    fn returns_output_for_a_command_that_finishes_quickly() {
+        let cancel = AtomicBool::new(false);
+        let mut cmd = fast_command();
+        let output = run_cancellable(
+            &mut cmd,
+            &cancel,
+            Duration::from_secs(10),
+            Duration::from_millis(50),
+        )
+        .expect("a fast, well-behaved command should succeed");
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("hello"));
+    }
+
+    #[test]
+    fn kills_a_hung_process_on_timeout_instead_of_blocking_forever() {
+        // This is the exact defect class the FFglitch fix closes: without a
+        // bound, a hung subprocess left the awaiting Tauri command's promise
+        // unresolved forever (the same "stuck at ~0% CPU, looks frozen,
+        // isn't a crash" signature diagnosed for the mask-texture bug).
+        let cancel = AtomicBool::new(false);
+        let mut cmd = hang_command(30);
+        let started = std::time::Instant::now();
+        let result = run_cancellable(
+            &mut cmd,
+            &cancel,
+            Duration::from_secs(1),
+            Duration::from_millis(50),
+        );
+        let elapsed = started.elapsed();
+
+        assert!(
+            result.is_err(),
+            "a hung process must error, not hang the caller"
+        );
+        assert!(result.unwrap_err().contains("timed out"));
+        assert!(
+            elapsed < std::time::Duration::from_secs(20),
+            "expected the timeout path to return well before the process's own 30s runtime, took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn stops_a_running_process_when_cancel_flag_is_set() {
+        // This is the other half of the FFglitch fix: the Cancel button used
+        // to only reset local UI state while the subprocess kept running
+        // untouched. Confirms flipping the same AtomicBool cancel_export
+        // sets actually stops an in-progress run, well before its own
+        // timeout or natural completion.
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_setter = Arc::clone(&cancel);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            cancel_setter.store(true, Ordering::Relaxed);
+        });
+
+        let mut cmd = hang_command(30);
+        let started = std::time::Instant::now();
+        let result = run_cancellable(
+            &mut cmd,
+            &cancel,
+            Duration::from_secs(30),
+            Duration::from_millis(50),
+        );
+        let elapsed = started.elapsed();
+
+        assert!(
+            result.is_err(),
+            "a cancelled process must error, not hang the caller"
+        );
+        assert!(result.unwrap_err().contains("Cancelled"));
+        assert!(
+            elapsed < std::time::Duration::from_secs(20),
+            "expected cancellation to stop the process well before its own 30s runtime, took {elapsed:?}"
+        );
     }
 }

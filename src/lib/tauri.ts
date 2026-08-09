@@ -403,6 +403,15 @@ export async function applyFfglitch(
   });
 }
 
+/** Request cancellation of an in-progress export (real export or FFglitch --
+ *  both check the same server-side AtomicBool). Without this, the Cancel
+ *  button only reset local UI state (progress bar, running flag) while the
+ *  actual ffmpeg/mosh_cli.py subprocess kept running untouched in the
+ *  background -- purely cosmetic cancellation. */
+export async function cancelExport(): Promise<void> {
+  return invoke("cancel_export");
+}
+
 // ── Effect Verification ──────────────────────────────────────
 
 export interface VerificationChecks {

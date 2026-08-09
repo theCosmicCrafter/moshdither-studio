@@ -14,9 +14,16 @@ export const tauriMockWithMediaScript = `
 
   const tinyPng = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
+  // Bayer's own matrix_size parameter, given real definitions so tests can
+  // actually drive a parameter change through the UI (rather than just
+  // checking that some slider/input exists somewhere on the page).
+  const bayerParameters = [
+    { id: "matrix_size", name: "Matrix Size", type: "select", default: 0, options: ["2", "4", "8", "16"] },
+  ];
+
   const mockResponses = {
     list_effects: [
-      { id: "dithering.bayer", name: "Bayer Dither", category: "dithering", media_type: "image", parameters: [] },
+      { id: "dithering.bayer", name: "Bayer Dither", category: "dithering", media_type: "image", parameters: bayerParameters },
       { id: "dithering.floyd_steinberg", name: "Floyd-Steinberg", category: "dithering", media_type: "image", parameters: [] },
       { id: "analog.vhs", name: "VHS", category: "analog", media_type: "video", parameters: [] },
       { id: "glitch.slice_shift", name: "Slice Shift", category: "glitch", media_type: "video", parameters: [] },
@@ -24,7 +31,7 @@ export const tauriMockWithMediaScript = `
     ],
     list_effects_by_category: (args) => {
       const all = [
-        { id: "dithering.bayer", name: "Bayer Dither", category: "dithering", media_type: "image", parameters: [] },
+        { id: "dithering.bayer", name: "Bayer Dither", category: "dithering", media_type: "image", parameters: bayerParameters },
         { id: "dithering.floyd_steinberg", name: "Floyd-Steinberg", category: "dithering", media_type: "image", parameters: [] },
       ];
       return all.filter(e => e.category === args.category);

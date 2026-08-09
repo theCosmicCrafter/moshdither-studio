@@ -55,7 +55,18 @@ def _run(args):
        pointing at the wrong step. Checking here means the failure is reported
        where it happens, with the command and the tool's own stderr.
     """
-    result = subprocess.run(args, capture_output=True, text=True, check=False)
+    # timeout: this whole script is given an overall bound and cancellation by
+    # the Rust host (apply_ffglitch/run_ffglitch_subprocess in
+    # src-tauri/src/commands.rs), which kills the Python process if it hangs
+    # -- but killing that parent does not, on Windows, kill an already-spawned
+    # ffgac/ffedit child on its own. A per-call timeout here lets
+    # subprocess.run's own kill logic clean up that specific child
+    # immediately instead of leaving it orphaned.
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, check=False, timeout=1200)
+    except subprocess.TimeoutExpired as e:
+        tool = os.path.basename(str(args[0]))
+        raise RuntimeError(f"{tool} timed out after {e.timeout}s: {' '.join(str(a) for a in args)}") from e
     if result.returncode != 0:
         tool = os.path.basename(str(args[0]))
         raise RuntimeError(
