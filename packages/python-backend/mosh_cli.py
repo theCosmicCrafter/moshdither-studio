@@ -58,8 +58,7 @@ def ffmpeg_convert(input_path, output_path, extra_args=None):
     cmd = [ffmpeg_path, "-y", "-i", input_path] + extra_args + [output_path]
     print(f"Running ffmpeg: {cmd}")
     # List form with shell=False cannot inject, and the executable is validated
-    # above. The marker must sit on the line immediately before the call.
-    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+    # above.
     #
     # timeout: this whole script is itself given an overall bound and
     # cancellation by the Rust host (see apply_ffglitch/run_ffglitch_subprocess
@@ -68,6 +67,9 @@ def ffmpeg_convert(input_path, output_path, extra_args=None):
     # ffmpeg child on its own. A per-call timeout here lets subprocess.run's
     # own kill logic clean up that specific child immediately, rather than
     # leaving it orphaned until the whole process tree is eventually reaped.
+    #
+    # The marker must sit on the line immediately before the call.
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
     except subprocess.TimeoutExpired as e:
