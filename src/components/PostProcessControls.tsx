@@ -52,7 +52,7 @@ export default function PostProcessControls({
               onChange={(e) => setPpGrow(parseInt(e.target.value))}
               className="flex-1 h-1 bg-[var(--surface-2)] rounded-lg appearance-none cursor-pointer"
             />
-            <span className="font-code-sm text-code-sm text-[var(--text-muted)] w-6 text-right">{ppGrow}px</span>
+            <span className="font-code-sm text-code-sm text-[var(--text-muted)] w-8 text-right">{ppGrow}px</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="font-label-sm text-label-sm uppercase text-[var(--text-muted)] w-12">Shrink</span>
@@ -67,7 +67,7 @@ export default function PostProcessControls({
               onChange={(e) => setPpShrink(parseInt(e.target.value))}
               className="flex-1 h-1 bg-[var(--surface-2)] rounded-lg appearance-none cursor-pointer"
             />
-            <span className="font-code-sm text-code-sm text-[var(--text-muted)] w-6 text-right">{ppShrink}px</span>
+            <span className="font-code-sm text-code-sm text-[var(--text-muted)] w-8 text-right">{ppShrink}px</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="font-label-sm text-label-sm uppercase text-[var(--text-muted)] w-12">Feather</span>
@@ -82,7 +82,7 @@ export default function PostProcessControls({
               onChange={(e) => setPpFeather(parseInt(e.target.value))}
               className="flex-1 h-1 bg-[var(--surface-2)] rounded-lg appearance-none cursor-pointer"
             />
-            <span className="font-code-sm text-code-sm text-[var(--text-muted)] w-6 text-right">{ppFeather}px</span>
+            <span className="font-code-sm text-code-sm text-[var(--text-muted)] w-8 text-right">{ppFeather}px</span>
           </div>
           <label className="flex items-center gap-2 cursor-pointer">
             <input
