@@ -28,7 +28,7 @@ export default function CategoryTabs() {
           <button
             key={cat.id}
             onClick={() => setActiveCategory(cat.id)}
-            className={`relative px-2.5 py-1 rounded-md text-label-sm font-label-sm transition-all duration-300 ${isActive ? "neo-pressed" : "neo-btn"}`}
+            className={`relative px-2.5 py-1 rounded-md text-label-md font-label-md transition-all duration-300 ${isActive ? "neo-pressed" : "neo-btn"}`}
             style={{
               color: isActive ? cat.color : undefined,
             }}

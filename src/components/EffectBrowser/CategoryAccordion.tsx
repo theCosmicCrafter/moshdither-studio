@@ -127,7 +127,7 @@ export default function CategoryAccordion() {
             {isExpanded && (
               <div className="px-2 pb-2 space-y-1.5">
                 {effects.length === 0 ? (
-                  <div className="text-center py-4 text-label-sm font-label-sm text-on-surface-variant opacity-50">
+                  <div className="text-center py-4 font-body-sm text-body-sm text-on-surface-variant opacity-50">
                     No effects found
                   </div>
                 ) : (

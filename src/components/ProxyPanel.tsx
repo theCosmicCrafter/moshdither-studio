@@ -36,7 +36,7 @@ export default function ProxyPanel() {
 
   return (
     <div className="flex flex-col gap-2 p-2">
-      <label className="flex items-center gap-2 font-label-sm text-label-sm text-on-surface-variant">
+      <label className="flex items-center gap-2 font-label-md text-label-md text-on-surface-variant">
         <input
           type="checkbox"
           checked={proxyEnabled}
@@ -47,7 +47,7 @@ export default function ProxyPanel() {
       </label>
 
       <div className="flex flex-col gap-1">
-        <label className="font-label-sm text-label-sm text-on-surface-variant">
+        <label className="font-label-md text-label-md text-on-surface-variant">
           Max Width: {proxyMaxWidth}px
         </label>
         <input
@@ -62,7 +62,7 @@ export default function ProxyPanel() {
       </div>
 
       <div className="flex flex-col gap-1">
-        <label className="font-label-sm text-label-sm text-on-surface-variant">
+        <label className="font-label-md text-label-md text-on-surface-variant">
           Quality (CRF): {proxyCrf}
         </label>
         <input
@@ -79,13 +79,13 @@ export default function ProxyPanel() {
       <button
         onClick={handleGenerate}
         disabled={proxyGenerating || !filePath}
-        className="neo-btn rounded-md px-3 py-1.5 font-label-sm text-label-sm text-accent-cyan hover:text-accent-pink transition-colors disabled:opacity-50"
+        className="neo-btn rounded-md px-3 py-1.5 font-label-md text-label-md text-accent-cyan hover:text-accent-pink transition-colors disabled:opacity-50"
       >
         {proxyGenerating ? "Generating..." : "Generate Proxy"}
       </button>
 
       {proxyPath && (
-        <div className="font-label-sm text-label-sm text-on-surface-variant truncate">
+        <div className="font-code-sm text-code-sm text-on-surface-variant truncate">
           Proxy: {proxyPath.split(/[\\/]/).pop()}
         </div>
       )}

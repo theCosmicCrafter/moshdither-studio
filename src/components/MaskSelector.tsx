@@ -19,7 +19,7 @@ export default function MaskSelector({ masks, scores, selectedIndex, onSelect }:
         className="flex items-center gap-2 w-full py-1 px-2 rounded bg-[var(--surface-1)] hover:bg-[var(--surface-2)] transition-colors"
       >
         <span className="material-symbols-outlined text-[var(--accent)]" style={{ fontSize: 12 }}>layers</span>
-        <span className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] flex-1 text-left">
+        <span className="font-label-sm text-label-sm uppercase text-[var(--text-muted)] flex-1 text-left">
           Mask Candidates ({masks.length})
         </span>
         <span
@@ -58,7 +58,7 @@ export default function MaskSelector({ masks, scores, selectedIndex, onSelect }:
                 <span className="text-[11px] font-semibold text-[var(--text-primary)]">
                   Mask #{i + 1}
                 </span>
-                <span className="text-[9px] font-mono text-[var(--text-muted)]">
+                <span className="font-code-sm text-code-sm text-[var(--text-muted)]">
                   Score: {scores[i]?.toFixed(3) ?? "?"}
                 </span>
               </div>

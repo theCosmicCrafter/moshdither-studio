@@ -34,7 +34,7 @@ export default function StatusBar() {
 
   return (
     <div
-      className="flex items-center justify-between px-3 h-7 flex-shrink-0 text-code-sm font-code-sm neo-flat rounded-lg mx-1 mb-1 bg-surface/80 backdrop-blur-xl text-on-surface-variant"
+      className="flex items-center justify-between px-3 h-7 flex-shrink-0 font-body-sm text-body-sm neo-flat rounded-lg mx-1 mb-1 bg-surface/80 backdrop-blur-xl text-on-surface-variant"
     >
       <div className="flex items-center gap-2">
         {isProcessing ? (

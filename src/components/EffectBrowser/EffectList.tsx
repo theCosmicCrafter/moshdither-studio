@@ -41,7 +41,7 @@ export default function EffectList() {
   return (
     <div className="flex-1 overflow-y-auto custom-scrollbar px-2 py-2 space-y-1.5">
       {effects.length === 0 && (
-        <div className="text-center py-8 text-label-sm font-label-sm text-on-surface-variant opacity-50">
+        <div className="text-center py-8 font-body-sm text-body-sm text-on-surface-variant opacity-50">
           <span className="material-symbols-outlined mx-auto mb-2 opacity-30 block" style={{ fontSize: 24 }}>
             layers
           </span>

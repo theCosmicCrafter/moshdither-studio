@@ -66,7 +66,7 @@ export default function LUTPanel() {
       <div className="px-2 pt-2">
         <button
           onClick={handleCustom}
-          className="w-full text-left px-3 py-2 rounded-lg font-body-sm text-body-sm text-on-surface hover:bg-surface/60 hover:text-accent-teal transition-colors active:scale-[0.98] duration-100 border border-outline-variant/10 flex items-center gap-2"
+          className="w-full text-left px-3 py-2 rounded-lg font-label-md text-label-md text-on-surface hover:bg-surface/60 hover:text-accent-teal transition-colors active:scale-[0.98] duration-100 border border-outline-variant/10 flex items-center gap-2"
           title="Load a custom .png or .cube LUT"
         >
           <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
@@ -74,7 +74,7 @@ export default function LUTPanel() {
           </span>
           Load Custom LUT…
         </button>
-        <p className="mt-2 px-1 text-label-sm text-on-surface-variant opacity-70 leading-relaxed">
+        <p className="mt-2 px-1 font-body-sm text-body-sm text-on-surface-variant opacity-70 leading-relaxed">
           Click above to import a custom LUT. Supports 512×512 PNG LUTs and standard
           Adobe / Resolve .cube 3D LUTs. Bundled presets live in{" "}
           <code className="bg-surface/40 px-1 rounded">public/lut/</code> for dev builds
@@ -89,7 +89,7 @@ export default function LUTPanel() {
           <button
             key={preset.url}
             onClick={() => handleApply(preset.url, preset.name)}
-            className="w-full text-left px-3 py-2 rounded-lg font-body-sm text-body-sm text-on-surface hover:bg-surface/60 hover:text-accent-teal transition-colors active:scale-[0.98] duration-100 border border-outline-variant/10"
+            className="w-full text-left px-3 py-2 rounded-lg font-label-md text-label-md text-on-surface hover:bg-surface/60 hover:text-accent-teal transition-colors active:scale-[0.98] duration-100 border border-outline-variant/10"
             title={preset.name}
           >
             {preset.name}

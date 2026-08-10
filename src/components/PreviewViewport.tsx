@@ -32,7 +32,7 @@ function AudioWaveform() {
   if (Object.keys(audioBandEnergies).length === 0) return null;
   return (
     <div className="absolute bottom-10 left-1/2 -translate-x-1/2 w-1/2 h-20 neo-panel rounded-lg bg-surface/80 backdrop-blur-md p-3 flex flex-col justify-end z-50 border border-accent-teal/20 pointer-events-none">
-      <div className="text-[8px] font-label-sm text-accent-teal/70 absolute top-2 left-2 uppercase">Audio/Pixel Intensity</div>
+      <div className="text-data-micro font-data-micro text-accent-teal/70 absolute top-2 left-2 uppercase">Audio/Pixel Intensity</div>
       <AudioVisualizer className="h-full pt-4" />
     </div>
   );
@@ -1222,7 +1222,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
               ))}
             </div>
             {mediaInfo && (
-              <span className="text-label-sm font-label-sm text-accent-teal neo-flat px-3 py-1 rounded-full cursor-default hover:border-accent-teal/30 transition-colors">
+              <span className="text-code-sm font-code-sm text-accent-teal neo-flat px-3 py-1 rounded-full cursor-default hover:border-accent-teal/30 transition-colors">
                 {mediaInfo.width} x {mediaInfo.height}
               </span>
             )}
@@ -1350,7 +1350,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
                       <span className="material-symbols-outlined mi-sm text-black">center_focus_strong</span>
                     </div>
                   </button>
-                  <div className="absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded split-label">
+                  <div className="absolute top-2 left-2 font-label-sm text-label-sm px-2 py-0.5 rounded split-label">
                     BEFORE
                   </div>
                   <div className="absolute top-2 right-2 text-[10px] font-bold px-2 py-0.5 rounded split-label-after">
@@ -1427,7 +1427,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       {/* Bottom Info */}
       {mediaInfo && (
         <div
-          className="flex items-center justify-between px-3 h-7 flex-shrink-0 text-[11px] info-bar"
+          className="flex items-center justify-between px-3 h-7 flex-shrink-0 font-code-sm text-code-sm info-bar"
         >
           <div className="flex items-center gap-3">
             <span>

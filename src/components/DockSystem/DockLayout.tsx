@@ -62,7 +62,7 @@ export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) 
       const Component = panelMeta.component;
       return (
         <div className="w-full h-full overflow-hidden" style={{ ["--panel-opacity" as string]: panelOpacity }}>
-          <Suspense fallback={<div className="p-4 text-xs text-on-surface-variant">Loading...</div>}>
+          <Suspense fallback={<div className="p-4 font-body-sm text-body-sm text-on-surface-variant">Loading...</div>}>
             <Component />
           </Suspense>
         </div>
