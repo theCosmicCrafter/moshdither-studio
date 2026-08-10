@@ -65,11 +65,11 @@ export default function OnboardingModal() {
         </h2>
         <p
           id="onboarding-description"
-          className="m-0 font-body-md text-on-surface-variant leading-relaxed"
+          className="m-0 font-body-md text-body-md text-on-surface-variant leading-relaxed"
         >
           A professional datamoshing and dithering studio built for artists and creators.
         </p>
-        <ul className="m-0 pl-5 font-body-sm text-on-surface-variant leading-loose list-disc">
+        <ul className="m-0 pl-5 font-body-sm text-body-sm text-on-surface-variant leading-loose list-disc">
           <li>Import images or videos to start</li>
           <li>Add and stack effects in the Layers panel</li>
           <li>Use blend modes and opacity for fine control</li>
