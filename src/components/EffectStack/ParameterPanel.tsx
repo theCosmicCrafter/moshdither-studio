@@ -89,7 +89,7 @@ function ParameterWheel({
           style={{ transform: `rotate(${angle}deg)`, boxShadow: "0 0 8px #ffade0" }}
         />
         <div className="w-6 h-6 rounded-full neo-pressed flex items-center justify-center">
-          <span className="font-code-sm text-code-sm text-accent-teal">{value.toFixed(0)}</span>
+          <span className="font-data-micro text-data-micro text-accent-teal">{value.toFixed(0)}</span>
         </div>
       </div>
     </div>
