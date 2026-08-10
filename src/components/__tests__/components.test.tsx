@@ -101,6 +101,7 @@ vi.mock("../../lib/tauri", () => ({
   applyEffectStack: vi.fn(() => Promise.resolve("data:image/png;base64,abc")),
   applyFfglitch: vi.fn(() => Promise.resolve("/output/path.mp4")),
   exportVideo: vi.fn(() => Promise.resolve("/output/path.mp4")),
+  cancelExport: vi.fn(() => Promise.resolve()),
   verifyEffects: vi.fn(() => Promise.resolve({
     total_effects: 2,
     passed: 1,

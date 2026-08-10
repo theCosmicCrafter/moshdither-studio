@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useAppStore } from "../../store";
-import { exportVideo, applyFfglitch } from "../../lib/tauri";
+import { exportVideo, applyFfglitch, cancelExport } from "../../lib/tauri";
 import { stackToRustPayload } from "../../utils/effectConverter";
 import { useBatchQueue } from "../../hooks/useBatchQueue";
 import type { WatermarkSettings } from "../../utils/watermark";
@@ -212,6 +212,13 @@ export default function ExportPanel() {
 
   const handleCancel = () => {
     requestExportCancel();
+    // requestExportCancel() only resets local UI state (progress bar,
+    // running flag) -- it never told the backend anything. Without this
+    // call, the actual ffmpeg/mosh_cli.py subprocess kept running untouched
+    // after the UI already claimed the export was cancelled.
+    void cancelExport().catch((err) => {
+      console.error("Failed to cancel export on the backend:", err);
+    });
     if (progressTimerRef.current) {
       clearInterval(progressTimerRef.current);
       progressTimerRef.current = null;

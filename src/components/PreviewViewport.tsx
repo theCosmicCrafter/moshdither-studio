@@ -148,10 +148,6 @@ function PreviewViewport({ isDropTarget = false }: Props) {
   );
 
   // Heavy signature computation is memoised against the (immutable) effect stack.
-  const stackSignature = useMemo(
-    () => effectStack.map((e) => `${e.id}:${e.enabled}`).join("|"),
-    [effectStack]
-  );
   const cpuRenderSignature = useMemo(
     () =>
       effectStack
@@ -922,9 +918,9 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     // (dithering, color, pixel geometry) are static: identical output every
     // frame for an unchanging image, so looping forever bought nothing but a
     // perpetual 60fps GPU render call -- real, measurable cost for zero
-    // visual benefit. The shader set only changes when stackSignature changes
-    // (this effect's own dependency), so it's safe to snapshot once here
-    // rather than recompute per frame inside the loop below.
+    // visual benefit. The shader set only changes when cpuRenderSignature
+    // changes (this effect's own dependency), so it's safe to snapshot once
+    // here rather than recompute per frame inside the loop below.
     const snapshotState = useAppStore.getState();
     const snapshotPasses = stackToRenderPasses(
       snapshotState.effectStack,
@@ -965,7 +961,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     };
   }, [
     originalDataUrl,
-    stackSignature,
+    cpuRenderSignature,
     mediaInfo,
     audioEnabled,
     isPlaying,
