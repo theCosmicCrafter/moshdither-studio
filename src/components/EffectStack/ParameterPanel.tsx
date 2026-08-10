@@ -223,7 +223,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                     placeholder="0"
                     onChange={(e) => updateStackParams(entry.id, { [param.id]: parseFloat(e.target.value) || 0 })}
                     className="param-readout bg-transparent border-b border-[var(--border-secondary)] px-1 w-12 text-right outline-none focus:border-[var(--accent)]"
-                    style={{ fontFamily: "var(--font-mono)", color: "var(--text-primary)" }}
+                    style={{ color: "var(--text-primary)" }}
                   />
                 ) : (
                   <span className="param-readout">{String(value)}</span>

@@ -260,7 +260,7 @@ export default function MaskPanel() {
         </button>
         <button
           onClick={() => setMaskTab("manual")}
-          className={`flex-1 py-1 px-2 text-[10px] uppercase tracking-wider rounded transition-colors ${
+          className={`flex-1 py-1 px-2 font-label-md text-label-md uppercase rounded transition-colors ${
             maskTab === "manual"
               ? "bg-accent text-black font-semibold"
               : "bg-surface-container text-on-surface-variant hover:text-on-surface"
@@ -313,7 +313,7 @@ export default function MaskPanel() {
               <button
                 onClick={handleAutoMask}
                 disabled={isLoading}
-                className="flex-1 px-3 py-1.5 rounded bg-[var(--accent)] text-black font-semibold text-xs uppercase tracking-wider hover:brightness-110 transition-all disabled:opacity-50 flex items-center justify-center gap-1"
+                className="flex-1 px-3 py-1.5 rounded bg-[var(--accent)] text-black font-label-md text-label-md uppercase hover:brightness-110 transition-all disabled:opacity-50 flex items-center justify-center gap-1"
               >
                 <span className="material-symbols-outlined" style={{ fontSize: 12 }}>auto_awesome</span>
                 {isLoading ? "Starting..." : "Start SAM3 & Auto Mask"}
@@ -336,7 +336,7 @@ export default function MaskPanel() {
             <select
               value={sam3Mode}
               onChange={(e) => setSam3Mode(e.target.value as "text" | "point" | "box" | "auto")}
-              className="themed-select px-2 py-1.5 text-xs"
+              className="themed-select px-2 py-1.5 font-label-md text-label-md"
             >
               <option value="text">Text</option>
               <option value="point">Point</option>
@@ -351,14 +351,14 @@ export default function MaskPanel() {
                 Click image to add points
               </span>
             ) : sam3Mode === "box" ? (
-              <span className="flex-1 text-[11px] text-[var(--text-muted)] flex items-center">
+              <span className="flex-1 font-body-sm text-body-sm text-[var(--text-muted)] flex items-center">
                 Drag on image to draw box
               </span>
             ) : (
               <button
                 onClick={handleAutoMask}
                 disabled={isLoading}
-                className="flex-1 px-3 py-1.5 rounded bg-[var(--accent)] text-black font-semibold text-xs uppercase tracking-wider hover:brightness-110 transition-all disabled:opacity-50 flex items-center justify-center gap-1"
+                className="flex-1 px-3 py-1.5 rounded bg-[var(--accent)] text-black font-label-md text-label-md uppercase hover:brightness-110 transition-all disabled:opacity-50 flex items-center justify-center gap-1"
               >
                 <span className="material-symbols-outlined" style={{ fontSize: 12 }}>auto_awesome</span>
                 {isLoading ? "Running..." : "Auto Mask"}
@@ -430,7 +430,7 @@ export default function MaskPanel() {
                 </span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] min-w-[50px]">
+                <span className="font-label-sm text-label-sm uppercase text-[var(--text-muted)] min-w-[50px]">
                   Tint
                 </span>
                 <input
@@ -515,7 +515,7 @@ const TextPromptInput = memo(function TextPromptInput({
       <button
         onClick={handleSubmit}
         disabled={isLoading || !prompt.trim()}
-        className="px-3 py-1.5 rounded bg-[var(--accent)] text-black font-semibold text-xs uppercase tracking-wider hover:brightness-110 transition-all disabled:opacity-50"
+        className="px-3 py-1.5 rounded bg-[var(--accent)] text-black font-label-md text-label-md uppercase hover:brightness-110 transition-all disabled:opacity-50"
       >
         {isLoading ? "..." : "Go"}
       </button>

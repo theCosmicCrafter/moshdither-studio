@@ -87,7 +87,7 @@ export default function PanelMenu() {
                   useAppStore.getState().triggerLayoutAction("remove", p.id);
                 });
               }}
-              className="text-[10px] text-on-surface-variant hover:text-accent-pink transition-colors"
+              className="font-label-md text-label-md text-on-surface-variant hover:text-accent-pink transition-colors"
             >
               Hide All
             </button>

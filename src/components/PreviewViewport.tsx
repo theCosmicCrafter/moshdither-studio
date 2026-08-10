@@ -1353,7 +1353,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
                   <div className="absolute top-2 left-2 font-label-sm text-label-sm px-2 py-0.5 rounded split-label">
                     BEFORE
                   </div>
-                  <div className="absolute top-2 right-2 text-[10px] font-bold px-2 py-0.5 rounded split-label-after">
+                  <div className="absolute top-2 right-2 font-label-sm text-label-sm px-2 py-0.5 rounded split-label-after">
                     AFTER
                   </div>
                 </>
