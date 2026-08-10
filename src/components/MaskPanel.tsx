@@ -304,7 +304,7 @@ export default function MaskPanel() {
               <button
                 onClick={ensureSam3Ready}
                 disabled={isLoading}
-                className="flex-1 px-3 py-1.5 rounded bg-[var(--accent)] text-black font-label-md text-label-md uppercase hover:brightness-110 transition-all disabled:opacity-50 flex items-center justify-center gap-1"
+                className="flex-1 px-3 py-1.5 rounded bg-[var(--accent)] text-black font-label-md text-label-md font-semibold uppercase hover:brightness-110 transition-all disabled:opacity-50 flex items-center justify-center gap-1"
               >
                 <span className="material-symbols-outlined" style={{ fontSize: 12 }}>auto_awesome</span>
                 {isLoading ? "Starting..." : "Start SAM3"}
@@ -313,7 +313,7 @@ export default function MaskPanel() {
               <button
                 onClick={handleAutoMask}
                 disabled={isLoading}
-                className="flex-1 px-3 py-1.5 rounded bg-[var(--accent)] text-black font-label-md text-label-md uppercase hover:brightness-110 transition-all disabled:opacity-50 flex items-center justify-center gap-1"
+                className="flex-1 px-3 py-1.5 rounded bg-[var(--accent)] text-black font-label-md text-label-md font-semibold uppercase hover:brightness-110 transition-all disabled:opacity-50 flex items-center justify-center gap-1"
               >
                 <span className="material-symbols-outlined" style={{ fontSize: 12 }}>auto_awesome</span>
                 {isLoading ? "Starting..." : "Start SAM3 & Auto Mask"}
@@ -358,7 +358,7 @@ export default function MaskPanel() {
               <button
                 onClick={handleAutoMask}
                 disabled={isLoading}
-                className="flex-1 px-3 py-1.5 rounded bg-[var(--accent)] text-black font-label-md text-label-md uppercase hover:brightness-110 transition-all disabled:opacity-50 flex items-center justify-center gap-1"
+                className="flex-1 px-3 py-1.5 rounded bg-[var(--accent)] text-black font-label-md text-label-md font-semibold uppercase hover:brightness-110 transition-all disabled:opacity-50 flex items-center justify-center gap-1"
               >
                 <span className="material-symbols-outlined" style={{ fontSize: 12 }}>auto_awesome</span>
                 {isLoading ? "Running..." : "Auto Mask"}
@@ -515,7 +515,7 @@ const TextPromptInput = memo(function TextPromptInput({
       <button
         onClick={handleSubmit}
         disabled={isLoading || !prompt.trim()}
-        className="px-3 py-1.5 rounded bg-[var(--accent)] text-black font-label-md text-label-md uppercase hover:brightness-110 transition-all disabled:opacity-50"
+        className="px-3 py-1.5 rounded bg-[var(--accent)] text-black font-label-md text-label-md font-semibold uppercase hover:brightness-110 transition-all disabled:opacity-50"
       >
         {isLoading ? "..." : "Go"}
       </button>
