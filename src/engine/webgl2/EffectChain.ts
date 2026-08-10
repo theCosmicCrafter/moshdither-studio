@@ -49,6 +49,18 @@ export class EffectChain {
     if (this.gl.isContextLost()) {
       return null;
     }
+    // An empty/missing mask string is not a valid image to load -- and
+    // critically, `img.src = ""` is a well-known browser quirk that often
+    // fires neither onload nor onerror, hanging the promise below forever.
+    // Since the caller awaits this from inside render()'s isRendering-guarded
+    // section, a permanently-hung promise means isRendering never resets to
+    // false, and the animation loop's next tick (and every tick after it)
+    // silently no-ops on the `if (isRendering) return` guard -- the preview
+    // freezes with ~0% CPU, not a crash or a visible error. Treat it as "no
+    // mask" instead of attempting to load it.
+    if (!maskB64) {
+      return null;
+    }
     // LRU touch: re-insert at the tail (most recently used) so the head holds
     // the least recently used entry. Map preserves insertion order in JS.
     const cached = this.maskTextureCache.get(maskB64);
@@ -59,9 +71,23 @@ export class EffectChain {
     }
     const img = new Image();
     img.crossOrigin = "anonymous";
+    // Bounded with a timeout for the same reason: onload/onerror not firing
+    // isn't limited to the empty-string case (a malformed data URL or a
+    // webview quirk can do it too), and any of those must not be able to
+    // hang this promise forever.
     await new Promise<void>((resolve, reject) => {
-      img.onload = () => resolve();
-      img.onerror = reject;
+      const timer = setTimeout(
+        () => reject(new Error(`Mask image failed to load within 5s: ${maskB64.slice(0, 40)}...`)),
+        5000
+      );
+      img.onload = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      img.onerror = () => {
+        clearTimeout(timer);
+        reject(new Error(`Mask image failed to load: ${maskB64.slice(0, 40)}...`));
+      };
       img.src = maskB64;
     });
     const gl = this.gl;

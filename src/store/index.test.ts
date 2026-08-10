@@ -403,6 +403,25 @@ describe("Studio Store", () => {
       expect(useAppStore.getState().sam3Masks).toEqual([]);
     });
 
+    it("setSam3Masks drops empty-string mask candidates instead of setting them as activeMask", () => {
+      // A "" activeMask reaches EffectChain.getMaskTexture, which used to await
+      // an <img> load that never settles for an empty src -- freezing the live
+      // preview. If the first (best-scored) candidate were ever empty, it must
+      // not become activeMask.
+      useAppStore.getState().setSam3Masks(["", "mask-b", ""], [0.9, 0.8, 0.7]);
+      const s = useAppStore.getState();
+      expect(s.sam3Masks).toEqual(["mask-b"]);
+      expect(s.sam3MaskScores).toEqual([0.8]);
+      expect(s.activeMask).toBe("mask-b");
+    });
+
+    it("setSam3Masks falls back to null activeMask when every candidate is empty", () => {
+      useAppStore.getState().setSam3Masks(["", ""], [0.9, 0.8]);
+      const s = useAppStore.getState();
+      expect(s.sam3Masks).toEqual([]);
+      expect(s.activeMask).toBe(null);
+    });
+
     it("setSam3MaskIndex changes index and activeMask", () => {
       const masks = ["mask0", "mask1", "mask2"];
       useAppStore.getState().setSam3Masks(masks, [0.9, 0.8, 0.7]);
