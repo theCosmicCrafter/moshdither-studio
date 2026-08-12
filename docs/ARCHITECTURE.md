@@ -25,9 +25,9 @@ React UI → invoke("process_media", args) → Tauri → Rust command → Effect
 
 ## Effect System
 
-Every feature is an `Effect` trait implementation. Effects are grouped by category in `src/effects/`. The `EffectStack` runs them in order.
+Every feature is an `Effect` trait implementation. Effects are grouped by category in `src-tauri/src/effects/`. The `EffectStack` runs them in order.
 
-See [API.md](API.md) for the trait definition.
+See [API_SPEC.md](API_SPEC.md) for the trait definition.
 
 ## Project File Format
 

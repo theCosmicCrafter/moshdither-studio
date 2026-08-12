@@ -1,8 +1,8 @@
 # Auditing Tools Tasks
 - [x] Tool 1: Create `tools/resource_profiler.py` to monitor RAM/VRAM of the Tauri app and SAM3 Python processes.
 - [x] Tool 2: Create a preset stress-tester script or Playwright test that blasts the UI with state changes to test robustness.
-- [ ] Tool 3: Create a render parity auditor script to compare WebGL vs CPU outputs.
-- [ ] Tool 4: Formalize `scratch/feature_check.py` into `tools/feature_audit.py` and add it to `package.json` scripts.
+- [x] Tool 3: Create a render parity auditor script to compare WebGL vs CPU outputs. (`tools/render_parity_auditor.py`)
+- [x] Tool 4: Formalize `scratch/feature_check.py` into `tools/feature_audit.py` and add it to `package.json` scripts. (wired as `audit:features`)
 
 # CPU Preview Performance Tasks
 - [x] 1. Intermediate Frame Caching: In `src-tauri/src/commands.rs` (or `engine.rs`), cache the intermediate frame buffer between consecutive effects in the stack. If only a later effect changes, reuse the cached buffer from previous effects.
