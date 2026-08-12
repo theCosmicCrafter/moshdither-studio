@@ -92,7 +92,6 @@ vi.mock("../../lib/tauri", () => ({
   sam3PointPrompt: vi.fn(() => Promise.resolve({ count: 1, masks: ["mask1"], scores: [0.9] })),
   sam3BoxPrompt: vi.fn(() => Promise.resolve({ count: 0, masks: [], scores: [] })),
   sam3AutoMask: vi.fn(() => Promise.resolve({ count: 2, masks: ["m1", "m2"], scores: [0.9, 0.8] })),
-  sam3RefineMask: vi.fn(() => Promise.resolve({ status: "ok", count: 1, masks: ["m1"], scores: [0.9] })),
   sam3PostprocessMask: vi.fn(() => Promise.resolve("processed-mask")),
   sam3Clear: vi.fn(() => Promise.resolve("ok")),
   getFrameData: vi.fn(() => Promise.resolve("data:image/png;base64,abc")),
