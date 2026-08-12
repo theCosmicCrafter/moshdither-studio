@@ -2,11 +2,8 @@
 # Pinned to compatible-release specifiers to avoid surprise breakages and
 # supply-chain drift (see architecture review #19).
 
-# Image processing (used by dither_cli.py reference)
+# Image processing (used by tools/render_parity_auditor.py)
 Pillow>=12.2.0,<13
-
-# Terminal UI (used by dither_cli.py reference)
-rich>=13.0.0,<14
 
 # JWT verification for RPC session tokens (AUD-009 hardening)
 PyJWT>=2.8.0,<3
