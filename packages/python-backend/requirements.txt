@@ -5,9 +5,6 @@
 # Image processing (used by tools/render_parity_auditor.py)
 Pillow>=12.2.0,<13
 
-# JWT verification for RPC session tokens (AUD-009 hardening)
-PyJWT>=2.8.0,<3
-
 # SAM 3 (Meta Segment Anything Model 3)
 torch>=2.0.0,<3
 torchvision>=0.15.0,<1
@@ -19,23 +16,8 @@ regex>=2023.0.0
 iopath>=0.1.10,<1
 huggingface_hub>=0.20.0,<1
 
-# GroundingDINO text detection → SAM segmentation
-#
-# KNOWN VULNERABLE: 4.57.6 carries PYSEC-2025-217, PYSEC-2026-2288/2289/2290.
-# Every fix is in transformers 5.x, so clearing them means crossing a major
-# version boundary -- a breaking-change evaluation, not a version bump. Tracked
-# in docs/SECURITY_FINDINGS_2026-07-26.md and suppressed by ID (not blanket) in
-# .pre-commit-config.yaml so any *new* advisory still fails the gate.
-transformers>=4.36.0,<5
-
 # SAM PRO mode post-processing (connected components, morph ops)
 opencv-python>=4.8.0,<5
-
-# Background removal
-# Floor raised to 2.0.75 for PYSEC-2026-2274 / GHSA-55v6-g8pm-pw4c, which
-# required the numpy 2 move above.
-rembg>=2.0.75,<3
-onnxruntime>=1.15.0,<2
 
 # SAM 3 additional runtime deps (not in core pyproject.toml but required at import)
 einops>=0.7.0,<1
