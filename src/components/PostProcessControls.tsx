@@ -1,4 +1,6 @@
 // src/components/PostProcessControls.tsx
+import LabeledSlider from "./LabeledSlider";
+
 interface PostProcessControlsProps {
   ppGrow: number;
   setPpGrow: (v: number) => void;
@@ -39,51 +41,39 @@ export default function PostProcessControls({
 
       {showPostProcess && (
         <div className="flex flex-col gap-2 p-2 rounded bg-[var(--surface-1)]">
-          <div className="flex items-center gap-2">
-            <span className="font-label-sm text-label-sm uppercase text-[var(--text-muted)] w-12">Grow</span>
-            <input
-              type="range"
-              min={0}
-              max={20}
-              step={1}
-              value={ppGrow}
-              aria-label="Grow mask by pixels"
-              title="Grow mask by pixels"
-              onChange={(e) => setPpGrow(parseInt(e.target.value))}
-              className="flex-1 h-1 bg-[var(--surface-2)] rounded-lg appearance-none cursor-pointer"
-            />
-            <span className="font-code-sm text-code-sm text-[var(--text-muted)] w-8 text-right">{ppGrow}px</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="font-label-sm text-label-sm uppercase text-[var(--text-muted)] w-12">Shrink</span>
-            <input
-              type="range"
-              min={0}
-              max={20}
-              step={1}
-              value={ppShrink}
-              aria-label="Shrink mask by pixels"
-              title="Shrink mask by pixels"
-              onChange={(e) => setPpShrink(parseInt(e.target.value))}
-              className="flex-1 h-1 bg-[var(--surface-2)] rounded-lg appearance-none cursor-pointer"
-            />
-            <span className="font-code-sm text-code-sm text-[var(--text-muted)] w-8 text-right">{ppShrink}px</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="font-label-sm text-label-sm uppercase text-[var(--text-muted)] w-12">Feather</span>
-            <input
-              type="range"
-              min={0}
-              max={20}
-              step={1}
-              value={ppFeather}
-              aria-label="Feather mask edge by pixels"
-              title="Feather mask edge by pixels"
-              onChange={(e) => setPpFeather(parseInt(e.target.value))}
-              className="flex-1 h-1 bg-[var(--surface-2)] rounded-lg appearance-none cursor-pointer"
-            />
-            <span className="font-code-sm text-code-sm text-[var(--text-muted)] w-8 text-right">{ppFeather}px</span>
-          </div>
+          <LabeledSlider
+            label="Grow"
+            value={ppGrow}
+            min={0}
+            max={20}
+            step={1}
+            onChange={setPpGrow}
+            ariaLabel="Grow mask by pixels"
+            title="Grow mask by pixels"
+            unit="px"
+          />
+          <LabeledSlider
+            label="Shrink"
+            value={ppShrink}
+            min={0}
+            max={20}
+            step={1}
+            onChange={setPpShrink}
+            ariaLabel="Shrink mask by pixels"
+            title="Shrink mask by pixels"
+            unit="px"
+          />
+          <LabeledSlider
+            label="Feather"
+            value={ppFeather}
+            min={0}
+            max={20}
+            step={1}
+            onChange={setPpFeather}
+            ariaLabel="Feather mask edge by pixels"
+            title="Feather mask edge by pixels"
+            unit="px"
+          />
           <label className="flex items-center gap-2 cursor-pointer">
             <input
               type="checkbox"
