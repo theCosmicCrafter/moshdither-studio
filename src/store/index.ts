@@ -416,6 +416,21 @@ function sanitizeParams(params: Record<string, unknown>): Record<string, unknown
   return out;
 }
 
+/**
+ * Snapshot the current effect stack onto the undo history and clear the
+ * redo stack, for actions that make a new edit. Spread this into a `set()`
+ * return value alongside that action's own state changes. Not used by
+ * `redo()`, which has different semantics: it shifts (not clears)
+ * `futureStacks` and pushes onto `pastStacks` from the *incoming* stack,
+ * not the outgoing one.
+ */
+function pushHistory(state: Pick<AppState, "pastStacks" | "effectStack">) {
+  return {
+    pastStacks: [...state.pastStacks, state.effectStack],
+    futureStacks: [] as StackEntry[][],
+  };
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
   currentTime: 0,
   isPlaying: true,
@@ -564,8 +579,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       maskMode: "inside",
     };
     set((state) => ({
-      pastStacks: [...state.pastStacks, state.effectStack],
-      futureStacks: [],
+      ...pushHistory(state),
       effectStack: [...state.effectStack, entry],
       selectedStackId: entry.id,
     }));
@@ -595,8 +609,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       maskMode: "inside",
     };
     set((s) => ({
-      pastStacks: [...s.pastStacks, s.effectStack],
-      futureStacks: [],
+      ...pushHistory(s),
       effectStack: [...s.effectStack, entry],
       selectedStackId: entry.id,
     }));
@@ -606,8 +619,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => {
       const newStack = state.effectStack.filter((e) => e.id !== id);
       return {
-        pastStacks: [...state.pastStacks, state.effectStack],
-        futureStacks: [],
+        ...pushHistory(state),
         effectStack: newStack,
         selectedStackId:
           state.selectedStackId === id
@@ -618,8 +630,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setEffectStack: (stack) =>
     set((state) => ({
-      pastStacks: [...state.pastStacks, state.effectStack],
-      futureStacks: [],
+      ...pushHistory(state),
       effectStack: stack,
       selectedStackId: stack.length > 0 ? stack[stack.length - 1].id : null,
     })),
@@ -637,16 +648,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       const [item] = arr.splice(fromIndex, 1);
       arr.splice(toIndex, 0, item);
       return {
-        pastStacks: [...state.pastStacks, state.effectStack],
-        futureStacks: [],
+        ...pushHistory(state),
         effectStack: arr,
       };
     }),
 
   updateStackParams: (id, params) =>
     set((state) => ({
-      pastStacks: [...state.pastStacks, state.effectStack],
-      futureStacks: [],
+      ...pushHistory(state),
       effectStack: state.effectStack.map((e) =>
         e.id === id ? { ...e, params: { ...e.params, ...sanitizeParams(params) } } : e
       ),
@@ -670,8 +679,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         maskB64 = state.sam3Masks[idx] ?? null;
       }
       return {
-        pastStacks: [...state.pastStacks, state.effectStack],
-        futureStacks: [],
+        ...pushHistory(state),
         maskRevision: state.maskRevision + 1,
         effectStack: state.effectStack.map((e) => (e.id === id ? { ...e, maskId, maskB64 } : e)),
       };
@@ -679,15 +687,13 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setStackItemMaskMode: (id, mode) =>
     set((state) => ({
-      pastStacks: [...state.pastStacks, state.effectStack],
-      futureStacks: [],
+      ...pushHistory(state),
       effectStack: state.effectStack.map((e) => (e.id === id ? { ...e, maskMode: mode } : e)),
     })),
 
   toggleStackItem: (id) =>
     set((state) => ({
-      pastStacks: [...state.pastStacks, state.effectStack],
-      futureStacks: [],
+      ...pushHistory(state),
       effectStack: state.effectStack.map((e) => (e.id === id ? { ...e, enabled: !e.enabled } : e)),
     })),
 
@@ -754,15 +760,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   setWatermark: (settings) => set((state) => ({ watermark: { ...state.watermark, ...settings } })),
   clearStack: () =>
     set((state) => ({
-      pastStacks: [...state.pastStacks, state.effectStack],
-      futureStacks: [],
+      ...pushHistory(state),
       effectStack: [],
       selectedStackId: null,
     })),
   replaceStack: (stack) =>
     set((state) => ({
-      pastStacks: [...state.pastStacks, state.effectStack],
-      futureStacks: [],
+      ...pushHistory(state),
       effectStack: stack,
       selectedStackId: null,
     })),
