@@ -6,6 +6,28 @@ use serde_json::json;
 /// Custom ordered or error-diffusion matrix loaded from JSON.
 pub struct CustomMatrixDither;
 
+/// Resolve a `matrix` parameter name to its raw (unnormalized) threshold
+/// values. Unlike bayer.rs's `generate_bayer_matrix`, which recursively
+/// computes an NxN matrix, this is a `match` returning small hardcoded
+/// literals -- there is no computation to cache and no `#[allow(dead_code)]`
+/// to remove. Reusing a precomputed field the way bayer.rs does its
+/// `self.matrix` would add an instance field and an interior-mutability
+/// story for zero measurable benefit here. "bayer2"/"bayer4" source their
+/// literals from `bayer_tables`, shared with `palette_dither.rs`, which
+/// hardcoded an identical copy before this extraction.
+fn matrix_for_name(name: &str) -> Vec<Vec<u32>> {
+    use super::bayer_tables::{BAYER_2, BAYER_4};
+    match name {
+        "bayer2" => BAYER_2.iter().map(|r| r.to_vec()).collect(),
+        "bayer4" => BAYER_4.iter().map(|r| r.to_vec()).collect(),
+        "horizontal" => vec![vec![0, 1, 2, 3]],
+        "vertical" => vec![vec![0], vec![1], vec![2], vec![3]],
+        "diagonal" => vec![vec![0, 1], vec![1, 2]],
+        "checker" => vec![vec![0, 1], vec![1, 0]],
+        _ => BAYER_2.iter().map(|r| r.to_vec()).collect(),
+    }
+}
+
 impl Default for CustomMatrixDither {
     fn default() -> Self {
         CustomMatrixDither
@@ -72,26 +94,7 @@ impl Effect for CustomMatrixDither {
             .get("matrix")
             .and_then(|v| v.as_str())
             .unwrap_or("bayer2");
-        // Unlike bayer.rs's `generate_bayer_matrix`, which recursively
-        // computes an NxN matrix, this is a `match` returning a small
-        // hardcoded literal -- there is no computation to cache and no
-        // `#[allow(dead_code)]` to remove. Reusing a precomputed field the
-        // way bayer.rs does its `self.matrix` would add an instance field
-        // and an interior-mutability story for zero measurable benefit here.
-        let matrix: Vec<Vec<u32>> = match matrix_name {
-            "bayer2" => vec![vec![0, 2], vec![3, 1]],
-            "bayer4" => vec![
-                vec![0, 8, 2, 10],
-                vec![12, 4, 14, 6],
-                vec![3, 11, 1, 9],
-                vec![15, 7, 13, 5],
-            ],
-            "horizontal" => vec![vec![0, 1, 2, 3]],
-            "vertical" => vec![vec![0], vec![1], vec![2], vec![3]],
-            "diagonal" => vec![vec![0, 1], vec![1, 2]],
-            "checker" => vec![vec![0, 1], vec![1, 0]],
-            _ => vec![vec![0, 2], vec![3, 1]],
-        };
+        let matrix: Vec<Vec<u32>> = matrix_for_name(matrix_name);
         let rows = matrix.len().max(1);
         let cols = matrix.first().map(|r| r.len()).unwrap_or(1).max(1);
         let max_val = matrix.iter().flatten().copied().max().unwrap_or(1).max(1);
@@ -164,6 +167,30 @@ mod tests {
             height: h,
             data,
         }
+    }
+
+    /// Pins `matrix_for_name`'s "bayer2"/"bayer4" arms against their known
+    /// literal values, before extracting the raw tables into
+    /// `bayer_tables::{BAYER_2, BAYER_4}`. A transcription slip during that
+    /// extraction would silently shift every ordered-dither threshold;
+    /// this catches it.
+    #[test]
+    fn bayer_matrix_names_match_the_known_reference_tables() {
+        assert_eq!(matrix_for_name("bayer2"), vec![vec![0, 2], vec![3, 1]]);
+        assert_eq!(
+            matrix_for_name("bayer4"),
+            vec![
+                vec![0, 8, 2, 10],
+                vec![12, 4, 14, 6],
+                vec![3, 11, 1, 9],
+                vec![15, 7, 13, 5],
+            ]
+        );
+        assert_eq!(
+            matrix_for_name("not-a-real-matrix"),
+            matrix_for_name("bayer2"),
+            "an unrecognised name must fall back to the bayer2 literal"
+        );
     }
 
     /// `levels` must be read with `as_f64`, not `as_i64`: a JSON float
