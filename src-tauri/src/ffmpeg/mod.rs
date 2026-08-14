@@ -405,7 +405,21 @@ pub fn decode_video_with_options(
 /// Encode a sequence of raw RGBA frames to a video file.
 /// `codec`: "libx264" | "libx265" | "libvpx-vp9" | "prores_ks"
 /// `fps_override`: optional target fps (defaults to segment fps)
-fn apply_watermark_args(mut args: Vec<String>, wm: &WatermarkSettings) -> Vec<String> {
+/// Locate the output path argument by exact string identity, not by guessing
+/// a file extension. Extension-based lookups (`a.ends_with(".mp4") || ...`)
+/// broke in two ways: the extension allow-list didn't include every
+/// container (e.g. .webm was missing at some call sites but not others), and
+/// `position()` (first match) could match the SOURCE input's `-i <path>`
+/// argument instead of the output path whenever the source happened to share
+/// a listed extension and audio was included -- corrupting the argv by
+/// splicing a filter flag between `-i` and the source filename. Matching the
+/// known `output_path` value directly is immune to both: it can't collide
+/// with a different string, and it needs no extension list at all.
+fn find_output_arg_index(args: &[String], output_path: &str) -> Option<usize> {
+    args.iter().rposition(|a| a == output_path)
+}
+
+fn apply_watermark_args(mut args: Vec<String>, wm: &WatermarkSettings, output_path: &str) -> Vec<String> {
     if !wm.enabled {
         return args;
     }
@@ -487,9 +501,7 @@ fn apply_watermark_args(mut args: Vec<String>, wm: &WatermarkSettings) -> Vec<St
                 args[idx + 1] = format!("{},{}", args[idx + 1], drawtext);
             }
         } else {
-            let insert_index = args
-                .iter()
-                .position(|a| a.ends_with(".mp4") || a.ends_with(".mov") || a.ends_with(".mkv"));
+            let insert_index = find_output_arg_index(&args, output_path);
             if let Some(idx) = insert_index {
                 args.insert(idx, "-vf".to_string());
                 args.insert(idx + 1, drawtext);
@@ -550,9 +562,7 @@ fn apply_watermark_args(mut args: Vec<String>, wm: &WatermarkSettings) -> Vec<St
                     args[idx + 1] = format!("{};{}", existing, filter);
                 }
             } else {
-                let insert_index = args.iter().position(|a| {
-                    a.ends_with(".mp4") || a.ends_with(".mov") || a.ends_with(".mkv")
-                });
+                let insert_index = find_output_arg_index(&args, output_path);
                 if let Some(idx) = insert_index {
                     args.insert(idx, "-filter_complex".to_string());
                     args.insert(idx + 1, filter);
@@ -563,12 +573,20 @@ fn apply_watermark_args(mut args: Vec<String>, wm: &WatermarkSettings) -> Vec<St
             }
 
             if !args.iter().any(|a| a == "-map") {
-                let output_index = args.iter().position(|a| {
-                    a.ends_with(".mp4") || a.ends_with(".mov") || a.ends_with(".mkv")
-                });
+                let output_index = find_output_arg_index(&args, output_path);
                 if let Some(idx) = output_index {
                     args.insert(idx, "-map".to_string());
                     args.insert(idx + 1, "[out]".to_string());
+                } else {
+                    // output_path is pushed unconditionally before this fn runs
+                    // (encode_video always calls args.push(path) first), so
+                    // reaching here means it went missing from args entirely --
+                    // a deeper bug upstream, not a routine lookup miss.
+                    eprintln!(
+                        "[export] WARNING: output path not found in ffmpeg args while inserting watermark -map; audio/video mapping may be wrong"
+                    );
+                    args.push("-map".to_string());
+                    args.push("[out]".to_string());
                 }
             }
         }
@@ -734,7 +752,7 @@ pub fn encode_video(
     // Apply watermark if enabled
     if let Some(wm) = watermark {
         if wm.enabled {
-            args = apply_watermark_args(args, wm);
+            args = apply_watermark_args(args, wm, path);
         }
     }
 
@@ -750,13 +768,7 @@ pub fn encode_video(
             let input_count = args.iter().filter(|a| *a == "-i").count();
             // Audio source is the last input (pipe:0 is input 0, watermark image may be input 1, audio is last)
             let audio_idx = (input_count - 1) as u32;
-            // Find the output path (last arg ending with video extension)
-            let output_pos = args.iter().rposition(|a| {
-                a.ends_with(".mp4")
-                    || a.ends_with(".mov")
-                    || a.ends_with(".mkv")
-                    || a.ends_with(".webm")
-            });
+            let output_pos = find_output_arg_index(&args, path);
             if let Some(pos) = output_pos {
                 args.insert(pos, "-map".to_string());
                 args.insert(pos + 1, format!("{}:a", audio_idx));
@@ -789,12 +801,7 @@ pub fn encode_video(
                 }
             } else {
                 // No existing video filter — add -vf scale before output
-                let out_pos = args.iter().rposition(|a| {
-                    a.ends_with(".mp4")
-                        || a.ends_with(".mov")
-                        || a.ends_with(".mkv")
-                        || a.ends_with(".webm")
-                });
+                let out_pos = find_output_arg_index(&args, path);
                 if let Some(pos) = out_pos {
                     args.insert(pos, scale_filter.clone());
                     args.insert(pos, "-vf".to_string());
@@ -816,12 +823,7 @@ pub fn encode_video(
             let existing = args[fc_pos + 1].clone();
             args[fc_pos + 1] = format!("{};[out]{}[out]", existing, pad_filter);
         } else {
-            let out_pos = args.iter().rposition(|a| {
-                a.ends_with(".mp4")
-                    || a.ends_with(".mov")
-                    || a.ends_with(".mkv")
-                    || a.ends_with(".webm")
-            });
+            let out_pos = find_output_arg_index(&args, path);
             if let Some(pos) = out_pos {
                 args.insert(pos, pad_filter);
                 args.insert(pos, "-vf".to_string());
@@ -1411,6 +1413,146 @@ mod output_with_timeout_tests {
         assert!(
             elapsed < std::time::Duration::from_secs(20),
             "expected the timeout path to return well before the process's own 30s runtime, took {elapsed:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod output_arg_lookup_tests {
+    use super::*;
+
+    fn text_watermark(text: &str) -> WatermarkSettings {
+        WatermarkSettings {
+            enabled: true,
+            watermark_type: "text".to_string(),
+            text: text.to_string(),
+            image_path: None,
+            position: "bottom-right".to_string(),
+            font_size: 24,
+            font_path: None,
+            color: "white".to_string(),
+            opacity: 0.8,
+            scale: 20,
+            rotation: 0,
+        }
+    }
+
+    fn image_watermark(image_path: &str) -> WatermarkSettings {
+        WatermarkSettings {
+            enabled: true,
+            watermark_type: "image".to_string(),
+            text: String::new(),
+            image_path: Some(image_path.to_string()),
+            position: "bottom-right".to_string(),
+            font_size: 24,
+            font_path: None,
+            color: "white".to_string(),
+            opacity: 1.0,
+            scale: 20,
+            rotation: 0,
+        }
+    }
+
+    // This is the exact shape of `args` right before `apply_watermark_args`
+    // runs in `encode_video` when audio is included: the source clip's `-i
+    // <path>` (pushed early for the second/audio input), then encoder flags,
+    // then `-y <output_path>` (pushed last). Deliberately gives the source
+    // and the output the SAME extension -- the exact condition that made
+    // `position()` (first match) find the wrong one.
+    fn args_with_shared_extension_source_and_output(source: &str, output: &str) -> Vec<String> {
+        vec![
+            "-f".to_string(),
+            "rawvideo".to_string(),
+            "-i".to_string(),
+            "pipe:0".to_string(),
+            "-i".to_string(),
+            source.to_string(),
+            "-c:v".to_string(),
+            "libx264".to_string(),
+            "-c:a".to_string(),
+            "aac".to_string(),
+            "-y".to_string(),
+            output.to_string(),
+        ]
+    }
+
+    #[test]
+    fn find_output_arg_index_finds_the_real_output_even_when_source_shares_its_extension() {
+        let args = args_with_shared_extension_source_and_output("source.mp4", "output.mp4");
+        let idx = find_output_arg_index(&args, "output.mp4");
+        assert_eq!(
+            idx,
+            Some(args.len() - 1),
+            "must match the output path itself, not the earlier source -i argument with the same extension"
+        );
+    }
+
+    #[test]
+    fn find_output_arg_index_is_immune_to_extensions_missing_from_any_allow_list() {
+        // .avi was never in any of the old hardcoded extension lists (some
+        // had .mp4/.mov/.mkv, some added .webm) -- exact-identity matching
+        // needs no allow-list at all.
+        let args = args_with_shared_extension_source_and_output("source.mp4", "output.avi");
+        let idx = find_output_arg_index(&args, "output.avi");
+        assert_eq!(idx, Some(args.len() - 1));
+    }
+
+    #[test]
+    fn text_watermark_inserts_before_the_real_output_not_the_shared_extension_source() {
+        // Regression test for the live bug: watermark + include_audio on a
+        // source that shares the output's extension used to splice "-vf"
+        // between "-i" and the source filename, corrupting that input pair.
+        let args = args_with_shared_extension_source_and_output("source.mp4", "output.mp4");
+        let wm = text_watermark("hello");
+        let result = apply_watermark_args(args, &wm, "output.mp4");
+
+        let vf_idx = result
+            .iter()
+            .position(|a| a == "-vf")
+            .expect("-vf must be inserted");
+        // The source "-i source.mp4" pair must be left completely intact and
+        // untouched -- "-i" immediately followed by the literal source path,
+        // nothing spliced between them.
+        let source_i_idx = result
+            .iter()
+            .position(|a| a == "source.mp4")
+            .expect("source path must still be present");
+        assert_eq!(
+            result[source_i_idx - 1],
+            "-i",
+            "the source input pair must stay adjacent -- got {:?} immediately before the source path",
+            result[source_i_idx - 1]
+        );
+        // -vf must land before the real output path, not before the source.
+        let output_idx = result
+            .iter()
+            .rposition(|a| a == "output.mp4")
+            .expect("output path must still be present");
+        assert!(
+            vf_idx < output_idx,
+            "-vf (at {vf_idx}) must be inserted before the output path (at {output_idx})"
+        );
+        assert!(
+            vf_idx > source_i_idx,
+            "-vf (at {vf_idx}) must not be spliced before/into the source -i pair (source path at {source_i_idx})"
+        );
+    }
+
+    #[test]
+    fn image_watermark_map_fallback_still_maps_output_when_lookup_somehow_misses() {
+        // args deliberately does NOT contain the literal output_path string,
+        // simulating the "should be unreachable" case the fallback guards.
+        let args = vec![
+            "-i".to_string(),
+            "pipe:0".to_string(),
+            "-filter_complex".to_string(),
+            "[0:v][1:v]overlay=0:0".to_string(),
+        ];
+        let wm = image_watermark("logo.png");
+        let result = apply_watermark_args(args, &wm, "output.mp4");
+        assert!(
+            result.windows(2).any(|w| w[0] == "-map" && w[1] == "[out]"),
+            "must still push a -map [out] fallback instead of silently dropping the mapping, got {result:?}"
         );
     }
 }
