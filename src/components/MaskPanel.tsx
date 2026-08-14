@@ -14,6 +14,7 @@ import MaskSelector from "./MaskSelector";
 import PostProcessControls from "./PostProcessControls";
 import ManualMaskEditor from "./ManualMaskEditor";
 import FrameTimeline from "./FrameTimeline";
+import LabeledSlider from "./LabeledSlider";
 
 export default function MaskPanel() {
   const mediaLoaded = useAppStore((s) => s.mediaLoaded);
@@ -412,23 +413,16 @@ export default function MaskPanel() {
           {/* Overlay controls */}
           {(activeMask || sam3Points.length > 0) && (
             <div className="flex flex-col gap-2">
-              <div className="flex items-center gap-2">
-                <span className="font-label-sm text-label-sm uppercase text-[var(--text-muted)] min-w-[50px]">
-                  Opacity
-                </span>
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={sam3OverlayOpacity}
-                  onChange={(e) => setSam3OverlayOpacity(Number.parseFloat(e.target.value))}
-                  className="flex-1 h-1 bg-surface-container rounded-lg appearance-none cursor-pointer"
-                />
-                <span className="font-code-sm text-code-sm text-[var(--text-muted)] w-8 text-right">
-                  {Math.round(sam3OverlayOpacity * 100)}%
-                </span>
-              </div>
+              <LabeledSlider
+                label="Opacity"
+                value={sam3OverlayOpacity}
+                displayValue={Math.round(sam3OverlayOpacity * 100)}
+                min={0}
+                max={1}
+                step={0.05}
+                onChange={setSam3OverlayOpacity}
+                unit="%"
+              />
               <div className="flex items-center gap-2">
                 <span className="font-label-sm text-label-sm uppercase text-[var(--text-muted)] min-w-[50px]">
                   Tint

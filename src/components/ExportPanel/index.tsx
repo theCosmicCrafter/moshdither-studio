@@ -6,6 +6,7 @@ import { useBatchQueue } from "../../hooks/useBatchQueue";
 import type { WatermarkSettings } from "../../utils/watermark";
 import { listen } from "@tauri-apps/api/event";
 import ChipButton from "./ChipButton";
+import LabeledSlider from "../LabeledSlider";
 
 const CODECS = [
   { id: "h264", label: "H.264", desc: "Best compatibility" },
@@ -298,24 +299,15 @@ export default function ExportPanel() {
       </div>
 
       {/* FPS */}
-      <div className="space-y-1">
-        <span style={{ fontSize: 10, color: "var(--text-muted)" }}>Frame Rate</span>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <input
-            aria-label="FPS"
-            type="range"
-            min={1}
-            max={60}
-            step={1}
-            value={fps}
-            onChange={(e) => setFps(Number.parseInt(e.target.value))}
-            style={{ flex: 1 }}
-          />
-          <span style={{ minWidth: 28, textAlign: "right", fontFamily: "var(--font-mono)", color: "var(--text-primary)" }}>
-            {fps}
-          </span>
-        </div>
-      </div>
+      <LabeledSlider
+        label="Frame Rate"
+        ariaLabel="FPS"
+        value={fps}
+        min={1}
+        max={60}
+        step={1}
+        onChange={setFps}
+      />
 
       {/* Include audio */}
       {audioEnabled && audioFilePath && (
@@ -681,24 +673,17 @@ export default function ExportPanel() {
                 <option value="center">Center</option>
               </select>
             </span>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <label style={{ fontSize: 10, color: "var(--text-muted)", minWidth: 42 }} htmlFor="wm-opacity">
-                Opacity
-              </label>
-              <input
-                id="wm-opacity"
-                type="range"
-                min={0}
-                max={1}
-                step={0.05}
-                value={watermark.opacity}
-                onChange={(e) => setWatermark({ opacity: Number.parseFloat(e.target.value) })}
-                style={{ flex: 1 }}
-              />
-              <span style={{ fontSize: 10, color: "var(--text-muted)", minWidth: 32 }}>
-                {Math.round(watermark.opacity * 100)}%
-              </span>
-            </div>
+            <LabeledSlider
+              id="wm-opacity"
+              label="Opacity"
+              value={watermark.opacity}
+              displayValue={Math.round(watermark.opacity * 100)}
+              min={0}
+              max={1}
+              step={0.05}
+              onChange={(v) => setWatermark({ opacity: v })}
+              unit="%"
+            />
           </div>
         )}
       </div>

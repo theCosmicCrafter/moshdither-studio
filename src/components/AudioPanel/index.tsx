@@ -5,6 +5,7 @@ import { detectBeats, decodeAudioFile } from "../../utils/beatDetection";
 import { generateBeatKeyframes } from "../../utils/beatKeyframeGenerator";
 import { getFileName } from "../../utils/fileName";
 import AudioVisualizer from "../common/AudioVisualizer";
+import LabeledSlider from "../LabeledSlider";
 
 export default function AudioPanel() {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -245,22 +246,17 @@ export default function AudioPanel() {
           </div>
 
           {/* Volume */}
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ minWidth: 40 }}>Vol</span>
-            <input
-              type="range"
-              aria-label="Volume"
-              min={0}
-              max={1}
-              step={0.01}
-              value={audioVolume}
-              onChange={(e) => setAudioVolume(parseFloat(e.target.value))}
-              style={{ flex: 1 }}
-            />
-            <span style={{ minWidth: 28, textAlign: "right" }}>
-              {Math.round(audioVolume * 100)}%
-            </span>
-          </div>
+          <LabeledSlider
+            label="Vol"
+            ariaLabel="Volume"
+            value={audioVolume}
+            displayValue={Math.round(audioVolume * 100)}
+            min={0}
+            max={1}
+            step={0.01}
+            onChange={setAudioVolume}
+            unit="%"
+          />
 
           {/* BPM */}
           {audioBpm && (
