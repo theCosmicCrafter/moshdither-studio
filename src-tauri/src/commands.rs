@@ -2,7 +2,7 @@
 
 use crate::effects::{
     blend_mask, functional_tests::run_all_function_tests, verification::verify_all_effects,
-    EffectCategory, EffectMeta, EffectRegistry, Frame,
+    Effect, EffectCategory, EffectMeta, EffectRegistry, Frame, Mask,
 };
 use crate::ffmpeg::{
     decode_video, encode_video, extract_audio_to_wav, ffedit_binary, ffgac_binary, ffmpeg_binary,
@@ -280,6 +280,46 @@ fn decode_mask_b64(
     }))
 }
 
+/// True when `effect` doesn't already blend the mask into `process_frame`
+/// itself and a mask was actually supplied — i.e. the caller must save a
+/// pre-effect copy of the frame and blend it in afterward.
+fn needs_mask_blend(effect: &dyn Effect, mask: Option<&Mask>) -> bool {
+    !effect.handles_masking() && mask.is_some()
+}
+
+/// Run one effect over a single frame, then apply the post-process mask
+/// blend for effects that don't already handle masking internally
+/// (mirrors the doubled-masking guard documented on `Effect::handles_masking`).
+/// `mode` is the blend mode ("inside"/"outside"/"alpha"); pass "inside" for
+/// call sites that don't expose a per-call mask mode.
+fn process_frame_with_mask(
+    effect: &dyn Effect,
+    working: &Frame,
+    mask: Option<&Mask>,
+    params: &serde_json::Map<String, serde_json::Value>,
+    mode: &str,
+) -> std::result::Result<Frame, String> {
+    let blend_needed = needs_mask_blend(effect, mask);
+    let previous = if blend_needed {
+        Some(working.clone())
+    } else {
+        None
+    };
+
+    let clamped_params = crate::effects::clamp_for_effect(effect, params);
+    let mut result = effect
+        .process_frame(working, mask, &clamped_params)
+        .map_err(|e| e.to_string())?;
+
+    if blend_needed {
+        if let (Some(previous), Some(m)) = (previous.as_ref(), mask) {
+            blend_mask(&mut result, previous, m, mode).map_err(|e| e.to_string())?;
+        }
+    }
+
+    Ok(result)
+}
+
 /// Apply a single effect to the currently loaded image.
 #[tauri::command]
 pub fn apply_effect(
@@ -304,25 +344,7 @@ pub fn apply_effect(
     let effect = registry
         .get(&effect_id)
         .ok_or_else(|| format!("Effect '{}' not found", effect_id))?;
-    let effect_handles_mask = effect.handles_masking();
-    let previous = if !effect_handles_mask && mask.is_some() {
-        Some(working.clone())
-    } else {
-        None
-    };
-    let params = crate::effects::clamp_for_effect(effect, &params);
-    working = effect
-        .process_frame(&working, mask.as_ref(), &params)
-        .map_err(|e| e.to_string())?;
-
-    // Only apply post-process mask blend for effects that don't handle masking internally.
-    // Mask-aware effects (e.g., MaskIsolate) already apply the mask in process_frame,
-    // so applying it again would cause double-mask corruption.
-    if !effect_handles_mask {
-        if let (Some(previous), Some(m)) = (previous.as_ref(), mask.as_ref()) {
-            blend_mask(&mut working, previous, m, "inside").map_err(|e| e.to_string())?;
-        }
-    }
+    working = process_frame_with_mask(effect, &working, mask.as_ref(), &params, "inside")?;
 
     // Encode result
     let img = image::RgbaImage::from_raw(working.width, working.height, working.data)
@@ -427,7 +449,6 @@ pub fn apply_effect_stack(
         let effect = registry
             .get(&call.effect_id)
             .ok_or_else(|| format!("Effect '{}' not found", call.effect_id))?;
-        let effect_handles_mask = effect.handles_masking();
 
         // Per-effect mask overrides global mask
         let per_effect_mask = if let Some(ref b64) = call.mask_b64 {
@@ -436,24 +457,8 @@ pub fn apply_effect_stack(
             None
         };
         let active_mask = per_effect_mask.as_ref().or(global_mask.as_ref());
-        let previous = if !effect_handles_mask && active_mask.is_some() {
-            Some(working.clone())
-        } else {
-            None
-        };
-
-        let params = crate::effects::clamp_for_effect(effect, &call.params);
-        working = effect
-            .process_frame(&working, active_mask, &params)
-            .map_err(|e| e.to_string())?;
-
-        // Only apply post-process mask blend for effects that don't handle masking internally.
-        if !effect_handles_mask {
-            if let (Some(previous), Some(m)) = (previous.as_ref(), active_mask) {
-                let mode = call.mask_mode.as_deref().unwrap_or("inside");
-                blend_mask(&mut working, previous, m, mode).map_err(|e| e.to_string())?;
-            }
-        }
+        let mode = call.mask_mode.as_deref().unwrap_or("inside");
+        working = process_frame_with_mask(effect, &working, active_mask, &call.params, mode)?;
 
         new_cache.push(CacheEntry {
             effect_id: call.effect_id.clone(),
@@ -1056,6 +1061,27 @@ pub fn get_media_info(
     }
 }
 
+fn lock_sam3<'a>(
+    state: &'a State<'_, AppState>,
+) -> std::result::Result<std::sync::MutexGuard<'a, Option<Sam3Engine>>, String> {
+    state
+        .sam3
+        .lock()
+        .map_err(|e| format!("SAM3 lock poisoned: {e}"))
+}
+
+/// Zip parallel (mask_b64, score) pairs into the `{count, masks, scores}`
+/// shape shared by every SAM3 prompt command's response.
+fn masks_to_json(masks: Vec<(String, f64)>) -> serde_json::Value {
+    let count = masks.len();
+    let (mask_b64s, scores): (Vec<String>, Vec<f64>) = masks.into_iter().unzip();
+    json!({
+        "count": count,
+        "masks": mask_b64s,
+        "scores": scores,
+    })
+}
+
 fn with_sam3<F, R>(
     app: &tauri::AppHandle,
     state: &State<'_, AppState>,
@@ -1064,10 +1090,7 @@ fn with_sam3<F, R>(
 where
     F: Fn(&Sam3Engine) -> crate::error::Result<R>,
 {
-    let mut sam3_lock = state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
+    let mut sam3_lock = lock_sam3(state)?;
 
     if sam3_lock.is_none() {
         match Sam3Engine::new(app) {
@@ -1111,10 +1134,7 @@ pub fn sam3_init(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> std::result::Result<String, String> {
-    let mut sam3_lock = state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
+    let mut sam3_lock = lock_sam3(&state)?;
     if sam3_lock.is_none() {
         match Sam3Engine::new(&app) {
             Ok(engine) => {
@@ -1147,13 +1167,7 @@ pub fn sam3_text_prompt(
     prompt: String,
 ) -> std::result::Result<serde_json::Value, String> {
     let masks = with_sam3(&app, &state, |engine| engine.text_prompt(prompt.clone()))?;
-    let count = masks.len();
-    let (mask_b64s, scores): (Vec<String>, Vec<f64>) = masks.into_iter().unzip();
-    Ok(json!({
-        "count": count,
-        "masks": mask_b64s,
-        "scores": scores,
-    }))
+    Ok(masks_to_json(masks))
 }
 
 /// Run a point-click prompt on the currently loaded SAM3 image.
@@ -1172,13 +1186,7 @@ pub fn sam3_point_prompt(
     let masks = with_sam3(&app, &state, |engine| {
         engine.point_prompt(f32_points.clone(), labels_clone.clone())
     })?;
-    let count = masks.len();
-    let (mask_b64s, scores): (Vec<String>, Vec<f64>) = masks.into_iter().unzip();
-    Ok(json!({
-        "count": count,
-        "masks": mask_b64s,
-        "scores": scores,
-    }))
+    Ok(masks_to_json(masks))
 }
 
 /// Run a box prompt on the currently loaded SAM3 image.
@@ -1193,13 +1201,7 @@ pub fn sam3_box_prompt(
         .map(|[x1, y1, x2, y2]| [x1 as f32, y1 as f32, x2 as f32, y2 as f32])
         .collect();
     let masks = with_sam3(&app, &state, |engine| engine.box_prompt(f32_boxes.clone()))?;
-    let count = masks.len();
-    let (mask_b64s, scores): (Vec<String>, Vec<f64>) = masks.into_iter().unzip();
-    Ok(json!({
-        "count": count,
-        "masks": mask_b64s,
-        "scores": scores,
-    }))
+    Ok(masks_to_json(masks))
 }
 
 /// Run auto-mask grid generation on the currently loaded SAM3 image.
@@ -1214,13 +1216,7 @@ pub fn sam3_auto_mask(
     let masks = with_sam3(&app, &state, |engine| {
         engine.auto_mask(grid_size, iou_threshold, min_mask_region_area)
     })?;
-    let count = masks.len();
-    let (mask_b64s, scores): (Vec<String>, Vec<f64>) = masks.into_iter().unzip();
-    Ok(json!({
-        "count": count,
-        "masks": mask_b64s,
-        "scores": scores,
-    }))
+    Ok(masks_to_json(masks))
 }
 
 /// Run video predictor on a list of frames.
@@ -1230,10 +1226,7 @@ pub fn sam3_video_predictor(
     frames: Vec<String>,
     prompt: Option<String>,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
+    let sam3_lock = lock_sam3(&state)?;
     let engine = sam3_lock
         .as_ref()
         .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
@@ -1271,14 +1264,9 @@ pub fn sam3_refine_mask(
             labels_clone.clone(),
         )
     })?;
-    let count = masks.len();
-    let (mask_b64s, scores): (Vec<String>, Vec<f64>) = masks.into_iter().unzip();
-    Ok(json!({
-        "status": "ok",
-        "count": count,
-        "masks": mask_b64s,
-        "scores": scores,
-    }))
+    let mut result = masks_to_json(masks);
+    result["status"] = json!("ok");
+    Ok(result)
 }
 
 /// Post-process a single mask (grow/shrink/feather/fill holes).
@@ -1301,10 +1289,7 @@ pub fn sam3_postprocess_mask(
 /// Clear SAM3 state (image + masks).
 #[tauri::command]
 pub fn sam3_clear(state: State<'_, AppState>) -> std::result::Result<String, String> {
-    let sam3_lock = state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
+    let sam3_lock = lock_sam3(&state)?;
     if let Some(engine) = sam3_lock.as_ref() {
         engine.clear().map_err(|e| e.to_string())?;
     }
@@ -1314,10 +1299,7 @@ pub fn sam3_clear(state: State<'_, AppState>) -> std::result::Result<String, Str
 /// Shutdown the SAM3 bridge process.
 #[tauri::command]
 pub fn sam3_shutdown(state: State<'_, AppState>) -> std::result::Result<String, String> {
-    let mut sam3_lock = state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
+    let mut sam3_lock = lock_sam3(&state)?;
     if let Some(engine) = sam3_lock.take() {
         let _ = engine.shutdown();
     }
