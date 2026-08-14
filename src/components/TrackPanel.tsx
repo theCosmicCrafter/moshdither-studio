@@ -42,7 +42,7 @@ export default function TrackPanel() {
       </div>
 
       {tracks.length === 0 && (
-        <div className="font-label-sm text-label-sm text-on-surface-variant opacity-60 py-2 text-center">
+        <div className="font-body-sm text-body-sm text-on-surface-variant opacity-60 py-2 text-center">
           No tracks. Click &quot;Add&quot; to create one.
         </div>
       )}

@@ -79,7 +79,7 @@ export default function PanelRail() {
             >
               {zoneIndicator}
             </span>
-            <span className="absolute left-full ml-2 px-2 py-0.5 rounded bg-surface/90 text-[10px] text-on-surface whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-[200] border border-outline/20">
+            <span className="absolute left-full ml-2 px-2 py-0.5 rounded bg-surface/90 font-label-sm text-label-sm text-on-surface whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-[200] border border-outline/20">
               {panel.label}
             </span>
           </button>

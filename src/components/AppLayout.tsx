@@ -198,7 +198,7 @@ export default function AppLayout() {
             >
               Recover Session?
             </h3>
-            <p className="font-label-sm text-label-sm text-on-surface-variant mb-4">
+            <p className="font-body-sm text-body-sm text-on-surface-variant mb-4">
               An unsaved session was found from{" "}
               {new Date(autoSave.savedAt).toLocaleString()}
               {autoSave.filePath && (
@@ -216,7 +216,7 @@ export default function AppLayout() {
                   clearAutoSave();
                   setShowRecovery(false);
                 }}
-                className="neo-btn rounded-md px-3 py-1.5 font-label-sm text-label-sm text-on-surface-variant hover:text-accent-pink transition-colors"
+                className="neo-btn rounded-md px-3 py-1.5 font-label-md text-label-md text-on-surface-variant hover:text-accent-pink transition-colors"
                 aria-label="Discard recovered session"
               >
                 Discard
@@ -228,7 +228,7 @@ export default function AppLayout() {
                     setShowRecovery(false);
                   })();
                 }}
-                className="neo-btn rounded-md px-3 py-1.5 font-label-sm text-label-sm text-on-surface bg-accent-pink/20 hover:bg-accent-pink/30 transition-colors"
+                className="neo-btn rounded-md px-3 py-1.5 font-label-md text-label-md text-on-surface bg-accent-pink/20 hover:bg-accent-pink/30 transition-colors"
                 aria-label="Restore recovered session"
                 autoFocus
               >
@@ -242,7 +242,7 @@ export default function AppLayout() {
       {/* Recent Projects */}
       {recentProjects.length > 0 && (
         <div className="fixed bottom-7 left-2 z-50">
-          <div className="neo-flat rounded-md p-2 font-data-micro text-data-micro text-on-surface-variant bg-surface/40 backdrop-blur-md">
+          <div className="neo-flat rounded-md p-2 font-body-sm text-body-sm text-on-surface-variant bg-surface/40 backdrop-blur-md">
             <div className="font-label-sm text-label-sm text-on-surface mb-1">Recent</div>
             {recentProjects.slice(0, 5).map((p) => (
               <div
