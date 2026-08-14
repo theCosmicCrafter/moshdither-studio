@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useAppStore } from "../store";
+import LabeledSlider from "./LabeledSlider";
 
 export default function CustomUiModal() {
   const customUiModalOpen = useAppStore((s) => s.customUiModalOpen);
@@ -113,24 +114,18 @@ export default function CustomUiModal() {
           </div>
 
           {/* Panel Opacity */}
-          <div className="space-y-1 pt-2 border-t border-outline/20">
-            <div className="flex justify-between items-center">
-              <label htmlFor="panel-opacity" className="font-label-md text-label-md text-on-surface">
-                Panel Opacity
-              </label>
-              <span className="font-code-sm text-code-sm text-on-surface-variant">
-                {Math.round(panelOpacity * 100)}%
-              </span>
-            </div>
-            <input
+          <div className="pt-2 border-t border-outline/20">
+            <LabeledSlider
+              layout="stacked"
               id="panel-opacity"
-              type="range"
+              label="Panel Opacity"
+              value={panelOpacity}
+              displayValue={Math.round(panelOpacity * 100)}
               min={0.2}
               max={1}
               step={0.05}
-              value={panelOpacity}
-              onChange={(e) => setPanelOpacity(Number.parseFloat(e.target.value))}
-              className="w-full accent-[var(--accent-teal)]"
+              onChange={setPanelOpacity}
+              unit="%"
             />
           </div>
         </div>

@@ -537,6 +537,15 @@ describe("Component Test Suite", () => {
       fireEvent.change(input, { target: { value: "My Track" } });
       expect(useAppStore.getState().tracks[0].name).toBe("My Track");
     });
+
+    // LabeledSlider's onChange previously used Number.parseInt, which
+    // truncates a float-stepped value like this slider's 0.05 step to 0.
+    it("sets a float opacity value via the slider, not truncated to an integer", () => {
+      render(<TrackPanel />);
+      fireEvent.click(screen.getByText("+ Add"));
+      fireEvent.change(screen.getByLabelText("Opacity"), { target: { value: "0.65" } });
+      expect(useAppStore.getState().tracks[0].opacity).toBe(0.65);
+    });
   });
 
   // ── MaskSelector ───────────────────────────────────────────

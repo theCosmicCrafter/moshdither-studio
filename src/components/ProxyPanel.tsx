@@ -1,5 +1,6 @@
 import { useAppStore } from "../store";
 import { generateProxy } from "../lib/tauri";
+import LabeledSlider from "./LabeledSlider";
 
 export default function ProxyPanel() {
   const proxyEnabled = useAppStore((s) => s.proxyEnabled);
@@ -46,35 +47,26 @@ export default function ProxyPanel() {
         Use Proxy
       </label>
 
-      <div className="flex flex-col gap-1">
-        <label className="font-label-md text-label-md text-on-surface-variant">
-          Max Width: {proxyMaxWidth}px
-        </label>
-        <input
-          type="range"
-          min={320}
-          max={1920}
-          step={160}
-          value={proxyMaxWidth}
-          onChange={(e) => setProxyMaxWidth(Number(e.target.value))}
-          className="w-full"
-        />
-      </div>
+      <LabeledSlider
+        layout="stacked"
+        label="Max Width"
+        value={proxyMaxWidth}
+        min={320}
+        max={1920}
+        step={160}
+        onChange={setProxyMaxWidth}
+        unit="px"
+      />
 
-      <div className="flex flex-col gap-1">
-        <label className="font-label-md text-label-md text-on-surface-variant">
-          Quality (CRF): {proxyCrf}
-        </label>
-        <input
-          type="range"
-          min={18}
-          max={40}
-          step={1}
-          value={proxyCrf}
-          onChange={(e) => setProxyCrf(Number(e.target.value))}
-          className="w-full"
-        />
-      </div>
+      <LabeledSlider
+        layout="stacked"
+        label="Quality (CRF)"
+        value={proxyCrf}
+        min={18}
+        max={40}
+        step={1}
+        onChange={setProxyCrf}
+      />
 
       <button
         onClick={handleGenerate}

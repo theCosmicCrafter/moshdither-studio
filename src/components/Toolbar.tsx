@@ -13,6 +13,7 @@ import { stackToRustPayload, stackRequiresCpuPreview } from "../utils/effectConv
 import WindowControls from "./WindowControls";
 import KeyboardShortcutsEditor from "./KeyboardShortcutsEditor";
 import UpdateChecker from "./UpdateChecker";
+import LabeledSlider from "./LabeledSlider";
 import { PANEL_REGISTRY } from "./DockSystem/panelRegistry";
 
 interface Props {
@@ -455,23 +456,19 @@ export default function Toolbar({ onFileLoaded }: Props) {
                 </button>
                 <div className="border-t border-outline/20 my-1" />
                 <div className="px-3 py-1.5">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="font-label-md text-label-md text-on-surface-variant flex items-center gap-1.5">
-                      <span className="material-symbols-outlined panel-menu-icon">opacity</span>
-                      Panel Opacity
-                    </span>
-                    <span className="font-code-sm text-code-sm text-on-surface-variant">{Math.round(panelOpacity * 100)}%</span>
-                  </div>
-                  <input
-                    type="range"
+                  <LabeledSlider
+                    layout="stacked"
+                    icon="opacity"
+                    label="Panel Opacity"
+                    ariaLabel="Panel opacity"
+                    title="Panel opacity"
+                    value={panelOpacity}
+                    displayValue={Math.round(panelOpacity * 100)}
                     min={0.2}
                     max={1}
                     step={0.05}
-                    value={panelOpacity}
-                    onChange={(e) => setPanelOpacity(Number.parseFloat(e.target.value))}
-                    className="w-full accent-[var(--accent-teal)]"
-                    title="Panel opacity"
-                    aria-label="Panel opacity"
+                    onChange={setPanelOpacity}
+                    unit="%"
                   />
                 </div>
                 <div className="border-t border-outline/20 my-1" />
@@ -573,38 +570,32 @@ export default function Toolbar({ onFileLoaded }: Props) {
         >
           {isPlaying ? "pause" : "play_arrow"}
         </button>
-        <div className="flex items-center gap-1.5">
-          <span className="text-label-sm font-label-sm text-on-surface-variant uppercase">
-            TIME
-          </span>
-          <input
-            type="range"
-            min="0"
-            max="99"
-            step="1"
-            value={currentTime}
-            onChange={(e) => {
-              setCurrentTime(Number.parseInt(e.target.value));
-              handleProcess();
-            }}
-            className="slider-thumb w-20"
-            title={`Frame ${currentTime}`}
-          />
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span className="text-label-sm font-label-sm text-on-surface-variant uppercase">FPS</span>
-          <input
-            type="range"
-            min="1"
-            max="60"
-            step="1"
-            value={fps}
-            onChange={(e) => setFps(Number.parseInt(e.target.value))}
-            className="slider-thumb w-16"
-            title={`${fps} FPS`}
-          />
-          <span className="text-code-sm font-code-sm text-accent-pink w-4 text-right">{fps}</span>
-        </div>
+        <LabeledSlider
+          label="TIME"
+          ariaLabel="Current frame"
+          value={currentTime}
+          min={0}
+          max={99}
+          step={1}
+          onChange={(v) => {
+            setCurrentTime(v);
+            handleProcess();
+          }}
+          title={`Frame ${currentTime}`}
+          showValue={false}
+          trackClassName="slider-thumb w-20"
+        />
+        <LabeledSlider
+          label="FPS"
+          value={fps}
+          min={1}
+          max={60}
+          step={1}
+          onChange={setFps}
+          title={`${fps} FPS`}
+          trackClassName="slider-thumb w-16"
+          valueClassName="text-code-sm font-code-sm text-accent-pink w-4 text-right"
+        />
         <select
           value={playbackSpeed}
           onChange={(e) => setPlaybackSpeed(Number.parseFloat(e.target.value))}
