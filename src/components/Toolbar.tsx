@@ -12,6 +12,7 @@ import { useAppStore } from "../store";
 import { stackToRustPayload, stackRequiresCpuPreview } from "../utils/effectConverter";
 import WindowControls from "./WindowControls";
 import KeyboardShortcutsEditor from "./KeyboardShortcutsEditor";
+import UpdateChecker from "./UpdateChecker";
 import { PANEL_REGISTRY } from "./DockSystem/panelRegistry";
 
 interface Props {
@@ -52,6 +53,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
   const togglePlay = useAppStore((s) => s.togglePlay);
   const [fps, setFps] = useState(30);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showUpdateChecker, setShowUpdateChecker] = useState(false);
   const [editMenuOpen, setEditMenuOpen] = useState(false);
   const editMenuRef = useClickOutside<HTMLDivElement>(editMenuOpen, () => setEditMenuOpen(false));
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
@@ -322,6 +324,15 @@ export default function Toolbar({ onFileLoaded }: Props) {
                 >
                   <span className="material-symbols-outlined menu-item-icon">image</span>
                   Save Image
+                </button>
+                <div className="border-t border-outline/10 my-1" />
+                <button
+                  onClick={() => { setShowUpdateChecker(true); setFileMenuOpen(false); }}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors"
+                  role="menuitem"
+                >
+                  <span className="material-symbols-outlined menu-item-icon" aria-hidden="true">system_update</span>
+                  Check for Updates
                 </button>
               </div>
             )}
@@ -630,6 +641,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
         <WindowControls />
       </div>
       {showShortcuts && <KeyboardShortcutsEditor onClose={() => setShowShortcuts(false)} />}
+      {showUpdateChecker && <UpdateChecker onClose={() => setShowUpdateChecker(false)} />}
     </header>
   );
 }

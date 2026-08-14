@@ -460,3 +460,29 @@ export async function undockWindowAppbar(): Promise<void> {
   if (!isTauriAvailable()) return;
   await invoke("undock_window_appbar");
 }
+
+// ── App Updates ──────────────────────────────────────────────
+
+export interface UpdateInfo {
+  version: string;
+  date: string | null;
+  body: string | null;
+  url: string;
+  signature: string;
+}
+
+/** Checks the configured updater endpoint. Returns null when already up to date. */
+export async function checkForUpdate(): Promise<UpdateInfo | null> {
+  if (!isTauriAvailable()) return null;
+  return invoke<UpdateInfo | null>("check_update");
+}
+
+/**
+ * Downloads, verifies, and installs the latest signed update, then restarts
+ * the app. Resolves with "up to date" instead of installing anything if no
+ * update was actually available at install time.
+ */
+export async function installUpdate(): Promise<string> {
+  if (!isTauriAvailable()) return "up to date";
+  return invoke<string>("install_update");
+}
