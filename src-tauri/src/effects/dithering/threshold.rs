@@ -62,7 +62,7 @@ impl Effect for ThresholdDither {
             .unwrap_or(self.threshold);
         let mut data = input.data.clone();
         for chunk in data.chunks_exact_mut(4) {
-            let lum = 0.299 * chunk[0] as f32 + 0.587 * chunk[1] as f32 + 0.114 * chunk[2] as f32;
+            let lum = crate::effects::luminance_f32(chunk[0], chunk[1], chunk[2]);
             let color = if lum > threshold as f32 { 255 } else { 0 };
             chunk[0] = color;
             chunk[1] = color;

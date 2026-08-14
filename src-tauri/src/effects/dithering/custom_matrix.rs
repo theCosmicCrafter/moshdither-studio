@@ -109,9 +109,7 @@ impl Effect for CustomMatrixDither {
         for y in 0..h {
             for x in 0..w {
                 let idx = (y * w + x) * 4;
-                let gray = 0.299 * data[idx] as f32
-                    + 0.587 * data[idx + 1] as f32
-                    + 0.114 * data[idx + 2] as f32;
+                let gray = crate::effects::luminance_f32(data[idx], data[idx + 1], data[idx + 2]);
 
                 // Normalised ordered-dither threshold [0, 1]
                 let threshold = matrix[y % rows][x % cols] as f32 / max_f;

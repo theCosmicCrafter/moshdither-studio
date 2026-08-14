@@ -257,9 +257,8 @@ pub fn apply(
             let base = (y * w + x) * nc;
             match mode {
                 ColorMode::Grayscale => {
-                    buf[base] = 0.299 * input.data[idx] as f32
-                        + 0.587 * input.data[idx + 1] as f32
-                        + 0.114 * input.data[idx + 2] as f32;
+                    buf[base] =
+                        crate::effects::luminance_f32(input.data[idx], input.data[idx + 1], input.data[idx + 2]);
                 }
                 ColorMode::Rgb | ColorMode::Palette => {
                     buf[base] = input.data[idx] as f32;

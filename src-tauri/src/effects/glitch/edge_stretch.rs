@@ -69,10 +69,11 @@ impl Effect for EdgeStretch {
         // Step 1: Compute grayscale luminance
         let mut gray = vec![0.0f32; w * h];
         for (i, pixel) in gray.iter_mut().enumerate() {
-            let r = input.data[i * 4] as f32;
-            let g = input.data[i * 4 + 1] as f32;
-            let b = input.data[i * 4 + 2] as f32;
-            *pixel = 0.299 * r + 0.587 * g + 0.114 * b;
+            *pixel = crate::effects::luminance_f32(
+                input.data[i * 4],
+                input.data[i * 4 + 1],
+                input.data[i * 4 + 2],
+            );
         }
 
         // Step 2: Sobel edge detection

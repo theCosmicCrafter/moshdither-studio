@@ -2,6 +2,7 @@ pub mod analog;
 pub mod artistic;
 pub mod audio_reactive;
 pub mod color;
+pub mod color_math;
 pub mod composite;
 pub mod datamoshing;
 pub mod dithering;
@@ -23,6 +24,7 @@ pub mod test_helpers;
 pub mod types;
 pub mod verification;
 
+pub use color_math::luminance_f32;
 pub use engine::blend_mask;
 pub use params::{clamp_for_effect, clamp_params};
 pub use registry::EffectRegistry;

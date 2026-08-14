@@ -59,9 +59,8 @@ impl Effect for RiemersmaDither {
         for y in 0..h {
             for x in 0..w {
                 let idx = (y * w + x) * 4;
-                lum[y * w + x] = 0.299 * input.data[idx] as f32
-                    + 0.587 * input.data[idx + 1] as f32
-                    + 0.114 * input.data[idx + 2] as f32;
+                lum[y * w + x] =
+                    crate::effects::luminance_f32(input.data[idx], input.data[idx + 1], input.data[idx + 2]);
             }
         }
 

@@ -83,9 +83,11 @@ impl Effect for PixelSort {
             let mut sum = 0u64;
             let px = (w * h) as u64;
             for i in (0..input.data.len()).step_by(4) {
-                sum += (0.299 * input.data[i] as f32
-                    + 0.587 * input.data[i + 1] as f32
-                    + 0.114 * input.data[i + 2] as f32) as u64;
+                sum += crate::effects::luminance_f32(
+                    input.data[i],
+                    input.data[i + 1],
+                    input.data[i + 2],
+                ) as u64;
             }
             sum.checked_div(px).map_or(128, |mean| mean.min(255) as u8)
         } else {
@@ -103,9 +105,8 @@ impl Effect for PixelSort {
 
             for x in 0..w {
                 let idx = (y * w + x) * 4;
-                let lum = (0.299 * data[idx] as f32
-                    + 0.587 * data[idx + 1] as f32
-                    + 0.114 * data[idx + 2] as f32) as u8;
+                let lum = crate::effects::luminance_f32(data[idx], data[idx + 1], data[idx + 2])
+                    as u8;
 
                 if lum > threshold && !in_run {
                     run_start = x;
@@ -120,9 +121,7 @@ impl Effect for PixelSort {
                         })
                         .collect();
 
-                    pixels.sort_by_key(|p| {
-                        (0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32) as u8
-                    });
+                    pixels.sort_by_key(|p| crate::effects::luminance_f32(p[0], p[1], p[2]) as u8);
 
                     for (offset, pixel) in pixels.iter().enumerate() {
                         let pidx = (y * w + (run_start + offset)) * 4;
