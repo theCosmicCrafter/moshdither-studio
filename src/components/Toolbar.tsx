@@ -7,6 +7,7 @@ import {
   loadMediaFile,
   sam3LoadImage,
 } from "../lib/tauri";
+import { useClickOutside } from "../hooks/useClickOutside";
 import { useAppStore } from "../store";
 import { stackToRustPayload, stackRequiresCpuPreview } from "../utils/effectConverter";
 import WindowControls from "./WindowControls";
@@ -52,47 +53,16 @@ export default function Toolbar({ onFileLoaded }: Props) {
   const [fps, setFps] = useState(30);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [editMenuOpen, setEditMenuOpen] = useState(false);
-  const editMenuRef = useRef<HTMLDivElement>(null);
+  const editMenuRef = useClickOutside<HTMLDivElement>(editMenuOpen, () => setEditMenuOpen(false));
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
-  const viewMenuRef = useRef<HTMLDivElement>(null);
+  const viewMenuRef = useClickOutside<HTMLDivElement>(viewMenuOpen, () => setViewMenuOpen(false));
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
-  const fileMenuRef = useRef<HTMLDivElement>(null);
+  const fileMenuRef = useClickOutside<HTMLDivElement>(fileMenuOpen, () => setFileMenuOpen(false));
   const dockedPanels = useAppStore((s) => s.dockedPanels) || [];
   const triggerLayoutAction = useAppStore((s) => s.triggerLayoutAction);
   const setTheme = useAppStore((s) => s.setTheme);
 
   const dockedIds = new Set(dockedPanels);
-
-  useEffect(() => {
-    if (!fileMenuOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (fileMenuRef.current && !fileMenuRef.current.contains(e.target as Node)) {
-        setFileMenuOpen(false);
-      }
-    };
-    window.addEventListener("mousedown", handler);
-    return () => window.removeEventListener("mousedown", handler);
-  }, [fileMenuOpen]);
-  useEffect(() => {
-    if (!editMenuOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (editMenuRef.current && !editMenuRef.current.contains(e.target as Node)) {
-        setEditMenuOpen(false);
-      }
-    };
-    window.addEventListener("mousedown", handler);
-    return () => window.removeEventListener("mousedown", handler);
-  }, [editMenuOpen]);
-  useEffect(() => {
-    if (!viewMenuOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (viewMenuRef.current && !viewMenuRef.current.contains(e.target as Node)) {
-        setViewMenuOpen(false);
-      }
-    };
-    window.addEventListener("mousedown", handler);
-    return () => window.removeEventListener("mousedown", handler);
-  }, [viewMenuOpen]);
   const theme = useAppStore((s) => s.theme);
   const toggleTheme = useAppStore((s) => s.toggleTheme);
   const panelOpacity = useAppStore((s) => s.panelOpacity);
