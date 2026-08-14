@@ -1,6 +1,7 @@
 pub mod atkinson;
 pub mod auto_palette;
 pub mod bayer;
+pub mod bayer_tables;
 pub mod blue_noise;
 pub mod burkes;
 pub mod custom_matrix;
