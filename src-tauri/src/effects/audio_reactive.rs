@@ -464,7 +464,7 @@ impl Effect for AudioDither {
             let x = (i / 4) % input.width as usize;
             let y = (i / 4) / input.width as usize;
 
-            let lum = 0.299 * out[i] as f32 + 0.587 * out[i + 1] as f32 + 0.114 * out[i + 2] as f32;
+            let lum = crate::effects::luminance_f32(out[i], out[i + 1], out[i + 2]);
 
             // 2×2 Bayer threshold, audio-modulated
             let bayer = ((x & 1) ^ (y & 1)) as f32 * threshold * 0.5;

@@ -130,9 +130,11 @@ impl Effect for HalftoneDither {
                         let my = centre_y.round() as i32 + oy;
                         if mx >= 0 && my >= 0 && (mx as u32) < w && (my as u32) < h {
                             let midx = ((my as u32 * w + mx as u32) * 4) as usize;
-                            sum += 0.299 * input.data[midx] as f32
-                                + 0.587 * input.data[midx + 1] as f32
-                                + 0.114 * input.data[midx + 2] as f32;
+                            sum += crate::effects::luminance_f32(
+                                input.data[midx],
+                                input.data[midx + 1],
+                                input.data[midx + 2],
+                            );
                             count += 1;
                         }
                     }

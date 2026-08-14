@@ -37,7 +37,7 @@ fn dist_sq(a: [u8; 3], b: [u8; 3]) -> u32 {
 }
 
 fn luma(c: [u8; 3]) -> f32 {
-    0.299 * c[0] as f32 + 0.587 * c[1] as f32 + 0.114 * c[2] as f32
+    crate::effects::luminance_f32(c[0], c[1], c[2])
 }
 
 impl Effect for PaletteDither {
