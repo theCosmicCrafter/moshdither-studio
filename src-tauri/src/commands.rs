@@ -320,43 +320,6 @@ fn process_frame_with_mask(
     Ok(result)
 }
 
-/// Apply a single effect to the currently loaded image.
-#[tauri::command]
-pub fn apply_effect(
-    state: State<'_, AppState>,
-    effect_id: String,
-    params: serde_json::Map<String, serde_json::Value>,
-    mask_b64: Option<String>,
-) -> std::result::Result<String, String> {
-    let frame_lock = state
-        .current_frame
-        .lock()
-        .map_err(|e| format!("frame lock poisoned: {e}"))?;
-    let mut working = frame_lock.as_ref().ok_or("No media loaded")?.clone();
-    drop(frame_lock);
-
-    let mask = decode_mask_b64(mask_b64.as_deref())?;
-
-    let registry = state
-        .registry
-        .lock()
-        .map_err(|e| format!("registry lock poisoned: {e}"))?;
-    let effect = registry
-        .get(&effect_id)
-        .ok_or_else(|| format!("Effect '{}' not found", effect_id))?;
-    working = process_frame_with_mask(effect, &working, mask.as_ref(), &params, "inside")?;
-
-    // Encode result
-    let img = image::RgbaImage::from_raw(working.width, working.height, working.data)
-        .ok_or("Invalid frame data after processing.")?;
-    let mut buf = Cursor::new(Vec::new());
-    img.write_to(&mut buf, ImageFormat::Png)
-        .map_err(|e| e.to_string())?;
-
-    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, buf.into_inner());
-    Ok(format!("data:image/png;base64,{}", b64))
-}
-
 #[derive(serde::Deserialize)]
 pub struct EffectCall {
     pub effect_id: String,
