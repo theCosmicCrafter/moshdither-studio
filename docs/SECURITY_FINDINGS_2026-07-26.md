@@ -94,7 +94,7 @@ The pin lives on the `snapshot_download()` that actually contacts the Hub.
 
 ---
 
-## 3. `transformers` 4.57.6 — 4 advisories, 1 that matters
+## 3. `transformers` 4.57.6 — 4 advisories, 1 that matters — **FIXED 2026-08-11**
 
 Triaged rather than treated as four equal items:
 
@@ -137,10 +137,18 @@ dead code, upgrading transformers 4→5 (which also forces `huggingface_hub` 0�
 buys nothing and carries real breakage risk. The cheaper and more honest move is
 to recycle `sam3_service.py` and `main.py` and drop `transformers` from
 `requirements.txt` entirely, which removes the advisory surface rather than
-managing it. That is a scope decision, so it is recorded here rather than done.
+managing it.
 
-Suppressed by ID, never blanket, so a new `transformers` advisory still fails
-the gate.
+**Done 2026-08-11.** `main.py`, `sam3_service.py`, their 8 scratch debug
+scripts, and the two real test suites that only exercised them
+(`test_main.py`, `test_coordinates.py`) are recycled — see
+`recycling/MANIFEST.md`. `transformers`, `rembg`, `onnxruntime`, and `PyJWT`
+are dropped from `requirements.txt` entirely along with the now-pointless
+`pip-audit --ignore-vuln` suppressions in `.pre-commit-config.yaml` (nothing
+left to suppress) and the `packages/python-backend/test_*` bandit exclusions
+in both `.pre-commit-config.yaml` and `.github/workflows/security.yml`
+(nothing left to exclude). `sam3_bridge.py` — the production bridge — never
+imported any of the four and is unaffected; re-verified before removal.
 
 ---
 

@@ -84,13 +84,11 @@ repos:
         # the files, which also means only changed files are scanned on commit.
         args: ['-ll']
         #
-        # The legacy Python backend is NO LONGER excluded: its 15 B602
-        # shell=True findings are fixed, and it now reports clean.
-        #
-        # Only packages/python-backend/test_*.py stays out. Those carry 6 B108
-        # (hardcoded /tmp paths) and are tests for main.py, which the app never
-        # spawns. CI's bandit job excludes ./tests for the same reason.
-        exclude: '^(references|sam3_env|sam3_repo|audit_venv|node_modules|recycling|dist|target|src-tauri/target|packages/python-backend/(venv|sam3_repo)/|packages/python-backend/test_)'
+        # The legacy Python backend (main.py, sam3_service.py, and their
+        # test_*.py scratch scripts) is gone -- recycled 2026-08-11, see
+        # recycling/MANIFEST.md. Nothing under packages/python-backend/ needs
+        # a bandit exclusion of its own anymore.
+        exclude: '^(references|sam3_env|sam3_repo|audit_venv|node_modules|recycling|dist|target|src-tauri/target|packages/python-backend/(venv|sam3_repo)/)'
 
 
   # ── JS / TS / NODE ────────────────────────────────────────────
@@ -123,17 +121,4 @@ repos:
           - 'packages/python-backend/requirements.txt'
           - '--desc'
           - '--progress-spinner=off'
-          # Suppressed by explicit ID, never blanket, so a NEW advisory against
-          # any dependency still fails this gate. These four are all transformers
-          # 4.57.6 issues whose only fix is transformers 5.x -- a major-version
-          # migration, tracked in docs/SECURITY_FINDINGS_2026-07-26.md. Remove
-          # these lines when that upgrade lands.
-          - '--ignore-vuln'
-          - 'PYSEC-2025-217'
-          - '--ignore-vuln'
-          - 'PYSEC-2026-2288'
-          - '--ignore-vuln'
-          - 'PYSEC-2026-2289'
-          - '--ignore-vuln'
-          - 'PYSEC-2026-2290'
         pass_filenames: false
