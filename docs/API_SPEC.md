@@ -18,8 +18,7 @@ All communication between the React frontend and Rust backend uses Tauri v2's `i
 | `load_media_from_base64` | `dataUrl: string` | `void` | Load media from a base64 data URL (e.g. drag-drop). |
 | `list_effects` | — | `EffectMeta[]` | List all registered effects (75+ across 11 categories). |
 | `list_effects_by_category` | `category: string` | `EffectMeta[]` | Filter effects by category (dithering, analog, color, glitch, etc.). |
-| `apply_effect` | `effectId: string, params: Record, maskB64?: string` | `string` (data URL) | Apply a single effect to the current frame. Returns processed image as PNG data URL. |
-| `apply_effect_stack` | `stack: StackEntry[], maskB64?: string` | `string` (data URL) | Apply the full effect stack to the current frame. Each entry has `effect_id`, `params`, `mask_b64`, `mask_mode`. |
+| `apply_effect_stack` | `stack: StackEntry[], maskB64?: string` | `string` (data URL) | Apply the full effect stack to the current frame — used for single effects too, there's no separate single-effect command. Each entry has `effect_id`, `params`, `mask_b64`, `mask_mode`. |
 | `get_frame_data` | — | `string` (data URL) | Get the current frame as a PNG data URL. |
 | `save_media` | `path: string, format: string, quality: number` | `void` | Save current frame to file (PNG/JPEG/BMP/TIFF). |
 | `export_video` | `sourcePath, outputPath, stack, maskB64?, codec?, fps?, width?, height?, audioBakeJson?, watermark?, trimStart?, trimEnd?` | `string` (output path) | Export video with effect stack applied via FFmpeg. |
