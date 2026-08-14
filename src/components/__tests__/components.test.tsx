@@ -3,7 +3,7 @@
  * Tests render behavior, key interactions, and store integration.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, within, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { useAppStore, type EffectMeta } from "../../store";
 
 // ── Mock external dependencies ──────────────────────────────
@@ -92,7 +92,6 @@ vi.mock("../../lib/tauri", () => ({
   sam3PointPrompt: vi.fn(() => Promise.resolve({ count: 1, masks: ["mask1"], scores: [0.9] })),
   sam3BoxPrompt: vi.fn(() => Promise.resolve({ count: 0, masks: [], scores: [] })),
   sam3AutoMask: vi.fn(() => Promise.resolve({ count: 2, masks: ["m1", "m2"], scores: [0.9, 0.8] })),
-  sam3RefineMask: vi.fn(() => Promise.resolve({ status: "ok", count: 1, masks: ["m1"], scores: [0.9] })),
   sam3PostprocessMask: vi.fn(() => Promise.resolve("processed-mask")),
   sam3Clear: vi.fn(() => Promise.resolve("ok")),
   getFrameData: vi.fn(() => Promise.resolve("data:image/png;base64,abc")),
@@ -165,8 +164,6 @@ vi.mock("../../engine/palettePresets", () => ({
 
 // ── Import components after mocks ────────────────────────────
 import StatusBar from "../StatusBar";
-import FloatingPanel from "../FloatingPanel";
-import PanelMenu from "../PanelMenu";
 import OnboardingModal from "../OnboardingModal";
 import WindowControls from "../WindowControls";
 import PlaybackOverlay from "../PlaybackOverlay";
@@ -176,7 +173,6 @@ import MaskSelector from "../MaskSelector";
 import EffectStack from "../EffectStack";
 import EffectBrowser from "../EffectBrowser";
 import SearchBar from "../EffectBrowser/SearchBar";
-import CategoryTabs from "../EffectBrowser/CategoryTabs";
 import EffectList from "../EffectBrowser/EffectList";
 import CategoryAccordion from "../EffectBrowser/CategoryAccordion";
 import PresetPanel from "../PresetPanel";
@@ -336,102 +332,6 @@ describe("Component Test Suite", () => {
     });
   });
 
-  // ── FloatingPanel ──────────────────────────────────────────
-  describe("FloatingPanel", () => {
-    it("renders title and children", () => {
-      render(
-        <FloatingPanel id="test" title="Test Panel" defaultX={10} defaultY={10} defaultWidth={300} defaultHeight={200}>
-          <div data-testid="child">Content</div>
-        </FloatingPanel>
-      );
-      expect(screen.getByText("Test Panel")).toBeInTheDocument();
-      expect(screen.getByTestId("child")).toBeInTheDocument();
-    });
-
-    it("minimize button hides children", () => {
-      render(
-        <FloatingPanel id="test" title="Test" defaultX={0} defaultY={0} defaultWidth={300} defaultHeight={200}>
-          <div data-testid="child">Content</div>
-        </FloatingPanel>
-      );
-      expect(screen.getByTestId("child")).toBeInTheDocument();
-      fireEvent.click(screen.getByLabelText("Minimize panel"));
-      expect(screen.queryByTestId("child")).not.toBeInTheDocument();
-    });
-
-    it("restore button shows children again", () => {
-      render(
-        <FloatingPanel id="test" title="Test" defaultX={0} defaultY={0} defaultWidth={300} defaultHeight={200}>
-          <div data-testid="child">Content</div>
-        </FloatingPanel>
-      );
-      fireEvent.click(screen.getByLabelText("Minimize panel"));
-      expect(screen.queryByTestId("child")).not.toBeInTheDocument();
-      fireEvent.click(screen.getByLabelText("Restore panel"));
-      expect(screen.getByTestId("child")).toBeInTheDocument();
-    });
-
-    it("calls onActivate on mousedown", () => {
-      let activated = false;
-      render(
-        <FloatingPanel id="test" title="Test" defaultX={0} defaultY={0} defaultWidth={300} defaultHeight={200} onActivate={() => { activated = true; }}>
-          <div>Content</div>
-        </FloatingPanel>
-      );
-      fireEvent.mouseDown(screen.getByText("Test"));
-      expect(activated).toBe(true);
-    });
-
-    it("calls onClose when close button is clicked", () => {
-      let closedId: string | null = null;
-      render(
-        <FloatingPanel id="test" title="Test" defaultX={0} defaultY={0} defaultWidth={300} defaultHeight={200} onClose={(id) => { closedId = id; }}>
-          <div>Content</div>
-        </FloatingPanel>
-      );
-      fireEvent.click(screen.getByLabelText("Close panel"));
-      expect(closedId).toBe("test");
-    });
-  });
-
-  // ── PanelMenu ──────────────────────────────────────────────
-  describe("PanelMenu", () => {
-    it("renders toggle button with panel count", () => {
-      render(<PanelMenu />);
-      expect(screen.getByTitle("Toggle panels")).toBeInTheDocument();
-    });
-
-    it("opens dropdown on click", () => {
-      render(<PanelMenu />);
-      fireEvent.click(screen.getByTitle("Toggle panels"));
-      expect(screen.getByText("Panels")).toBeInTheDocument();
-    });
-
-    it("lists all panels from registry", () => {
-      render(<PanelMenu />);
-      fireEvent.click(screen.getByTitle("Toggle panels"));
-      for (const p of PANEL_REGISTRY) {
-        expect(screen.getByText(p.label)).toBeInTheDocument();
-      }
-    });
-
-    it("shows Show All and Hide All buttons", () => {
-      render(<PanelMenu />);
-      fireEvent.click(screen.getByTitle("Toggle panels"));
-      expect(screen.getByText("Show All")).toBeInTheDocument();
-      expect(screen.getByText("Hide All")).toBeInTheDocument();
-    });
-
-    it("removes panel from dock on click when docked", () => {
-      render(<PanelMenu />);
-      fireEvent.click(screen.getByTitle("Toggle panels"));
-      // "browser" is docked by default
-      const browserBtn = screen.getByText("Effects").closest("button")!;
-      fireEvent.click(browserBtn);
-      const docked = useAppStore.getState().dockedPanels;
-      expect(docked.includes("browser")).toBe(false);
-    });
-  });
 
   // ── OnboardingModal ────────────────────────────────────────
   describe("OnboardingModal", () => {
@@ -791,34 +691,6 @@ describe("Component Test Suite", () => {
     it("does not show clear button when query is empty", () => {
       render(<SearchBar />);
       expect(screen.queryByRole("button")).not.toBeInTheDocument();
-    });
-  });
-
-  // ── CategoryTabs ───────────────────────────────────────────
-  describe("CategoryTabs", () => {
-    it("renders all category buttons", () => {
-      render(<CategoryTabs />);
-      expect(screen.getByText("Dither")).toBeInTheDocument();
-      expect(screen.getByText("Analog")).toBeInTheDocument();
-      expect(screen.getByText("Glitch")).toBeInTheDocument();
-    });
-
-    it("shows effect count per category", () => {
-      useAppStore.getState().setAllEffects([
-        mockEffectMeta("dithering.bayer", "Bayer", "dithering"),
-        mockEffectMeta("dithering.floyd", "Floyd", "dithering"),
-        mockEffectMeta("analog.vhs", "VHS", "analog"),
-      ]);
-      render(<CategoryTabs />);
-      // Dither category should show count 2
-      const ditherBtn = screen.getByText("Dither").closest("button")!;
-      expect(within(ditherBtn).getByText("2")).toBeInTheDocument();
-    });
-
-    it("sets active category on click", () => {
-      render(<CategoryTabs />);
-      fireEvent.click(screen.getByText("Analog"));
-      expect(useAppStore.getState().activeCategory).toBe("analog");
     });
   });
 

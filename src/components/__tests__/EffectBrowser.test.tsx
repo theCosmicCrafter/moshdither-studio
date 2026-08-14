@@ -2,7 +2,7 @@
  * Tests for EffectBrowser: search filtering, category switching, effect selection.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, within, act } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
 import { useAppStore, type EffectMeta } from "../../store";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -22,7 +22,6 @@ vi.mock("../../lib/browserFallback", () => ({
 
 import EffectBrowser from "../EffectBrowser";
 import SearchBar from "../EffectBrowser/SearchBar";
-import CategoryTabs from "../EffectBrowser/CategoryTabs";
 import EffectList from "../EffectBrowser/EffectList";
 import CategoryAccordion from "../EffectBrowser/CategoryAccordion";
 
@@ -150,32 +149,6 @@ describe("EffectBrowser — Category Switching", () => {
     expect(screen.getByText("VHS")).toBeInTheDocument();
     expect(screen.queryByText("Bayer")).not.toBeInTheDocument();
     expect(screen.queryByText("Pixel Sort")).not.toBeInTheDocument();
-  });
-
-  it("changes active category on tab click", () => {
-    render(<CategoryTabs />);
-    fireEvent.click(screen.getByText("Glitch"));
-    expect(useAppStore.getState().activeCategory).toBe("glitch");
-  });
-
-  it("shows effect count badge per category", () => {
-    useAppStore.getState().setAllEffects([
-      mockEffectMeta("dithering.bayer", "Bayer", "dithering"),
-      mockEffectMeta("dithering.floyd", "Floyd", "dithering"),
-      mockEffectMeta("dithering.atkinson", "Atkinson", "dithering"),
-    ]);
-    render(<CategoryTabs />);
-    const ditherBtn = screen.getByText("Dither").closest("button")!;
-    expect(within(ditherBtn).getByText("3")).toBeInTheDocument();
-  });
-
-  it("does not show count badge for empty categories", () => {
-    useAppStore.getState().setAllEffects([
-      mockEffectMeta("dithering.bayer", "Bayer", "dithering"),
-    ]);
-    render(<CategoryTabs />);
-    const analogBtn = screen.getByText("Analog").closest("button")!;
-    expect(within(analogBtn).queryByText("0")).not.toBeInTheDocument();
   });
 
   it("CategoryAccordion expands and collapses categories", () => {

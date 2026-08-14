@@ -5,11 +5,6 @@
  * and persistence to localStorage.
  */
 
-export interface Keybinding {
-  commandId: string;
-  keys: string; // e.g. "Ctrl+Shift+Z"
-}
-
 export interface ShortcutPreset {
   name: string;
   label: string;

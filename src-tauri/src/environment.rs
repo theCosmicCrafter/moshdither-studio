@@ -347,10 +347,11 @@ pub async fn install_local_environment(app: AppHandle) -> std::result::Result<En
             &["install", "-r", &reqs.to_string_lossy()],
         )?;
     } else {
-        // Minimal fallback set for mosh_cli.py
+        // Minimal fallback set for mosh_cli.py (numpy/Pillow are transitive
+        // deps of the DatamoshLib.FFG_effects modules it imports)
         run_command(
             &pip.to_string_lossy(),
-            &["install", "numpy", "Pillow", "rich"],
+            &["install", "numpy", "Pillow"],
         )?;
     }
 
@@ -359,36 +360,4 @@ pub async fn install_local_environment(app: AppHandle) -> std::result::Result<En
 
     save_config(&app, "local");
     get_environment_status(app).await
-}
-
-/// Return the path to the local venv python if available.
-pub fn local_python_path(app: &AppHandle) -> Option<String> {
-    let cfg = load_config(app);
-    if cfg.mode == "local" {
-        let py = venv_python(app);
-        if py.exists() {
-            return Some(py.to_string_lossy().to_string());
-        }
-    }
-    None
-}
-
-/// Return the path to the copied FFmpeg binaries if available.
-pub fn local_ffmpeg_dir(app: &AppHandle) -> Option<PathBuf> {
-    let dir = bundled_ffmpeg_dir(app);
-    if dir.join(format!("ffmpeg{}", exe_suffix())).exists() {
-        Some(dir)
-    } else {
-        None
-    }
-}
-
-/// Return the path to the copied FFglitch binaries if available.
-pub fn local_ffglitch_dir(app: &AppHandle) -> Option<PathBuf> {
-    let dir = bundled_ffglitch_dir(app);
-    if dir.join(format!("ffgac{}", exe_suffix())).exists() {
-        Some(dir)
-    } else {
-        None
-    }
 }

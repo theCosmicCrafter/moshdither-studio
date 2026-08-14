@@ -26,6 +26,10 @@ Thumbs.db
 /test-outputs
 *.tsbuildinfo
 
+# live-preview-param-update.spec.ts writes fresh before/after diffs on every
+# run; cpu.png/webgl.png in the same directory are committed goldens and stay tracked.
+/tests/e2e/output/param-update-*.png
+
 # Downloaded SAM3 checkpoint (fetched at build time).
 #
 # The WEIGHTS are ignored (see the /models/**/*.pt rules below), but the

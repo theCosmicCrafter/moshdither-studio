@@ -118,7 +118,3 @@ const PANEL_MAP: Record<string, PanelMeta> = Object.fromEntries(
 export function getPanelMeta(id: string): PanelMeta | undefined {
   return PANEL_MAP[id];
 }
-
-export function getAllPanelIds(): string[] {
-  return PANEL_REGISTRY.map((p) => p.id);
-}

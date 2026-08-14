@@ -1,5 +1,12 @@
 # MoshDither Studio — Execution Milestones
 
+> **Stale — not maintained.** Every checkbox below is unchecked, but M1
+> (parameter controls, theme system, dock system) and M4 (SAM3 mask
+> persistence) items have already shipped per `CHANGELOG.md` and git log.
+> Treat `CHANGELOG.md` as the accurate record of what's done; this file was
+> never reconciled after the work landed and would need a full pass against
+> the checklist below before it could be trusted again.
+
 **Version:** 1.0.0
 **Spec Baseline:** commit SHA TBD (after initial governance scaffold)
 **Source:** Synthesized from `docs/HARDENING_PLAN_2026-07-26.md`, `docs/IMPLEMENTATION_STATUS.md`, and `docs/UI_UX_IMPROVEMENT_PLAN.md`

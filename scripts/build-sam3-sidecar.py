@@ -2,8 +2,8 @@
 """Build the SAM3 bridge sidecar using PyInstaller.
 
 The sidecar is a single-file executable that bundles a Python interpreter,
-torch/transformers/opencv, and the `sam3` package source. It communicates
-with the Rust backend over stdin/stdout using the same JSON-line protocol as
+torch/opencv, and the `sam3` package source. It communicates with the Rust
+backend over stdin/stdout using the same JSON-line protocol as
 `src-tauri/sam3_bridge.py`.
 
 The model checkpoint is **not** bundled here; it is shipped as a Tauri resource
@@ -128,8 +128,12 @@ def run_pyinstaller(target: str, python: Path, work_dir: Path) -> Path:
         str(BRIDGE_SCRIPT),
     ]
 
-    # torch/transformers have heavy dynamic imports; collect all submodules and data.
-    for pkg in ["torch", "torchvision", "transformers", "timm", "iopath", "huggingface_hub", "tqdm"]:
+    # torch has heavy dynamic imports; collect all submodules and data. Same
+    # for its companions here -- none of these are transformers/rembg/
+    # onnxruntime, which only the recycled legacy RPC backend ever needed
+    # (see docs/SECURITY_FINDINGS_2026-07-26.md §3); sam3_bridge.py and the
+    # vendored sam3 package never import them.
+    for pkg in ["torch", "torchvision", "timm", "iopath", "huggingface_hub", "tqdm"]:
         cmd.extend(["--collect-submodules", pkg, "--collect-data", pkg])
 
     print("Building sidecar...")

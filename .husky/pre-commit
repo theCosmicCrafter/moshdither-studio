@@ -3,7 +3,6 @@
 
 # Secret scan before every commit
 echo "Running secret scan..."
-cd packages/desktop-gui
 npm run secret-scan
 if [ $? -ne 0 ]; then
     echo "Secret scan failed. Commit aborted."
