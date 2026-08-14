@@ -136,7 +136,7 @@ export default function FrameTimeline() {
             </button>
           ))
         ) : (
-          <div className="text-xs text-outline">
+          <div className="font-body-sm text-body-sm text-outline">
             Click 'Run Video Predictor' to extract frames and generate tracking masks.
           </div>
         )}

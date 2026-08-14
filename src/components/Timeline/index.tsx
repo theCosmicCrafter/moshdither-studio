@@ -186,7 +186,7 @@ export default function Timeline() {
         {/* Audio file name */}
         {audioFilePath && (
           <div
-            className="font-data-micro text-data-micro text-accent-teal max-w-[120px] overflow-hidden text-ellipsis whitespace-nowrap ml-2"
+            className="font-label-sm text-label-sm text-accent-teal max-w-[120px] overflow-hidden text-ellipsis whitespace-nowrap ml-2"
             title={audioFilePath}
           >
             {getFileName(audioFilePath)}

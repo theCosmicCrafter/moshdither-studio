@@ -39,7 +39,7 @@ export default function CustomUiModal() {
         <div className="flex items-center justify-between border-b border-outline/20 pb-3">
           <div className="flex items-center gap-2">
             <span className="material-symbols-outlined text-accent-teal">palette</span>
-            <h2 id="custom-ui-title" className="text-base font-bold text-on-surface">
+            <h2 id="custom-ui-title" className="font-headline-md text-headline-md text-on-surface">
               Custom UI Configurator
             </h2>
           </div>
@@ -55,10 +55,10 @@ export default function CustomUiModal() {
           {/* Primary Accent */}
           <div className="flex items-center justify-between">
             <div>
-              <label htmlFor="primary-color" className="text-xs font-medium text-on-surface block">
+              <label htmlFor="primary-color" className="font-label-md text-label-md text-on-surface block">
                 Primary Accent Color
               </label>
-              <span className="text-[10px] text-on-surface-variant">Active elements, highlights</span>
+              <span className="font-label-sm text-label-sm text-on-surface-variant">Active elements, highlights</span>
             </div>
             <div className="flex items-center gap-2">
               <input
@@ -68,17 +68,17 @@ export default function CustomUiModal() {
                 onChange={(e) => setPrimary(e.target.value)}
                 className="w-8 h-8 rounded cursor-pointer border border-outline/30 bg-transparent"
               />
-              <span className="text-xs font-mono text-on-surface-variant">{primary}</span>
+              <span className="font-code-sm text-code-sm text-on-surface-variant">{primary}</span>
             </div>
           </div>
 
           {/* Secondary Accent */}
           <div className="flex items-center justify-between">
             <div>
-              <label htmlFor="secondary-color" className="text-xs font-medium text-on-surface block">
+              <label htmlFor="secondary-color" className="font-label-md text-label-md text-on-surface block">
                 Secondary Accent Color
               </label>
-              <span className="text-[10px] text-on-surface-variant">Hover states, badges</span>
+              <span className="font-label-sm text-label-sm text-on-surface-variant">Hover states, badges</span>
             </div>
             <div className="flex items-center gap-2">
               <input
@@ -88,17 +88,17 @@ export default function CustomUiModal() {
                 onChange={(e) => setSecondary(e.target.value)}
                 className="w-8 h-8 rounded cursor-pointer border border-outline/30 bg-transparent"
               />
-              <span className="text-xs font-mono text-on-surface-variant">{secondary}</span>
+              <span className="font-code-sm text-code-sm text-on-surface-variant">{secondary}</span>
             </div>
           </div>
 
           {/* Surface Background */}
           <div className="flex items-center justify-between">
             <div>
-              <label htmlFor="bg-color" className="text-xs font-medium text-on-surface block">
+              <label htmlFor="bg-color" className="font-label-md text-label-md text-on-surface block">
                 Workspace Surface Color
               </label>
-              <span className="text-[10px] text-on-surface-variant">Panel background tint</span>
+              <span className="font-label-sm text-label-sm text-on-surface-variant">Panel background tint</span>
             </div>
             <div className="flex items-center gap-2">
               <input
@@ -108,17 +108,17 @@ export default function CustomUiModal() {
                 onChange={(e) => setBg(e.target.value)}
                 className="w-8 h-8 rounded cursor-pointer border border-outline/30 bg-transparent"
               />
-              <span className="text-xs font-mono text-on-surface-variant">{bg}</span>
+              <span className="font-code-sm text-code-sm text-on-surface-variant">{bg}</span>
             </div>
           </div>
 
           {/* Panel Opacity */}
           <div className="space-y-1 pt-2 border-t border-outline/20">
             <div className="flex justify-between items-center">
-              <label htmlFor="panel-opacity" className="text-xs font-medium text-on-surface">
+              <label htmlFor="panel-opacity" className="font-label-md text-label-md text-on-surface">
                 Panel Opacity
               </label>
-              <span className="text-xs font-mono text-on-surface-variant">
+              <span className="font-code-sm text-code-sm text-on-surface-variant">
                 {Math.round(panelOpacity * 100)}%
               </span>
             </div>
@@ -139,13 +139,13 @@ export default function CustomUiModal() {
         <div className="flex justify-end gap-3 pt-3 border-t border-outline/20">
           <button
             onClick={() => setCustomUiModalOpen(false)}
-            className="px-4 py-1.5 text-xs text-on-surface-variant hover:text-on-surface transition-colors"
+            className="px-4 py-1.5 font-label-md text-label-md text-on-surface-variant hover:text-on-surface transition-colors"
           >
             Cancel
           </button>
           <button
             onClick={handleApply}
-            className="px-4 py-1.5 text-xs rounded bg-accent-teal text-surface font-bold hover:brightness-110 transition-all shadow-md"
+            className="px-4 py-1.5 font-label-md text-label-md font-semibold rounded bg-accent-teal text-surface hover:brightness-110 transition-all shadow-md"
           >
             Apply Theme
           </button>

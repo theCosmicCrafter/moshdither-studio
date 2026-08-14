@@ -53,7 +53,7 @@ export default function EffectStack() {
       <div className="flex items-center justify-between px-4 py-3 border-b border-outline-variant/30 flex-shrink-0">
         <div className="flex items-center gap-3">
           <div>
-            <h3 className="font-headline-md text-headline-md solar-text uppercase filigree-header ml-6 cursor-default">
+            <h3 className="font-headline-md text-headline-md solar-text filigree-header ml-6 cursor-default">
               Inspector
             </h3>
             <p className="font-label-sm text-label-sm text-accent-teal opacity-90 mt-1 pl-6">
@@ -70,7 +70,7 @@ export default function EffectStack() {
           >
             {expandedIds.size > 0 || selectedStackId ? "unfold_less" : "unfold_more"}
           </button>
-          <span className="text-label-sm font-label-sm text-on-surface-variant uppercase tracking-widest bg-surface/40 px-2 rounded">
+          <span className="text-label-sm font-label-sm text-on-surface-variant uppercase bg-surface/40 px-2 rounded">
             Stack
           </span>
         </div>
@@ -88,7 +88,7 @@ export default function EffectStack() {
               placeholder="Filter effects..."
               value={filterQuery}
               onChange={(e) => setFilterQuery(e.target.value)}
-              className="w-full bg-surface/50 border border-outline/20 rounded pl-8 pr-2 py-1 text-[11px] text-on-surface outline-none focus:border-accent-teal/50 transition-colors"
+              className="w-full bg-surface/50 border border-outline/20 rounded pl-8 pr-2 py-1 text-label-sm font-label-sm text-on-surface outline-none focus:border-accent-teal/50 transition-colors"
             />
           </div>
         </div>
@@ -101,7 +101,7 @@ export default function EffectStack() {
             <span className="material-symbols-outlined opacity-20" style={{ fontSize: 32 }}>
               layers
             </span>
-            <span className="text-label-sm font-label-sm text-center" style={{ fontFamily: "var(--font-hand)" }}>
+            <span className="text-label-sm font-label-sm text-center">
               No effects in stack
               <br />
               Click an effect from the browser to add it
