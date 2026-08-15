@@ -12,6 +12,7 @@ import { resolveExternalDrag } from "./externalDrag";
 // Import components that are hardcoded into the layout
 import PreviewViewport from "../PreviewViewport";
 import Timeline from "../Timeline";
+import { ErrorBoundary } from "../ErrorBoundary";
 
 export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) {
   const panelOpacity = useAppStore((s) => s.panelOpacity);
@@ -62,9 +63,36 @@ export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) 
       const Component = panelMeta.component;
       return (
         <div className="w-full h-full overflow-hidden" style={{ ["--panel-opacity" as string]: panelOpacity }}>
-          <Suspense fallback={<div className="p-4 font-body-sm text-body-sm text-on-surface-variant">Loading...</div>}>
-            <Component />
-          </Suspense>
+          <ErrorBoundary
+            fallback={(error, reset) => (
+              <div className="w-full h-full flex flex-col items-center justify-center gap-2 p-4 text-center">
+                <span
+                  className="material-symbols-outlined text-on-surface-variant"
+                  style={{ fontSize: 20, opacity: 0.5 }}
+                  aria-hidden="true"
+                >
+                  error
+                </span>
+                <p className="font-body-sm text-body-sm text-on-surface-variant">
+                  {panelMeta.label} panel failed to load
+                </p>
+                <p className="font-body-sm text-body-sm text-on-surface-variant" style={{ opacity: 0.7 }}>
+                  {error.message}
+                </p>
+                <button
+                  type="button"
+                  onClick={reset}
+                  className="font-label-md text-label-md text-accent-teal hover:underline"
+                >
+                  Try again
+                </button>
+              </div>
+            )}
+          >
+            <Suspense fallback={<div className="p-4 font-body-sm text-body-sm text-on-surface-variant">Loading...</div>}>
+              <Component />
+            </Suspense>
+          </ErrorBoundary>
         </div>
       );
     }
