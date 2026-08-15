@@ -58,13 +58,6 @@ export default function Toolbar({ onFileLoaded }: Props) {
   const redo = useAppStore((s) => s.redo);
   const canUndo = useAppStore((s) => s.canUndo());
   const canRedo = useAppStore((s) => s.canRedo());
-  const currentTime = useAppStore((s) => s.currentTime);
-  const setCurrentTime = useAppStore((s) => s.setCurrentTime);
-  const playbackSpeed = useAppStore((s) => s.playbackSpeed);
-  const setPlaybackSpeed = useAppStore((s) => s.setPlaybackSpeed);
-  const isPlaying = useAppStore((s) => s.isPlaying);
-  const togglePlay = useAppStore((s) => s.togglePlay);
-  const [fps, setFps] = useState(30);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showUpdateChecker, setShowUpdateChecker] = useState(false);
   const [editMenuOpen, setEditMenuOpen] = useState(false);
@@ -591,54 +584,6 @@ export default function Toolbar({ onFileLoaded }: Props) {
         >
           zoom_in
         </button>
-        <div className="w-px h-5 bg-outline-variant/50 mx-1" />
-        <button
-          onClick={() => togglePlay()}
-          className={`material-symbols-outlined transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full transport-icon ${isPlaying ? "text-accent-pink neo-pressed" : "text-on-surface-variant hover:text-accent-teal"}`}
-          title={isPlaying ? "Pause" : "Play"}
-          aria-label={isPlaying ? "Pause playback" : "Play preview"}
-        >
-          {isPlaying ? "pause" : "play_arrow"}
-        </button>
-        <LabeledSlider
-          label="TIME"
-          ariaLabel="Current frame"
-          value={currentTime}
-          min={0}
-          max={99}
-          step={1}
-          onChange={(v) => {
-            setCurrentTime(v);
-            handleProcess();
-          }}
-          title={`Frame ${currentTime}`}
-          showValue={false}
-          trackClassName="slider-thumb w-20"
-        />
-        <LabeledSlider
-          label="FPS"
-          value={fps}
-          min={1}
-          max={60}
-          step={1}
-          onChange={setFps}
-          title={`${fps} FPS`}
-          trackClassName="slider-thumb w-16"
-          valueClassName="text-code-sm font-code-sm text-accent-pink w-4 text-right"
-        />
-        <select
-          value={playbackSpeed}
-          onChange={(e) => setPlaybackSpeed(Number.parseFloat(e.target.value))}
-          className="themed-select text-label-sm font-label-sm cursor-pointer"
-          title="Playback speed"
-          aria-label="Playback speed"
-        >
-          <option value={0.25}>0.25x</option>
-          <option value={0.5}>0.5x</option>
-          <option value={1}>1x</option>
-          <option value={2}>2x</option>
-          <option value={4}>4x</option>
-        </select>
       </div>
 
       {/* Right: Window controls */}
