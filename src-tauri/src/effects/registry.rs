@@ -18,7 +18,7 @@ impl EffectRegistry {
 
     fn register<E: Effect + 'static>(&mut self, effect: E) {
         let meta = effect.meta();
-        self.effects.insert(meta.id.clone(), Box::new(effect));
+        self.effects.insert(meta.id, Box::new(effect));
     }
 
     fn register_defaults(&mut self) {

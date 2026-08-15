@@ -329,6 +329,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
             {String(param.type).toLowerCase() === "toggle" && (
               <button
                 aria-label={param.name}
+                aria-pressed={Boolean(value)}
                 title={param.name}
                 onClick={() =>
                   updateStackParams(entry.id, {

@@ -21,6 +21,16 @@ This project is a desktop creative tool. Security concerns primarily involve:
 - Network access (only for downloading SAM3 models on user request)
 - FFmpeg sidecar execution
 
+## Known Accepted Configuration
+
+- **CSP `style-src 'self' 'unsafe-inline'`** (`src-tauri/tauri.conf.json`) —
+  `script-src` has no such relaxation (inherits `default-src 'self'`), so
+  this only affects CSS injection risk, not script execution. It's needed
+  because the frontend still has ~600 inline `style={{...}}` objects
+  (see `docs/UI_UX_IMPROVEMENT_PLAN.md`, "Inline styles everywhere"). Once
+  that migration to Tailwind/CSS custom properties lands, `unsafe-inline`
+  should be dropped from `style-src`.
+
 ## Security Toolchain
 
 This project implements a comprehensive security stack with multi-layer scanning:
