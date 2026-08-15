@@ -37,10 +37,10 @@ use tauri::Manager;
 use window_commands::{dock_window_appbar, get_monitor_info, snap_to_edge, undock_window_appbar};
 
 pub fn run() {
-    println!("Initializing Tauri Builder...");
+    tracing::info!("Initializing Tauri Builder...");
     tauri::Builder::default()
         .setup(|app| {
-            println!("Tauri setup complete.");
+            tracing::info!("Tauri setup complete.");
             // `app` is only read inside the macOS/Windows-gated block below; on
             // every other target that block is stripped entirely, which would
             // otherwise leave the closure's `app` parameter unused under
@@ -125,5 +125,5 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-    println!("Tauri app running successfully");
+    tracing::info!("Tauri app running successfully");
 }
