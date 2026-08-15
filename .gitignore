@@ -63,6 +63,15 @@ Thumbs.db
 # SAM3 sidecar binaries (built per target in CI / local release builds)
 /src-tauri/bin/sam3-bridge*
 
+# Stray local clone of the SAM3 upstream repo at the project root -- the
+# real, actively-used copy is the git submodule at
+# packages/python-backend/sam3_repo (see .gitmodules). This one was
+# previously tracked as an orphaned, unregistered submodule gitlink
+# pointing at a different commit; untracked and left in place on disk
+# rather than deleted, since it's a real local clone with its own git
+# history someone may still want.
+/sam3_repo
+
 # Bundled model weights; the directory is tracked but .pt files are not
 /models/**/*.pt
 /models/**/*.pth
