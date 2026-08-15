@@ -107,6 +107,14 @@ export default function ExportPanel() {
   }, []);
 
   const handleExport = async () => {
+    // Guards both call paths: the in-panel button (already unmounted while
+    // exportIsRunning, but defense-in-depth) and the File-menu/triggerExport
+    // path below, which has no other guard -- without this, triggering a
+    // second export mid-flight opens a second Save dialog and can silently
+    // overwrite the first job's still-encoding output.
+    if (exportIsRunning) {
+      return;
+    }
     if (!mediaInfo || !filePath) {
       setStatusMessage("Load media before exporting");
       return;

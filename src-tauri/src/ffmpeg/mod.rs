@@ -439,7 +439,15 @@ fn apply_watermark_args(mut args: Vec<String>, wm: &WatermarkSettings, output_pa
     }
 
     fn escape_path(path: &str) -> String {
-        path.replace('\'', "\\'").replace(':', "\\:")
+        // Comma and semicolon are filtergraph-level separators (chain
+        // multiple filters / filter stages within one -vf argument) even
+        // though this value is unquoted -- without escaping them, a
+        // font_path containing one lets a caller splice extra FFmpeg
+        // filters/options into the export's filtergraph.
+        path.replace('\'', "\\'")
+            .replace(':', "\\:")
+            .replace(',', "\\,")
+            .replace(';', "\\;")
     }
 
     fn to_drawtext_color(color: &str) -> &str {
@@ -618,6 +626,33 @@ fn add_metadata_args(mut args: Vec<String>, source_path: &str) -> Vec<String> {
     args
 }
 
+/// Removes the file at `path` on drop unless `disarm()` was called first.
+/// Used so a temp export file is cleaned up on every exit path out of
+/// `encode_video` -- early `?` returns included -- without having to thread
+/// a manual cleanup call through each one by hand.
+struct TempFileGuard {
+    path: std::path::PathBuf,
+    armed: bool,
+}
+
+impl TempFileGuard {
+    fn new(path: std::path::PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
 pub fn encode_video(
     segment: &VideoSegment,
     path: &str,
@@ -637,6 +672,22 @@ pub fn encode_video(
     if segment.frames.is_empty() {
         return Err(AppError::Ffmpeg("No frames to encode".to_string()));
     }
+
+    // Encode to a temp file beside the final destination, then atomically
+    // rename onto it only after FFmpeg fully succeeds. Without this, a
+    // cancelled, timed-out, or failed encode -- which FFmpeg (`-y`) has
+    // already started writing directly to `path` -- leaves a truncated or
+    // corrupt file at the user's chosen destination, silently destroying
+    // whatever was there before if they picked an existing file to overwrite.
+    let final_path = path;
+    let dest = std::path::Path::new(final_path);
+    let temp_path_buf = dest.with_file_name(format!(
+        ".{}.moshdither-tmp",
+        dest.file_name().and_then(|f| f.to_str()).unwrap_or("export")
+    ));
+    let temp_path = temp_path_buf.to_string_lossy().into_owned();
+    let path: &str = &temp_path;
+    let mut temp_guard = TempFileGuard::new(temp_path_buf.clone());
 
     let ffmpeg = ffmpeg_binary()?;
     let first = &segment.frames[0];
@@ -945,6 +996,16 @@ pub fn encode_video(
             stderr.chars().take(2000).collect::<String>()
         )));
     }
+
+    // Only now, after FFmpeg has fully and successfully finished, does the
+    // final destination change -- atomically, so a reader never observes a
+    // partially-written file at `final_path`. Disarm the guard first so a
+    // successful rename doesn't get immediately deleted by Drop.
+    temp_guard.disarm();
+    if let Err(e) = std::fs::rename(&temp_path_buf, final_path) {
+        let _ = std::fs::remove_file(&temp_path_buf);
+        return Err(AppError::Io(e));
+    }
     eprintln!("[export] FFmpeg encode completed successfully");
     Ok(())
 }
@@ -1178,8 +1239,9 @@ pub struct MediaMetadata {
 
 pub fn probe_metadata(path: &str) -> Result<MediaMetadata> {
     let bin = ffprobe_binary()?;
-    let output = Command::new(&bin)
-        .args([
+    const PROBE_METADATA_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    let output = output_with_timeout(
+        Command::new(&bin).args([
             "-v",
             "error",
             "-show_entries",
@@ -1187,9 +1249,9 @@ pub fn probe_metadata(path: &str) -> Result<MediaMetadata> {
             "-of",
             "json",
             path,
-        ])
-        .output()
-        .map_err(AppError::Io)?;
+        ]),
+        PROBE_METADATA_TIMEOUT,
+    )?;
     if !output.status.success() {
         return Err(AppError::Ffmpeg(format!(
             "FFprobe metadata failed: {}",
@@ -1272,8 +1334,9 @@ pub fn probe_metadata(path: &str) -> Result<MediaMetadata> {
 /// audio from a loaded video for audio-reactive effects.
 pub fn has_audio_stream(path: &str) -> Result<bool> {
     let bin = ffprobe_binary()?;
-    let output = Command::new(&bin)
-        .args([
+    const HAS_AUDIO_STREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    let output = output_with_timeout(
+        Command::new(&bin).args([
             "-v",
             "error",
             "-select_streams",
@@ -1283,9 +1346,9 @@ pub fn has_audio_stream(path: &str) -> Result<bool> {
             "-of",
             "csv=p=0",
             path,
-        ])
-        .output()
-        .map_err(AppError::Io)?;
+        ]),
+        HAS_AUDIO_STREAM_TIMEOUT,
+    )?;
     // ffprobe prints one line per audio stream; if stdout is empty, no audio.
     let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(stdout.trim().lines().any(|l| l.trim() == "audio"))
@@ -1314,9 +1377,10 @@ pub fn extract_audio_to_wav(
         }
     }
     cmd.args([output_wav_path]);
-    cmd.stdout(Stdio::null());
-    cmd.stderr(Stdio::piped());
-    let output = cmd.output().map_err(AppError::Io)?;
+    // Generous timeout since this transcodes real audio data (unlike the
+    // structural-only probes above); matches encode_video's own default.
+    const AUDIO_EXTRACT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+    let output = output_with_timeout(&mut cmd, AUDIO_EXTRACT_TIMEOUT)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         // If the source has no audio stream, ffmpeg exits non-zero with a
@@ -1539,6 +1603,40 @@ mod output_arg_lookup_tests {
     }
 
     #[test]
+    fn font_path_with_a_comma_is_escaped_so_it_cannot_inject_an_extra_filter() {
+        // FFmpeg's filtergraph syntax treats an unescaped comma as a filter
+        // separator even inside one -vf argument string. A font_path
+        // containing a comma must not be able to splice a second filter in.
+        let args = vec![
+            "-f".to_string(),
+            "rawvideo".to_string(),
+            "-i".to_string(),
+            "pipe:0".to_string(),
+            "-c:v".to_string(),
+            "libx264".to_string(),
+            "-y".to_string(),
+            "output.mp4".to_string(),
+        ];
+        let mut wm = text_watermark("hello");
+        wm.font_path = Some("C:/fonts/evil.ttf,drawbox=0:0:10:10:red".to_string());
+        let result = apply_watermark_args(args, &wm, "output.mp4");
+
+        let vf_idx = result
+            .iter()
+            .position(|a| a == "-vf")
+            .expect("-vf must be inserted");
+        let filter_value = &result[vf_idx + 1];
+        assert!(
+            filter_value.contains("evil.ttf\\,drawbox"),
+            "the comma in font_path must be backslash-escaped so FFmpeg treats it as a literal character, not a filter separator; got: {filter_value}"
+        );
+        assert!(
+            !filter_value.contains("evil.ttf,drawbox"),
+            "an unescaped comma would let font_path splice a second filter (drawbox) into the filtergraph; got: {filter_value}"
+        );
+    }
+
+    #[test]
     fn image_watermark_map_fallback_still_maps_output_when_lookup_somehow_misses() {
         // args deliberately does NOT contain the literal output_path string,
         // simulating the "should be unreachable" case the fallback guards.
@@ -1554,5 +1652,49 @@ mod output_arg_lookup_tests {
             result.windows(2).any(|w| w[0] == "-map" && w[1] == "[out]"),
             "must still push a -map [out] fallback instead of silently dropping the mapping, got {result:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod temp_file_guard_tests {
+    use super::*;
+
+    #[test]
+    fn drop_removes_the_file_while_still_armed() {
+        let path = std::env::temp_dir().join("moshdither_test_temp_file_guard_armed.txt");
+        std::fs::write(&path, b"partial encode").expect("failed to write test fixture");
+        {
+            let _guard = TempFileGuard::new(path.clone());
+            assert!(path.exists(), "fixture should exist while the guard is alive");
+        }
+        assert!(
+            !path.exists(),
+            "an armed guard must delete its file on drop -- this is what protects a cancelled/timed-out/failed export from leaving a stray temp file behind"
+        );
+    }
+
+    #[test]
+    fn disarm_prevents_deletion_on_drop() {
+        let path = std::env::temp_dir().join("moshdither_test_temp_file_guard_disarmed.txt");
+        std::fs::write(&path, b"finished encode").expect("failed to write test fixture");
+        {
+            let mut guard = TempFileGuard::new(path.clone());
+            guard.disarm();
+        }
+        assert!(
+            path.exists(),
+            "a disarmed guard must NOT delete its file on drop -- this is what lets a successfully renamed export survive"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn drop_does_not_panic_when_the_file_is_already_gone() {
+        // Mirrors the real success path: the temp file gets renamed away
+        // (moved) before the guard drops. Even without an explicit disarm,
+        // a missing file must not panic -- remove_file's error is swallowed.
+        let path = std::env::temp_dir().join("moshdither_test_temp_file_guard_missing.txt");
+        let _ = std::fs::remove_file(&path); // ensure it doesn't exist
+        drop(TempFileGuard::new(path));
     }
 }

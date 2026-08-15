@@ -606,18 +606,42 @@ pub async fn export_video(
     let validated_output = validate_io_path(&output_path, false)?;
     let registry = state.registry.clone();
     let cancel = state.export_cancel.clone();
-    cancel.store(false, Ordering::Relaxed);
 
     let source_path = validated_source.to_string_lossy().into_owned();
     let output_path = validated_output.to_string_lossy().into_owned();
 
-    // Serialize expensive exports so only one runs at a time.
+    // Watermark image/font paths are also frontend-supplied file paths fed
+    // straight to FFmpeg as -i / fontfile= inputs -- validate them the same
+    // way as source_path/output_path so a compromised renderer (or a
+    // malicious .moshdither preset) can't smuggle a UNC path or an
+    // unexpected local file through the watermark fields instead.
+    let watermark = watermark
+        .map(|mut wm| -> std::result::Result<WatermarkSettings, String> {
+            if wm.enabled {
+                if let Some(p) = &wm.image_path {
+                    wm.image_path = Some(validate_io_path(p, true)?.to_string_lossy().into_owned());
+                }
+                if let Some(p) = &wm.font_path {
+                    wm.font_path = Some(validate_io_path(p, true)?.to_string_lossy().into_owned());
+                }
+            }
+            Ok(wm)
+        })
+        .transpose()?;
+
+    // Serialize expensive exports (this and apply_ffglitch both share one
+    // export_cancel AtomicBool) so only one runs at a time. The permit is
+    // acquired BEFORE resetting the shared cancel flag -- export_video and
+    // apply_ffglitch share that flag, so resetting it while another
+    // export-like operation is still running (or queued ahead of us) could
+    // silently un-cancel that other job.
     let permit = state
         .export_semaphore
         .clone()
         .acquire_owned()
         .await
         .map_err(|e| format!("Export queue error: {}", e))?;
+    cancel.store(false, Ordering::Relaxed);
 
     tauri::async_runtime::spawn_blocking(move || {
         let _permit = permit;
@@ -2335,9 +2359,19 @@ pub async fn apply_ffglitch(
     ));
     std::fs::write(&temp_config, config.to_string()).map_err(|e| e.to_string())?;
 
-    // Mirror export_video's own cancel-flag protocol (this file, ~line 617):
-    // reset before starting so a stale `true` left over from a previously
-    // cancelled operation can't immediately abort this new one.
+    // Serialize against export_video (this file, ~line 615): the two
+    // commands share one export_cancel AtomicBool, so without this permit a
+    // concurrently-running export_video and apply_ffglitch could reset or
+    // trigger each other's cancel signal. Acquire the permit BEFORE
+    // resetting the flag so a stale `true` left over from a previously
+    // cancelled operation can't immediately abort this new one, and so this
+    // reset can't race a still-running or queued export_video call.
+    let permit = state
+        .export_semaphore
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|e| format!("Export queue error: {}", e))?;
     let cancel = state.export_cancel.clone();
     cancel.store(false, Ordering::Relaxed);
 
@@ -2347,6 +2381,7 @@ pub async fn apply_ffglitch(
     let temp_config_path = temp_config.to_string_lossy().to_string();
     let output_path_clone = output_path.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
         run_ffglitch_subprocess(
             &python,
             &mosh_cli,
