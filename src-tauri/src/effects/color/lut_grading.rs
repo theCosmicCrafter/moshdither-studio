@@ -46,8 +46,7 @@ fn locate_lut_file(lut_path: &str) -> Result<Option<PathBuf>> {
         // Custom user LUTs must pass the same security validation as any
         // frontend-supplied file path.
         return Ok(Some(
-            validate_io_path(lut_path, true)
-                .map_err(|e| crate::error::AppError::Generic(e.to_string()))?,
+            validate_io_path(lut_path, true).map_err(crate::error::AppError::Generic)?,
         ));
     }
 

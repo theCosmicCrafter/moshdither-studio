@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import {
   applyEffectStack,
   applyFfglitch,
@@ -24,16 +25,25 @@ export default function Toolbar({ onFileLoaded }: Props) {
   const mediaLoaded = useAppStore((s) => s.mediaLoaded);
   const showBeforeAfter = useAppStore((s) => s.showBeforeAfter);
   const zoom = useAppStore((s) => s.zoom);
-  const stackCount = useAppStore((s) => s.effectStack.length);
-  const processSignature = useAppStore((s) => {
-    const stackSig = s.effectStack
-      .map(
-        (e) =>
-          `${e.id}:${e.enabled}:${JSON.stringify(e.params)}:${e.maskId}:${e.maskMode}`
-      )
-      .join("|");
-    return `${stackSig}|${s.maskRevision}`;
-  });
+  const { effectStack, maskRevision } = useAppStore(
+    useShallow((s) => ({ effectStack: s.effectStack, maskRevision: s.maskRevision }))
+  );
+  const stackCount = effectStack.length;
+  // Memoised against the (immutable) effect stack -- matches
+  // PreviewViewport's cpuRenderSignature. Without this, computing the
+  // signature inline in a bare selector re-runs the map+JSON.stringify over
+  // the whole stack on every store update (e.g. every playback frame's
+  // currentTime tick), not just on genuine effect-stack edits.
+  const processSignature = useMemo(
+    () =>
+      effectStack
+        .map(
+          (e) =>
+            `${e.id}:${e.enabled}:${JSON.stringify(e.params)}:${e.maskId}:${e.maskMode}`
+        )
+        .join("|") + `|${maskRevision}`,
+    [effectStack, maskRevision]
+  );
   const setShowBeforeAfter = useAppStore((s) => s.setShowBeforeAfter);
   const setZoom = useAppStore((s) => s.setZoom);
   const setIsProcessing = useAppStore((s) => s.setIsProcessing);
@@ -314,6 +324,8 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   onClick={() => { handleFfglitchExport(); setFileMenuOpen(false); }}
                   disabled={!mediaLoaded}
                   className={`w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded ? "toolbar-enabled" : "toolbar-disabled"}`}
+                  role="menuitem"
+                  aria-disabled={!mediaLoaded}
                 >
                   <span className="material-symbols-outlined menu-item-icon">bug_report</span>
                   Export FFglitch
@@ -322,6 +334,8 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   onClick={() => { handleProcess(); setFileMenuOpen(false); }}
                   disabled={!mediaLoaded || stackCount === 0}
                   className={`w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded && stackCount > 0 ? "toolbar-enabled" : "toolbar-disabled"}`}
+                  role="menuitem"
+                  aria-disabled={!mediaLoaded || stackCount === 0}
                 >
                   <span className="material-symbols-outlined menu-item-icon">image</span>
                   Save Image
@@ -601,6 +615,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
           onChange={(e) => setPlaybackSpeed(Number.parseFloat(e.target.value))}
           className="themed-select text-label-sm font-label-sm cursor-pointer"
           title="Playback speed"
+          aria-label="Playback speed"
         >
           <option value={0.25}>0.25x</option>
           <option value={0.5}>0.5x</option>

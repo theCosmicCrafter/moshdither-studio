@@ -1193,9 +1193,8 @@ pub fn sam3_point_prompt(
         .into_iter()
         .map(|[x, y]| [x as f32, y as f32])
         .collect();
-    let labels_clone = labels.clone();
     let masks = with_sam3(&app, &state, |engine| {
-        engine.point_prompt(f32_points.clone(), labels_clone.clone())
+        engine.point_prompt(f32_points.clone(), labels.clone())
     })?;
     Ok(masks_to_json(masks))
 }
@@ -1266,14 +1265,8 @@ pub fn sam3_refine_mask(
         .into_iter()
         .map(|[x, y]| [x as f32, y as f32])
         .collect();
-    let mask_b64_clone = mask_b64.clone();
-    let labels_clone = labels.clone();
     let masks = with_sam3(&app, &state, |engine| {
-        engine.refine_mask(
-            mask_b64_clone.clone(),
-            f32_points.clone(),
-            labels_clone.clone(),
-        )
+        engine.refine_mask(mask_b64.clone(), f32_points.clone(), labels.clone())
     })?;
     let mut result = masks_to_json(masks);
     result["status"] = json!("ok");
@@ -1291,9 +1284,8 @@ pub fn sam3_postprocess_mask(
     feather: i32,
     fill_holes: bool,
 ) -> std::result::Result<String, String> {
-    let mask_b64_clone = mask_b64.clone();
     with_sam3(&app, &state, |engine| {
-        engine.postprocess_mask(mask_b64_clone.clone(), grow, shrink, feather, fill_holes)
+        engine.postprocess_mask(mask_b64.clone(), grow, shrink, feather, fill_holes)
     })
 }
 
@@ -2313,6 +2305,42 @@ fn run_ffglitch_subprocess(
     .map_err(|e| format!("FFglitch: {e}"))
 }
 
+/// Validates the extra file-path parameters that the motion_transfer/combine
+/// modes forward to mosh_cli.py (params.motionUrl / params.combineVideos).
+/// mosh_cli.py feeds these straight into FFglitch/ffmpeg as further input
+/// files, with no validation on either side of the IPC boundary -- unlike
+/// input_path/output_path, which are already checked. Returns Err on the
+/// first path that fails the path_guard check; all other modes are left
+/// untouched since they carry no file-path params. combineVideos mirrors
+/// Python's own "media://" prefix stripping (mosh_cli.py) so this validates
+/// the actual filesystem path Python will use, not the prefixed string.
+fn validate_ffglitch_extra_paths(
+    mode: &str,
+    params: &serde_json::Value,
+) -> std::result::Result<(), String> {
+    if mode == "motion_transfer" {
+        if let Some(url) = params.get("motionUrl").and_then(|v| v.as_str()) {
+            validate_io_path(url, true)?;
+        }
+    } else if mode == "combine" {
+        let videos: Vec<String> = match params.get("combineVideos") {
+            Some(serde_json::Value::String(s)) => vec![s.clone()],
+            Some(serde_json::Value::Array(items)) => items
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect(),
+            _ => Vec::new(),
+        };
+        for video in &videos {
+            let stripped = video.strip_prefix("media://").unwrap_or(video);
+            if !stripped.is_empty() {
+                validate_io_path(stripped, true)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Apply an FFglitch datamoshing effect by delegating to the Python mosh_cli.py.
 #[tauri::command]
 pub async fn apply_ffglitch(
@@ -2326,6 +2354,8 @@ pub async fn apply_ffglitch(
     let validated_output = validate_io_path(&output_path, false)?;
     let input_path = validated_input.to_string_lossy().into_owned();
     let output_path = validated_output.to_string_lossy().into_owned();
+
+    validate_ffglitch_extra_paths(&mode, &params)?;
 
     let python = find_python()
         .ok_or("Python interpreter not found. Install sam3_env or add python to PATH")?;
@@ -2667,6 +2697,81 @@ mod run_cancellable_tests {
         assert!(
             elapsed < std::time::Duration::from_secs(20),
             "expected cancellation to stop the process well before its own 30s runtime, took {elapsed:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod ffglitch_extra_path_tests {
+    use super::*;
+    use std::fs;
+
+    fn temp_media(name: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(name);
+        fs::write(&p, b"fake media").expect("write temp media fixture");
+        p
+    }
+
+    #[test]
+    fn motion_transfer_accepts_an_existing_motion_url() {
+        let p = temp_media("mosh_ffglitch_guard_motion_ok.mp4");
+        let params = serde_json::json!({ "motionUrl": p.to_string_lossy() });
+        let result = validate_ffglitch_extra_paths("motion_transfer", &params);
+        let _ = fs::remove_file(&p);
+        assert!(result.is_ok(), "existing motionUrl should be accepted: {result:?}");
+    }
+
+    #[test]
+    fn motion_transfer_rejects_a_motion_url_that_does_not_exist() {
+        let missing = std::env::temp_dir().join("mosh_ffglitch_guard_motion_missing.mp4");
+        let params = serde_json::json!({ "motionUrl": missing.to_string_lossy() });
+        let result = validate_ffglitch_extra_paths("motion_transfer", &params);
+        assert!(
+            result.is_err(),
+            "a motionUrl pointing at a nonexistent file must be rejected before reaching Python"
+        );
+    }
+
+    #[test]
+    fn combine_accepts_existing_videos_and_strips_the_media_prefix_before_checking() {
+        let a = temp_media("mosh_ffglitch_guard_combine_a.mp4");
+        let b = temp_media("mosh_ffglitch_guard_combine_b.mp4");
+        // Mirrors mosh_cli.py's own "media://" prefix stripping.
+        let prefixed = format!("media://{}", b.to_string_lossy());
+        let params = serde_json::json!({ "combineVideos": [a.to_string_lossy(), prefixed] });
+        let result = validate_ffglitch_extra_paths("combine", &params);
+        let _ = fs::remove_file(&a);
+        let _ = fs::remove_file(&b);
+        assert!(
+            result.is_ok(),
+            "existing combineVideos entries, including a media://-prefixed one, should be accepted: {result:?}"
+        );
+    }
+
+    #[test]
+    fn combine_rejects_a_video_that_does_not_exist() {
+        let a = temp_media("mosh_ffglitch_guard_combine_real.mp4");
+        let missing = std::env::temp_dir().join("mosh_ffglitch_guard_combine_missing.mp4");
+        let params =
+            serde_json::json!({ "combineVideos": [a.to_string_lossy(), missing.to_string_lossy()] });
+        let result = validate_ffglitch_extra_paths("combine", &params);
+        let _ = fs::remove_file(&a);
+        assert!(
+            result.is_err(),
+            "a combineVideos entry pointing at a nonexistent file must be rejected before reaching Python"
+        );
+    }
+
+    #[test]
+    fn other_modes_are_left_untouched_even_with_bogus_path_like_params() {
+        // Modes like "fluid"/"stretch"/"classic" carry no file-path params,
+        // so validation must not reach into params for them at all -- even
+        // a nonsense/malicious-looking value here must not cause a reject.
+        let params = serde_json::json!({ "motionUrl": "C:\\nonexistent\\evil.mp4" });
+        let result = validate_ffglitch_extra_paths("fluid", &params);
+        assert!(
+            result.is_ok(),
+            "modes without file-path params must not validate unrelated fields: {result:?}"
         );
     }
 }

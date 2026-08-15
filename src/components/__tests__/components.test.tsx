@@ -719,6 +719,25 @@ describe("Component Test Suite", () => {
       // delta = 100 - 90 = 10, step = 1/200
       expect(value).toBeCloseTo(0.5 + 10 * (1 / 200), 5);
     });
+
+    it("exposes a toggle parameter's on/off state via aria-pressed", () => {
+      const meta: EffectMeta = {
+        id: "test.toggle-effect",
+        name: "Toggle Effect",
+        category: "dithering",
+        media_type: "both",
+        parameters: [{ id: "flag", name: "Flag", type: "toggle", default: false }],
+      };
+      useAppStore.getState().setAllEffects([meta]);
+      useAppStore.getState().addToStack(meta);
+      render(<ParameterPanel />);
+
+      const toggle = screen.getByRole("button", { name: "Flag" });
+      expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+      fireEvent.click(toggle);
+      expect(toggle).toHaveAttribute("aria-pressed", "true");
+    });
   });
 
   // ── EffectBrowser ──────────────────────────────────────────
