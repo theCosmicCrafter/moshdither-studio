@@ -7,6 +7,7 @@ import {
   getMediaMetadata,
   loadMediaFile,
   sam3LoadImage,
+  saveImage,
 } from "../lib/tauri";
 import { useClickOutside } from "../hooks/useClickOutside";
 import { useAppStore } from "../store";
@@ -212,6 +213,36 @@ export default function Toolbar({ onFileLoaded }: Props) {
     }
   };
 
+  // Saves exactly one processed frame to disk, unlike Export Video (which
+  // always duplicates the source into a multi-frame clip, even for a still
+  // image) -- this is the only path in the app that actually writes a
+  // still-image file.
+  const handleSaveImage = async () => {
+    if (!mediaLoaded) return;
+    const state = useAppStore.getState();
+    if (state.effectStack.length === 0) return;
+    setStatusMessage("Saving image...");
+    setIsProcessing(true);
+    try {
+      const activeStack = stackToRustPayload(
+        state.effectStack,
+        state.activeMask,
+        state.sam3Masks,
+        state.currentTime
+      );
+      const outPath = await saveImage(activeStack, null);
+      setStatusMessage(`Image saved: ${outPath}`);
+    } catch (err) {
+      if (err instanceof Error && err.message === "Save cancelled") {
+        setStatusMessage("Ready");
+      } else {
+        setStatusMessage(`Save image failed: ${err}`);
+      }
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleUndo = async () => {
     undo();
     setTimeout(handleProcess, 0);
@@ -326,7 +357,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   Export FFglitch
                 </button>
                 <button
-                  onClick={() => { handleProcess(); setFileMenuOpen(false); }}
+                  onClick={() => { handleSaveImage(); setFileMenuOpen(false); }}
                   disabled={!mediaLoaded || stackCount === 0}
                   className={`w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded && stackCount > 0 ? "toolbar-enabled" : "toolbar-disabled"}`}
                   role="menuitem"

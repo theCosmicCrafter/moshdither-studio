@@ -570,6 +570,70 @@ pub fn save_media(
     Ok(path)
 }
 
+/// Runs `stack` over `frame` in order, applying each effect's own mask
+/// (falling back to `global_mask`) via `process_frame_with_mask`. Used by
+/// `save_processed_image`; deliberately not shared with `apply_effect_stack`,
+/// which interleaves this same per-effect logic with preview-cache lookups
+/// that a one-shot save has no use for.
+fn apply_stack_to_frame(
+    registry: &EffectRegistry,
+    frame: Frame,
+    stack: &[EffectCall],
+    global_mask: Option<&Mask>,
+) -> std::result::Result<Frame, String> {
+    let mut working = frame;
+    for call in stack {
+        let effect = registry
+            .get(&call.effect_id)
+            .ok_or_else(|| format!("Effect '{}' not found", call.effect_id))?;
+        let per_effect_mask = if let Some(ref b64) = call.mask_b64 {
+            decode_mask_b64(Some(b64.as_str()))?
+        } else {
+            None
+        };
+        let active_mask = per_effect_mask.as_ref().or(global_mask);
+        let mode = call.mask_mode.as_deref().unwrap_or("inside");
+        working = process_frame_with_mask(effect, &working, active_mask, &call.params, mode)?;
+    }
+    Ok(working)
+}
+
+/// Apply the effect stack to the currently loaded frame and save the result
+/// to disk as a still image. Writes straight to a file instead of returning
+/// a preview data URL, and does not touch the interactive-preview cache --
+/// `apply_effect_stack` itself never persists its processed result anywhere
+/// (it only returns a base64 PNG for the preview), so `save_media` alone
+/// could only ever save the original, unprocessed frame.
+#[tauri::command]
+pub fn save_processed_image(
+    state: State<'_, AppState>,
+    stack: Vec<EffectCall>,
+    mask_b64: Option<String>,
+    path: String,
+    format: Option<String>,
+    quality: Option<u8>,
+) -> std::result::Result<String, String> {
+    validate_io_path(&path, false)?;
+
+    let frame_lock = state
+        .current_frame
+        .lock()
+        .map_err(|e| format!("frame lock poisoned: {e}"))?;
+    let frame = frame_lock.as_ref().ok_or("No media loaded")?.clone();
+    drop(frame_lock);
+
+    let global_mask = decode_mask_b64(mask_b64.as_deref())?;
+    let registry = state
+        .registry
+        .lock()
+        .map_err(|e| format!("registry lock poisoned: {e}"))?;
+    let working = apply_stack_to_frame(&registry, frame, &stack, global_mask.as_ref())?;
+    drop(registry);
+
+    save_image(&working, &path, format.as_deref(), quality).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
 /// Export a video by decoding, applying the effect stack, and re-encoding.
 /// Audio-reactive effects receive per-frame audio params when `audio_bake_json` is provided.
 /// Temporal effects (datamoshing) use `process_video` for cross-frame correctness.
@@ -1541,6 +1605,67 @@ mod integration_tests {
             "a genuinely time-based effect's changing time value must still be a cache miss"
         );
         assert!(params_match_for_cache(databend, &a, &a.clone()));
+    }
+
+    fn solid_frame(width: u32, height: u32, rgba: [u8; 4]) -> Frame {
+        let mut data = Vec::with_capacity((width * height * 4) as usize);
+        for _ in 0..(width * height) {
+            data.extend_from_slice(&rgba);
+        }
+        Frame {
+            width,
+            height,
+            data,
+        }
+    }
+
+    #[test]
+    fn test_apply_stack_to_frame_actually_modifies_pixels() {
+        // This is what save_processed_image relies on to save the
+        // effects-applied result rather than a silent copy of the original --
+        // apply_effect_stack itself never persists its output anywhere, so a
+        // regression here would make "Save Image" save the untouched source.
+        let reg = EffectRegistry::new();
+        let frame = solid_frame(4, 4, [128, 128, 128, 255]);
+        let stack = vec![EffectCall {
+            effect_id: "dithering.bayer".to_string(),
+            params: serde_json::Map::new(),
+            mask_b64: None,
+            mask_mode: None,
+        }];
+
+        let result = apply_stack_to_frame(&reg, frame.clone(), &stack, None)
+            .expect("bayer dither should succeed on a valid frame");
+
+        assert_eq!(result.width, frame.width);
+        assert_eq!(result.height, frame.height);
+        assert_ne!(
+            result.data, frame.data,
+            "a dither effect must actually change the frame's pixel data"
+        );
+    }
+
+    #[test]
+    fn test_apply_stack_to_frame_empty_stack_returns_original_frame() {
+        let reg = EffectRegistry::new();
+        let frame = solid_frame(2, 2, [10, 20, 30, 255]);
+        let result = apply_stack_to_frame(&reg, frame.clone(), &[], None)
+            .expect("an empty stack should be a no-op, not an error");
+        assert_eq!(result.data, frame.data);
+    }
+
+    #[test]
+    fn test_apply_stack_to_frame_unknown_effect_id_errors() {
+        let reg = EffectRegistry::new();
+        let frame = solid_frame(2, 2, [0, 0, 0, 255]);
+        let stack = vec![EffectCall {
+            effect_id: "totally.bogus.effect.id".to_string(),
+            params: serde_json::Map::new(),
+            mask_b64: None,
+            mask_mode: None,
+        }];
+        let result = apply_stack_to_frame(&reg, frame, &stack, None);
+        assert!(result.is_err(), "an unknown effect id must error, not panic");
     }
 
     #[test]
