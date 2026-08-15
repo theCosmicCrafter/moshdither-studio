@@ -282,6 +282,42 @@ export async function applyEffectStack(
   return invoke("apply_effect_stack", { stack, maskB64, previewScale });
 }
 
+/** Applies the effect stack to the currently loaded frame and saves the
+ * result to disk as a still image (png/jpg/bmp/tiff), via a native save
+ * dialog. Unlike exportVideo, this never duplicates the frame into a
+ * multi-frame clip -- the output is exactly one image. */
+export async function saveImage(
+  stack: {
+    effect_id: string;
+    params: Record<string, unknown>;
+    mask_b64?: string | null;
+    mask_mode?: string;
+  }[],
+  maskB64?: string | null,
+  format: "png" | "jpg" | "bmp" | "tiff" = "png",
+  quality?: number
+): Promise<string> {
+  const path = await save({
+    filters: [
+      { name: "PNG", extensions: ["png"] },
+      { name: "JPEG", extensions: ["jpg", "jpeg"] },
+      { name: "BMP", extensions: ["bmp"] },
+      { name: "TIFF", extensions: ["tiff", "tif"] },
+    ],
+    defaultPath: `image.${format}`,
+  });
+  if (!path || typeof path !== "string") {
+    throw new Error("Save cancelled");
+  }
+  return invoke("save_processed_image", {
+    stack,
+    maskB64: maskB64 ?? null,
+    path,
+    format,
+    quality: quality ?? null,
+  });
+}
+
 export async function exportVideo(
   sourcePath: string,
   stack: {
