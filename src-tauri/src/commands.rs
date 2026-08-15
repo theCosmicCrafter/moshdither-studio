@@ -329,6 +329,30 @@ pub struct EffectCall {
     pub mask_mode: Option<String>,
 }
 
+/// Compares two effect-call params maps for cache-hit purposes. Effects
+/// that don't read the implicit `time` value the frontend injects into
+/// every effect's params during playback (see `Effect::uses_time_param`)
+/// ignore that key entirely -- otherwise `time` genuinely changing every
+/// frame would defeat this cache for every effect in the stack, including
+/// perfectly static ones like a fixed Bayer dither, on every single
+/// playback tick.
+fn params_match_for_cache(
+    effect: &dyn Effect,
+    cached: &serde_json::Map<String, serde_json::Value>,
+    incoming: &serde_json::Map<String, serde_json::Value>,
+) -> bool {
+    if effect.uses_time_param() {
+        return cached == incoming;
+    }
+    let strip_time = |m: &serde_json::Map<String, serde_json::Value>| -> serde_json::Map<String, serde_json::Value> {
+        m.iter()
+            .filter(|(k, _)| k.as_str() != "time")
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    };
+    strip_time(cached) == strip_time(incoming)
+}
+
 /// Apply a stack of effects to the currently loaded image.
 /// If `preview_scale` is provided (0.0–1.0), the image is downscaled before
 /// processing and upscaled after, for faster interactive preview.
@@ -382,6 +406,10 @@ pub fn apply_effect_stack(
     }
 
     for (i, call) in stack.into_iter().enumerate() {
+        let effect = registry
+            .get(&call.effect_id)
+            .ok_or_else(|| format!("Effect '{}' not found", call.effect_id))?;
+
         if use_cache {
             let cache_lock = state
                 .frame_cache
@@ -390,7 +418,7 @@ pub fn apply_effect_stack(
             if i < cache_lock.entries.len() {
                 let entry = &cache_lock.entries[i];
                 if entry.effect_id == call.effect_id
-                    && entry.params == call.params
+                    && params_match_for_cache(effect, &entry.params, &call.params)
                     && entry.mask_b64 == call.mask_b64
                     && entry.mask_mode == call.mask_mode
                 {
@@ -408,10 +436,6 @@ pub fn apply_effect_stack(
         }
 
         use_cache = false;
-
-        let effect = registry
-            .get(&call.effect_id)
-            .ok_or_else(|| format!("Effect '{}' not found", call.effect_id))?;
 
         // Per-effect mask overrides global mask
         let per_effect_mask = if let Some(ref b64) = call.mask_b64 {
@@ -1451,6 +1475,56 @@ mod integration_tests {
         // registry.get(..).ok_or(..). Confirm the lookup returns None (not panic).
         let reg = EffectRegistry::new();
         assert!(reg.get("totally.bogus.effect.id").is_none());
+    }
+
+    #[test]
+    fn test_params_match_for_cache_ignores_time_for_effects_that_dont_use_it() {
+        // Reproduces the "dithering looks choppy" bug directly: the frontend
+        // injects a per-frame `time` value into every effect's params during
+        // playback, even for effects (like a plain Bayer dither) that never
+        // read it. Without this, a changing time value alone would defeat
+        // the cache for every static effect on every playback tick.
+        let reg = EffectRegistry::new();
+        let bayer = reg
+            .get("dithering.bayer")
+            .expect("dithering.bayer should be registered");
+
+        let mut a = serde_json::Map::new();
+        a.insert("threshold".to_string(), json!(128));
+        a.insert("time".to_string(), json!(0.0));
+
+        let mut b = a.clone();
+        b.insert("time".to_string(), json!(1.5));
+        assert!(
+            params_match_for_cache(bayer, &a, &b),
+            "a static effect's cache-key comparison must ignore a changing time value"
+        );
+
+        let mut c = a.clone();
+        c.insert("threshold".to_string(), json!(200));
+        assert!(
+            !params_match_for_cache(bayer, &a, &c),
+            "a real (non-time) param change must still be treated as a cache miss"
+        );
+    }
+
+    #[test]
+    fn test_params_match_for_cache_respects_time_for_effects_that_use_it() {
+        let reg = EffectRegistry::new();
+        let databend = reg
+            .get("glitch.databend")
+            .expect("glitch.databend should be registered");
+
+        let mut a = serde_json::Map::new();
+        a.insert("time".to_string(), json!(0.0));
+        let mut b = a.clone();
+        b.insert("time".to_string(), json!(1.5));
+
+        assert!(
+            !params_match_for_cache(databend, &a, &b),
+            "a genuinely time-based effect's changing time value must still be a cache miss"
+        );
+        assert!(params_match_for_cache(databend, &a, &a.clone()));
     }
 
     #[test]

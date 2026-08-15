@@ -215,6 +215,29 @@ describe("Store Stress Tests — Trying to Break Things", () => {
       // So after each cycle, futureStacks = 1 (not accumulating)
       expect(useAppStore.getState().futureStacks.length).toBe(1);
     });
+
+    // A long editing session -- especially rapid parameter-drag ticks,
+    // each of which used to call updateStackParams once per mousemove --
+    // must not retain an ever-growing number of full-stack snapshots.
+    it("undo history stays bounded across a long editing session instead of growing forever", () => {
+      for (let i = 0; i < 500; i++) {
+        useAppStore.getState().updateStackParams("nonexistent-id", { x: i });
+      }
+      expect(useAppStore.getState().pastStacks.length).toBeLessThanOrEqual(100);
+    });
+
+    it("undo history cap keeps the most RECENT entries, not the oldest", () => {
+      for (let i = 0; i < 150; i++) {
+        useAppStore.getState().addToStack({ ...mockEffect, id: `test.effect.${i}` });
+      }
+      const past = useAppStore.getState().pastStacks;
+      expect(past.length).toBe(100);
+      // The oldest surviving snapshot should be the one taken right before
+      // the 50th addToStack call (0-indexed: snapshots from calls 0-49 were
+      // evicted), not an empty/near-empty stack from session start.
+      expect(past[0].length).toBe(50);
+      expect(past[past.length - 1].length).toBe(149);
+    });
   });
 
   // ── addToStack with malformed effect ──

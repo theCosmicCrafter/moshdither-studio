@@ -273,13 +273,15 @@ pub fn apply(
 
     for y in 0..h {
         let reverse = serpentine && y % 2 == 1;
-        let x_range: Vec<usize> = if reverse {
-            (0..w).rev().collect()
-        } else {
-            (0..w).collect()
-        };
 
-        for x in x_range {
+        // Serpentine scanning needs to walk each row forwards or backwards
+        // depending on parity. Indexing `w - 1 - i` on the reverse rows
+        // gets the same traversal as `(0..w).rev()` without a per-row Vec
+        // allocation -- this loop runs once per apply() call for every
+        // effect that shares this function (Floyd-Steinberg, Sierra,
+        // Stucki, Burkes, Jarvis-Judice-Ninke, Atkinson).
+        for i in 0..w {
+            let x = if reverse { w - 1 - i } else { i };
             let base = (y * w + x) * nc;
 
             // Quantise. Grayscale and RGB snap each channel to its own level

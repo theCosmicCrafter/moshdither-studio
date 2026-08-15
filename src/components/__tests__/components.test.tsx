@@ -171,6 +171,7 @@ import PostProcessControls from "../PostProcessControls";
 import TrackPanel from "../TrackPanel";
 import MaskSelector from "../MaskSelector";
 import EffectStack from "../EffectStack";
+import ParameterPanel from "../EffectStack/ParameterPanel";
 import EffectBrowser from "../EffectBrowser";
 import SearchBar from "../EffectBrowser/SearchBar";
 import EffectList from "../EffectBrowser/EffectList";
@@ -663,6 +664,60 @@ describe("Component Test Suite", () => {
         "Databend",
         "VHS Effect",
       ]);
+    });
+  });
+
+  // ── ParameterPanel / ParameterWheel drag throttling ─────────
+  describe("ParameterPanel", () => {
+    it("coalesces a fast slider drag to one committed update per animation frame, not one per mousemove", () => {
+      const meta = mockEffectMeta("dithering.bayer", "Bayer Dither", "dithering");
+      useAppStore.getState().setAllEffects([meta]);
+      useAppStore.getState().addToStack(meta);
+      render(<ParameterPanel />);
+
+      const wheel = screen.getByLabelText("Parameter wheel");
+      fireEvent.mouseDown(wheel, { clientY: 100 });
+
+      // Five rapid drag ticks, synchronously, before any animation frame
+      // has had a chance to run.
+      for (let dy = 1; dy <= 5; dy++) {
+        fireEvent.mouseMove(window, { clientY: 100 - dy });
+      }
+
+      // Old behavior: onChange (and therefore a full store update) fired
+      // synchronously on every mousemove -- so the value would already
+      // reflect the 5th tick here. Coalesced behavior: nothing has been
+      // committed to the store yet, only scheduled.
+      expect(useAppStore.getState().effectStack[0].params.intensity).toBe(0.5);
+
+      return new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          // The frame that flushes the coalesced update must itself have
+          // committed by the time this callback runs (rAF callbacks run in
+          // registration order).
+          const value = useAppStore.getState().effectStack[0].params.intensity as number;
+          // delta = startY(100) - clientY(95) = 5, step = (max-min)/200 = 1/200
+          expect(value).toBeCloseTo(0.5 + 5 * (1 / 200), 5);
+          fireEvent.mouseUp(window);
+          resolve();
+        });
+      });
+    });
+
+    it("always commits the final drag value on mouseup, even if it lands between animation frames", () => {
+      const meta = mockEffectMeta("dithering.bayer", "Bayer Dither", "dithering");
+      useAppStore.getState().setAllEffects([meta]);
+      useAppStore.getState().addToStack(meta);
+      render(<ParameterPanel />);
+
+      const wheel = screen.getByLabelText("Parameter wheel");
+      fireEvent.mouseDown(wheel, { clientY: 100 });
+      fireEvent.mouseMove(window, { clientY: 90 });
+      fireEvent.mouseUp(window);
+
+      const value = useAppStore.getState().effectStack[0].params.intensity as number;
+      // delta = 100 - 90 = 10, step = 1/200
+      expect(value).toBeCloseTo(0.5 + 10 * (1 / 200), 5);
     });
   });
 
