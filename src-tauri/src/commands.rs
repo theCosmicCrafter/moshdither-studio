@@ -719,8 +719,8 @@ fn export_video_blocking(
     // `processing_scale = None` means "auto" — the backend picks the
     // largest resolution that fits. `Some(n)` means the user explicitly
     // chose n px on the longest side.
-    eprintln!(
-        "[export] Planning decode for source: {} (preferred scale: {:?})",
+    tracing::info!(
+        "Planning export decode for source: {} (preferred scale: {:?})",
         source_path, processing_scale
     );
     let _ = app_handle.emit(
@@ -730,8 +730,8 @@ fn export_video_blocking(
     let (decode_scale, budget_bytes) =
         crate::ffmpeg::plan_decode(&source_path, processing_scale).map_err(|e| e.to_string())?;
     let budget_mb = budget_bytes as f64 / (1024.0 * 1024.0);
-    eprintln!(
-        "[export] Decode plan: scale={:?}, memory budget={:.0} MB",
+    tracing::info!(
+        "Export decode plan: scale={:?}, memory budget={:.0} MB",
         decode_scale, budget_mb
     );
     if let Some(s) = decode_scale {
@@ -740,7 +740,7 @@ fn export_video_blocking(
              processing at {}p. Final encode will scale to target dimensions.",
             s
         );
-        eprintln!("[export] {}", message);
+        tracing::warn!("{}", message);
         let _ = app_handle.emit(
             "export-progress",
             serde_json::json!({
@@ -753,15 +753,15 @@ fn export_video_blocking(
     }
 
     // Decode the full source video
-    eprintln!("[export] Decoding source: {}", source_path);
+    tracing::info!("Decoding export source: {}", source_path);
     let _ = app_handle.emit(
         "export-progress",
         serde_json::json!({"stage": "decoding", "progress": 0}),
     );
     let mut segment = crate::ffmpeg::decode_video_with_options(&source_path, None, decode_scale)
         .map_err(|e| e.to_string())?;
-    eprintln!(
-        "[export] Decoded {} frames, {}x{}, fps={}",
+    tracing::info!(
+        "Decoded {} frames, {}x{}, fps={}",
         segment.frames.len(),
         segment.frames.first().map(|f| f.width).unwrap_or(0),
         segment.frames.first().map(|f| f.height).unwrap_or(0),
@@ -775,16 +775,16 @@ fn export_video_blocking(
     if let Some(first) = segment.frames.first() {
         let frame_mb = (first.data.len() as f64) / (1024.0 * 1024.0);
         let total_mb = frame_mb * segment.frames.len() as f64;
-        eprintln!(
-            "[export] Memory estimate: {:.1} MB per frame, {:.1} MB total for {} frames (budget {:.0} MB)",
+        tracing::debug!(
+            "Export memory estimate: {:.1} MB per frame, {:.1} MB total for {} frames (budget {:.0} MB)",
             frame_mb,
             total_mb,
             segment.frames.len(),
             budget_mb
         );
         if total_mb > budget_mb * 0.95 {
-            eprintln!(
-                "[export] WARNING: decode used >=95% of memory budget. If the clip \
+            tracing::warn!(
+                "Export decode used >=95% of memory budget. If the clip \
                  was truncated, lower the processing resolution or trim the range."
             );
         }
@@ -836,7 +836,7 @@ fn export_video_blocking(
         audio_bake_json.and_then(|json| serde_json::from_str(&json).ok());
 
     // Apply the effect stack
-    eprintln!("[export] Applying {} effects", stack.len());
+    tracing::info!("Applying {} effects for export", stack.len());
     let _ = app_handle.emit(
         "export-progress",
         serde_json::json!({"stage": "effects", "progress": 5, "total": stack.len(), "current": 0}),
@@ -848,8 +848,8 @@ fn export_video_blocking(
         let effect = registry
             .get(&call.effect_id)
             .ok_or_else(|| format!("Effect '{}' not found", call.effect_id))?;
-        eprintln!(
-            "[export] Effect {}/{}: {} (temporal={})",
+        tracing::debug!(
+            "Export effect {}/{}: {} (temporal={})",
             effect_idx + 1,
             stack.len(),
             call.effect_id,
@@ -929,8 +929,8 @@ fn export_video_blocking(
         // Post-process mask blend for effects that don't handle masking internally
         if let (Some(prev), Some(m)) = (previous_frames, active_mask) {
             let mode = call.mask_mode.as_deref().unwrap_or("inside");
-            eprintln!(
-                "[export] Blending mask (mode={}) for {} frames",
+            tracing::debug!(
+                "Blending mask (mode={}) for {} frames",
                 mode,
                 segment.frames.len()
             );
@@ -943,12 +943,12 @@ fn export_video_blocking(
                 })?;
         }
 
-        eprintln!("[export] Effect {}/{} done", effect_idx + 1, stack.len());
+        tracing::debug!("Export effect {}/{} done", effect_idx + 1, stack.len());
         let pct = 5 + ((effect_idx + 1) as f64 / stack.len() as f64 * 80.0) as u32;
         let _ = app_handle.emit("export-progress", serde_json::json!({"stage": "effects", "progress": pct, "total": stack.len(), "current": effect_idx + 1}));
     }
     drop(registry);
-    eprintln!("[export] All effects applied, proceeding to encode");
+    tracing::info!("All effects applied, proceeding to encode");
     let _ = app_handle.emit(
         "export-progress",
         serde_json::json!({"stage": "encoding", "progress": 90}),
@@ -1122,8 +1122,8 @@ where
                 || err_str.contains("closed")
                 || err_str.contains("os error")
             {
-                eprintln!(
-                    "[SAM3 Engine] Pipe error detected ({err_str}), auto-restarting SAM3 engine..."
+                tracing::warn!(
+                    "SAM3 engine pipe error detected ({err_str}), auto-restarting SAM3 engine..."
                 );
                 *sam3_lock = None;
                 if let Ok(new_engine) = Sam3Engine::new(app) {

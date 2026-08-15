@@ -321,8 +321,8 @@ pub fn decode_video_with_options(
     let budget_frames = budget / frame_size;
     let max_frames = requested_max.min(budget_frames).max(1);
     if max_frames < requested_max {
-        eprintln!(
-            "[ffmpeg] WARNING: requested {} frames but only {} fit in memory budget \
+        tracing::warn!(
+            "Requested {} frames but only {} fit in memory budget \
              ({}x{} @ {} bytes/frame, budget {} bytes). Clip will be truncated.",
             requested_max, max_frames, width, height, frame_size, budget
         );
@@ -389,8 +389,8 @@ pub fn decode_video_with_options(
     // limit outright is not safe either, since the decode is fully buffered in
     // memory. The real fix is streaming decode, which is a larger change.
     if frames.len() == max_frames {
-        eprintln!(
-            "[ffmpeg] WARNING: decode stopped at the {}-frame limit ({:.1}s at {:.0} fps). \
+        tracing::warn!(
+            "Decode stopped at the {}-frame limit ({:.1}s at {:.0} fps). \
              If the source is longer, the result is TRUNCATED. Raise the limit by passing \
              max_frames, or lower memory per frame with a smaller scale.",
             max_frames,
@@ -590,8 +590,8 @@ fn apply_watermark_args(mut args: Vec<String>, wm: &WatermarkSettings, output_pa
                     // (encode_video always calls args.push(path) first), so
                     // reaching here means it went missing from args entirely --
                     // a deeper bug upstream, not a routine lookup miss.
-                    eprintln!(
-                        "[export] WARNING: output path not found in ffmpeg args while inserting watermark -map; audio/video mapping may be wrong"
+                    tracing::warn!(
+                        "Output path not found in ffmpeg args while inserting watermark -map; audio/video mapping may be wrong"
                     );
                     args.push("-map".to_string());
                     args.push("[out]".to_string());
@@ -858,7 +858,7 @@ pub fn encode_video(
                     args.insert(pos, "-vf".to_string());
                 }
             }
-            eprintln!("[export] Applied FFmpeg scale filter: {}", scale_filter);
+            tracing::debug!("Applied FFmpeg scale filter: {}", scale_filter);
         }
     }
 
@@ -867,7 +867,7 @@ pub fn encode_video(
     // frame dimensions when they are already even.
     if !w.is_multiple_of(2) || !h.is_multiple_of(2) {
         let pad_filter = "pad=ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2:black".to_string();
-        eprintln!("[export] DEBUG: ensuring even dimensions for {}x{}", w, h);
+        tracing::debug!("Ensuring even dimensions for {}x{}", w, h);
         if let Some(vf_pos) = args.iter().position(|a| a == "-vf") {
             args[vf_pos + 1] = format!("{}, {}", args[vf_pos + 1], pad_filter);
         } else if let Some(fc_pos) = args.iter().position(|a| a == "-filter_complex") {
@@ -882,15 +882,15 @@ pub fn encode_video(
         }
     }
 
-    eprintln!(
-        "[export] FFmpeg encode: {} frames, {}x{}, fps={}, codec={}",
+    tracing::info!(
+        "FFmpeg encode: {} frames, {}x{}, fps={}, codec={}",
         segment.frames.len(),
         w,
         h,
         fps,
         encoder
     );
-    eprintln!("[export] FFmpeg args: {}", args.join(" "));
+    tracing::debug!("FFmpeg args: {}", args.join(" "));
 
     let mut child = Command::new(&ffmpeg)
         .args(&args)
@@ -931,7 +931,7 @@ pub fn encode_video(
         for (i, frame) in segment.frames.iter().enumerate() {
             if let Some(c) = cancel {
                 if c.load(Ordering::Relaxed) {
-                    eprintln!("[export] FFmpeg encode cancelled by user");
+                    tracing::info!("FFmpeg encode cancelled by user");
                     let _ = stdin.flush();
                     drop(stdin);
                     let _ = child.kill();
@@ -943,13 +943,13 @@ pub fn encode_video(
                 }
             }
             if i % 50 == 0 || i == total - 1 {
-                eprintln!("[export] Writing frame {}/{} to FFmpeg stdin", i + 1, total);
+                tracing::debug!("Writing frame {}/{} to FFmpeg stdin", i + 1, total);
             }
             stdin.write_all(&frame.data).map_err(AppError::Io)?;
         }
         // Close stdin so FFmpeg sees EOF and can finish encoding the final frames.
         drop(stdin);
-        eprintln!("[export] FFmpeg stdin closed (EOF sent), waiting for encode to finish...");
+        tracing::debug!("FFmpeg stdin closed (EOF sent), waiting for encode to finish...");
     }
 
     // Wait for the child with a bounded timeout (default 10 minutes). If it
@@ -960,8 +960,8 @@ pub fn encode_video(
     let status = match child.wait_timeout(timeout) {
         Ok(status) => status,
         Err(e) if e.kind() == ErrorKind::TimedOut => {
-            eprintln!(
-                "[export] FFmpeg encode timed out after {:?}, killing process",
+            tracing::warn!(
+                "FFmpeg encode timed out after {:?}, killing process",
                 timeout
             );
             let _ = child.kill();
@@ -989,7 +989,7 @@ pub fn encode_video(
     let stderr_bytes = stderr_buf.lock().map(|g| g.clone()).unwrap_or_default();
     if !status.success() {
         let stderr = String::from_utf8_lossy(&stderr_bytes);
-        eprintln!("[export] FFmpeg FAILED. stderr:\n{}", stderr);
+        tracing::error!("FFmpeg FAILED. stderr:\n{}", stderr);
         return Err(AppError::Ffmpeg(format!(
             "FFmpeg encode failed (exit {}): {}",
             status.code().unwrap_or(-1),
@@ -1006,7 +1006,7 @@ pub fn encode_video(
         let _ = std::fs::remove_file(&temp_path_buf);
         return Err(AppError::Io(e));
     }
-    eprintln!("[export] FFmpeg encode completed successfully");
+    tracing::info!("FFmpeg encode completed successfully");
     Ok(())
 }
 
@@ -1088,8 +1088,8 @@ fn output_with_timeout(
     let status = match child.wait_timeout(timeout) {
         Ok(status) => status,
         Err(e) if e.kind() == ErrorKind::TimedOut => {
-            eprintln!(
-                "[ffmpeg] Command timed out after {:?}, killing process",
+            tracing::warn!(
+                "Command timed out after {:?}, killing process",
                 timeout
             );
             let _ = child.kill();
