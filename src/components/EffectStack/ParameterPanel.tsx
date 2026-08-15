@@ -44,15 +44,40 @@ function ParameterWheel({
     e.preventDefault();
     const startY = e.clientY;
     const startValue = value;
+    // Raw mousemove can fire far faster than the screen repaints (OS/mouse
+    // polling rate, sometimes 100-1000Hz) -- calling onChange synchronously
+    // on every event pushed a full store update (and, downstream, a real
+    // preview re-render/backend IPC call) on every single tick, which is
+    // what made dragging a slider on a CPU-preview dithering effect feel
+    // choppy. Coalesce to at most one commit per animation frame instead;
+    // the eye can't perceive more than that anyway, and the final value is
+    // still always committed on mouseup even if it lands between frames.
+    let rafId: number | null = null;
+    let pendingValue: number | null = null;
+    const flush = () => {
+      rafId = null;
+      if (pendingValue !== null) {
+        onChange(pendingValue);
+        pendingValue = null;
+      }
+    };
     const handleMove = (ev: MouseEvent) => {
       const delta = startY - ev.clientY;
       const step = range > 0 ? range / 200 : 1;
       const next = Math.max(min, Math.min(max, startValue + delta * step));
-      onChange(next);
+      pendingValue = next;
+      if (rafId === null) {
+        rafId = requestAnimationFrame(flush);
+      }
     };
     const handleUp = () => {
       window.removeEventListener("mousemove", handleMove);
       window.removeEventListener("mouseup", handleUp);
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      flush();
     };
     window.addEventListener("mousemove", handleMove);
     window.addEventListener("mouseup", handleUp);

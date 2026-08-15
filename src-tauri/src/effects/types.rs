@@ -79,6 +79,20 @@ pub trait Effect: Send + Sync {
         false
     }
 
+    /// Whether `process_frame`/`process_video` actually reads the implicit
+    /// `time` value the frontend injects into every effect's params during
+    /// playback (see `stackToRustPayload` in effectConverter.ts). Unrelated
+    /// to `is_temporal` -- an effect can read `time` to vary its own output
+    /// frame-to-frame (e.g. as a noise seed) without needing adjacent-frame
+    /// access. commands.rs's `apply_effect_stack` cache uses this to ignore
+    /// the `time` key when comparing cached params for effects that don't
+    /// care about it -- otherwise every effect, including a fully static
+    /// dither, would cache-miss on every playback frame purely because
+    /// `time` changed for someone else in the stack.
+    fn uses_time_param(&self) -> bool {
+        false
+    }
+
     /// Process a single frame (images or preview).
     fn process_frame(
         &self,

@@ -49,6 +49,10 @@ impl Effect for ByteZero {
         }
     }
 
+    fn uses_time_param(&self) -> bool {
+        true
+    }
+
     fn process_frame(
         &self,
         input: &Frame,

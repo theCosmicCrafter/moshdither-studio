@@ -1015,6 +1015,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     let inFlight = false;
     let pendingRenderScale: number | null = null;
     let debounceTimer: number | null = null;
+    let lowResDebounceTimer: number | null = null;
 
     const doRender = async (scale: number) => {
       if (inFlight) {
@@ -1046,8 +1047,18 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       }
     };
 
-    // Immediately render at low-medium resolution on any parameter change (slider drag)
-    doRender(0.35);
+    // Render at low-medium resolution on any parameter change (slider drag),
+    // briefly debounced -- this useEffect re-runs on every cpuRenderSignature
+    // change, i.e. on every drag tick, and each run used to fire an
+    // independent real backend IPC call immediately with no gating between
+    // runs (the inFlight/pendingRenderScale coalescing above only applies
+    // *within* a single run's own closure, not across the many runs a fast
+    // drag produces). 60ms is short enough to feel live for a one-off
+    // change but caps a rapid drag to ~16 real renders/sec instead of one
+    // per tick.
+    lowResDebounceTimer = window.setTimeout(() => {
+      if (!cancelled) doRender(0.35);
+    }, 60);
 
     // Debounce to high resolution after 400ms of inactivity
     debounceTimer = window.setTimeout(() => {
@@ -1093,6 +1104,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     return () => {
       cancelled = true;
       if (debounceTimer) window.clearTimeout(debounceTimer);
+      if (lowResDebounceTimer) window.clearTimeout(lowResDebounceTimer);
       cancelAnimationFrame(cpuAnimRafRef.current);
     };
   }, [useCpuPreview, mediaLoaded, cpuRenderSignature, isPlaying]);

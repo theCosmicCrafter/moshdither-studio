@@ -417,6 +417,17 @@ function sanitizeParams(params: Record<string, unknown>): Record<string, unknown
 }
 
 /**
+ * Cap on retained undo-history entries. Each entry is a full snapshot of
+ * effectStack; without a bound, a long editing session -- especially one
+ * with many rapid parameter-drag ticks -- would retain an ever-growing
+ * number of full-stack snapshots for the app's entire lifetime. `undo()`
+ * and `redo()` move entries between pastStacks/futureStacks but never grow
+ * the total beyond what pushHistory already capped, so this one bound is
+ * sufficient for both arrays.
+ */
+const MAX_HISTORY_ENTRIES = 100;
+
+/**
  * Snapshot the current effect stack onto the undo history and clear the
  * redo stack, for actions that make a new edit. Spread this into a `set()`
  * return value alongside that action's own state changes. Not used by
@@ -425,8 +436,12 @@ function sanitizeParams(params: Record<string, unknown>): Record<string, unknown
  * not the outgoing one.
  */
 function pushHistory(state: Pick<AppState, "pastStacks" | "effectStack">) {
+  const pastStacks = [...state.pastStacks, state.effectStack];
   return {
-    pastStacks: [...state.pastStacks, state.effectStack],
+    pastStacks:
+      pastStacks.length > MAX_HISTORY_ENTRIES
+        ? pastStacks.slice(pastStacks.length - MAX_HISTORY_ENTRIES)
+        : pastStacks,
     futureStacks: [] as StackEntry[][],
   };
 }
