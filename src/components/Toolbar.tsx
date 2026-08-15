@@ -44,6 +44,8 @@ export default function Toolbar({ onFileLoaded }: Props) {
         .join("|") + `|${maskRevision}`,
     [effectStack, maskRevision]
   );
+  const verifyPanelVisible = useAppStore((s) => s.panelVisibility.verify);
+  const togglePanel = useAppStore((s) => s.togglePanel);
   const setShowBeforeAfter = useAppStore((s) => s.setShowBeforeAfter);
   const setZoom = useAppStore((s) => s.setZoom);
   const setIsProcessing = useAppStore((s) => s.setIsProcessing);
@@ -517,6 +519,20 @@ export default function Toolbar({ onFileLoaded }: Props) {
                 >
                   <span className="material-symbols-outlined menu-item-icon">dashboard_customize</span>
                   Reset Standard Layout
+                </button>
+                <div className="border-t border-outline/20 my-1" />
+                <div className="px-3 py-1 font-label-sm text-label-sm uppercase text-on-surface-variant/70">
+                  Advanced
+                </div>
+                <button
+                  onClick={() => { togglePanel("verify"); setViewMenuOpen(false); }}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors"
+                  title="Effect self-test suite for diagnosing a broken install"
+                >
+                  <span className="material-symbols-outlined menu-item-icon">
+                    {verifyPanelVisible ? "toggle_on" : "toggle_off"}
+                  </span>
+                  Diagnostics Panel
                 </button>
               </div>
             )}
