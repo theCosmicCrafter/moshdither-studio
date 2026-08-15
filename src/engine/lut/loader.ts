@@ -49,14 +49,29 @@ export const LUT_PRESETS: LUTPreset[] = [
 
 export class LUTLoader {
   private gl: WebGL2RenderingContext;
+  // LRU-bounded cache of uploaded LUT textures, keyed by URL. Without
+  // bounding, every distinct custom LUT a user loads via LUTPanel's "Load
+  // Custom LUT" button gets a brand-new blob: URL as its key (even
+  // re-loading the same .cube file twice), so it would pin a 512x512 RGBA
+  // GPU texture (~1MB) forever -- see EffectChain's maskTextureCache for
+  // the same pattern applied to mask textures. Sized comfortably above
+  // LUT_PRESETS' fixed count so normal preset browsing never evicts.
   private cache: Map<string, WebGLTexture> = new Map();
+  private static readonly LUT_CACHE_MAX = 48;
 
   constructor(ctx: WebGLContext) {
     this.gl = ctx.getGL();
   }
 
   async loadLUT(url: string): Promise<WebGLTexture> {
-    if (this.cache.has(url)) return this.cache.get(url)!;
+    // LRU touch: re-insert at the tail (most recently used) so the head
+    // holds the least recently used entry. Map preserves insertion order.
+    const cached = this.cache.get(url);
+    if (cached) {
+      this.cache.delete(url);
+      this.cache.set(url, cached);
+      return cached;
+    }
 
     const img = new Image();
     img.crossOrigin = "anonymous";
@@ -74,8 +89,25 @@ export class LUTLoader {
     }
 
     const tex = this.createTextureFromImage(img);
+    this.evictIfNeeded();
     this.cache.set(url, tex);
     return tex;
+  }
+
+  // Evict the least-recently-used entry (the Map's first key) when the
+  // cache is full. Custom LUTs loaded from .cube files are keyed by a
+  // blob: URL created in loadCustomLUT() -- that object URL is never
+  // revoked elsewhere, so eviction is also the only place that can free it.
+  private evictIfNeeded() {
+    if (this.cache.size < LUTLoader.LUT_CACHE_MAX) return;
+    const oldestKey = this.cache.keys().next().value;
+    if (oldestKey === undefined) return;
+    const oldestTex = this.cache.get(oldestKey)!;
+    this.gl.deleteTexture(oldestTex);
+    this.cache.delete(oldestKey);
+    if (oldestKey.startsWith("blob:")) {
+      URL.revokeObjectURL(oldestKey);
+    }
   }
 
   private createTextureFromImage(img: HTMLImageElement): WebGLTexture {
@@ -95,7 +127,12 @@ export class LUTLoader {
 
   clearCache() {
     const gl = this.gl;
-    this.cache.forEach((t) => gl.deleteTexture(t));
+    this.cache.forEach((t, key) => {
+      gl.deleteTexture(t);
+      if (key.startsWith("blob:")) {
+        URL.revokeObjectURL(key);
+      }
+    });
     this.cache.clear();
   }
 }
