@@ -15,6 +15,7 @@ import { useAppStore } from "../store";
 import { logger } from "../utils/logger";
 import { WebGLContext, MediaUploader, EffectChain } from "../engine/webgl2";
 import { stackToRenderPasses, buildShaderMap, stackToRustPayload, stackHasApproximatePreview } from "../utils/effectConverter";
+import { getThemeColor } from "../utils/themeColor";
 import ManualMaskOverlay from "./ManualMaskOverlay";
 import ScopesOverlay from "./ScopesOverlay";
 import PlaybackOverlay from "./PlaybackOverlay";
@@ -127,6 +128,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     sam3FrameMasks,
     sam3OverlayOpacity,
     sam3OverlayColor,
+    theme,
   } = useAppStore(
     useShallow((s) => ({
       activeMask: s.activeMask,
@@ -140,6 +142,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       sam3FrameMasks: s.sam3FrameMasks,
       sam3OverlayOpacity: s.sam3OverlayOpacity,
       sam3OverlayColor: s.sam3OverlayColor,
+      theme: s.theme,
     }))
   );
 
@@ -659,11 +662,16 @@ function PreviewViewport({ isDropTarget = false }: Props) {
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Draw committed points
+    // Draw committed points. Colors are read from the theme's semantic
+    // success/danger tokens (not hardcoded) so they track light/dark/custom
+    // themes; the white outline stays fixed since it's a contrast ring
+    // against arbitrary media content, not app chrome.
+    const positiveColor = getThemeColor("--success", "#22c55e");
+    const negativeColor = getThemeColor("--danger", "#ef4444");
     for (const p of sam3Points) {
       ctx.beginPath();
       ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
-      ctx.fillStyle = p.label === 1 ? "#22c55e" : "#ef4444";
+      ctx.fillStyle = p.label === 1 ? positiveColor : negativeColor;
       ctx.fill();
       ctx.lineWidth = 2;
       ctx.strokeStyle = "#fff";
@@ -676,15 +684,19 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       const y1 = Math.min(boxStart.y, boxCurrent.y);
       const x2 = Math.max(boxStart.x, boxCurrent.x);
       const y2 = Math.max(boxStart.y, boxCurrent.y);
-      ctx.strokeStyle = "#f59e0b";
+      const selectionColor = getThemeColor("--warning", "#f59e0b");
+      ctx.strokeStyle = selectionColor;
       ctx.lineWidth = 2;
       ctx.setLineDash([4, 4]);
       ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
       ctx.setLineDash([]);
-      ctx.fillStyle = "rgba(245, 158, 11, 0.15)";
+      ctx.save();
+      ctx.globalAlpha = 0.15;
+      ctx.fillStyle = selectionColor;
       ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+      ctx.restore();
     }
-  }, [sam3Points, isBoxDragging, boxStart, boxCurrent, mediaInfo]);
+  }, [sam3Points, isBoxDragging, boxStart, boxCurrent, mediaInfo, theme]);
 
   // ── WebGL Preview Pipeline ────────────────────────────────
   useEffect(() => {
