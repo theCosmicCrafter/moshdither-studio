@@ -156,7 +156,9 @@ def main() -> None:
     print(f"Using Python: {python}")
     print(f"Target triple: {target}")
 
-    with tempfile.TemporaryDirectory(prefix="sam3-sidecar-", dir=str(PROJECT_ROOT / "build")) as tmp:
+    build_root = PROJECT_ROOT / "build"
+    build_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="sam3-sidecar-", dir=str(build_root)) as tmp:
         work_dir = Path(tmp)
         work_dir.mkdir(parents=True, exist_ok=True)
         binary = run_pyinstaller(target, python, work_dir)
