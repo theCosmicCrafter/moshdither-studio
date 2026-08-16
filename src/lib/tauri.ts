@@ -183,6 +183,26 @@ export async function loadMediaFromPath(path: string): Promise<void> {
   await invoke("load_media", { path });
 }
 
+/**
+ * Turn a currently-loaded still image into a real multi-frame video by
+ * looping its single frame for `durationSecs` at `fps` (a classic
+ * freeze-frame "image to video" operation). This is what lets the
+ * video-only effect family (frame_reverse, shuffle, motion_transfer, ...)
+ * operate on what started out as a still image -- those effects read/write
+ * multiple frames and are meaningless applied to a single still.
+ *
+ * Returns the absolute path to the generated `.mp4`. The caller is
+ * responsible for loading it back in via `loadMediaFromPath` (the normal
+ * video-loading path) to make it the active session.
+ */
+export async function animateStillAsVideo(
+  imagePath: string,
+  durationSecs: number = 5,
+  fps: number = 30
+): Promise<string> {
+  return invoke("animate_still_as_video", { imagePath, durationSecs, fps });
+}
+
 // Browser-mode media cache: stores the last loaded data URL so getMediaInfo/getFrameData can return it
 let browserMedia: { dataUrl: string; width: number; height: number } | null = null;
 

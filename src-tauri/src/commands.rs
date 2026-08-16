@@ -6,7 +6,7 @@ use crate::effects::{
 };
 use crate::ffmpeg::{
     decode_video, encode_video, extract_audio_to_wav, ffedit_binary, ffgac_binary, ffmpeg_binary,
-    generate_proxy, has_audio_stream, probe_metadata,
+    generate_proxy, has_audio_stream, image_to_video, probe_metadata,
 };
 use crate::path_guard::validate_io_path;
 use crate::sam3_engine::Sam3Engine;
@@ -2602,6 +2602,27 @@ pub async fn generate_proxy_command(
     let path = validated.to_string_lossy().into_owned();
     tauri::async_runtime::spawn_blocking(move || {
         generate_proxy(&path, max_width, crf).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("Task failed: {}", e))?
+}
+
+/// Turn a currently-loaded still image into a real multi-frame video by
+/// looping its single frame for `duration_secs` at `fps`, then returns the
+/// generated file's path so the frontend can load it back in through the
+/// normal video-loading path (`load_media`). This is what lets the
+/// video-only effect family (frame_reverse, shuffle, motion_transfer, ...)
+/// operate on what started out as a still image.
+#[tauri::command]
+pub async fn animate_still_as_video(
+    image_path: String,
+    duration_secs: f64,
+    fps: f64,
+) -> std::result::Result<String, String> {
+    let validated = validate_io_path(&image_path, true)?;
+    let path = validated.to_string_lossy().into_owned();
+    tauri::async_runtime::spawn_blocking(move || {
+        image_to_video(&path, duration_secs, fps).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| format!("Task failed: {}", e))?
