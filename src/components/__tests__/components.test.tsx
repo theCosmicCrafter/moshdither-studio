@@ -81,6 +81,9 @@ vi.mock("../../utils/beatKeyframeGenerator", () => ({
 vi.mock("../../utils/effectConverter", () => ({
   stackToRustPayload: vi.fn(() => []),
   stackRequiresCpuPreview: vi.fn(() => false),
+  isVideoOnlyEffect: (meta: { media_type: string }) => meta.media_type === "video",
+  VIDEO_ONLY_ON_IMAGE_WARNING:
+    "No visible effect on a still image — this effect requires video.",
 }));
 
 vi.mock("../../lib/tauri", () => ({
@@ -737,6 +740,51 @@ describe("Component Test Suite", () => {
 
       fireEvent.click(toggle);
       expect(toggle).toHaveAttribute("aria-pressed", "true");
+    });
+
+    it("shows a video-only warning banner when a video-only effect sits in the stack over a still image", () => {
+      const meta: EffectMeta = {
+        id: "datamoshing.frame_reverse",
+        name: "Frame Reverse",
+        category: "datamoshing",
+        media_type: "video",
+        parameters: [{ id: "amount", name: "Amount", type: "slider", min: 0, max: 1, default: 0.5 }],
+      };
+      useAppStore.getState().setAllEffects([meta]);
+      useAppStore.getState().addToStack(meta);
+      useAppStore.getState().setMediaLoaded(true);
+      useAppStore.getState().setIsVideo(false);
+      render(<ParameterPanel />);
+
+      expect(screen.getByText(/requires video/i)).toBeInTheDocument();
+    });
+
+    it("does not show the video-only warning when a video is loaded", () => {
+      const meta: EffectMeta = {
+        id: "datamoshing.frame_reverse",
+        name: "Frame Reverse",
+        category: "datamoshing",
+        media_type: "video",
+        parameters: [{ id: "amount", name: "Amount", type: "slider", min: 0, max: 1, default: 0.5 }],
+      };
+      useAppStore.getState().setAllEffects([meta]);
+      useAppStore.getState().addToStack(meta);
+      useAppStore.getState().setMediaLoaded(true);
+      useAppStore.getState().setIsVideo(true);
+      render(<ParameterPanel />);
+
+      expect(screen.queryByText(/requires video/i)).not.toBeInTheDocument();
+    });
+
+    it("does not show the video-only warning for an effect that supports images (media_type !== \"video\")", () => {
+      const meta = mockEffectMeta("dithering.bayer", "Bayer Dither", "dithering");
+      useAppStore.getState().setAllEffects([meta]);
+      useAppStore.getState().addToStack(meta);
+      useAppStore.getState().setMediaLoaded(true);
+      useAppStore.getState().setIsVideo(false);
+      render(<ParameterPanel />);
+
+      expect(screen.queryByText(/requires video/i)).not.toBeInTheDocument();
     });
   });
 

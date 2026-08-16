@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { useAppStore } from "../../store";
+import { isVideoOnlyEffect, VIDEO_ONLY_ON_IMAGE_WARNING } from "../../utils/effectConverter";
 
 const CAT_COLORS: Record<string, string> = {
   dithering: "var(--cat-dithering)",
@@ -22,6 +23,8 @@ export default function EffectList() {
   const searchQuery = useAppStore((s) => s.searchQuery);
   const addToStack = useAppStore((s) => s.addToStack);
   const effectStack = useAppStore((s) => s.effectStack);
+  const mediaLoaded = useAppStore((s) => s.mediaLoaded);
+  const isVideo = useAppStore((s) => s.isVideo);
 
   const effects = useMemo(() => {
     let filtered = allEffects;
@@ -51,11 +54,20 @@ export default function EffectList() {
       {effects.map((effect) => {
         const color = CAT_COLORS[effect.category] || "var(--text-muted)";
         const isInStack = effectStack.some((e) => e.effectId === effect.id);
+        const isIncompatible =
+          mediaLoaded && !isVideo && isVideoOnlyEffect(effect);
         return (
           <button
             key={effect.id}
             onClick={() => addToStack(effect)}
-            className="group w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-lg transition-all duration-300 neo-flat filigree-corner hover:border-accent-pink"
+            className={`group w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-lg transition-all duration-300 neo-flat filigree-corner hover:border-accent-pink ${
+              isIncompatible ? "toolbar-disabled" : ""
+            }`}
+            title={
+              isIncompatible
+                ? VIDEO_ONLY_ON_IMAGE_WARNING
+                : undefined
+            }
           >
             {/* Category indicator line */}
             <div
@@ -71,6 +83,15 @@ export default function EffectList() {
                 {effect.parameters.length !== 1 ? "s" : ""}
                 {isInStack && (
                   <span className="text-accent-pink ml-1">• in stack</span>
+                )}
+                {isIncompatible && (
+                  <span
+                    className="material-symbols-outlined text-amber-400 ml-1 align-middle"
+                    style={{ fontSize: 12 }}
+                    title={VIDEO_ONLY_ON_IMAGE_WARNING}
+                  >
+                    movie
+                  </span>
                 )}
               </div>
             </div>
