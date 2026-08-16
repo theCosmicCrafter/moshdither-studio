@@ -1,5 +1,6 @@
 import { useAppStore, type AudioBinding } from "../../store";
 import { PALETTE_PRESETS, fillPaletteParams } from "../../engine/palettePresets";
+import { isVideoOnlyEffect, VIDEO_ONLY_ON_IMAGE_WARNING } from "../../utils/effectConverter";
 
 const AUDIO_SOURCES = [
   { id: "bass", label: "Bass" },
@@ -125,6 +126,8 @@ function ParameterWheel({
 export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
   const entry = useAppStore((s) => s.effectStack.find((e) => e.id === (stackId || s.selectedStackId)));
   const effectMeta = useAppStore((s) => s.allEffects.find((e) => e.id === entry?.effectId));
+  const mediaLoaded = useAppStore((s) => s.mediaLoaded);
+  const isVideo = useAppStore((s) => s.isVideo);
   const updateStackParams = useAppStore((s) => s.updateStackParams);
   const audioBindings = useAppStore((s) =>
     entry?.id ? s.audioBindings[entry.id] : undefined
@@ -153,6 +156,8 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
 
   if (!effectMeta) return null;
 
+  const showVideoOnlyWarning = mediaLoaded && !isVideo && isVideoOnlyEffect(effectMeta);
+
   return (
     <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4 custom-scrollbar">
       <div
@@ -161,6 +166,28 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
       >
         {entry.effectName} Parameters
       </div>
+
+      {showVideoOnlyWarning && (
+        <div
+          role="alert"
+          style={{
+            padding: "6px 8px",
+            fontSize: 10,
+            borderRadius: 3,
+            background: "rgba(255, 180, 0, 0.15)",
+            border: "1px solid rgba(255, 180, 0, 0.4)",
+            color: "var(--accent-gold, #ffb400)",
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+          }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 12 }}>
+            warning
+          </span>
+          <span>{VIDEO_ONLY_ON_IMAGE_WARNING}</span>
+        </div>
+      )}
 
       {entry.effectId === "dithering.palette" && (
         <div className="space-y-2">

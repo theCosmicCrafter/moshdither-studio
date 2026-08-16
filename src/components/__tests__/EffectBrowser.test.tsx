@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
 import { useAppStore, type EffectMeta } from "../../store";
+import { VIDEO_ONLY_ON_IMAGE_WARNING } from "../../utils/effectConverter";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(() => Promise.resolve({})),
@@ -37,6 +38,10 @@ function mockEffectMeta(id: string, name: string, category: string): EffectMeta 
   };
 }
 
+function mockVideoOnlyEffectMeta(id: string, name: string, category: string): EffectMeta {
+  return { ...mockEffectMeta(id, name, category), media_type: "video" };
+}
+
 function resetStore() {
   useAppStore.setState({
     allEffects: [],
@@ -46,8 +51,12 @@ function resetStore() {
     pastStacks: [],
     futureStacks: [],
     selectedStackId: null,
+    mediaLoaded: false,
+    isVideo: false,
   });
 }
+
+const VIDEO_ONLY_TITLE = VIDEO_ONLY_ON_IMAGE_WARNING;
 
 describe("EffectBrowser — Search Filtering", () => {
   beforeEach(() => {
@@ -254,5 +263,84 @@ describe("EffectBrowser — Effect Selection", () => {
     fireEvent.click(screen.getByText("Dither"));
     fireEvent.click(screen.getByText("Bayer"));
     expect(useAppStore.getState().effectStack.length).toBe(1);
+  });
+});
+
+describe("EffectBrowser — Media Type Compatibility Indicator", () => {
+  beforeEach(() => {
+    resetStore();
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("marks a video-only effect as incompatible in EffectList when a still image is loaded", () => {
+    useAppStore.getState().setAllEffects([
+      mockVideoOnlyEffectMeta("datamoshing.bloom", "Bloom", "datamoshing"),
+    ]);
+    useAppStore.getState().setActiveCategory("datamoshing");
+    useAppStore.getState().setMediaLoaded(true);
+    useAppStore.getState().setIsVideo(false);
+    render(<EffectList />);
+    expect(screen.getAllByTitle(VIDEO_ONLY_TITLE).length).toBeGreaterThan(0);
+  });
+
+  it("does not mark anything incompatible when no media is loaded", () => {
+    useAppStore.getState().setAllEffects([
+      mockVideoOnlyEffectMeta("datamoshing.bloom", "Bloom", "datamoshing"),
+    ]);
+    useAppStore.getState().setActiveCategory("datamoshing");
+    // mediaLoaded defaults to false via resetStore
+    render(<EffectList />);
+    expect(screen.queryByTitle(VIDEO_ONLY_TITLE)).not.toBeInTheDocument();
+  });
+
+  it("does not mark anything incompatible when a video is loaded", () => {
+    useAppStore.getState().setAllEffects([
+      mockVideoOnlyEffectMeta("datamoshing.bloom", "Bloom", "datamoshing"),
+    ]);
+    useAppStore.getState().setActiveCategory("datamoshing");
+    useAppStore.getState().setMediaLoaded(true);
+    useAppStore.getState().setIsVideo(true);
+    render(<EffectList />);
+    expect(screen.queryByTitle(VIDEO_ONLY_TITLE)).not.toBeInTheDocument();
+  });
+
+  it("does not mark effects that support images as incompatible", () => {
+    useAppStore.getState().setAllEffects([
+      mockEffectMeta("dithering.bayer", "Bayer", "dithering"), // media_type: "both"
+    ]);
+    useAppStore.getState().setActiveCategory("dithering");
+    useAppStore.getState().setMediaLoaded(true);
+    useAppStore.getState().setIsVideo(false);
+    render(<EffectList />);
+    expect(screen.queryByTitle(VIDEO_ONLY_TITLE)).not.toBeInTheDocument();
+  });
+
+  it("still allows adding a video-only effect to the stack while a still image is loaded (visual hint only, not a hard block)", () => {
+    useAppStore.getState().setAllEffects([
+      mockVideoOnlyEffectMeta("datamoshing.bloom", "Bloom", "datamoshing"),
+    ]);
+    useAppStore.getState().setActiveCategory("datamoshing");
+    useAppStore.getState().setMediaLoaded(true);
+    useAppStore.getState().setIsVideo(false);
+    render(<EffectList />);
+    fireEvent.click(screen.getByText("Bloom"));
+    expect(useAppStore.getState().effectStack.length).toBe(1);
+    expect(useAppStore.getState().effectStack[0].effectId).toBe("datamoshing.bloom");
+  });
+
+  it("marks a video-only effect as incompatible in CategoryAccordion when a still image is loaded", () => {
+    useAppStore.getState().setAllEffects([
+      mockVideoOnlyEffectMeta("datamoshing.bloom", "Bloom", "datamoshing"),
+    ]);
+    useAppStore.getState().setActiveCategory("color");
+    useAppStore.getState().setMediaLoaded(true);
+    useAppStore.getState().setIsVideo(false);
+    render(<CategoryAccordion />);
+    fireEvent.click(screen.getByText("Mosh"));
+    expect(screen.getAllByTitle(VIDEO_ONLY_TITLE).length).toBeGreaterThan(0);
   });
 });

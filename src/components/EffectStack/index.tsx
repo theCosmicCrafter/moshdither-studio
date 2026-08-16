@@ -1,6 +1,7 @@
 import { useRef, useState, useMemo } from "react";
 import { useAppStore } from "../../store";
 import ParameterPanel from "./ParameterPanel";
+import { isVideoOnlyEffect, VIDEO_ONLY_ON_IMAGE_WARNING } from "../../utils/effectConverter";
 
 export default function EffectStack() {
   const effectStack = useAppStore((s) => s.effectStack);
@@ -14,6 +15,15 @@ export default function EffectStack() {
   const setStackItemMaskMode = useAppStore((s) => s.setStackItemMaskMode);
   const hasActiveMask = useAppStore((s) => !!s.activeMask);
   const sam3MaskCount = useAppStore((s) => s.sam3Masks.length);
+  const allEffects = useAppStore((s) => s.allEffects);
+  const mediaLoaded = useAppStore((s) => s.mediaLoaded);
+  const isVideo = useAppStore((s) => s.isVideo);
+  // True only while a still image (not video) is loaded -- gates the
+  // video-only-effect warning below. Video-only effects (the datamoshing
+  // family) have a process_frame that is a literal no-op clone on a single
+  // frame, so left in the stack over a still image they change nothing with
+  // no indication why.
+  const showVideoOnlyWarnings = mediaLoaded && !isVideo;
 
   const containerRef = useRef<HTMLDivElement>(null);
   
@@ -125,6 +135,9 @@ export default function EffectStack() {
             // position moved a different, invisible pair of effects instead
             // of the one the user clicked.
             const realIndex = effectStack.findIndex((e) => e.id === entry.id);
+            const effectMeta = allEffects.find((e) => e.id === entry.effectId);
+            const isVideoOnlyOnImage =
+              showVideoOnlyWarnings && !!effectMeta && isVideoOnlyEffect(effectMeta);
 
             return (
               <div
@@ -166,6 +179,15 @@ export default function EffectStack() {
                       {entry.maskId && (
                         <span className="material-symbols-outlined text-accent-pink" style={{ fontSize: 12 }} title="Effect locked to mask">
                           lock
+                        </span>
+                      )}
+                      {isVideoOnlyOnImage && (
+                        <span
+                          className="material-symbols-outlined"
+                          style={{ fontSize: 12, color: "var(--accent-gold, #ffb400)" }}
+                          title={VIDEO_ONLY_ON_IMAGE_WARNING}
+                        >
+                          warning
                         </span>
                       )}
                     </div>
