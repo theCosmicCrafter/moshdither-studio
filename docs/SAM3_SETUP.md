@@ -68,13 +68,68 @@ If this prints `OK: <class 'sam3.model.sam3_image.Sam3Image'>`, the Rust/
 Python bridge will work too — `Sam3Engine::new()` runs the same import and
 build path.
 
-## Known gap: packaged builds
+## Packaged builds
 
-None of the above ships in a built installer today. `tauri.conf.json`'s
-`bundle.externalBin` only lists ffmpeg/ffprobe/ffgac/ffedit — no SAM3
-sidecar — and there's no first-run model-download flow. A distributable
-build needs: a PyInstaller-built `sam3-bridge` sidecar added to
-`externalBin`, and a decision on checkpoint delivery (first-run download UI
-is the recommended approach over bundling several GB of weights into the
-installer). See `docs/HARDENING_PLAN_2026-07-26.md` §7 and
-`docs/PRODUCTION_AUDIT_2026-07-25.md` for the existing analysis.
+The base `tauri.conf.json` intentionally ships no SAM3 sidecar (dev builds
+run the Python interpreter directly, per above). Release builds use a
+separate pipeline, driven by `scripts/setup-sam3-env.py` →
+`scripts/download-sam3-checkpoint.py` → `scripts/build-sam3-sidecar.py` →
+`scripts/enable-sam3-sidecar.mjs`, which generates a `tauri.release.conf.json`
+overlay adding `sam3-bridge` to `bundle.externalBin` and the checkpoint to
+`bundle.resources` — so the model ships inside the installer rather than
+requiring a first-run download. `.github/workflows/release.yml` already
+wires all four steps together for CI release builds.
+
+This pipeline previously produced a broken sidecar (see the fix history
+below) but has been verified end-to-end locally: `scripts/build-sam3-sidecar.py`
+now produces a working `sam3-bridge-<target>.exe`, confirmed by actually
+launching it and completing a real handshake + shutdown round-trip over its
+stdin/stdout JSON-IPC protocol — not just checking that the binary exists.
+The CI workflow itself has not been exercised in this repo (GitHub Actions
+is blocked on this account's billing), so a real release build remains
+unverified end-to-end, but the local build/run path that CI drives is now
+confirmed functional.
+
+### Fix history: PyInstaller + eager JIT compilation
+
+`build-sam3-sidecar.py` failed on its very first real run with
+`FileNotFoundError` because it wrote its scratch dir under a `build/`
+subdirectory that never existed — `tempfile.TemporaryDirectory(dir=...)`
+doesn't create parent directories. This alone is strong evidence the script
+had never been successfully run end-to-end before.
+
+Once that was fixed, the *built* sidecar crashed on startup (before ever
+reaching the auth handshake) with several different frozen-bundle failures,
+all the same underlying cause: PyInstaller's onefile bundle ships compiled
+bytecode, not real `.py` source files, but several dependencies eagerly JIT-
+compile functions at import time using `inspect.getsourcelines()` /
+`linecache`, which only work against real source on disk:
+
+- `sageattention` (optional attention accelerator, probed in
+  `sam3_bridge.py`) failed with `ValueError` from triton's `@jit` machinery,
+  not `ImportError` — the existing `except ImportError` didn't catch it and
+  crashed the whole bridge process. Broadened to `except Exception`, same
+  fix applied to the adjacent `xformers`/`triton` probes.
+- `sam3/model/model_misc.py` has its own `import xformers` guarded by
+  `except ImportError` — xformers' own `_register_extensions()` call raises
+  `FileNotFoundError` in the frozen bundle (its DLL directory doesn't exist
+  at the expected frozen path), which also wasn't caught. Same broadening.
+- `sam3/model/box_ops.py` applies `@torch.jit.script` eagerly at module
+  level to two functions, unconditionally, on every import — not optional,
+  and not something `sam3_bridge.py`'s own accelerator probes could guard.
+  Patched to attempt scripting and fall back to the plain eager function on
+  any failure (dev builds still get the scripted/faster version; frozen
+  builds get the same numerically-correct but uncompiled function).
+- The vendored `sam3` package uses `@triton.jit` eagerly at module level in
+  several more files (`sam3/model/edt.py`, `sam3/perflib/triton/*`), each of
+  which would otherwise crash the same way one file at a time across
+  separate rebuild-and-discover cycles. Instead of patching each file,
+  `sam3_bridge.py` now patches `triton.jit` itself — once, only when running
+  from a frozen bundle (`sys.frozen`) — so any `@triton.jit` call site,
+  including ones not yet discovered, falls back to the plain function
+  instead of crashing. Verified directly against a function with no
+  introspectable source (simulating the frozen condition) before rebuilding.
+
+`packages/python-backend/sam3_repo` (the vendored SAM3 checkout, not
+git-tracked — see above) carries the `box_ops.py` patch; the root `sam3_repo/`
+reference copy was kept in sync for consistency.
