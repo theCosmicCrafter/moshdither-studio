@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
+  animateStillAsVideo,
   applyEffectStack,
   applyFfglitch,
+  convertFileSrc,
+  generateProxy,
   getFrameData,
   getMediaMetadata,
   loadMediaFile,
+  loadMediaFromPath,
   sam3LoadImage,
   saveImage,
 } from "../lib/tauri";
@@ -22,8 +26,23 @@ interface Props {
   readonly onFileLoaded: () => Promise<boolean>;
 }
 
+// "Animate as Video" (still image -> looped freeze-frame video) defaults.
+// Fixed values instead of a duration/fps prompt modal -- 5s @ 30fps (150
+// frames) gives every video-only effect (frame_reverse, shuffle,
+// motion_transfer, ...) real multi-frame material to operate on, and a
+// still image has no "existing fps" to inherit the way a video would. A v1
+// modal was judged not worth the complexity for a one-off conversion; see
+// the PR description for the full tradeoff.
+const ANIMATE_AS_VIDEO_DURATION_SECS = 5;
+const ANIMATE_AS_VIDEO_FPS = 30;
+
 export default function Toolbar({ onFileLoaded }: Props) {
   const mediaLoaded = useAppStore((s) => s.mediaLoaded);
+  const isVideo = useAppStore((s) => s.isVideo);
+  const isProcessing = useAppStore((s) => s.isProcessing);
+  const setIsVideo = useAppStore((s) => s.setIsVideo);
+  const setDuration = useAppStore((s) => s.setDuration);
+  const setProxyUrl = useAppStore((s) => s.setProxyUrl);
   const showBeforeAfter = useAppStore((s) => s.showBeforeAfter);
   const zoom = useAppStore((s) => s.zoom);
   const { effectStack, maskRevision } = useAppStore(
@@ -184,6 +203,76 @@ export default function Toolbar({ onFileLoaded }: Props) {
     }
   };
 
+  // Turns the currently loaded still image into a real multi-frame video
+  // (freeze-frame loop) and loads it back in through the normal
+  // video-loading path, so Timeline/playback/video-only effects work on it
+  // exactly like any other opened video -- no special-casing needed
+  // elsewhere. Only meaningful when a still image (not already a video) is
+  // loaded, matching the isVideoOnlyEffect gating used across
+  // EffectBrowser/EffectStack.
+  const handleAnimateAsVideo = async () => {
+    if (!mediaLoaded || isVideo || isProcessing) return;
+    const state = useAppStore.getState();
+    const path = state.filePath;
+    if (!path) {
+      setStatusMessage("Animate as Video: no file path for the loaded image (reopen it via File > Open first)");
+      return;
+    }
+    setStatusMessage("Animating still image as video...");
+    setIsProcessing(true);
+    try {
+      const videoPath = await animateStillAsVideo(
+        path,
+        ANIMATE_AS_VIDEO_DURATION_SECS,
+        ANIMATE_AS_VIDEO_FPS
+      );
+      // Only point filePath at the generated video once it's actually loaded --
+      // otherwise a failed loadMediaFromPath below leaves filePath referencing
+      // a video while isVideo/mediaLoaded still reflect the prior still image.
+      await loadMediaFromPath(videoPath);
+      setFilePath(videoPath);
+
+      // The freshly generated file is unambiguously a video -- set this
+      // directly instead of re-deriving it from the extension. Mirrors
+      // PreviewViewport's own video-loading path (refreshPreviewFromBackend),
+      // which is the only other place isVideo/proxyUrl get set for real:
+      // the WebGL preview's video texture only activates when both are set.
+      setIsVideo(true);
+      setDuration(ANIMATE_AS_VIDEO_DURATION_SECS);
+      try {
+        const proxy = await generateProxy(videoPath, 1280, 28);
+        setProxyUrl(convertFileSrc(proxy));
+      } catch (e) {
+        console.warn("Proxy generation failed for animated video:", e);
+        setProxyUrl(null);
+      }
+
+      const synced = await onFileLoaded();
+
+      const refreshedState = useAppStore.getState();
+      if (refreshedState.sam3Ready) {
+        setStatusMessage("Loading animated frame into SAM3...");
+        try {
+          const b64 = await getFrameData();
+          await sam3LoadImage(b64);
+        } catch (e) {
+          console.warn("Failed to load animated frame into SAM3", e);
+        }
+      }
+
+      setStatusMessage(
+        synced
+          ? `Animated as video: ${videoPath}`
+          : `Animated as video: ${videoPath} (preview sync pending)`
+      );
+    } catch (err) {
+      console.error("[Toolbar] handleAnimateAsVideo failed:", err);
+      setStatusMessage(`Animate as Video failed: ${err}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleExport = async () => {
     if (!mediaLoaded) return;
     const state = useAppStore.getState();
@@ -334,6 +423,17 @@ export default function Toolbar({ onFileLoaded }: Props) {
                 >
                   <span className="material-symbols-outlined menu-item-icon" aria-hidden="true">folder_open</span>
                   Open File
+                </button>
+                <button
+                  onClick={() => { handleAnimateAsVideo(); setFileMenuOpen(false); }}
+                  disabled={!mediaLoaded || isVideo || isProcessing}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded && !isVideo && !isProcessing ? "toolbar-enabled" : "toolbar-disabled"}`}
+                  role="menuitem"
+                  aria-disabled={!mediaLoaded || isVideo || isProcessing}
+                  title="Turn the loaded still image into a looped video so video-only effects (frame reverse, shuffle, motion transfer, ...) can be applied"
+                >
+                  <span className="material-symbols-outlined menu-item-icon" aria-hidden="true">animation</span>
+                  Animate as Video
                 </button>
                 <div className="border-t border-outline/10 my-1" />
                 <button

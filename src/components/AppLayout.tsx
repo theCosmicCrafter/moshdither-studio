@@ -1,6 +1,13 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useAppStore } from "../store";
-import { listEffects, getFrameData, getMediaInfo, loadMediaFromPath } from "../lib/tauri";
+import {
+  listEffects,
+  getFrameData,
+  getMediaInfo,
+  loadMediaFromPath,
+  convertFileSrc,
+  generateProxy,
+} from "../lib/tauri";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { useKeyframePlayback } from "../hooks/useKeyframePlayback";
@@ -35,6 +42,8 @@ export default function AppLayout() {
   const setMediaInfo = useAppStore((s) => s.setMediaInfo);
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
   const setFilePath = useAppStore((s) => s.setFilePath);
+  const setIsVideo = useAppStore((s) => s.setIsVideo);
+  const setProxyUrl = useAppStore((s) => s.setProxyUrl);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const [isDropTarget, setIsDropTarget] = useState(false);
 
@@ -88,17 +97,38 @@ export default function AppLayout() {
   }, [setAllEffects, setStatusMessage]);
 
   // Refresh preview on demand (called after file load / effect apply).
+  // Mirrors PreviewViewport's refreshPreviewFromBackend so isVideo/proxyUrl
+  // stay accurate no matter which "open a file" path the user takes (File
+  // menu, native OS drag-drop here, or the dropzone/HTML5 drop in
+  // PreviewViewport) -- callers like Toolbar's "Animate as Video" gate their
+  // own enabled state on isVideo, so a stale value here silently breaks that.
   const refreshPreview = useCallback(async (): Promise<boolean> => {
     try {
       const info = await getMediaInfo();
       if (info.loaded) {
+        const path = useAppStore.getState().filePath;
+        const isVideoFile =
+          !!path && /\.(mp4|avi|mov|mkv|webm|m4v|flv|wmv|mpeg|mpg)$/i.test(path);
         setMediaLoaded(true);
         setMediaInfo({ width: info.width, height: info.height });
+        setIsVideo(isVideoFile);
 
         // Always use backend-generated PNG data URL for reliability in dev/prod.
         const frame = await getFrameData();
         setPreviewDataUrl(frame);
         setOriginalDataUrl(frame);
+
+        if (isVideoFile && path) {
+          try {
+            const proxy = await generateProxy(path, 1280, 28);
+            setProxyUrl(convertFileSrc(proxy));
+          } catch (err) {
+            console.warn("[AppLayout] Proxy generation failed:", err);
+            setProxyUrl(null);
+          }
+        } else {
+          setProxyUrl(null);
+        }
         return true;
       }
       return false;
@@ -108,7 +138,15 @@ export default function AppLayout() {
       setStatusMessage(`Preview refresh failed: ${msg}`);
       return false;
     }
-  }, [setMediaLoaded, setMediaInfo, setPreviewDataUrl, setOriginalDataUrl, setStatusMessage]);
+  }, [
+    setMediaLoaded,
+    setMediaInfo,
+    setPreviewDataUrl,
+    setOriginalDataUrl,
+    setStatusMessage,
+    setIsVideo,
+    setProxyUrl,
+  ]);
 
   // Drag-and-drop file support via Tauri webview API
   useEffect(() => {

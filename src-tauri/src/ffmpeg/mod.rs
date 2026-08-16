@@ -186,7 +186,10 @@ pub fn generate_proxy(source_path: &str, max_width: u32, crf: u32) -> Result<Str
         scale_height
     };
 
-    let proxy_dir = std::env::temp_dir().join("moshdither-proxy");
+    // Nested under moshdither-studio so it falls inside the Tauri asset-protocol
+    // scope allowlist ($TEMP/moshdither-studio/** in tauri.conf.json) -- the
+    // proxy path is fed straight into convertFileSrc() for webview playback.
+    let proxy_dir = std::env::temp_dir().join("moshdither-studio").join("proxy");
     std::fs::create_dir_all(&proxy_dir).map_err(AppError::Io)?;
 
     let source_name = Path::new(source_path)
@@ -223,6 +226,159 @@ pub fn generate_proxy(source_path: &str, max_width: u32, crf: u32) -> Result<Str
     }
 
     Ok(proxy_path.to_string_lossy().to_string())
+}
+
+/// Bounds on the duration/fps accepted by [`image_to_video`]. These stop a
+/// malformed or hostile frontend value (zero, negative, NaN, or an absurdly
+/// large duration) from producing a pathological FFmpeg invocation -- an
+/// unbounded `-t` would just burn the timeout-guarded subprocess's full
+/// budget for no benefit, and a zero/negative/non-finite value produces
+/// either an empty file or an FFmpeg parse error instead of a clear one.
+const MIN_STILL_ANIMATION_DURATION_SECS: f64 = 0.1;
+const MAX_STILL_ANIMATION_DURATION_SECS: f64 = 600.0;
+const MIN_STILL_ANIMATION_FPS: f64 = 1.0;
+const MAX_STILL_ANIMATION_FPS: f64 = 120.0;
+
+/// Validate and clamp the duration/fps requested for [`image_to_video`].
+/// Pulled out as its own function so the bounds-checking logic is testable
+/// without invoking FFmpeg. Rejects non-finite or non-positive values
+/// outright (those are almost certainly a caller bug, not a deliberate
+/// request); in-range-but-too-large values are silently clamped to the
+/// nearest bound rather than rejected, matching this file's existing
+/// `clamp()`-based tolerance for slightly-out-of-range UI input (e.g.
+/// `wm.font_size.clamp(1, 999)` in `apply_watermark_args`).
+fn validate_still_animation_params(duration_secs: f64, fps: f64) -> Result<(f64, f64)> {
+    if !duration_secs.is_finite() || duration_secs <= 0.0 {
+        return Err(AppError::Ffmpeg(format!(
+            "duration_secs must be a positive, finite number of seconds, got {duration_secs}"
+        )));
+    }
+    if !fps.is_finite() || fps <= 0.0 {
+        return Err(AppError::Ffmpeg(format!(
+            "fps must be a positive, finite frame rate, got {fps}"
+        )));
+    }
+    let duration = duration_secs.clamp(
+        MIN_STILL_ANIMATION_DURATION_SECS,
+        MAX_STILL_ANIMATION_DURATION_SECS,
+    );
+    let fps = fps.clamp(MIN_STILL_ANIMATION_FPS, MAX_STILL_ANIMATION_FPS);
+    Ok((duration, fps))
+}
+
+/// Build the FFmpeg argument vector for [`image_to_video`]. A pure function
+/// (no subprocess) so the argv shape -- flag ordering, the even-dimension
+/// pad filter, and where the output path lands -- is unit-testable directly,
+/// mirroring `apply_watermark_args`/`find_output_arg_index` above.
+fn build_image_to_video_args(
+    image_path: &str,
+    duration_secs: f64,
+    fps: f64,
+    width: u32,
+    height: u32,
+    output_path: &str,
+) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "-y".to_string(),
+        "-loop".to_string(),
+        "1".to_string(),
+        "-i".to_string(),
+        image_path.to_string(),
+        "-t".to_string(),
+        format!("{duration_secs}"),
+        "-r".to_string(),
+        format!("{fps}"),
+        "-c:v".to_string(),
+        "libx264".to_string(),
+        "-pix_fmt".to_string(),
+        "yuv420p".to_string(),
+    ];
+
+    // yuv420p requires even dimensions. Pad (rather than crop) so no source
+    // pixels are lost -- mirrors encode_video's own even-dimension handling
+    // further down this file.
+    if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
+        args.push("-vf".to_string());
+        args.push("pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0:black".to_string());
+    }
+
+    args.push(output_path.to_string());
+    args
+}
+
+/// Build a collision-resistant output filename for [`image_to_video`]. Hashes
+/// the full source path (not just its file stem) so two different images
+/// that happen to share a filename in different folders can't collide on the
+/// same output path and silently overwrite each other's animated clip.
+fn build_animated_still_filename(image_path: &str, duration_secs: f64, fps: f64) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    image_path.hash(&mut hasher);
+    let path_hash = format!("{:016x}", hasher.finish());
+
+    let source_name = Path::new(image_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("still");
+    format!(
+        "{}_{}_animated_{:.2}s_{:.0}fps.mp4",
+        source_name, path_hash, duration_secs, fps
+    )
+}
+
+/// Generate a video from a single still image by looping it for
+/// `duration_secs` seconds at `fps`. This is how a still-image session
+/// becomes a real multi-frame video that the video-only effect family
+/// (frame_reverse, shuffle, motion_transfer, mv_effects, profiles, ...) can
+/// meaningfully operate on -- those effects read/write multiple frames and
+/// are structurally meaningless applied to a single still.
+///
+/// The source image's own dimensions are probed and used as-is (no
+/// hardcoded resolution); only even-ness is corrected for, via padding, if
+/// needed for `yuv420p`. Returns the path to the generated `.mp4` in the
+/// system temp directory.
+pub fn image_to_video(image_path: &str, duration_secs: f64, fps: f64) -> Result<String> {
+    let (duration_secs, fps) = validate_still_animation_params(duration_secs, fps)?;
+    let ffmpeg = ffmpeg_binary()?;
+
+    let (width, height) = image::image_dimensions(image_path)
+        .map_err(|e| AppError::Ffmpeg(format!("Could not read image dimensions: {e}")))?;
+
+    // Nested under moshdither-studio so it falls inside the Tauri asset-protocol
+    // scope allowlist, matching extract_audio_to_wav/LUT temp dirs.
+    let out_dir = std::env::temp_dir()
+        .join("moshdither-studio")
+        .join("animated-stills");
+    std::fs::create_dir_all(&out_dir).map_err(AppError::Io)?;
+
+    let output_path = out_dir.join(build_animated_still_filename(image_path, duration_secs, fps));
+    let output_path_str = output_path.to_string_lossy().to_string();
+
+    let args = build_image_to_video_args(
+        image_path,
+        duration_secs,
+        fps,
+        width,
+        height,
+        &output_path_str,
+    );
+
+    const IMAGE_TO_VIDEO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+    let output = output_with_timeout(Command::new(&ffmpeg).args(&args), IMAGE_TO_VIDEO_TIMEOUT)?;
+
+    if !output.status.success() {
+        return Err(AppError::Ffmpeg(format!(
+            "FFmpeg image-to-video failed (exit {}): {}",
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stderr)
+                .chars()
+                .take(2000)
+                .collect::<String>()
+        )));
+    }
+
+    Ok(output_path_str)
 }
 
 /// Locate the FFgac binary (FFglitch encoder). Tries bundled sidecar first, then PATH.
@@ -1651,6 +1807,145 @@ mod output_arg_lookup_tests {
         assert!(
             result.windows(2).any(|w| w[0] == "-map" && w[1] == "[out]"),
             "must still push a -map [out] fallback instead of silently dropping the mapping, got {result:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod image_to_video_tests {
+    use super::*;
+
+    #[test]
+    fn validate_rejects_zero_or_negative_duration() {
+        assert!(validate_still_animation_params(0.0, 30.0).is_err());
+        assert!(validate_still_animation_params(-5.0, 30.0).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_zero_or_negative_fps() {
+        assert!(validate_still_animation_params(5.0, 0.0).is_err());
+        assert!(validate_still_animation_params(5.0, -1.0).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_non_finite_values() {
+        assert!(validate_still_animation_params(f64::NAN, 30.0).is_err());
+        assert!(validate_still_animation_params(f64::INFINITY, 30.0).is_err());
+        assert!(validate_still_animation_params(5.0, f64::NAN).is_err());
+        assert!(validate_still_animation_params(5.0, f64::INFINITY).is_err());
+    }
+
+    #[test]
+    fn validate_passes_through_in_range_values_unchanged() {
+        let (d, f) = validate_still_animation_params(5.0, 30.0)
+            .expect("in-range duration/fps must be accepted");
+        assert_eq!(d, 5.0);
+        assert_eq!(f, 30.0);
+    }
+
+    #[test]
+    fn validate_clamps_duration_and_fps_to_their_bounds_instead_of_rejecting() {
+        // Deliberately way outside both bounds -- must clamp, not error, so
+        // a slightly-too-enthusiastic UI value degrades gracefully instead
+        // of failing the whole operation.
+        let (d, f) = validate_still_animation_params(100_000.0, 100_000.0)
+            .expect("out-of-range-but-positive values must be clamped, not rejected");
+        assert_eq!(d, MAX_STILL_ANIMATION_DURATION_SECS);
+        assert_eq!(f, MAX_STILL_ANIMATION_FPS);
+
+        let (d, f) = validate_still_animation_params(0.0001, 0.0001)
+            .expect("tiny-but-positive values must be clamped up to the floor, not rejected");
+        assert_eq!(d, MIN_STILL_ANIMATION_DURATION_SECS);
+        assert_eq!(f, MIN_STILL_ANIMATION_FPS);
+    }
+
+    #[test]
+    fn build_args_includes_loop_duration_fps_and_output_path() {
+        let args = build_image_to_video_args("in.png", 5.0, 30.0, 100, 100, "out.mp4");
+        assert!(
+            args.windows(2).any(|w| w[0] == "-loop" && w[1] == "1"),
+            "must loop the single input frame: {args:?}"
+        );
+        assert!(
+            args.windows(2).any(|w| w[0] == "-i" && w[1] == "in.png"),
+            "must pass the source image as -i: {args:?}"
+        );
+        assert!(
+            args.windows(2).any(|w| w[0] == "-t" && w[1] == "5"),
+            "must cap output length with -t <duration>: {args:?}"
+        );
+        assert!(
+            args.windows(2).any(|w| w[0] == "-r" && w[1] == "30"),
+            "must set the output frame rate with -r <fps>: {args:?}"
+        );
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "-pix_fmt" && w[1] == "yuv420p"),
+            "must encode as yuv420p for broad player/codec compatibility: {args:?}"
+        );
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some("out.mp4"),
+            "the output path must be the final argument: {args:?}"
+        );
+    }
+
+    #[test]
+    fn build_args_omits_pad_filter_for_already_even_dimensions() {
+        let args = build_image_to_video_args("in.png", 5.0, 30.0, 100, 200, "out.mp4");
+        assert!(
+            !args.iter().any(|a| a == "-vf"),
+            "even width and height need no padding filter: {args:?}"
+        );
+    }
+
+    #[test]
+    fn build_args_adds_pad_filter_for_odd_width_or_height() {
+        let odd_width = build_image_to_video_args("in.png", 5.0, 30.0, 101, 200, "out.mp4");
+        let vf_idx = odd_width
+            .iter()
+            .position(|a| a == "-vf")
+            .expect("odd width must trigger a pad filter to reach even dimensions");
+        assert!(
+            odd_width[vf_idx + 1].starts_with("pad="),
+            "the -vf value must be a pad filter: {:?}",
+            odd_width[vf_idx + 1]
+        );
+
+        let odd_height = build_image_to_video_args("in.png", 5.0, 30.0, 100, 201, "out.mp4");
+        assert!(
+            odd_height.iter().any(|a| a == "-vf"),
+            "odd height must also trigger a pad filter: {odd_height:?}"
+        );
+    }
+
+    #[test]
+    fn animated_still_filename_differs_for_different_source_paths_with_the_same_stem() {
+        let a = build_animated_still_filename("C:/folderA/photo.jpg", 5.0, 30.0);
+        let b = build_animated_still_filename("C:/folderB/photo.jpg", 5.0, 30.0);
+        assert_ne!(
+            a, b,
+            "two different images that merely share a file stem must not collide on the same output filename"
+        );
+    }
+
+    #[test]
+    fn animated_still_filename_is_deterministic_for_the_same_source_and_params() {
+        let a = build_animated_still_filename("C:/folder/photo.jpg", 5.0, 30.0);
+        let b = build_animated_still_filename("C:/folder/photo.jpg", 5.0, 30.0);
+        assert_eq!(
+            a, b,
+            "repeat calls with the same source+params should reuse the same filename (bounded, not accumulating)"
+        );
+    }
+
+    #[test]
+    fn animated_still_filename_differs_for_different_params_on_the_same_source() {
+        let a = build_animated_still_filename("C:/folder/photo.jpg", 5.0, 30.0);
+        let b = build_animated_still_filename("C:/folder/photo.jpg", 10.0, 30.0);
+        assert_ne!(
+            a, b,
+            "different duration/fps on the same source must not collide on the same output filename"
         );
     }
 }
