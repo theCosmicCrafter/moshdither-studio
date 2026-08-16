@@ -1,3 +1,0 @@
-[submodule "packages/python-backend/sam3_repo"]
-	path = packages/python-backend/sam3_repo
-	url = https://github.com/facebookresearch/sam3.git
