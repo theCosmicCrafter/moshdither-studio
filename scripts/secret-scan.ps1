@@ -38,42 +38,36 @@ if (-not $trufflehog) {
     New-Item -ItemType Directory -Force -Path (Split-Path $trufflehog) | Out-Null
     Write-Host "TruffleHog not found in tools directories or on PATH." -ForegroundColor Yellow
     Write-Host "Downloading (~170 MB)..." -ForegroundColor Yellow
-    $latest = (Invoke-RestMethod "https://api.github.com/repos/trufflesecurity/trufflehog/releases/latest").tag_name
-    # The git tag carries a leading "v" (v3.97.0) but the release asset filename
-    # does not (trufflehog_3.97.0_windows_amd64.tar.gz). Interpolating the tag
-    # into both halves produced a 404, so the download always failed, the binary
-    # was never installed, and the pre-commit secret gate could not run at all.
-    $version = $latest -replace '^v', ''
-    $base = "https://github.com/trufflesecurity/trufflehog/releases/download/$latest"
+    # Pinned rather than tracking `releases/latest`, and pinned by HASH as well
+    # as by version.
+    #
+    # Following "latest" meant an upstream release silently changed which binary
+    # ran the commit gate, and re-downloaded ~170 MB whenever it moved. Worse,
+    # fetching the expected hash from the same release that serves the asset
+    # only proves the download matches what that release currently claims: an
+    # attacker who could replace the tarball could replace checksums.txt with
+    # it, and verification would pass.
+    #
+    # Keeping the expected digest here instead means the trusted value lives in
+    # this repository's history, where changing it is a reviewable commit rather
+    # than a server-side edit. That is most of what signature verification
+    # (cosign against TruffleHog's Sigstore identity) would buy, without adding
+    # cosign as a second tool that would itself need bootstrapping.
+    #
+    # To bump: set both constants together, from the release's own checksums.txt
+    # (`trufflehog_<version>_checksums.txt`), and verify the new value in the PR.
+    $version = "3.97.0"
+    $expected = "2A8208E6E5BE8D6CD855322480EDA4790A437F805DBD6538AD7495C27F40D4E5"
+
+    $base = "https://github.com/trufflesecurity/trufflehog/releases/download/v$version"
+    # The git tag carries a leading "v" but the asset filename does not, so the
+    # two halves are built separately; interpolating the tag into both produced
+    # a 404 and left the gate unable to run at all.
     $asset = "trufflehog_${version}_windows_amd64.tar.gz"
     $tmp = [System.IO.Path]::GetTempFileName() + ".tar.gz"
+    Write-Host "Fetching TruffleHog $version..." -ForegroundColor Yellow
     Invoke-WebRequest -Uri "$base/$asset" -OutFile $tmp
 
-    # This archive is unpacked and then executed on every commit, so verify it
-    # against the checksums the release publishes before trusting it. Without
-    # this a substituted or tampered asset would run with the developer's
-    # privileges, and the extracted binary is gitignored so it never gets
-    # reviewed. Note this authenticates the download against GitHub's release
-    # metadata only; it is not a signature check against TruffleHog's signing
-    # key (the .sig/.pem cosign bundle beside it would be needed for that).
-    # -UseBasicParsing hands back a Byte[] for text/plain here, not a string, so
-    # decode before splitting or the line match silently finds nothing.
-    $raw = (Invoke-WebRequest -Uri "$base/trufflehog_${version}_checksums.txt" -UseBasicParsing).Content
-    $sums = if ($raw -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($raw) } else { $raw }
-    # Compare the filename field exactly rather than searching for the asset
-    # name anywhere in the line. The release also ships entries whose names
-    # merely start with this one (.sig, .pem, SBOM variants), so a substring
-    # test can match a sibling and hand back that file's hash -- which would
-    # then never equal the tarball's and would fail the install for the wrong
-    # reason, or worse, match an attacker-chosen entry.
-    $expected = $null
-    foreach ($line in ($sums -split "`r?`n")) {
-        $fields = $line.Trim() -split '\s+'
-        if ($fields.Count -ge 2 -and $fields[-1] -eq $asset) {
-            $expected = $fields[0]
-            break
-        }
-    }
     # Report before cleaning up, and use Write-Host rather than Write-Error:
     # $ErrorActionPreference is "Stop" at the top of this script, so Write-Error
     # would terminate immediately, making the `exit 1` unreachable and surfacing
@@ -86,14 +80,18 @@ if (-not $trufflehog) {
         try { Remove-Item $tmp -ErrorAction SilentlyContinue } catch { }
         exit 1
     }
-    if (-not $expected) {
-        & $abort "No checksum published for $asset -- refusing to install."
-    }
     $actual = (Get-FileHash -Path $tmp -Algorithm SHA256).Hash
-    if ($actual -ne $expected.ToUpper()) {
-        & $abort "Checksum mismatch for $asset. Expected $expected, got $actual. Refusing to install."
+    if ($actual -ne $expected) {
+        & $abort @"
+Checksum mismatch for $asset.
+  expected $expected  (pinned in scripts/secret-scan.ps1)
+  actual   $actual
+Refusing to install. Either the download was corrupted, or the release no
+longer matches the pinned digest -- do not "fix" this by pasting in the new
+hash without establishing where it came from.
+"@
     }
-    Write-Host "Checksum verified ($expected)." -ForegroundColor Green
+    Write-Host "Verified against pinned digest for $version." -ForegroundColor Green
 
     # Resolve tar explicitly rather than trusting PATH. When this script is
     # invoked through `npm run` from a Git Bash shell, PATH puts GNU tar
