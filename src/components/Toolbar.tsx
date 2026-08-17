@@ -1,36 +1,71 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import {
+  animateStillAsVideo,
   applyEffectStack,
   applyFfglitch,
+  convertFileSrc,
+  generateProxy,
   getFrameData,
   getMediaMetadata,
   loadMediaFile,
+  loadMediaFromPath,
   sam3LoadImage,
+  saveImage,
 } from "../lib/tauri";
+import { useClickOutside } from "../hooks/useClickOutside";
 import { useAppStore } from "../store";
 import { stackToRustPayload, stackRequiresCpuPreview } from "../utils/effectConverter";
 import WindowControls from "./WindowControls";
 import KeyboardShortcutsEditor from "./KeyboardShortcutsEditor";
+import UpdateChecker from "./UpdateChecker";
+import LabeledSlider from "./LabeledSlider";
 import { PANEL_REGISTRY } from "./DockSystem/panelRegistry";
 
 interface Props {
   readonly onFileLoaded: () => Promise<boolean>;
 }
 
+// "Animate as Video" (still image -> looped freeze-frame video) defaults.
+// Fixed values instead of a duration/fps prompt modal -- 5s @ 30fps (150
+// frames) gives every video-only effect (frame_reverse, shuffle,
+// motion_transfer, ...) real multi-frame material to operate on, and a
+// still image has no "existing fps" to inherit the way a video would. A v1
+// modal was judged not worth the complexity for a one-off conversion; see
+// the PR description for the full tradeoff.
+const ANIMATE_AS_VIDEO_DURATION_SECS = 5;
+const ANIMATE_AS_VIDEO_FPS = 30;
+
 export default function Toolbar({ onFileLoaded }: Props) {
   const mediaLoaded = useAppStore((s) => s.mediaLoaded);
+  const isVideo = useAppStore((s) => s.isVideo);
+  const isProcessing = useAppStore((s) => s.isProcessing);
+  const setIsVideo = useAppStore((s) => s.setIsVideo);
+  const setDuration = useAppStore((s) => s.setDuration);
+  const setProxyUrl = useAppStore((s) => s.setProxyUrl);
   const showBeforeAfter = useAppStore((s) => s.showBeforeAfter);
   const zoom = useAppStore((s) => s.zoom);
-  const stackCount = useAppStore((s) => s.effectStack.length);
-  const processSignature = useAppStore((s) => {
-    const stackSig = s.effectStack
-      .map(
-        (e) =>
-          `${e.id}:${e.enabled}:${JSON.stringify(e.params)}:${e.maskId}:${e.maskMode}`
-      )
-      .join("|");
-    return `${stackSig}|${s.maskRevision}`;
-  });
+  const { effectStack, maskRevision } = useAppStore(
+    useShallow((s) => ({ effectStack: s.effectStack, maskRevision: s.maskRevision }))
+  );
+  const stackCount = effectStack.length;
+  // Memoised against the (immutable) effect stack -- matches
+  // PreviewViewport's cpuRenderSignature. Without this, computing the
+  // signature inline in a bare selector re-runs the map+JSON.stringify over
+  // the whole stack on every store update (e.g. every playback frame's
+  // currentTime tick), not just on genuine effect-stack edits.
+  const processSignature = useMemo(
+    () =>
+      effectStack
+        .map(
+          (e) =>
+            `${e.id}:${e.enabled}:${JSON.stringify(e.params)}:${e.maskId}:${e.maskMode}`
+        )
+        .join("|") + `|${maskRevision}`,
+    [effectStack, maskRevision]
+  );
+  const verifyPanelVisible = useAppStore((s) => s.panelVisibility.verify);
+  const togglePanel = useAppStore((s) => s.togglePanel);
   const setShowBeforeAfter = useAppStore((s) => s.setShowBeforeAfter);
   const setZoom = useAppStore((s) => s.setZoom);
   const setIsProcessing = useAppStore((s) => s.setIsProcessing);
@@ -43,56 +78,19 @@ export default function Toolbar({ onFileLoaded }: Props) {
   const redo = useAppStore((s) => s.redo);
   const canUndo = useAppStore((s) => s.canUndo());
   const canRedo = useAppStore((s) => s.canRedo());
-  const currentTime = useAppStore((s) => s.currentTime);
-  const setCurrentTime = useAppStore((s) => s.setCurrentTime);
-  const playbackSpeed = useAppStore((s) => s.playbackSpeed);
-  const setPlaybackSpeed = useAppStore((s) => s.setPlaybackSpeed);
-  const isPlaying = useAppStore((s) => s.isPlaying);
-  const togglePlay = useAppStore((s) => s.togglePlay);
-  const [fps, setFps] = useState(30);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showUpdateChecker, setShowUpdateChecker] = useState(false);
   const [editMenuOpen, setEditMenuOpen] = useState(false);
-  const editMenuRef = useRef<HTMLDivElement>(null);
+  const editMenuRef = useClickOutside<HTMLDivElement>(editMenuOpen, () => setEditMenuOpen(false));
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
-  const viewMenuRef = useRef<HTMLDivElement>(null);
+  const viewMenuRef = useClickOutside<HTMLDivElement>(viewMenuOpen, () => setViewMenuOpen(false));
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
-  const fileMenuRef = useRef<HTMLDivElement>(null);
+  const fileMenuRef = useClickOutside<HTMLDivElement>(fileMenuOpen, () => setFileMenuOpen(false));
   const dockedPanels = useAppStore((s) => s.dockedPanels) || [];
   const triggerLayoutAction = useAppStore((s) => s.triggerLayoutAction);
   const setTheme = useAppStore((s) => s.setTheme);
 
   const dockedIds = new Set(dockedPanels);
-
-  useEffect(() => {
-    if (!fileMenuOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (fileMenuRef.current && !fileMenuRef.current.contains(e.target as Node)) {
-        setFileMenuOpen(false);
-      }
-    };
-    window.addEventListener("mousedown", handler);
-    return () => window.removeEventListener("mousedown", handler);
-  }, [fileMenuOpen]);
-  useEffect(() => {
-    if (!editMenuOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (editMenuRef.current && !editMenuRef.current.contains(e.target as Node)) {
-        setEditMenuOpen(false);
-      }
-    };
-    window.addEventListener("mousedown", handler);
-    return () => window.removeEventListener("mousedown", handler);
-  }, [editMenuOpen]);
-  useEffect(() => {
-    if (!viewMenuOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (viewMenuRef.current && !viewMenuRef.current.contains(e.target as Node)) {
-        setViewMenuOpen(false);
-      }
-    };
-    window.addEventListener("mousedown", handler);
-    return () => window.removeEventListener("mousedown", handler);
-  }, [viewMenuOpen]);
   const theme = useAppStore((s) => s.theme);
   const toggleTheme = useAppStore((s) => s.toggleTheme);
   const panelOpacity = useAppStore((s) => s.panelOpacity);
@@ -205,6 +203,76 @@ export default function Toolbar({ onFileLoaded }: Props) {
     }
   };
 
+  // Turns the currently loaded still image into a real multi-frame video
+  // (freeze-frame loop) and loads it back in through the normal
+  // video-loading path, so Timeline/playback/video-only effects work on it
+  // exactly like any other opened video -- no special-casing needed
+  // elsewhere. Only meaningful when a still image (not already a video) is
+  // loaded, matching the isVideoOnlyEffect gating used across
+  // EffectBrowser/EffectStack.
+  const handleAnimateAsVideo = async () => {
+    if (!mediaLoaded || isVideo || isProcessing) return;
+    const state = useAppStore.getState();
+    const path = state.filePath;
+    if (!path) {
+      setStatusMessage("Animate as Video: no file path for the loaded image (reopen it via File > Open first)");
+      return;
+    }
+    setStatusMessage("Animating still image as video...");
+    setIsProcessing(true);
+    try {
+      const videoPath = await animateStillAsVideo(
+        path,
+        ANIMATE_AS_VIDEO_DURATION_SECS,
+        ANIMATE_AS_VIDEO_FPS
+      );
+      // Only point filePath at the generated video once it's actually loaded --
+      // otherwise a failed loadMediaFromPath below leaves filePath referencing
+      // a video while isVideo/mediaLoaded still reflect the prior still image.
+      await loadMediaFromPath(videoPath);
+      setFilePath(videoPath);
+
+      // The freshly generated file is unambiguously a video -- set this
+      // directly instead of re-deriving it from the extension. Mirrors
+      // PreviewViewport's own video-loading path (refreshPreviewFromBackend),
+      // which is the only other place isVideo/proxyUrl get set for real:
+      // the WebGL preview's video texture only activates when both are set.
+      setIsVideo(true);
+      setDuration(ANIMATE_AS_VIDEO_DURATION_SECS);
+      try {
+        const proxy = await generateProxy(videoPath, 1280, 28);
+        setProxyUrl(convertFileSrc(proxy));
+      } catch (e) {
+        console.warn("Proxy generation failed for animated video:", e);
+        setProxyUrl(null);
+      }
+
+      const synced = await onFileLoaded();
+
+      const refreshedState = useAppStore.getState();
+      if (refreshedState.sam3Ready) {
+        setStatusMessage("Loading animated frame into SAM3...");
+        try {
+          const b64 = await getFrameData();
+          await sam3LoadImage(b64);
+        } catch (e) {
+          console.warn("Failed to load animated frame into SAM3", e);
+        }
+      }
+
+      setStatusMessage(
+        synced
+          ? `Animated as video: ${videoPath}`
+          : `Animated as video: ${videoPath} (preview sync pending)`
+      );
+    } catch (err) {
+      console.error("[Toolbar] handleAnimateAsVideo failed:", err);
+      setStatusMessage(`Animate as Video failed: ${err}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleExport = async () => {
     if (!mediaLoaded) return;
     const state = useAppStore.getState();
@@ -229,6 +297,36 @@ export default function Toolbar({ onFileLoaded }: Props) {
       setStatusMessage(`FFglitch exported: ${outPath}`);
     } catch (err) {
       setStatusMessage(`FFglitch export failed: ${err}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Saves exactly one processed frame to disk, unlike Export Video (which
+  // always duplicates the source into a multi-frame clip, even for a still
+  // image) -- this is the only path in the app that actually writes a
+  // still-image file.
+  const handleSaveImage = async () => {
+    if (!mediaLoaded) return;
+    const state = useAppStore.getState();
+    if (state.effectStack.length === 0) return;
+    setStatusMessage("Saving image...");
+    setIsProcessing(true);
+    try {
+      const activeStack = stackToRustPayload(
+        state.effectStack,
+        state.activeMask,
+        state.sam3Masks,
+        state.currentTime
+      );
+      const outPath = await saveImage(activeStack, null);
+      setStatusMessage(`Image saved: ${outPath}`);
+    } catch (err) {
+      if (err instanceof Error && err.message === "Save cancelled") {
+        setStatusMessage("Ready");
+      } else {
+        setStatusMessage(`Save image failed: ${err}`);
+      }
     } finally {
       setIsProcessing(false);
     }
@@ -290,7 +388,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
           />
         ) : null}
         <span
-          className={`font-headline-lg text-headline-lg solar-text tracking-wider filigree-header cursor-default toolbar-logo ${theme === "custom" ? "hidden ml-2" : "ml-6"}`}
+          className={`font-headline-lg text-headline-lg solar-text filigree-header cursor-default toolbar-logo ${theme === "custom" ? "hidden ml-2" : "ml-6"}`}
           aria-hidden="true"
         >
           MoshDither Studio
@@ -299,7 +397,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
           <div ref={fileMenuRef} className="relative">
             <button
               onClick={() => setFileMenuOpen((v) => !v)}
-              className="font-label-md text-label-md text-accent-pink font-bold border-b-2 border-accent-pink pb-1 hover:text-accent-teal transition-colors flex items-center gap-1"
+              className="font-label-md text-label-md text-accent-pink font-medium border-b-2 border-accent-pink pb-1 hover:text-accent-teal transition-colors flex items-center gap-1"
               aria-haspopup="menu"
               aria-expanded={fileMenuOpen}
               aria-label="File menu"
@@ -320,17 +418,28 @@ export default function Toolbar({ onFileLoaded }: Props) {
               >
                 <button
                   onClick={() => { handleOpen(); setFileMenuOpen(false); }}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-dense-md text-on-surface hover:bg-accent-teal/10 transition-colors"
+                  className="w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors"
                   role="menuitem"
                 >
                   <span className="material-symbols-outlined menu-item-icon" aria-hidden="true">folder_open</span>
                   Open File
                 </button>
+                <button
+                  onClick={() => { handleAnimateAsVideo(); setFileMenuOpen(false); }}
+                  disabled={!mediaLoaded || isVideo || isProcessing}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded && !isVideo && !isProcessing ? "toolbar-enabled" : "toolbar-disabled"}`}
+                  role="menuitem"
+                  aria-disabled={!mediaLoaded || isVideo || isProcessing}
+                  title="Turn the loaded still image into a looped video so video-only effects (frame reverse, shuffle, motion transfer, ...) can be applied"
+                >
+                  <span className="material-symbols-outlined menu-item-icon" aria-hidden="true">animation</span>
+                  Animate as Video
+                </button>
                 <div className="border-t border-outline/10 my-1" />
                 <button
                   onClick={() => { handleExport(); setFileMenuOpen(false); }}
                   disabled={!mediaLoaded}
-                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-dense-md text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded ? "toolbar-enabled" : "toolbar-disabled"}`}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded ? "toolbar-enabled" : "toolbar-disabled"}`}
                   role="menuitem"
                   aria-disabled={!mediaLoaded}
                 >
@@ -340,18 +449,31 @@ export default function Toolbar({ onFileLoaded }: Props) {
                 <button
                   onClick={() => { handleFfglitchExport(); setFileMenuOpen(false); }}
                   disabled={!mediaLoaded}
-                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-dense-md text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded ? "toolbar-enabled" : "toolbar-disabled"}`}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded ? "toolbar-enabled" : "toolbar-disabled"}`}
+                  role="menuitem"
+                  aria-disabled={!mediaLoaded}
                 >
                   <span className="material-symbols-outlined menu-item-icon">bug_report</span>
                   Export FFglitch
                 </button>
                 <button
-                  onClick={() => { handleProcess(); setFileMenuOpen(false); }}
+                  onClick={() => { handleSaveImage(); setFileMenuOpen(false); }}
                   disabled={!mediaLoaded || stackCount === 0}
-                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-dense-md text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded && stackCount > 0 ? "toolbar-enabled" : "toolbar-disabled"}`}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded && stackCount > 0 ? "toolbar-enabled" : "toolbar-disabled"}`}
+                  role="menuitem"
+                  aria-disabled={!mediaLoaded || stackCount === 0}
                 >
                   <span className="material-symbols-outlined menu-item-icon">image</span>
                   Save Image
+                </button>
+                <div className="border-t border-outline/10 my-1" />
+                <button
+                  onClick={() => { setShowUpdateChecker(true); setFileMenuOpen(false); }}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors"
+                  role="menuitem"
+                >
+                  <span className="material-symbols-outlined menu-item-icon" aria-hidden="true">system_update</span>
+                  Check for Updates
                 </button>
               </div>
             )}
@@ -373,7 +495,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                 <button
                   onClick={() => { handleUndo(); setEditMenuOpen(false); }}
                   disabled={!canUndo}
-                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-dense-md text-on-surface hover:bg-accent-teal/10 transition-colors ${canUndo ? "toolbar-enabled" : "toolbar-disabled"}`}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors ${canUndo ? "toolbar-enabled" : "toolbar-disabled"}`}
                 >
                   <span className="material-symbols-outlined menu-item-icon">undo</span>
                   Undo
@@ -381,7 +503,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                 <button
                   onClick={() => { handleRedo(); setEditMenuOpen(false); }}
                   disabled={!canRedo}
-                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-dense-md text-on-surface hover:bg-accent-teal/10 transition-colors ${canRedo ? "toolbar-enabled" : "toolbar-disabled"}`}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors ${canRedo ? "toolbar-enabled" : "toolbar-disabled"}`}
                 >
                   <span className="material-symbols-outlined menu-item-icon">redo</span>
                   Redo
@@ -389,13 +511,13 @@ export default function Toolbar({ onFileLoaded }: Props) {
                 <button
                   onClick={() => { handleClearAll(); setEditMenuOpen(false); }}
                   disabled={stackCount === 0}
-                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-dense-md text-on-surface hover:bg-accent-teal/10 transition-colors ${stackCount > 0 ? "toolbar-enabled" : "toolbar-disabled"}`}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors ${stackCount > 0 ? "toolbar-enabled" : "toolbar-disabled"}`}
                 >
                   <span className="material-symbols-outlined menu-item-icon">delete_sweep</span>
                   Clear Stack
                 </button>
                 <div className="border-t border-outline/10 my-1" />
-                <div className="px-3 py-1 text-dense-xs font-semibold text-on-surface-variant uppercase tracking-wider">
+                <div className="px-3 py-1 font-label-sm text-label-sm text-on-surface-variant uppercase">
                   Panels
                 </div>
                 {PANEL_REGISTRY.map((p) => {
@@ -410,7 +532,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                           triggerLayoutAction("add", p.id);
                         }
                       }}
-                      className="w-full flex items-center justify-between px-3 py-1.5 text-dense-md text-on-surface hover:bg-accent-teal/10 transition-colors"
+                      className="w-full flex items-center justify-between px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors"
                     >
                       <span className="flex items-center gap-1.5">
                         <span className="material-symbols-outlined panel-menu-icon">{p.icon}</span>
@@ -433,7 +555,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                         }
                       });
                     }}
-                    className="text-dense-xs text-on-surface-variant hover:text-accent-teal transition-colors"
+                    className="font-label-md text-label-md text-on-surface-variant hover:text-accent-teal transition-colors"
                   >
                     Show All
                   </button>
@@ -443,7 +565,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                         useAppStore.getState().triggerLayoutAction("remove", p.id);
                       });
                     }}
-                    className="text-dense-xs text-on-surface-variant hover:text-accent-pink transition-colors"
+                    className="font-label-md text-label-md text-on-surface-variant hover:text-accent-pink transition-colors"
                   >
                     Hide All
                   </button>
@@ -467,34 +589,30 @@ export default function Toolbar({ onFileLoaded }: Props) {
               <div className="absolute left-0 top-full mt-1 z-[200] min-w-[220px] neo-flat rounded-lg bg-surface/90 backdrop-blur-xl border border-outline/20 py-2 shadow-xl">
                 <button
                   onClick={() => { setShowBeforeAfter(!showBeforeAfter); setViewMenuOpen(false); }}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-dense-md text-on-surface hover:bg-accent-teal/10 transition-colors"
+                  className="w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors"
                 >
                   <span className="material-symbols-outlined menu-item-icon">{showBeforeAfter ? "toggle_on" : "toggle_off"}</span>
                   Before/After Split
                 </button>
                 <div className="border-t border-outline/20 my-1" />
                 <div className="px-3 py-1.5">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-dense-sm text-on-surface-variant flex items-center gap-1.5">
-                      <span className="material-symbols-outlined panel-menu-icon">opacity</span>
-                      Panel Opacity
-                    </span>
-                    <span className="text-dense-xs font-mono text-on-surface-variant">{Math.round(panelOpacity * 100)}%</span>
-                  </div>
-                  <input
-                    type="range"
+                  <LabeledSlider
+                    layout="stacked"
+                    icon="opacity"
+                    label="Panel Opacity"
+                    ariaLabel="Panel opacity"
+                    title="Panel opacity"
+                    value={panelOpacity}
+                    displayValue={Math.round(panelOpacity * 100)}
                     min={0.2}
                     max={1}
                     step={0.05}
-                    value={panelOpacity}
-                    onChange={(e) => setPanelOpacity(Number.parseFloat(e.target.value))}
-                    className="w-full accent-[var(--accent-teal)]"
-                    title="Panel opacity"
-                    aria-label="Panel opacity"
+                    onChange={setPanelOpacity}
+                    unit="%"
                   />
                 </div>
                 <div className="border-t border-outline/20 my-1" />
-                <div className="px-3 py-1 text-dense-xs uppercase font-bold text-on-surface-variant/70 tracking-wider">
+                <div className="px-3 py-1 font-label-sm text-label-sm uppercase text-on-surface-variant/70">
                   Theme Presets
                 </div>
                 {(["cosmic", "dark", "high-contrast", "light", "custom"] as const).map((t) => (
@@ -508,7 +626,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                       }
                       setViewMenuOpen(false);
                     }}
-                    className={`w-full flex items-center justify-between px-3 py-1.5 text-dense-md transition-colors ${theme === t ? "text-accent-teal font-bold bg-accent-teal/10" : "text-on-surface hover:bg-accent-teal/5"}`}
+                    className={`w-full flex items-center justify-between px-3 py-1.5 font-label-md text-label-md transition-colors ${theme === t ? "text-accent-teal font-bold bg-accent-teal/10" : "text-on-surface hover:bg-accent-teal/5"}`}
                   >
                     <span className="capitalize">{t === "custom" ? "Custom UI..." : t.replace("-", " ")}</span>
                     {theme === t && <span className="material-symbols-outlined text-xs">check</span>}
@@ -521,10 +639,24 @@ export default function Toolbar({ onFileLoaded }: Props) {
                     useAppStore.getState().triggerLayoutAction("reset");
                     setViewMenuOpen(false);
                   }}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-dense-md text-on-surface hover:bg-accent-teal/10 transition-colors"
+                  className="w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors"
                 >
                   <span className="material-symbols-outlined menu-item-icon">dashboard_customize</span>
                   Reset Standard Layout
+                </button>
+                <div className="border-t border-outline/20 my-1" />
+                <div className="px-3 py-1 font-label-sm text-label-sm uppercase text-on-surface-variant/70">
+                  Advanced
+                </div>
+                <button
+                  onClick={() => { togglePanel("verify"); setViewMenuOpen(false); }}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors"
+                  title="Effect self-test suite for diagnosing a broken install"
+                >
+                  <span className="material-symbols-outlined menu-item-icon">
+                    {verifyPanelVisible ? "toggle_on" : "toggle_off"}
+                  </span>
+                  Diagnostics Panel
                 </button>
               </div>
             )}
@@ -571,7 +703,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
           zoom_out
         </button>
         <span
-          className="text-label-sm font-label-sm text-on-surface-variant tabular-nums zoom-display"
+          className="text-code-sm font-code-sm text-on-surface-variant tabular-nums zoom-display"
         >
           {Math.round(zoom * 100)}%
         </span>
@@ -583,59 +715,6 @@ export default function Toolbar({ onFileLoaded }: Props) {
         >
           zoom_in
         </button>
-        <div className="w-px h-5 bg-outline-variant/50 mx-1" />
-        <button
-          onClick={() => togglePlay()}
-          className={`material-symbols-outlined transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full transport-icon ${isPlaying ? "text-accent-pink neo-pressed" : "text-on-surface-variant hover:text-accent-teal"}`}
-          title={isPlaying ? "Pause" : "Play"}
-          aria-label={isPlaying ? "Pause playback" : "Play preview"}
-        >
-          {isPlaying ? "pause" : "play_arrow"}
-        </button>
-        <div className="flex items-center gap-1.5">
-          <span className="text-label-sm font-label-sm text-on-surface-variant uppercase">
-            TIME
-          </span>
-          <input
-            type="range"
-            min="0"
-            max="99"
-            step="1"
-            value={currentTime}
-            onChange={(e) => {
-              setCurrentTime(Number.parseInt(e.target.value));
-              handleProcess();
-            }}
-            className="slider-thumb w-20"
-            title={`Frame ${currentTime}`}
-          />
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span className="text-label-sm font-label-sm text-on-surface-variant uppercase">FPS</span>
-          <input
-            type="range"
-            min="1"
-            max="60"
-            step="1"
-            value={fps}
-            onChange={(e) => setFps(Number.parseInt(e.target.value))}
-            className="slider-thumb w-16"
-            title={`${fps} FPS`}
-          />
-          <span className="text-label-sm font-label-sm text-accent-pink w-4 text-right">{fps}</span>
-        </div>
-        <select
-          value={playbackSpeed}
-          onChange={(e) => setPlaybackSpeed(Number.parseFloat(e.target.value))}
-          className="themed-select text-label-sm font-label-sm cursor-pointer"
-          title="Playback speed"
-        >
-          <option value={0.25}>0.25x</option>
-          <option value={0.5}>0.5x</option>
-          <option value={1}>1x</option>
-          <option value={2}>2x</option>
-          <option value={4}>4x</option>
-        </select>
       </div>
 
       {/* Right: Window controls */}
@@ -660,6 +739,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
         <WindowControls />
       </div>
       {showShortcuts && <KeyboardShortcutsEditor onClose={() => setShowShortcuts(false)} />}
+      {showUpdateChecker && <UpdateChecker onClose={() => setShowUpdateChecker(false)} />}
     </header>
   );
 }

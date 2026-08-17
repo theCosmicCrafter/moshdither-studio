@@ -113,8 +113,8 @@ impl Effect for CrossVideoDatamosh {
             return Ok(input.clone());
         }
 
-        let validated_second_path = validate_io_path(second_path, true)
-            .map_err(|e| crate::error::AppError::Generic(e.to_string()))?;
+        let validated_second_path =
+            validate_io_path(second_path, true).map_err(crate::error::AppError::Generic)?;
 
         let block_size = params
             .get("block_size")

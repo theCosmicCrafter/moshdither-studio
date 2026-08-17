@@ -378,9 +378,8 @@ impl Effect for OrderedDitherVariants {
         for y in 0..h {
             for x in 0..w {
                 let idx = (y * w + x) * 4;
-                let lum = 0.299 * input.data[idx] as f32
-                    + 0.587 * input.data[idx + 1] as f32
-                    + 0.114 * input.data[idx + 2] as f32;
+                let lum =
+                    crate::effects::luminance_f32(input.data[idx], input.data[idx + 1], input.data[idx + 2]);
 
                 let threshold = matrix[y % rows][x % cols] as f32 / max_val;
                 let dithered = lum + (threshold - 0.5) * step;

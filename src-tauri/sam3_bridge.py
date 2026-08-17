@@ -46,23 +46,50 @@ try:
     F.scaled_dot_product_attention = _sage_sdpa
     _ACCELERATORS.append("SageAttention 2.2")
     logging.info("SageAttention 2.2 patched (SDPA monkey-patch).")
-except ImportError:
-    logging.warning("SageAttention not installed — attention will use PyTorch SDPA.")
+except Exception:
+    # Broad except (not just ImportError): in a PyInstaller-frozen bundle, triton's
+    # @jit decorator calls inspect.getsourcelines() on sageattention's kernel modules,
+    # which raises ValueError (not ImportError) because frozen bundles ship compiled
+    # bytecode, not real .py source files. This accelerator is best-effort only.
+    logging.warning("SageAttention unavailable — attention will use PyTorch SDPA.")
 
 try:
     import xformers
     import xformers.ops
     _ACCELERATORS.append(f"xFormers {xformers.__version__}")
     logging.info("xFormers %s imported.", xformers.__version__)
-except ImportError:
-    logging.warning("xFormers not installed.")
+except Exception:
+    logging.warning("xFormers unavailable.")
 
 try:
     import triton
     _ACCELERATORS.append(f"Triton {triton.__version__}")
     logging.info("Triton %s available.", triton.__version__)
-except ImportError:
-    logging.warning("Triton not installed — SageAttention CUDA kernels will be unavailable.")
+
+    if getattr(sys, "frozen", False):
+        # PyInstaller-frozen bundles don't ship real .py source files, and
+        # triton.jit's decorator calls inspect.getsourcelines() at import
+        # time to compile the kernel, which always raises here. The vendored
+        # sam3 package (and optional accelerators like SageAttention) apply
+        # @triton.jit eagerly at module level in several files, so a single
+        # uncaught failure crashes the whole bridge process on import.
+        # Patch triton.jit itself, once, so every one of those call sites
+        # -- including ones not yet discovered -- degrades to the plain,
+        # uncompiled function instead of crashing.
+        _orig_triton_jit = triton.jit
+
+        def _safe_triton_jit(fn=None, **kwargs):
+            def _wrap(f):
+                try:
+                    return _orig_triton_jit(f, **kwargs)
+                except Exception:
+                    return f
+
+            return _wrap(fn) if fn is not None else _wrap
+
+        triton.jit = _safe_triton_jit
+except Exception:
+    logging.warning("Triton unavailable — SageAttention CUDA kernels will be unavailable.")
 # Resolve the sam3_repo location. The Rust side sets SAM3_REPO for both dev
 # (pointing at packages/python-backend/sam3_repo) and production sidecars.
 # PyInstaller bundles extract to a temporary _MEIPASS directory.

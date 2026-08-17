@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { useAppStore } from "../../store";
+import { isVideoOnlyEffect, VIDEO_ONLY_ON_IMAGE_WARNING } from "../../utils/effectConverter";
 
 const CAT_COLORS: Record<string, string> = {
   dithering: "var(--cat-dithering)",
@@ -22,6 +23,8 @@ export default function EffectList() {
   const searchQuery = useAppStore((s) => s.searchQuery);
   const addToStack = useAppStore((s) => s.addToStack);
   const effectStack = useAppStore((s) => s.effectStack);
+  const mediaLoaded = useAppStore((s) => s.mediaLoaded);
+  const isVideo = useAppStore((s) => s.isVideo);
 
   const effects = useMemo(() => {
     let filtered = allEffects;
@@ -41,7 +44,7 @@ export default function EffectList() {
   return (
     <div className="flex-1 overflow-y-auto custom-scrollbar px-2 py-2 space-y-1.5">
       {effects.length === 0 && (
-        <div className="text-center py-8 text-label-sm font-label-sm text-on-surface-variant opacity-50">
+        <div className="text-center py-8 font-body-sm text-body-sm text-on-surface-variant opacity-50">
           <span className="material-symbols-outlined mx-auto mb-2 opacity-30 block" style={{ fontSize: 24 }}>
             layers
           </span>
@@ -51,11 +54,20 @@ export default function EffectList() {
       {effects.map((effect) => {
         const color = CAT_COLORS[effect.category] || "var(--text-muted)";
         const isInStack = effectStack.some((e) => e.effectId === effect.id);
+        const isIncompatible =
+          mediaLoaded && !isVideo && isVideoOnlyEffect(effect);
         return (
           <button
             key={effect.id}
             onClick={() => addToStack(effect)}
-            className="group w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-lg transition duration-300 neo-flat filigree-corner hover:border-accent-pink"
+            className={`group w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-lg transition duration-300 neo-flat filigree-corner hover:border-accent-pink ${
+              isIncompatible ? "toolbar-disabled" : ""
+            }`}
+            title={
+              isIncompatible
+                ? VIDEO_ONLY_ON_IMAGE_WARNING
+                : undefined
+            }
           >
             {/* Category indicator line */}
             <div
@@ -71,6 +83,15 @@ export default function EffectList() {
                 {effect.parameters.length !== 1 ? "s" : ""}
                 {isInStack && (
                   <span className="text-accent-pink ml-1">• in stack</span>
+                )}
+                {isIncompatible && (
+                  <span
+                    className="material-symbols-outlined text-amber-400 ml-1 align-middle"
+                    style={{ fontSize: 12 }}
+                    title={VIDEO_ONLY_ON_IMAGE_WARNING}
+                  >
+                    movie
+                  </span>
                 )}
               </div>
             </div>

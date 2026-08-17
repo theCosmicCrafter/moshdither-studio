@@ -65,19 +65,19 @@ export default function OnboardingModal() {
         </h2>
         <p
           id="onboarding-description"
-          className="m-0 font-body-md text-on-surface-variant leading-relaxed"
+          className="m-0 font-body-md text-body-md text-on-surface-variant leading-relaxed"
         >
           A professional datamoshing and dithering studio built for artists and creators.
         </p>
-        <ul className="m-0 pl-5 font-body-sm text-on-surface-variant leading-loose list-disc">
+        <ul className="m-0 pl-5 font-body-sm text-body-sm text-on-surface-variant leading-loose list-disc">
           <li>Import images or videos to start</li>
           <li>Add and stack effects in the Layers panel</li>
           <li>Use blend modes and opacity for fine control</li>
           <li>Paint masks with the professional brush engine</li>
           <li>Export to PNG, JPG, GIF, or MP4</li>
         </ul>
-        <div className="p-3 rounded bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-start gap-2">
-          <span className="font-semibold uppercase tracking-wider text-dense-xs bg-amber-500/20 px-1.5 py-0.5 rounded text-amber-200 shrink-0">
+        <div className="p-3 rounded bg-amber-500/10 border border-amber-500/30 text-amber-300 font-body-sm text-body-sm flex items-start gap-2">
+          <span className="font-label-sm text-label-sm uppercase bg-amber-500/20 px-1.5 py-0.5 rounded text-amber-200 shrink-0">
             Advisory
           </span>
           <span>
@@ -88,7 +88,7 @@ export default function OnboardingModal() {
           <button
             ref={primaryButtonRef}
             onClick={dismiss}
-            className="flex-1 px-4 py-2 rounded-md bg-primary text-on-primary font-label-md hover:bg-primary/80 transition-colors"
+            className="flex-1 px-4 py-2 rounded-md bg-primary text-on-primary font-label-md text-label-md hover:bg-primary/80 transition-colors"
             aria-label="Get started and dismiss the welcome dialog"
             autoFocus
           >
@@ -96,7 +96,7 @@ export default function OnboardingModal() {
           </button>
           <button
             onClick={dismiss}
-            className="flex-1 px-4 py-2 rounded-md bg-surface-container text-primary border border-outline-variant font-label-md hover:bg-surface-container-high transition-colors"
+            className="flex-1 px-4 py-2 rounded-md bg-surface-container text-primary border border-outline-variant font-label-md text-label-md hover:bg-surface-container-high transition-colors"
             aria-label="Skip the welcome tour"
           >
             Skip

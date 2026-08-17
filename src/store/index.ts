@@ -416,6 +416,36 @@ function sanitizeParams(params: Record<string, unknown>): Record<string, unknown
   return out;
 }
 
+/**
+ * Cap on retained undo-history entries. Each entry is a full snapshot of
+ * effectStack; without a bound, a long editing session -- especially one
+ * with many rapid parameter-drag ticks -- would retain an ever-growing
+ * number of full-stack snapshots for the app's entire lifetime. `undo()`
+ * and `redo()` move entries between pastStacks/futureStacks but never grow
+ * the total beyond what pushHistory already capped, so this one bound is
+ * sufficient for both arrays.
+ */
+const MAX_HISTORY_ENTRIES = 100;
+
+/**
+ * Snapshot the current effect stack onto the undo history and clear the
+ * redo stack, for actions that make a new edit. Spread this into a `set()`
+ * return value alongside that action's own state changes. Not used by
+ * `redo()`, which has different semantics: it shifts (not clears)
+ * `futureStacks` and pushes onto `pastStacks` from the *incoming* stack,
+ * not the outgoing one.
+ */
+function pushHistory(state: Pick<AppState, "pastStacks" | "effectStack">) {
+  const pastStacks = [...state.pastStacks, state.effectStack];
+  return {
+    pastStacks:
+      pastStacks.length > MAX_HISTORY_ENTRIES
+        ? pastStacks.slice(pastStacks.length - MAX_HISTORY_ENTRIES)
+        : pastStacks,
+    futureStacks: [] as StackEntry[][],
+  };
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
   currentTime: 0,
   isPlaying: true,
@@ -469,6 +499,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     lut: true,
     proxy: true,
     tracks: true,
+    // Verify runs the internal effect-registry self-test suite -- a QA/dev
+    // tool for confirming the app's own effects work, not a content-creation
+    // feature. Hidden from the panel rail so it doesn't compete for space
+    // with the tools an end user actually needs day to day.
+    verify: false,
   } as Record<string, boolean>,
   dockedPanels: [],
   layoutTrigger: null,
@@ -559,8 +594,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       maskMode: "inside",
     };
     set((state) => ({
-      pastStacks: [...state.pastStacks, state.effectStack],
-      futureStacks: [],
+      ...pushHistory(state),
       effectStack: [...state.effectStack, entry],
       selectedStackId: entry.id,
     }));
@@ -590,8 +624,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       maskMode: "inside",
     };
     set((s) => ({
-      pastStacks: [...s.pastStacks, s.effectStack],
-      futureStacks: [],
+      ...pushHistory(s),
       effectStack: [...s.effectStack, entry],
       selectedStackId: entry.id,
     }));
@@ -601,8 +634,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => {
       const newStack = state.effectStack.filter((e) => e.id !== id);
       return {
-        pastStacks: [...state.pastStacks, state.effectStack],
-        futureStacks: [],
+        ...pushHistory(state),
         effectStack: newStack,
         selectedStackId:
           state.selectedStackId === id
@@ -613,8 +645,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setEffectStack: (stack) =>
     set((state) => ({
-      pastStacks: [...state.pastStacks, state.effectStack],
-      futureStacks: [],
+      ...pushHistory(state),
       effectStack: stack,
       selectedStackId: stack.length > 0 ? stack[stack.length - 1].id : null,
     })),
@@ -632,16 +663,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       const [item] = arr.splice(fromIndex, 1);
       arr.splice(toIndex, 0, item);
       return {
-        pastStacks: [...state.pastStacks, state.effectStack],
-        futureStacks: [],
+        ...pushHistory(state),
         effectStack: arr,
       };
     }),
 
   updateStackParams: (id, params) =>
     set((state) => ({
-      pastStacks: [...state.pastStacks, state.effectStack],
-      futureStacks: [],
+      ...pushHistory(state),
       effectStack: state.effectStack.map((e) =>
         e.id === id ? { ...e, params: { ...e.params, ...sanitizeParams(params) } } : e
       ),
@@ -665,8 +694,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         maskB64 = state.sam3Masks[idx] ?? null;
       }
       return {
-        pastStacks: [...state.pastStacks, state.effectStack],
-        futureStacks: [],
+        ...pushHistory(state),
         maskRevision: state.maskRevision + 1,
         effectStack: state.effectStack.map((e) => (e.id === id ? { ...e, maskId, maskB64 } : e)),
       };
@@ -674,15 +702,13 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setStackItemMaskMode: (id, mode) =>
     set((state) => ({
-      pastStacks: [...state.pastStacks, state.effectStack],
-      futureStacks: [],
+      ...pushHistory(state),
       effectStack: state.effectStack.map((e) => (e.id === id ? { ...e, maskMode: mode } : e)),
     })),
 
   toggleStackItem: (id) =>
     set((state) => ({
-      pastStacks: [...state.pastStacks, state.effectStack],
-      futureStacks: [],
+      ...pushHistory(state),
       effectStack: state.effectStack.map((e) => (e.id === id ? { ...e, enabled: !e.enabled } : e)),
     })),
 
@@ -749,15 +775,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   setWatermark: (settings) => set((state) => ({ watermark: { ...state.watermark, ...settings } })),
   clearStack: () =>
     set((state) => ({
-      pastStacks: [...state.pastStacks, state.effectStack],
-      futureStacks: [],
+      ...pushHistory(state),
       effectStack: [],
       selectedStackId: null,
     })),
   replaceStack: (stack) =>
     set((state) => ({
-      pastStacks: [...state.pastStacks, state.effectStack],
-      futureStacks: [],
+      ...pushHistory(state),
       effectStack: stack,
       selectedStackId: null,
     })),
@@ -921,14 +945,32 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSam3OverlayColor: (color) => set({ sam3OverlayColor: color }),
 
   // Multi-mask actions
-  setSam3Masks: (masks, scores) =>
+  setSam3Masks: (masks, scores) => {
+    // masks[0] becomes activeMask below and flows straight into the WebGL
+    // mask-texture loader (EffectChain.getMaskTexture), which awaits an
+    // <img> load with no other validation. An empty or malformed entry here
+    // -- e.g. a partial/edge-case response from the SAM3 subprocess -- used
+    // to reach that loader unfiltered and could hang it forever (img.src=""
+    // often fires neither onload nor onerror), freezing the live preview.
+    // Filtering at this boundary, where the IPC response becomes trusted
+    // app state, means every caller is protected without each one having to
+    // remember to check.
+    const paired = masks.map((m, i) => [m, scores[i]] as const).filter(([m]) => !!m);
+    if (paired.length < masks.length) {
+      console.warn(
+        `setSam3Masks: dropped ${masks.length - paired.length} empty/invalid mask candidate(s) from SAM3 response`
+      );
+    }
+    const validMasks = paired.map(([m]) => m);
+    const validScores = paired.map(([, s]) => s);
     set((state) => ({
-      sam3Masks: masks,
-      sam3MaskScores: scores,
+      sam3Masks: validMasks,
+      sam3MaskScores: validScores,
       sam3MaskIndex: 0,
-      activeMask: masks.length > 0 ? masks[0] : null,
+      activeMask: validMasks.length > 0 ? validMasks[0] : null,
       maskRevision: state.maskRevision + 1,
-    })),
+    }));
+  },
   setSam3MaskIndex: (index) =>
     set((state) => {
       const safeIndex = Math.max(0, Math.min(state.sam3Masks.length - 1, index));

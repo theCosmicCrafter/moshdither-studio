@@ -15,6 +15,7 @@ import { useAppStore } from "../store";
 import { logger } from "../utils/logger";
 import { WebGLContext, MediaUploader, EffectChain } from "../engine/webgl2";
 import { stackToRenderPasses, buildShaderMap, stackToRustPayload, stackHasApproximatePreview } from "../utils/effectConverter";
+import { getThemeColor } from "../utils/themeColor";
 import ManualMaskOverlay from "./ManualMaskOverlay";
 import ScopesOverlay from "./ScopesOverlay";
 import PlaybackOverlay from "./PlaybackOverlay";
@@ -32,7 +33,7 @@ function AudioWaveform() {
   if (Object.keys(audioBandEnergies).length === 0) return null;
   return (
     <div className="absolute bottom-10 left-1/2 -translate-x-1/2 w-1/2 h-20 neo-panel rounded-lg bg-surface/80 backdrop-blur-md p-3 flex flex-col justify-end z-50 border border-accent-teal/20 pointer-events-none">
-      <div className="text-dense-3xs font-label-sm text-accent-teal/70 absolute top-2 left-2 uppercase">Audio/Pixel Intensity</div>
+      <div className="text-data-micro font-data-micro text-accent-teal/70 absolute top-2 left-2 uppercase">Audio/Pixel Intensity</div>
       <AudioVisualizer className="h-full pt-4" />
     </div>
   );
@@ -127,6 +128,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     sam3FrameMasks,
     sam3OverlayOpacity,
     sam3OverlayColor,
+    theme,
   } = useAppStore(
     useShallow((s) => ({
       activeMask: s.activeMask,
@@ -140,6 +142,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       sam3FrameMasks: s.sam3FrameMasks,
       sam3OverlayOpacity: s.sam3OverlayOpacity,
       sam3OverlayColor: s.sam3OverlayColor,
+      theme: s.theme,
     }))
   );
 
@@ -148,10 +151,6 @@ function PreviewViewport({ isDropTarget = false }: Props) {
   );
 
   // Heavy signature computation is memoised against the (immutable) effect stack.
-  const stackSignature = useMemo(
-    () => effectStack.map((e) => `${e.id}:${e.enabled}`).join("|"),
-    [effectStack]
-  );
   const cpuRenderSignature = useMemo(
     () =>
       effectStack
@@ -663,11 +662,16 @@ function PreviewViewport({ isDropTarget = false }: Props) {
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Draw committed points
+    // Draw committed points. Colors are read from the theme's semantic
+    // success/danger tokens (not hardcoded) so they track light/dark/custom
+    // themes; the white outline stays fixed since it's a contrast ring
+    // against arbitrary media content, not app chrome.
+    const positiveColor = getThemeColor("--success", "#22c55e");
+    const negativeColor = getThemeColor("--danger", "#ef4444");
     for (const p of sam3Points) {
       ctx.beginPath();
       ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
-      ctx.fillStyle = p.label === 1 ? "#22c55e" : "#ef4444";
+      ctx.fillStyle = p.label === 1 ? positiveColor : negativeColor;
       ctx.fill();
       ctx.lineWidth = 2;
       ctx.strokeStyle = "#fff";
@@ -680,15 +684,19 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       const y1 = Math.min(boxStart.y, boxCurrent.y);
       const x2 = Math.max(boxStart.x, boxCurrent.x);
       const y2 = Math.max(boxStart.y, boxCurrent.y);
-      ctx.strokeStyle = "#f59e0b";
+      const selectionColor = getThemeColor("--warning", "#f59e0b");
+      ctx.strokeStyle = selectionColor;
       ctx.lineWidth = 2;
       ctx.setLineDash([4, 4]);
       ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
       ctx.setLineDash([]);
-      ctx.fillStyle = "rgba(245, 158, 11, 0.15)";
+      ctx.save();
+      ctx.globalAlpha = 0.15;
+      ctx.fillStyle = selectionColor;
       ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+      ctx.restore();
     }
-  }, [sam3Points, isBoxDragging, boxStart, boxCurrent, mediaInfo]);
+  }, [sam3Points, isBoxDragging, boxStart, boxCurrent, mediaInfo, theme]);
 
   // ── WebGL Preview Pipeline ────────────────────────────────
   useEffect(() => {
@@ -916,11 +924,26 @@ function PreviewViewport({ isDropTarget = false }: Props) {
 
     render();
 
-    // Continuous render loop — always run when there are effects so time-based
-    // shaders animate even without pressing play. Also runs when audio is active.
-    // Reads currentTime/audio/effectStack from getState() inside the loop.
-    const hasEffects = useAppStore.getState().effectStack.length > 0;
-    if (hasEffects || audioEnabled || isPlaying) {
+    // Continuous render loop — only needed when something in the active stack
+    // actually reads u_time/u_frame (motion, flicker, scrolling noise) and so
+    // produces different output frame to frame on its own. Most effects
+    // (dithering, color, pixel geometry) are static: identical output every
+    // frame for an unchanging image, so looping forever bought nothing but a
+    // perpetual 60fps GPU render call -- real, measurable cost for zero
+    // visual benefit. The shader set only changes when cpuRenderSignature
+    // changes (this effect's own dependency), so it's safe to snapshot once
+    // here rather than recompute per frame inside the loop below.
+    const snapshotState = useAppStore.getState();
+    const snapshotPasses = stackToRenderPasses(
+      snapshotState.effectStack,
+      snapshotState.currentTime,
+      snapshotState.activeMask,
+      snapshotState.sam3Masks
+    );
+    const hasAnimatedEffect = [...buildShaderMap(snapshotPasses).values()].some(
+      (shader) => shader.animated
+    );
+    if (hasAnimatedEffect || audioEnabled || isPlaying) {
       const loop = () => {
         // Advance currentTime for image sources when playing so the time slider
         // moves and keyframe-driven effects sync with export. Videos drive time
@@ -950,7 +973,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     };
   }, [
     originalDataUrl,
-    stackSignature,
+    cpuRenderSignature,
     mediaInfo,
     audioEnabled,
     isPlaying,
@@ -1004,6 +1027,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     let inFlight = false;
     let pendingRenderScale: number | null = null;
     let debounceTimer: number | null = null;
+    let lowResDebounceTimer: number | null = null;
 
     const doRender = async (scale: number) => {
       if (inFlight) {
@@ -1035,8 +1059,18 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       }
     };
 
-    // Immediately render at low-medium resolution on any parameter change (slider drag)
-    doRender(0.35);
+    // Render at low-medium resolution on any parameter change (slider drag),
+    // briefly debounced -- this useEffect re-runs on every cpuRenderSignature
+    // change, i.e. on every drag tick, and each run used to fire an
+    // independent real backend IPC call immediately with no gating between
+    // runs (the inFlight/pendingRenderScale coalescing above only applies
+    // *within* a single run's own closure, not across the many runs a fast
+    // drag produces). 60ms is short enough to feel live for a one-off
+    // change but caps a rapid drag to ~16 real renders/sec instead of one
+    // per tick.
+    lowResDebounceTimer = window.setTimeout(() => {
+      if (!cancelled) doRender(0.35);
+    }, 60);
 
     // Debounce to high resolution after 400ms of inactivity
     debounceTimer = window.setTimeout(() => {
@@ -1082,6 +1116,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     return () => {
       cancelled = true;
       if (debounceTimer) window.clearTimeout(debounceTimer);
+      if (lowResDebounceTimer) window.clearTimeout(lowResDebounceTimer);
       cancelAnimationFrame(cpuAnimRafRef.current);
     };
   }, [useCpuPreview, mediaLoaded, cpuRenderSignature, isPlaying]);
@@ -1211,7 +1246,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
               ))}
             </div>
             {mediaInfo && (
-              <span className="text-label-sm font-label-sm text-accent-teal neo-flat px-3 py-1 rounded-full cursor-default hover:border-accent-teal/30 transition-colors">
+              <span className="text-code-sm font-code-sm text-accent-teal neo-flat px-3 py-1 rounded-full cursor-default hover:border-accent-teal/30 transition-colors">
                 {mediaInfo.width} x {mediaInfo.height}
               </span>
             )}
@@ -1339,10 +1374,10 @@ function PreviewViewport({ isDropTarget = false }: Props) {
                       <span className="material-symbols-outlined mi-sm text-black">center_focus_strong</span>
                     </div>
                   </button>
-                  <div className="absolute top-2 left-2 text-dense-xs font-bold px-2 py-0.5 rounded split-label">
+                  <div className="absolute top-2 left-2 font-label-sm text-label-sm px-2 py-0.5 rounded split-label">
                     BEFORE
                   </div>
-                  <div className="absolute top-2 right-2 text-dense-xs font-bold px-2 py-0.5 rounded split-label-after">
+                  <div className="absolute top-2 right-2 font-label-sm text-label-sm px-2 py-0.5 rounded split-label-after">
                     AFTER
                   </div>
                 </>
@@ -1416,7 +1451,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       {/* Bottom Info */}
       {mediaInfo && (
         <div
-          className="flex items-center justify-between px-3 h-7 flex-shrink-0 text-dense-sm info-bar"
+          className="flex items-center justify-between px-3 h-7 flex-shrink-0 font-code-sm text-code-sm info-bar"
         >
           <div className="flex items-center gap-3">
             <span>

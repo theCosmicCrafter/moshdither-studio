@@ -1,6 +1,13 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useAppStore } from "../store";
-import { listEffects, getFrameData, getMediaInfo, loadMediaFromPath } from "../lib/tauri";
+import {
+  listEffects,
+  getFrameData,
+  getMediaInfo,
+  loadMediaFromPath,
+  convertFileSrc,
+  generateProxy,
+} from "../lib/tauri";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { useKeyframePlayback } from "../hooks/useKeyframePlayback";
@@ -35,6 +42,8 @@ export default function AppLayout() {
   const setMediaInfo = useAppStore((s) => s.setMediaInfo);
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
   const setFilePath = useAppStore((s) => s.setFilePath);
+  const setIsVideo = useAppStore((s) => s.setIsVideo);
+  const setProxyUrl = useAppStore((s) => s.setProxyUrl);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const [isDropTarget, setIsDropTarget] = useState(false);
 
@@ -88,17 +97,38 @@ export default function AppLayout() {
   }, [setAllEffects, setStatusMessage]);
 
   // Refresh preview on demand (called after file load / effect apply).
+  // Mirrors PreviewViewport's refreshPreviewFromBackend so isVideo/proxyUrl
+  // stay accurate no matter which "open a file" path the user takes (File
+  // menu, native OS drag-drop here, or the dropzone/HTML5 drop in
+  // PreviewViewport) -- callers like Toolbar's "Animate as Video" gate their
+  // own enabled state on isVideo, so a stale value here silently breaks that.
   const refreshPreview = useCallback(async (): Promise<boolean> => {
     try {
       const info = await getMediaInfo();
       if (info.loaded) {
+        const path = useAppStore.getState().filePath;
+        const isVideoFile =
+          !!path && /\.(mp4|avi|mov|mkv|webm|m4v|flv|wmv|mpeg|mpg)$/i.test(path);
         setMediaLoaded(true);
         setMediaInfo({ width: info.width, height: info.height });
+        setIsVideo(isVideoFile);
 
         // Always use backend-generated PNG data URL for reliability in dev/prod.
         const frame = await getFrameData();
         setPreviewDataUrl(frame);
         setOriginalDataUrl(frame);
+
+        if (isVideoFile && path) {
+          try {
+            const proxy = await generateProxy(path, 1280, 28);
+            setProxyUrl(convertFileSrc(proxy));
+          } catch (err) {
+            console.warn("[AppLayout] Proxy generation failed:", err);
+            setProxyUrl(null);
+          }
+        } else {
+          setProxyUrl(null);
+        }
         return true;
       }
       return false;
@@ -108,7 +138,15 @@ export default function AppLayout() {
       setStatusMessage(`Preview refresh failed: ${msg}`);
       return false;
     }
-  }, [setMediaLoaded, setMediaInfo, setPreviewDataUrl, setOriginalDataUrl, setStatusMessage]);
+  }, [
+    setMediaLoaded,
+    setMediaInfo,
+    setPreviewDataUrl,
+    setOriginalDataUrl,
+    setStatusMessage,
+    setIsVideo,
+    setProxyUrl,
+  ]);
 
   // Drag-and-drop file support via Tauri webview API
   useEffect(() => {
@@ -198,7 +236,7 @@ export default function AppLayout() {
             >
               Recover Session?
             </h3>
-            <p className="font-label-sm text-label-sm text-on-surface-variant mb-4">
+            <p className="font-body-sm text-body-sm text-on-surface-variant mb-4">
               An unsaved session was found from{" "}
               {new Date(autoSave.savedAt).toLocaleString()}
               {autoSave.filePath && (
@@ -216,7 +254,7 @@ export default function AppLayout() {
                   clearAutoSave();
                   setShowRecovery(false);
                 }}
-                className="neo-btn rounded-md px-3 py-1.5 font-label-sm text-label-sm text-on-surface-variant hover:text-accent-pink transition-colors"
+                className="neo-btn rounded-md px-3 py-1.5 font-label-md text-label-md text-on-surface-variant hover:text-accent-pink transition-colors"
                 aria-label="Discard recovered session"
               >
                 Discard
@@ -228,7 +266,7 @@ export default function AppLayout() {
                     setShowRecovery(false);
                   })();
                 }}
-                className="neo-btn rounded-md px-3 py-1.5 font-label-sm text-label-sm text-on-surface bg-accent-pink/20 hover:bg-accent-pink/30 transition-colors"
+                className="neo-btn rounded-md px-3 py-1.5 font-label-md text-label-md text-on-surface bg-accent-pink/20 hover:bg-accent-pink/30 transition-colors"
                 aria-label="Restore recovered session"
                 autoFocus
               >
@@ -242,7 +280,7 @@ export default function AppLayout() {
       {/* Recent Projects */}
       {recentProjects.length > 0 && (
         <div className="fixed bottom-7 left-2 z-50">
-          <div className="neo-flat rounded-md p-2 font-data-micro text-data-micro text-on-surface-variant bg-surface/40 backdrop-blur-md">
+          <div className="neo-flat rounded-md p-2 font-body-sm text-body-sm text-on-surface-variant bg-surface/40 backdrop-blur-md">
             <div className="font-label-sm text-label-sm text-on-surface mb-1">Recent</div>
             {recentProjects.slice(0, 5).map((p) => (
               <div

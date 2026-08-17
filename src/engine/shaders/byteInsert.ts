@@ -3,6 +3,7 @@ import { EffectShader } from "../webgl2/types";
 export const byteInsertShader: EffectShader = {
   id: "byte_insert",
   name: "Byte Insert",
+  animated: true,
   vertexSource: `
     attribute vec2 a_position;
     attribute vec2 a_texCoord;

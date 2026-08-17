@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useAppStore, type EffectMeta } from "../../store";
+import { isVideoOnlyEffect, VIDEO_ONLY_ON_IMAGE_WARNING } from "../../utils/effectConverter";
 
 const CATEGORIES: { id: string; label: string; icon: string; color: string }[] = [
   { id: "dithering", label: "Dither", icon: "grain", color: "var(--cat-dithering)" },
@@ -127,7 +128,7 @@ export default function CategoryAccordion() {
             {isExpanded && (
               <div className="px-2 pb-2 space-y-1.5">
                 {effects.length === 0 ? (
-                  <div className="text-center py-4 text-label-sm font-label-sm text-on-surface-variant opacity-50">
+                  <div className="text-center py-4 font-body-sm text-body-sm text-on-surface-variant opacity-50">
                     No effects found
                   </div>
                 ) : (
@@ -159,10 +160,16 @@ function EffectItem({
   addToStack: (effect: EffectMeta) => void;
 }) {
   const isInStack = effectStack.some((e) => e.effectId === effect.id);
+  const mediaLoaded = useAppStore((s) => s.mediaLoaded);
+  const isVideo = useAppStore((s) => s.isVideo);
+  const isIncompatible = mediaLoaded && !isVideo && isVideoOnlyEffect(effect);
   return (
     <button
       onClick={() => addToStack(effect)}
-      className="group w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-lg transition duration-300 neo-flat filigree-corner hover:border-accent-pink"
+      className={`group w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-lg transition duration-300 neo-flat filigree-corner hover:border-accent-pink ${
+        isIncompatible ? "toolbar-disabled" : ""
+      }`}
+      title={isIncompatible ? VIDEO_ONLY_ON_IMAGE_WARNING : undefined}
     >
       <div className="flex-1 min-w-0">
         <div className="text-label-md font-label-md text-on-surface group-hover:text-accent-pink transition-colors truncate">
@@ -172,6 +179,15 @@ function EffectItem({
           {effect.parameters.length} parameter
           {effect.parameters.length === 1 ? "" : "s"}
           {isInStack && <span className="text-accent-pink ml-1">• in stack</span>}
+          {isIncompatible && (
+            <span
+              className="material-symbols-outlined text-amber-400 ml-1 align-middle"
+              style={{ fontSize: 12 }}
+              title={VIDEO_ONLY_ON_IMAGE_WARNING}
+            >
+              movie
+            </span>
+          )}
         </div>
       </div>
       <span

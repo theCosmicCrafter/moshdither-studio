@@ -3,7 +3,7 @@
  * Tests render behavior, key interactions, and store integration.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, within, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { useAppStore, type EffectMeta } from "../../store";
 
 // ── Mock external dependencies ──────────────────────────────
@@ -81,6 +81,9 @@ vi.mock("../../utils/beatKeyframeGenerator", () => ({
 vi.mock("../../utils/effectConverter", () => ({
   stackToRustPayload: vi.fn(() => []),
   stackRequiresCpuPreview: vi.fn(() => false),
+  isVideoOnlyEffect: (meta: { media_type: string }) => meta.media_type === "video",
+  VIDEO_ONLY_ON_IMAGE_WARNING:
+    "No visible effect on a still image — this effect requires video.",
 }));
 
 vi.mock("../../lib/tauri", () => ({
@@ -92,7 +95,6 @@ vi.mock("../../lib/tauri", () => ({
   sam3PointPrompt: vi.fn(() => Promise.resolve({ count: 1, masks: ["mask1"], scores: [0.9] })),
   sam3BoxPrompt: vi.fn(() => Promise.resolve({ count: 0, masks: [], scores: [] })),
   sam3AutoMask: vi.fn(() => Promise.resolve({ count: 2, masks: ["m1", "m2"], scores: [0.9, 0.8] })),
-  sam3RefineMask: vi.fn(() => Promise.resolve({ status: "ok", count: 1, masks: ["m1"], scores: [0.9] })),
   sam3PostprocessMask: vi.fn(() => Promise.resolve("processed-mask")),
   sam3Clear: vi.fn(() => Promise.resolve("ok")),
   getFrameData: vi.fn(() => Promise.resolve("data:image/png;base64,abc")),
@@ -101,6 +103,7 @@ vi.mock("../../lib/tauri", () => ({
   applyEffectStack: vi.fn(() => Promise.resolve("data:image/png;base64,abc")),
   applyFfglitch: vi.fn(() => Promise.resolve("/output/path.mp4")),
   exportVideo: vi.fn(() => Promise.resolve("/output/path.mp4")),
+  cancelExport: vi.fn(() => Promise.resolve()),
   verifyEffects: vi.fn(() => Promise.resolve({
     total_effects: 2,
     passed: 1,
@@ -164,8 +167,6 @@ vi.mock("../../engine/palettePresets", () => ({
 
 // ── Import components after mocks ────────────────────────────
 import StatusBar from "../StatusBar";
-import FloatingPanel from "../FloatingPanel";
-import PanelMenu from "../PanelMenu";
 import OnboardingModal from "../OnboardingModal";
 import WindowControls from "../WindowControls";
 import PlaybackOverlay from "../PlaybackOverlay";
@@ -173,9 +174,9 @@ import PostProcessControls from "../PostProcessControls";
 import TrackPanel from "../TrackPanel";
 import MaskSelector from "../MaskSelector";
 import EffectStack from "../EffectStack";
+import ParameterPanel from "../EffectStack/ParameterPanel";
 import EffectBrowser from "../EffectBrowser";
 import SearchBar from "../EffectBrowser/SearchBar";
-import CategoryTabs from "../EffectBrowser/CategoryTabs";
 import EffectList from "../EffectBrowser/EffectList";
 import CategoryAccordion from "../EffectBrowser/CategoryAccordion";
 import PresetPanel from "../PresetPanel";
@@ -241,6 +242,7 @@ function resetStore() {
     panelVisibility: {
       browser: true, preview: true, stack: true, audio: true,
       export: true, presets: true, mask: true, lut: true, proxy: true, tracks: true,
+      verify: false,
     },
     dockedPanels: [],
     layoutTrigger: null,
@@ -334,102 +336,6 @@ describe("Component Test Suite", () => {
     });
   });
 
-  // ── FloatingPanel ──────────────────────────────────────────
-  describe("FloatingPanel", () => {
-    it("renders title and children", () => {
-      render(
-        <FloatingPanel id="test" title="Test Panel" defaultX={10} defaultY={10} defaultWidth={300} defaultHeight={200}>
-          <div data-testid="child">Content</div>
-        </FloatingPanel>
-      );
-      expect(screen.getByText("Test Panel")).toBeInTheDocument();
-      expect(screen.getByTestId("child")).toBeInTheDocument();
-    });
-
-    it("minimize button hides children", () => {
-      render(
-        <FloatingPanel id="test" title="Test" defaultX={0} defaultY={0} defaultWidth={300} defaultHeight={200}>
-          <div data-testid="child">Content</div>
-        </FloatingPanel>
-      );
-      expect(screen.getByTestId("child")).toBeInTheDocument();
-      fireEvent.click(screen.getByLabelText("Minimize panel"));
-      expect(screen.queryByTestId("child")).not.toBeInTheDocument();
-    });
-
-    it("restore button shows children again", () => {
-      render(
-        <FloatingPanel id="test" title="Test" defaultX={0} defaultY={0} defaultWidth={300} defaultHeight={200}>
-          <div data-testid="child">Content</div>
-        </FloatingPanel>
-      );
-      fireEvent.click(screen.getByLabelText("Minimize panel"));
-      expect(screen.queryByTestId("child")).not.toBeInTheDocument();
-      fireEvent.click(screen.getByLabelText("Restore panel"));
-      expect(screen.getByTestId("child")).toBeInTheDocument();
-    });
-
-    it("calls onActivate on mousedown", () => {
-      let activated = false;
-      render(
-        <FloatingPanel id="test" title="Test" defaultX={0} defaultY={0} defaultWidth={300} defaultHeight={200} onActivate={() => { activated = true; }}>
-          <div>Content</div>
-        </FloatingPanel>
-      );
-      fireEvent.mouseDown(screen.getByText("Test"));
-      expect(activated).toBe(true);
-    });
-
-    it("calls onClose when close button is clicked", () => {
-      let closedId: string | null = null;
-      render(
-        <FloatingPanel id="test" title="Test" defaultX={0} defaultY={0} defaultWidth={300} defaultHeight={200} onClose={(id) => { closedId = id; }}>
-          <div>Content</div>
-        </FloatingPanel>
-      );
-      fireEvent.click(screen.getByLabelText("Close panel"));
-      expect(closedId).toBe("test");
-    });
-  });
-
-  // ── PanelMenu ──────────────────────────────────────────────
-  describe("PanelMenu", () => {
-    it("renders toggle button with panel count", () => {
-      render(<PanelMenu />);
-      expect(screen.getByTitle("Toggle panels")).toBeInTheDocument();
-    });
-
-    it("opens dropdown on click", () => {
-      render(<PanelMenu />);
-      fireEvent.click(screen.getByTitle("Toggle panels"));
-      expect(screen.getByText("Panels")).toBeInTheDocument();
-    });
-
-    it("lists all panels from registry", () => {
-      render(<PanelMenu />);
-      fireEvent.click(screen.getByTitle("Toggle panels"));
-      for (const p of PANEL_REGISTRY) {
-        expect(screen.getByText(p.label)).toBeInTheDocument();
-      }
-    });
-
-    it("shows Show All and Hide All buttons", () => {
-      render(<PanelMenu />);
-      fireEvent.click(screen.getByTitle("Toggle panels"));
-      expect(screen.getByText("Show All")).toBeInTheDocument();
-      expect(screen.getByText("Hide All")).toBeInTheDocument();
-    });
-
-    it("removes panel from dock on click when docked", () => {
-      render(<PanelMenu />);
-      fireEvent.click(screen.getByTitle("Toggle panels"));
-      // "browser" is docked by default
-      const browserBtn = screen.getByText("Effects").closest("button")!;
-      fireEvent.click(browserBtn);
-      const docked = useAppStore.getState().dockedPanels;
-      expect(docked.includes("browser")).toBe(false);
-    });
-  });
 
   // ── OnboardingModal ────────────────────────────────────────
   describe("OnboardingModal", () => {
@@ -635,6 +541,15 @@ describe("Component Test Suite", () => {
       fireEvent.change(input, { target: { value: "My Track" } });
       expect(useAppStore.getState().tracks[0].name).toBe("My Track");
     });
+
+    // LabeledSlider's onChange previously used Number.parseInt, which
+    // truncates a float-stepped value like this slider's 0.05 step to 0.
+    it("sets a float opacity value via the slider, not truncated to an integer", () => {
+      render(<TrackPanel />);
+      fireEvent.click(screen.getByText("+ Add"));
+      fireEvent.change(screen.getByLabelText("Opacity"), { target: { value: "0.65" } });
+      expect(useAppStore.getState().tracks[0].opacity).toBe(0.65);
+    });
   });
 
   // ── MaskSelector ───────────────────────────────────────────
@@ -755,6 +670,124 @@ describe("Component Test Suite", () => {
     });
   });
 
+  // ── ParameterPanel / ParameterWheel drag throttling ─────────
+  describe("ParameterPanel", () => {
+    it("coalesces a fast slider drag to one committed update per animation frame, not one per mousemove", () => {
+      const meta = mockEffectMeta("dithering.bayer", "Bayer Dither", "dithering");
+      useAppStore.getState().setAllEffects([meta]);
+      useAppStore.getState().addToStack(meta);
+      render(<ParameterPanel />);
+
+      const wheel = screen.getByLabelText("Parameter wheel");
+      fireEvent.mouseDown(wheel, { clientY: 100 });
+
+      // Five rapid drag ticks, synchronously, before any animation frame
+      // has had a chance to run.
+      for (let dy = 1; dy <= 5; dy++) {
+        fireEvent.mouseMove(window, { clientY: 100 - dy });
+      }
+
+      // Old behavior: onChange (and therefore a full store update) fired
+      // synchronously on every mousemove -- so the value would already
+      // reflect the 5th tick here. Coalesced behavior: nothing has been
+      // committed to the store yet, only scheduled.
+      expect(useAppStore.getState().effectStack[0].params.intensity).toBe(0.5);
+
+      return new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          // The frame that flushes the coalesced update must itself have
+          // committed by the time this callback runs (rAF callbacks run in
+          // registration order).
+          const value = useAppStore.getState().effectStack[0].params.intensity as number;
+          // delta = startY(100) - clientY(95) = 5, step = (max-min)/200 = 1/200
+          expect(value).toBeCloseTo(0.5 + 5 * (1 / 200), 5);
+          fireEvent.mouseUp(window);
+          resolve();
+        });
+      });
+    });
+
+    it("always commits the final drag value on mouseup, even if it lands between animation frames", () => {
+      const meta = mockEffectMeta("dithering.bayer", "Bayer Dither", "dithering");
+      useAppStore.getState().setAllEffects([meta]);
+      useAppStore.getState().addToStack(meta);
+      render(<ParameterPanel />);
+
+      const wheel = screen.getByLabelText("Parameter wheel");
+      fireEvent.mouseDown(wheel, { clientY: 100 });
+      fireEvent.mouseMove(window, { clientY: 90 });
+      fireEvent.mouseUp(window);
+
+      const value = useAppStore.getState().effectStack[0].params.intensity as number;
+      // delta = 100 - 90 = 10, step = 1/200
+      expect(value).toBeCloseTo(0.5 + 10 * (1 / 200), 5);
+    });
+
+    it("exposes a toggle parameter's on/off state via aria-pressed", () => {
+      const meta: EffectMeta = {
+        id: "test.toggle-effect",
+        name: "Toggle Effect",
+        category: "dithering",
+        media_type: "both",
+        parameters: [{ id: "flag", name: "Flag", type: "toggle", default: false }],
+      };
+      useAppStore.getState().setAllEffects([meta]);
+      useAppStore.getState().addToStack(meta);
+      render(<ParameterPanel />);
+
+      const toggle = screen.getByRole("button", { name: "Flag" });
+      expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+      fireEvent.click(toggle);
+      expect(toggle).toHaveAttribute("aria-pressed", "true");
+    });
+
+    it("shows a video-only warning banner when a video-only effect sits in the stack over a still image", () => {
+      const meta: EffectMeta = {
+        id: "datamoshing.frame_reverse",
+        name: "Frame Reverse",
+        category: "datamoshing",
+        media_type: "video",
+        parameters: [{ id: "amount", name: "Amount", type: "slider", min: 0, max: 1, default: 0.5 }],
+      };
+      useAppStore.getState().setAllEffects([meta]);
+      useAppStore.getState().addToStack(meta);
+      useAppStore.getState().setMediaLoaded(true);
+      useAppStore.getState().setIsVideo(false);
+      render(<ParameterPanel />);
+
+      expect(screen.getByText(/requires video/i)).toBeInTheDocument();
+    });
+
+    it("does not show the video-only warning when a video is loaded", () => {
+      const meta: EffectMeta = {
+        id: "datamoshing.frame_reverse",
+        name: "Frame Reverse",
+        category: "datamoshing",
+        media_type: "video",
+        parameters: [{ id: "amount", name: "Amount", type: "slider", min: 0, max: 1, default: 0.5 }],
+      };
+      useAppStore.getState().setAllEffects([meta]);
+      useAppStore.getState().addToStack(meta);
+      useAppStore.getState().setMediaLoaded(true);
+      useAppStore.getState().setIsVideo(true);
+      render(<ParameterPanel />);
+
+      expect(screen.queryByText(/requires video/i)).not.toBeInTheDocument();
+    });
+
+    it("does not show the video-only warning for an effect that supports images (media_type !== \"video\")", () => {
+      const meta = mockEffectMeta("dithering.bayer", "Bayer Dither", "dithering");
+      useAppStore.getState().setAllEffects([meta]);
+      useAppStore.getState().addToStack(meta);
+      useAppStore.getState().setMediaLoaded(true);
+      useAppStore.getState().setIsVideo(false);
+      render(<ParameterPanel />);
+
+      expect(screen.queryByText(/requires video/i)).not.toBeInTheDocument();
+    });
+  });
+
   // ── EffectBrowser ──────────────────────────────────────────
   describe("EffectBrowser", () => {
     it("renders header with title", () => {
@@ -789,34 +822,6 @@ describe("Component Test Suite", () => {
     it("does not show clear button when query is empty", () => {
       render(<SearchBar />);
       expect(screen.queryByRole("button")).not.toBeInTheDocument();
-    });
-  });
-
-  // ── CategoryTabs ───────────────────────────────────────────
-  describe("CategoryTabs", () => {
-    it("renders all category buttons", () => {
-      render(<CategoryTabs />);
-      expect(screen.getByText("Dither")).toBeInTheDocument();
-      expect(screen.getByText("Analog")).toBeInTheDocument();
-      expect(screen.getByText("Glitch")).toBeInTheDocument();
-    });
-
-    it("shows effect count per category", () => {
-      useAppStore.getState().setAllEffects([
-        mockEffectMeta("dithering.bayer", "Bayer", "dithering"),
-        mockEffectMeta("dithering.floyd", "Floyd", "dithering"),
-        mockEffectMeta("analog.vhs", "VHS", "analog"),
-      ]);
-      render(<CategoryTabs />);
-      // Dither category should show count 2
-      const ditherBtn = screen.getByText("Dither").closest("button")!;
-      expect(within(ditherBtn).getByText("2")).toBeInTheDocument();
-    });
-
-    it("sets active category on click", () => {
-      render(<CategoryTabs />);
-      fireEvent.click(screen.getByText("Analog"));
-      expect(useAppStore.getState().activeCategory).toBe("analog");
     });
   });
 

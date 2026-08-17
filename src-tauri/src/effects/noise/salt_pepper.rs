@@ -42,6 +42,10 @@ impl Effect for SaltPepperNoise {
         }
     }
 
+    fn uses_time_param(&self) -> bool {
+        true
+    }
+
     fn process_frame(
         &self,
         input: &Frame,

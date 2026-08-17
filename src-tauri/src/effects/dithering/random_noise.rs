@@ -28,6 +28,10 @@ impl Effect for RandomNoiseDither {
         }
     }
 
+    fn uses_time_param(&self) -> bool {
+        true
+    }
+
     fn process_frame(
         &self,
         input: &Frame,
@@ -42,9 +46,7 @@ impl Effect for RandomNoiseDither {
         for y in 0..h {
             for x in 0..w {
                 let idx = (y * w + x) * 4;
-                let lum = 0.299 * data[idx] as f32
-                    + 0.587 * data[idx + 1] as f32
-                    + 0.114 * data[idx + 2] as f32;
+                let lum = crate::effects::luminance_f32(data[idx], data[idx + 1], data[idx + 2]);
 
                 // Deterministic per-pixel noise [0, 255]
                 let seed = x

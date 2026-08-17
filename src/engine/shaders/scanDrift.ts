@@ -3,6 +3,7 @@ import { EffectShader } from "../webgl2/types";
 export const scanDriftShader: EffectShader = {
   id: "scan_drift",
   name: "Scan Drift",
+  animated: true,
   vertexSource: `
     attribute vec2 a_position;
     attribute vec2 a_texCoord;

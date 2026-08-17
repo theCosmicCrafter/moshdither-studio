@@ -130,13 +130,13 @@ fn cleanup_stale_sam3_bridge() {
             || cmd.contains("sam3_bridge.py")
             || cmd.contains("sam3-bridge")
         {
-            eprintln!("[SAM3] Killing orphaned bridge process {} ({})", pid, name);
+            tracing::info!("Killing orphaned SAM3 bridge process {} ({})", pid, name);
             if !process.kill() {
-                eprintln!("[SAM3] Failed to kill orphaned bridge process {}", pid);
+                tracing::warn!("Failed to kill orphaned SAM3 bridge process {}", pid);
             }
         } else {
-            eprintln!(
-                "[SAM3] Stale PID file points to non-bridge process {} ({}), skipping",
+            tracing::debug!(
+                "Stale SAM3 PID file points to non-bridge process {} ({}), skipping",
                 pid, name
             );
         }
@@ -338,7 +338,7 @@ impl Sam3Engine {
             let reader = BufReader::new(stderr);
             for line in reader.lines() {
                 match line {
-                    Ok(text) => eprintln!("[SAM3 Bridge stderr] {}", text),
+                    Ok(text) => tracing::warn!("SAM3 bridge stderr: {}", text),
                     Err(_) => break,
                 }
             }
@@ -366,21 +366,21 @@ impl Sam3Engine {
                 // Read 4-byte LE length header
                 if let Err(e) = stdout.read_exact(&mut len_buf) {
                     if e.kind() != std::io::ErrorKind::UnexpectedEof {
-                        eprintln!("[SAM3 Reader] read header error: {}", e);
+                        tracing::error!("SAM3 reader: read header error: {}", e);
                     }
                     break;
                 }
                 let payload_len = u32::from_le_bytes(len_buf) as usize;
                 if payload_len > 512 * 1024 * 1024 {
-                    eprintln!(
-                        "[SAM3 Reader] frame size {} exceeds 512 MiB limit",
+                    tracing::error!(
+                        "SAM3 reader: frame size {} exceeds 512 MiB limit",
                         payload_len
                     );
                     break;
                 }
                 let mut payload = vec![0u8; payload_len];
                 if let Err(e) = stdout.read_exact(&mut payload) {
-                    eprintln!("[SAM3 Reader] read payload error: {}", e);
+                    tracing::error!("SAM3 reader: read payload error: {}", e);
                     break;
                 }
                 let line = String::from_utf8_lossy(&payload).into_owned();
@@ -795,7 +795,7 @@ impl Sam3Engine {
             fill_holes: None,
             frames: None,
         }) {
-            eprintln!("[SAM3] Graceful shutdown request failed: {}", e);
+            tracing::warn!("SAM3 graceful shutdown request failed: {}", e);
         }
         let mut child = self.child.lock().take();
         Self::kill_child(&mut child)
@@ -809,16 +809,16 @@ impl Sam3Engine {
             return Ok(());
         };
         if let Err(e) = child.kill() {
-            eprintln!("[SAM3] Failed to kill bridge child: {}", e);
+            tracing::warn!("Failed to kill SAM3 bridge child: {}", e);
         }
         let wait_result = child.wait_timeout(Duration::from_secs(5));
         let status = match wait_result {
             Ok(status) => {
-                eprintln!("[SAM3] Bridge child exited with status {:?}", status.code());
+                tracing::debug!("SAM3 bridge child exited with status {:?}", status.code());
                 Some(status)
             }
             Err(e) => {
-                eprintln!("[SAM3] Bridge child wait error: {}", e);
+                tracing::error!("SAM3 bridge child wait error: {}", e);
                 // Attempt one final reap; do not swallow unexpected IO errors.
                 let _ = child.wait();
                 return Err(crate::error::AppError::Generic(format!(

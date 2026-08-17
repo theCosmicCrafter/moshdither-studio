@@ -1,4 +1,5 @@
 import { useAppStore, type BlendMode } from "../store";
+import LabeledSlider from "./LabeledSlider";
 
 const BLEND_MODES: BlendMode[] = [
   "normal",
@@ -42,7 +43,7 @@ export default function TrackPanel() {
       </div>
 
       {tracks.length === 0 && (
-        <div className="font-label-sm text-label-sm text-on-surface-variant opacity-60 py-2 text-center">
+        <div className="font-body-sm text-body-sm text-on-surface-variant opacity-60 py-2 text-center">
           No tracks. Click &quot;Add&quot; to create one.
         </div>
       )}
@@ -102,21 +103,17 @@ export default function TrackPanel() {
             </button>
           </div>
 
-          <div className="flex items-center gap-2">
-            <label className="font-label-sm text-label-sm text-on-surface-variant whitespace-nowrap">
-              Opacity: {Math.round(track.opacity * 100)}%
-            </label>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={track.opacity}
-              onChange={(e) => setTrackOpacity(track.id, Number(e.target.value))}
-              onClick={(e) => e.stopPropagation()}
-              className="flex-1"
-            />
-          </div>
+          <LabeledSlider
+            label="Opacity"
+            value={track.opacity}
+            displayValue={Math.round(track.opacity * 100)}
+            min={0}
+            max={1}
+            step={0.05}
+            onChange={(v) => setTrackOpacity(track.id, v)}
+            unit="%"
+            onInputClick={(e) => e.stopPropagation()}
+          />
 
           <div className="flex items-center gap-2">
             <label className="font-label-sm text-label-sm text-on-surface-variant whitespace-nowrap">

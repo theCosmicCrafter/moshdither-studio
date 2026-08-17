@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { useAppStore, type EffectMeta } from "../../store";
+import { cancelExport } from "../../lib/tauri";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(() => Promise.resolve({})),
@@ -29,6 +30,7 @@ vi.mock("../../lib/tauri", () => ({
   convertFileSrc: vi.fn((path: string) => path),
   exportVideo: vi.fn(() => Promise.resolve("/output/test.mp4")),
   applyFfglitch: vi.fn(() => Promise.resolve("/output/ffglitch.mp4")),
+  cancelExport: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("../../lib/browserFallback", () => ({
@@ -264,5 +266,18 @@ describe("ExportPanel", () => {
     fireEvent.click(screen.getByText("Cancel"));
     expect(useAppStore.getState().exportIsRunning).toBe(false);
     expect(useAppStore.getState().exportProgress).toBe(0);
+  });
+
+  it("cancel button notifies the backend, not just local UI state", () => {
+    // Previously requestExportCancel() only flipped a Zustand flag nothing
+    // read -- the UI showed "Export cancelled" while the actual
+    // ffmpeg/mosh_cli.py subprocess kept running untouched. This is the
+    // regression test for that fix: clicking Cancel must actually invoke
+    // the backend command, not just reset local state.
+    vi.mocked(cancelExport).mockClear();
+    useAppStore.getState().setExportIsRunning(true);
+    render(<ExportPanel />);
+    fireEvent.click(screen.getByText("Cancel"));
+    expect(cancelExport).toHaveBeenCalledTimes(1);
   });
 });

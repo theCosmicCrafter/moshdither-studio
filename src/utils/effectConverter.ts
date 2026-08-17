@@ -1,6 +1,6 @@
 import { shaderRegistry } from "../engine/shaders";
 import { EffectShader, RenderPass } from "../engine/webgl2/types";
-import { StackEntry } from "../store";
+import { EffectMeta, StackEntry } from "../store";
 
 /** Maps a Rust effect ID to its WebGL shader preview equivalent. */
 export interface WebGLMapping {
@@ -1006,6 +1006,22 @@ export function stackHasApproximatePreview(stack: StackEntry[]): boolean {
 export function listPreviewableEffects(): string[] {
   return Object.keys(rustToWebGL).filter((id) => shaderRegistry.has(rustToWebGL[id].shaderId));
 }
+
+/** True if `meta.media_type` (from the Rust Effect trait, serialized as
+ *  "image" | "video" | "both") declares the effect as video-only -- e.g.
+ *  the datamoshing family, which reads/writes multiple frames and is
+ *  structurally meaningless applied to a single still. */
+export function isVideoOnlyEffect(meta: Pick<EffectMeta, "media_type">): boolean {
+  return meta.media_type === "video";
+}
+
+/** Shared copy for the video-only-effect-on-a-still-image warning, shown as
+ *  a tooltip on the stack row (EffectStack/index.tsx) and as an inline
+ *  banner in the parameter panel (EffectStack/ParameterPanel.tsx) whenever
+ *  `isVideoOnlyEffect` is true and the loaded media is a still image. Kept
+ *  in one place so the two surfaces never drift out of sync. */
+export const VIDEO_ONLY_ON_IMAGE_WARNING =
+  "No visible effect on a still image — this effect requires video.";
 
 /**
  * Resolve a maskId to a base64 PNG string.

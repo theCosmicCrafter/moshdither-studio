@@ -1,5 +1,6 @@
 import { useAppStore, type AudioBinding } from "../../store";
 import { PALETTE_PRESETS, fillPaletteParams } from "../../engine/palettePresets";
+import { isVideoOnlyEffect, VIDEO_ONLY_ON_IMAGE_WARNING } from "../../utils/effectConverter";
 
 const AUDIO_SOURCES = [
   { id: "bass", label: "Bass" },
@@ -44,15 +45,40 @@ function ParameterWheel({
     e.preventDefault();
     const startY = e.clientY;
     const startValue = value;
+    // Raw mousemove can fire far faster than the screen repaints (OS/mouse
+    // polling rate, sometimes 100-1000Hz) -- calling onChange synchronously
+    // on every event pushed a full store update (and, downstream, a real
+    // preview re-render/backend IPC call) on every single tick, which is
+    // what made dragging a slider on a CPU-preview dithering effect feel
+    // choppy. Coalesce to at most one commit per animation frame instead;
+    // the eye can't perceive more than that anyway, and the final value is
+    // still always committed on mouseup even if it lands between frames.
+    let rafId: number | null = null;
+    let pendingValue: number | null = null;
+    const flush = () => {
+      rafId = null;
+      if (pendingValue !== null) {
+        onChange(pendingValue);
+        pendingValue = null;
+      }
+    };
     const handleMove = (ev: MouseEvent) => {
       const delta = startY - ev.clientY;
       const step = range > 0 ? range / 200 : 1;
       const next = Math.max(min, Math.min(max, startValue + delta * step));
-      onChange(next);
+      pendingValue = next;
+      if (rafId === null) {
+        rafId = requestAnimationFrame(flush);
+      }
     };
     const handleUp = () => {
       window.removeEventListener("mousemove", handleMove);
       window.removeEventListener("mouseup", handleUp);
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      flush();
     };
     window.addEventListener("mousemove", handleMove);
     window.addEventListener("mouseup", handleUp);
@@ -89,7 +115,7 @@ function ParameterWheel({
           style={{ transform: `rotate(${angle}deg)`, boxShadow: "0 0 8px #ffade0" }}
         />
         <div className="w-6 h-6 rounded-full neo-pressed flex items-center justify-center">
-          <span className="text-dense-3xs font-code-sm text-accent-teal">{value.toFixed(0)}</span>
+          <span className="font-data-micro text-data-micro text-accent-teal">{value.toFixed(0)}</span>
         </div>
       </div>
     </div>
@@ -100,6 +126,8 @@ function ParameterWheel({
 export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
   const entry = useAppStore((s) => s.effectStack.find((e) => e.id === (stackId || s.selectedStackId)));
   const effectMeta = useAppStore((s) => s.allEffects.find((e) => e.id === entry?.effectId));
+  const mediaLoaded = useAppStore((s) => s.mediaLoaded);
+  const isVideo = useAppStore((s) => s.isVideo);
   const updateStackParams = useAppStore((s) => s.updateStackParams);
   const audioBindings = useAppStore((s) =>
     entry?.id ? s.audioBindings[entry.id] : undefined
@@ -121,12 +149,14 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
         style={{ color: "var(--text-dim)" }}
       >
         <span className="material-symbols-outlined" style={{ fontSize: 20, opacity: 0.3 }}>tune</span>
-        <span className="text-dense-sm">Select an effect to edit parameters</span>
+        <span className="font-body-sm text-body-sm">Select an effect to edit parameters</span>
       </div>
     );
   }
 
   if (!effectMeta) return null;
+
+  const showVideoOnlyWarning = mediaLoaded && !isVideo && isVideoOnlyEffect(effectMeta);
 
   return (
     <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4 custom-scrollbar">
@@ -137,18 +167,40 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
         {entry.effectName} Parameters
       </div>
 
+      {showVideoOnlyWarning && (
+        <div
+          role="alert"
+          style={{
+            padding: "6px 8px",
+            fontSize: 10,
+            borderRadius: 3,
+            background: "rgba(255, 180, 0, 0.15)",
+            border: "1px solid rgba(255, 180, 0, 0.4)",
+            color: "var(--accent-gold, #ffb400)",
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+          }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 12 }}>
+            warning
+          </span>
+          <span>{VIDEO_ONLY_ON_IMAGE_WARNING}</span>
+        </div>
+      )}
+
       {entry.effectId === "dithering.palette" && (
         <div className="space-y-2">
           <div className="flex items-center gap-1.5">
             <span className="material-symbols-outlined" style={{ fontSize: 12, color: "var(--accent)" }}>palette</span>
-            <span className="text-dense-xs font-medium" style={{ color: "var(--text-secondary)" }}>
+            <span className="font-label-md text-label-md" style={{ color: "var(--text-secondary)" }}>
               Palette Preset
             </span>
           </div>
           <select
             title="Palette preset"
             aria-label="Palette preset"
-            className="w-full text-dense-xs rounded px-2 py-1 border-none cursor-pointer"
+            className="w-full font-label-md text-label-md rounded px-2 py-1 border-none cursor-pointer"
             style={{
               background: "var(--bg-input)",
               color: "var(--text-primary)",
@@ -195,7 +247,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
           <div key={param.id} className="space-y-1.5">
             <div className="flex items-center justify-between">
               <label
-                className="text-dense-sm font-medium cursor-pointer hover:text-accent-teal transition-colors"
+                className="font-label-md text-label-md cursor-pointer hover:text-accent-teal transition-colors"
                 style={{ color: "var(--text-secondary)" }}
                 title="Double-click to reset to default"
                 onDoubleClick={() => updateStackParams(entry.id, { [param.id]: param.default })}
@@ -223,7 +275,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                     placeholder="0"
                     onChange={(e) => updateStackParams(entry.id, { [param.id]: parseFloat(e.target.value) || 0 })}
                     className="param-readout bg-transparent border-b border-[var(--border-secondary)] px-1 w-12 text-right outline-none focus:border-[var(--accent)]"
-                    style={{ fontFamily: "var(--font-mono)", fontSize: "10px", color: "var(--text-primary)" }}
+                    style={{ color: "var(--text-primary)" }}
                   />
                 ) : (
                   <span className="param-readout">{String(value)}</span>
@@ -267,7 +319,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                   const idx = param.options!.indexOf(e.target.value);
                   updateStackParams(entry.id, { [param.id]: idx });
                 }}
-                className="w-full text-xs rounded px-2 py-1.5"
+                className="w-full font-label-md text-label-md rounded px-2 py-1.5"
                 style={{
                   background: "var(--bg-input)",
                   border: "1px solid var(--border-secondary)",
@@ -292,7 +344,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                 onChange={(e) =>
                   updateStackParams(entry.id, { [param.id]: e.target.value })
                 }
-                className="w-full text-xs rounded px-2 py-1.5"
+                className="w-full font-label-md text-label-md rounded px-2 py-1.5"
                 style={{
                   background: "var(--bg-input)",
                   border: "1px solid var(--border-secondary)",
@@ -304,6 +356,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
             {String(param.type).toLowerCase() === "toggle" && (
               <button
                 aria-label={param.name}
+                aria-pressed={Boolean(value)}
                 title={param.name}
                 onClick={() =>
                   updateStackParams(entry.id, {
@@ -469,7 +522,7 @@ function AudioBindingControl({
             onChange={(e) =>
               onSet(stackId, paramId, { ...binding, source: e.target.value })
             }
-            className="w-full text-dense-xs rounded px-1 py-0.5"
+            className="w-full font-label-md text-label-md rounded px-1 py-0.5"
             style={{
               background: "var(--bg-input)",
               border: "1px solid var(--border-secondary)",
@@ -493,7 +546,7 @@ function AudioBindingControl({
               onChange={(e) =>
                 onSet(stackId, paramId, { ...binding, inputMin: parseFloat(e.target.value) || 0 })
               }
-              className="w-10 text-dense-2xs px-1 py-0.5 rounded"
+              className="w-10 font-code-sm text-code-sm px-1 py-0.5 rounded"
               style={{
                 background: "var(--bg-input)",
                 border: "1px solid var(--border-secondary)",
@@ -509,7 +562,7 @@ function AudioBindingControl({
               onChange={(e) =>
                 onSet(stackId, paramId, { ...binding, inputMax: parseFloat(e.target.value) || 1 })
               }
-              className="w-10 text-dense-2xs px-1 py-0.5 rounded"
+              className="w-10 font-code-sm text-code-sm px-1 py-0.5 rounded"
               style={{
                 background: "var(--bg-input)",
                 border: "1px solid var(--border-secondary)",
@@ -528,7 +581,7 @@ function AudioBindingControl({
               onChange={(e) =>
                 onSet(stackId, paramId, { ...binding, outputMin: parseFloat(e.target.value) || 0 })
               }
-              className="w-10 text-dense-2xs px-1 py-0.5 rounded"
+              className="w-10 font-code-sm text-code-sm px-1 py-0.5 rounded"
               style={{
                 background: "var(--bg-input)",
                 border: "1px solid var(--border-secondary)",
@@ -544,7 +597,7 @@ function AudioBindingControl({
               onChange={(e) =>
                 onSet(stackId, paramId, { ...binding, outputMax: parseFloat(e.target.value) || 1 })
               }
-              className="w-10 text-dense-2xs px-1 py-0.5 rounded"
+              className="w-10 font-code-sm text-code-sm px-1 py-0.5 rounded"
               style={{
                 background: "var(--bg-input)",
                 border: "1px solid var(--border-secondary)",

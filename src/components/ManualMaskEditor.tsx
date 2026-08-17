@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useAppStore } from "../store";
+import LabeledSlider from "./LabeledSlider";
 
 export default function ManualMaskEditor() {
   const mediaInfo = useAppStore((s) => s.mediaInfo);
@@ -93,7 +94,7 @@ export default function ManualMaskEditor() {
 
   if (width === 0 || height === 0) {
     return (
-      <div className="p-3 text-on-surface-variant text-dense-sm text-center">
+      <div className="p-3 text-on-surface-variant font-body-sm text-body-sm text-center">
         Load media to use manual mask drawing
       </div>
     );
@@ -150,23 +151,21 @@ export default function ManualMaskEditor() {
 
       {/* Brush size */}
       {(maskTool === "brush" || maskTool === "eraser") && (
-        <div className="flex items-center gap-1.5">
-          <span className="text-dense-xs text-on-surface-variant min-w-[50px]">Size: {brushSize}px</span>
-          <input
-            aria-label="Brush size"
-            type="range"
-            min={2}
-            max={200}
-            value={brushSize}
-            onChange={(e) => setBrushSize(parseInt(e.target.value))}
-            className="flex-1"
-          />
-        </div>
+        <LabeledSlider
+          label="Size"
+          value={brushSize}
+          min={2}
+          max={200}
+          step={1}
+          onChange={setBrushSize}
+          ariaLabel="Brush size"
+          unit="px"
+        />
       )}
 
       {/* Polygon hint */}
       {maskTool === "polygon" && (
-        <div className="text-dense-xs text-on-surface-variant px-1">
+        <div className="font-body-sm text-body-sm text-on-surface-variant px-1">
           Click on the preview to add points. Double-click to close.
         </div>
       )}
@@ -201,7 +200,7 @@ function ToolButton({
     <button
       onClick={onClick}
       title={label}
-      className={`flex items-center gap-[3px] px-2 py-1 text-dense-xs rounded-sm border-none cursor-pointer ${
+      className={`flex items-center gap-[3px] px-2 py-1 font-label-md text-label-md rounded-sm border-none cursor-pointer ${
         active
           ? "bg-accent-teal/25 text-accent-teal"
           : "bg-surface-container-high text-on-surface-variant hover:text-on-surface"

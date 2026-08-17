@@ -2,11 +2,11 @@
 
 use crate::effects::{
     blend_mask, functional_tests::run_all_function_tests, verification::verify_all_effects,
-    EffectCategory, EffectMeta, EffectRegistry, Frame,
+    Effect, EffectCategory, EffectMeta, EffectRegistry, Frame, Mask,
 };
 use crate::ffmpeg::{
     decode_video, encode_video, extract_audio_to_wav, ffedit_binary, ffgac_binary, ffmpeg_binary,
-    generate_proxy, has_audio_stream, probe_metadata,
+    generate_proxy, has_audio_stream, image_to_video, probe_metadata,
 };
 use crate::path_guard::validate_io_path;
 use crate::sam3_engine::Sam3Engine;
@@ -280,59 +280,44 @@ fn decode_mask_b64(
     }))
 }
 
-/// Apply a single effect to the currently loaded image.
-#[tauri::command]
-pub fn apply_effect(
-    state: State<'_, AppState>,
-    effect_id: String,
-    params: serde_json::Map<String, serde_json::Value>,
-    mask_b64: Option<String>,
-) -> std::result::Result<String, String> {
-    let frame_lock = state
-        .current_frame
-        .lock()
-        .map_err(|e| format!("frame lock poisoned: {e}"))?;
-    let mut working = frame_lock.as_ref().ok_or("No media loaded")?.clone();
-    drop(frame_lock);
+/// True when `effect` doesn't already blend the mask into `process_frame`
+/// itself and a mask was actually supplied — i.e. the caller must save a
+/// pre-effect copy of the frame and blend it in afterward.
+fn needs_mask_blend(effect: &dyn Effect, mask: Option<&Mask>) -> bool {
+    !effect.handles_masking() && mask.is_some()
+}
 
-    let mask = decode_mask_b64(mask_b64.as_deref())?;
-
-    let registry = state
-        .registry
-        .lock()
-        .map_err(|e| format!("registry lock poisoned: {e}"))?;
-    let effect = registry
-        .get(&effect_id)
-        .ok_or_else(|| format!("Effect '{}' not found", effect_id))?;
-    let effect_handles_mask = effect.handles_masking();
-    let previous = if !effect_handles_mask && mask.is_some() {
+/// Run one effect over a single frame, then apply the post-process mask
+/// blend for effects that don't already handle masking internally
+/// (mirrors the doubled-masking guard documented on `Effect::handles_masking`).
+/// `mode` is the blend mode ("inside"/"outside"/"alpha"); pass "inside" for
+/// call sites that don't expose a per-call mask mode.
+fn process_frame_with_mask(
+    effect: &dyn Effect,
+    working: &Frame,
+    mask: Option<&Mask>,
+    params: &serde_json::Map<String, serde_json::Value>,
+    mode: &str,
+) -> std::result::Result<Frame, String> {
+    let blend_needed = needs_mask_blend(effect, mask);
+    let previous = if blend_needed {
         Some(working.clone())
     } else {
         None
     };
-    let params = crate::effects::clamp_for_effect(effect, &params);
-    working = effect
-        .process_frame(&working, mask.as_ref(), &params)
+
+    let clamped_params = crate::effects::clamp_for_effect(effect, params);
+    let mut result = effect
+        .process_frame(working, mask, &clamped_params)
         .map_err(|e| e.to_string())?;
 
-    // Only apply post-process mask blend for effects that don't handle masking internally.
-    // Mask-aware effects (e.g., MaskIsolate) already apply the mask in process_frame,
-    // so applying it again would cause double-mask corruption.
-    if !effect_handles_mask {
-        if let (Some(previous), Some(m)) = (previous.as_ref(), mask.as_ref()) {
-            blend_mask(&mut working, previous, m, "inside").map_err(|e| e.to_string())?;
+    if blend_needed {
+        if let (Some(previous), Some(m)) = (previous.as_ref(), mask) {
+            blend_mask(&mut result, previous, m, mode).map_err(|e| e.to_string())?;
         }
     }
 
-    // Encode result
-    let img = image::RgbaImage::from_raw(working.width, working.height, working.data)
-        .ok_or("Invalid frame data after processing.")?;
-    let mut buf = Cursor::new(Vec::new());
-    img.write_to(&mut buf, ImageFormat::Png)
-        .map_err(|e| e.to_string())?;
-
-    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, buf.into_inner());
-    Ok(format!("data:image/png;base64,{}", b64))
+    Ok(result)
 }
 
 #[derive(serde::Deserialize)]
@@ -342,6 +327,30 @@ pub struct EffectCall {
     pub mask_b64: Option<String>,
     #[serde(default)]
     pub mask_mode: Option<String>,
+}
+
+/// Compares two effect-call params maps for cache-hit purposes. Effects
+/// that don't read the implicit `time` value the frontend injects into
+/// every effect's params during playback (see `Effect::uses_time_param`)
+/// ignore that key entirely -- otherwise `time` genuinely changing every
+/// frame would defeat this cache for every effect in the stack, including
+/// perfectly static ones like a fixed Bayer dither, on every single
+/// playback tick.
+fn params_match_for_cache(
+    effect: &dyn Effect,
+    cached: &serde_json::Map<String, serde_json::Value>,
+    incoming: &serde_json::Map<String, serde_json::Value>,
+) -> bool {
+    if effect.uses_time_param() {
+        return cached == incoming;
+    }
+    let strip_time = |m: &serde_json::Map<String, serde_json::Value>| -> serde_json::Map<String, serde_json::Value> {
+        m.iter()
+            .filter(|(k, _)| k.as_str() != "time")
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    };
+    strip_time(cached) == strip_time(incoming)
 }
 
 /// Apply a stack of effects to the currently loaded image.
@@ -397,6 +406,10 @@ pub fn apply_effect_stack(
     }
 
     for (i, call) in stack.into_iter().enumerate() {
+        let effect = registry
+            .get(&call.effect_id)
+            .ok_or_else(|| format!("Effect '{}' not found", call.effect_id))?;
+
         if use_cache {
             let cache_lock = state
                 .frame_cache
@@ -405,7 +418,7 @@ pub fn apply_effect_stack(
             if i < cache_lock.entries.len() {
                 let entry = &cache_lock.entries[i];
                 if entry.effect_id == call.effect_id
-                    && entry.params == call.params
+                    && params_match_for_cache(effect, &entry.params, &call.params)
                     && entry.mask_b64 == call.mask_b64
                     && entry.mask_mode == call.mask_mode
                 {
@@ -424,11 +437,6 @@ pub fn apply_effect_stack(
 
         use_cache = false;
 
-        let effect = registry
-            .get(&call.effect_id)
-            .ok_or_else(|| format!("Effect '{}' not found", call.effect_id))?;
-        let effect_handles_mask = effect.handles_masking();
-
         // Per-effect mask overrides global mask
         let per_effect_mask = if let Some(ref b64) = call.mask_b64 {
             decode_mask_b64(Some(b64.as_str()))?
@@ -436,24 +444,8 @@ pub fn apply_effect_stack(
             None
         };
         let active_mask = per_effect_mask.as_ref().or(global_mask.as_ref());
-        let previous = if !effect_handles_mask && active_mask.is_some() {
-            Some(working.clone())
-        } else {
-            None
-        };
-
-        let params = crate::effects::clamp_for_effect(effect, &call.params);
-        working = effect
-            .process_frame(&working, active_mask, &params)
-            .map_err(|e| e.to_string())?;
-
-        // Only apply post-process mask blend for effects that don't handle masking internally.
-        if !effect_handles_mask {
-            if let (Some(previous), Some(m)) = (previous.as_ref(), active_mask) {
-                let mode = call.mask_mode.as_deref().unwrap_or("inside");
-                blend_mask(&mut working, previous, m, mode).map_err(|e| e.to_string())?;
-            }
-        }
+        let mode = call.mask_mode.as_deref().unwrap_or("inside");
+        working = process_frame_with_mask(effect, &working, active_mask, &call.params, mode)?;
 
         new_cache.push(CacheEntry {
             effect_id: call.effect_id.clone(),
@@ -578,6 +570,70 @@ pub fn save_media(
     Ok(path)
 }
 
+/// Runs `stack` over `frame` in order, applying each effect's own mask
+/// (falling back to `global_mask`) via `process_frame_with_mask`. Used by
+/// `save_processed_image`; deliberately not shared with `apply_effect_stack`,
+/// which interleaves this same per-effect logic with preview-cache lookups
+/// that a one-shot save has no use for.
+fn apply_stack_to_frame(
+    registry: &EffectRegistry,
+    frame: Frame,
+    stack: &[EffectCall],
+    global_mask: Option<&Mask>,
+) -> std::result::Result<Frame, String> {
+    let mut working = frame;
+    for call in stack {
+        let effect = registry
+            .get(&call.effect_id)
+            .ok_or_else(|| format!("Effect '{}' not found", call.effect_id))?;
+        let per_effect_mask = if let Some(ref b64) = call.mask_b64 {
+            decode_mask_b64(Some(b64.as_str()))?
+        } else {
+            None
+        };
+        let active_mask = per_effect_mask.as_ref().or(global_mask);
+        let mode = call.mask_mode.as_deref().unwrap_or("inside");
+        working = process_frame_with_mask(effect, &working, active_mask, &call.params, mode)?;
+    }
+    Ok(working)
+}
+
+/// Apply the effect stack to the currently loaded frame and save the result
+/// to disk as a still image. Writes straight to a file instead of returning
+/// a preview data URL, and does not touch the interactive-preview cache --
+/// `apply_effect_stack` itself never persists its processed result anywhere
+/// (it only returns a base64 PNG for the preview), so `save_media` alone
+/// could only ever save the original, unprocessed frame.
+#[tauri::command]
+pub fn save_processed_image(
+    state: State<'_, AppState>,
+    stack: Vec<EffectCall>,
+    mask_b64: Option<String>,
+    path: String,
+    format: Option<String>,
+    quality: Option<u8>,
+) -> std::result::Result<String, String> {
+    validate_io_path(&path, false)?;
+
+    let frame_lock = state
+        .current_frame
+        .lock()
+        .map_err(|e| format!("frame lock poisoned: {e}"))?;
+    let frame = frame_lock.as_ref().ok_or("No media loaded")?.clone();
+    drop(frame_lock);
+
+    let global_mask = decode_mask_b64(mask_b64.as_deref())?;
+    let registry = state
+        .registry
+        .lock()
+        .map_err(|e| format!("registry lock poisoned: {e}"))?;
+    let working = apply_stack_to_frame(&registry, frame, &stack, global_mask.as_ref())?;
+    drop(registry);
+
+    save_image(&working, &path, format.as_deref(), quality).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
 /// Export a video by decoding, applying the effect stack, and re-encoding.
 /// Audio-reactive effects receive per-frame audio params when `audio_bake_json` is provided.
 /// Temporal effects (datamoshing) use `process_video` for cross-frame correctness.
@@ -614,18 +670,42 @@ pub async fn export_video(
     let validated_output = validate_io_path(&output_path, false)?;
     let registry = state.registry.clone();
     let cancel = state.export_cancel.clone();
-    cancel.store(false, Ordering::Relaxed);
 
     let source_path = validated_source.to_string_lossy().into_owned();
     let output_path = validated_output.to_string_lossy().into_owned();
 
-    // Serialize expensive exports so only one runs at a time.
+    // Watermark image/font paths are also frontend-supplied file paths fed
+    // straight to FFmpeg as -i / fontfile= inputs -- validate them the same
+    // way as source_path/output_path so a compromised renderer (or a
+    // malicious .moshdither preset) can't smuggle a UNC path or an
+    // unexpected local file through the watermark fields instead.
+    let watermark = watermark
+        .map(|mut wm| -> std::result::Result<WatermarkSettings, String> {
+            if wm.enabled {
+                if let Some(p) = &wm.image_path {
+                    wm.image_path = Some(validate_io_path(p, true)?.to_string_lossy().into_owned());
+                }
+                if let Some(p) = &wm.font_path {
+                    wm.font_path = Some(validate_io_path(p, true)?.to_string_lossy().into_owned());
+                }
+            }
+            Ok(wm)
+        })
+        .transpose()?;
+
+    // Serialize expensive exports (this and apply_ffglitch both share one
+    // export_cancel AtomicBool) so only one runs at a time. The permit is
+    // acquired BEFORE resetting the shared cancel flag -- export_video and
+    // apply_ffglitch share that flag, so resetting it while another
+    // export-like operation is still running (or queued ahead of us) could
+    // silently un-cancel that other job.
     let permit = state
         .export_semaphore
         .clone()
         .acquire_owned()
         .await
         .map_err(|e| format!("Export queue error: {}", e))?;
+    cancel.store(false, Ordering::Relaxed);
 
     tauri::async_runtime::spawn_blocking(move || {
         let _permit = permit;
@@ -703,8 +783,8 @@ fn export_video_blocking(
     // `processing_scale = None` means "auto" — the backend picks the
     // largest resolution that fits. `Some(n)` means the user explicitly
     // chose n px on the longest side.
-    eprintln!(
-        "[export] Planning decode for source: {} (preferred scale: {:?})",
+    tracing::info!(
+        "Planning export decode for source: {} (preferred scale: {:?})",
         source_path, processing_scale
     );
     let _ = app_handle.emit(
@@ -714,8 +794,8 @@ fn export_video_blocking(
     let (decode_scale, budget_bytes) =
         crate::ffmpeg::plan_decode(&source_path, processing_scale).map_err(|e| e.to_string())?;
     let budget_mb = budget_bytes as f64 / (1024.0 * 1024.0);
-    eprintln!(
-        "[export] Decode plan: scale={:?}, memory budget={:.0} MB",
+    tracing::info!(
+        "Export decode plan: scale={:?}, memory budget={:.0} MB",
         decode_scale, budget_mb
     );
     if let Some(s) = decode_scale {
@@ -724,7 +804,7 @@ fn export_video_blocking(
              processing at {}p. Final encode will scale to target dimensions.",
             s
         );
-        eprintln!("[export] {}", message);
+        tracing::warn!("{}", message);
         let _ = app_handle.emit(
             "export-progress",
             serde_json::json!({
@@ -737,15 +817,15 @@ fn export_video_blocking(
     }
 
     // Decode the full source video
-    eprintln!("[export] Decoding source: {}", source_path);
+    tracing::info!("Decoding export source: {}", source_path);
     let _ = app_handle.emit(
         "export-progress",
         serde_json::json!({"stage": "decoding", "progress": 0}),
     );
     let mut segment = crate::ffmpeg::decode_video_with_options(&source_path, None, decode_scale)
         .map_err(|e| e.to_string())?;
-    eprintln!(
-        "[export] Decoded {} frames, {}x{}, fps={}",
+    tracing::info!(
+        "Decoded {} frames, {}x{}, fps={}",
         segment.frames.len(),
         segment.frames.first().map(|f| f.width).unwrap_or(0),
         segment.frames.first().map(|f| f.height).unwrap_or(0),
@@ -759,16 +839,16 @@ fn export_video_blocking(
     if let Some(first) = segment.frames.first() {
         let frame_mb = (first.data.len() as f64) / (1024.0 * 1024.0);
         let total_mb = frame_mb * segment.frames.len() as f64;
-        eprintln!(
-            "[export] Memory estimate: {:.1} MB per frame, {:.1} MB total for {} frames (budget {:.0} MB)",
+        tracing::debug!(
+            "Export memory estimate: {:.1} MB per frame, {:.1} MB total for {} frames (budget {:.0} MB)",
             frame_mb,
             total_mb,
             segment.frames.len(),
             budget_mb
         );
         if total_mb > budget_mb * 0.95 {
-            eprintln!(
-                "[export] WARNING: decode used >=95% of memory budget. If the clip \
+            tracing::warn!(
+                "Export decode used >=95% of memory budget. If the clip \
                  was truncated, lower the processing resolution or trim the range."
             );
         }
@@ -820,7 +900,7 @@ fn export_video_blocking(
         audio_bake_json.and_then(|json| serde_json::from_str(&json).ok());
 
     // Apply the effect stack
-    eprintln!("[export] Applying {} effects", stack.len());
+    tracing::info!("Applying {} effects for export", stack.len());
     let _ = app_handle.emit(
         "export-progress",
         serde_json::json!({"stage": "effects", "progress": 5, "total": stack.len(), "current": 0}),
@@ -832,8 +912,8 @@ fn export_video_blocking(
         let effect = registry
             .get(&call.effect_id)
             .ok_or_else(|| format!("Effect '{}' not found", call.effect_id))?;
-        eprintln!(
-            "[export] Effect {}/{}: {} (temporal={})",
+        tracing::debug!(
+            "Export effect {}/{}: {} (temporal={})",
             effect_idx + 1,
             stack.len(),
             call.effect_id,
@@ -913,8 +993,8 @@ fn export_video_blocking(
         // Post-process mask blend for effects that don't handle masking internally
         if let (Some(prev), Some(m)) = (previous_frames, active_mask) {
             let mode = call.mask_mode.as_deref().unwrap_or("inside");
-            eprintln!(
-                "[export] Blending mask (mode={}) for {} frames",
+            tracing::debug!(
+                "Blending mask (mode={}) for {} frames",
                 mode,
                 segment.frames.len()
             );
@@ -927,12 +1007,12 @@ fn export_video_blocking(
                 })?;
         }
 
-        eprintln!("[export] Effect {}/{} done", effect_idx + 1, stack.len());
+        tracing::debug!("Export effect {}/{} done", effect_idx + 1, stack.len());
         let pct = 5 + ((effect_idx + 1) as f64 / stack.len() as f64 * 80.0) as u32;
         let _ = app_handle.emit("export-progress", serde_json::json!({"stage": "effects", "progress": pct, "total": stack.len(), "current": effect_idx + 1}));
     }
     drop(registry);
-    eprintln!("[export] All effects applied, proceeding to encode");
+    tracing::info!("All effects applied, proceeding to encode");
     let _ = app_handle.emit(
         "export-progress",
         serde_json::json!({"stage": "encoding", "progress": 90}),
@@ -1056,6 +1136,27 @@ pub fn get_media_info(
     }
 }
 
+fn lock_sam3<'a>(
+    state: &'a State<'_, AppState>,
+) -> std::result::Result<std::sync::MutexGuard<'a, Option<Sam3Engine>>, String> {
+    state
+        .sam3
+        .lock()
+        .map_err(|e| format!("SAM3 lock poisoned: {e}"))
+}
+
+/// Zip parallel (mask_b64, score) pairs into the `{count, masks, scores}`
+/// shape shared by every SAM3 prompt command's response.
+fn masks_to_json(masks: Vec<(String, f64)>) -> serde_json::Value {
+    let count = masks.len();
+    let (mask_b64s, scores): (Vec<String>, Vec<f64>) = masks.into_iter().unzip();
+    json!({
+        "count": count,
+        "masks": mask_b64s,
+        "scores": scores,
+    })
+}
+
 fn with_sam3<F, R>(
     app: &tauri::AppHandle,
     state: &State<'_, AppState>,
@@ -1064,10 +1165,7 @@ fn with_sam3<F, R>(
 where
     F: Fn(&Sam3Engine) -> crate::error::Result<R>,
 {
-    let mut sam3_lock = state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
+    let mut sam3_lock = lock_sam3(state)?;
 
     if sam3_lock.is_none() {
         match Sam3Engine::new(app) {
@@ -1088,8 +1186,8 @@ where
                 || err_str.contains("closed")
                 || err_str.contains("os error")
             {
-                eprintln!(
-                    "[SAM3 Engine] Pipe error detected ({err_str}), auto-restarting SAM3 engine..."
+                tracing::warn!(
+                    "SAM3 engine pipe error detected ({err_str}), auto-restarting SAM3 engine..."
                 );
                 *sam3_lock = None;
                 if let Ok(new_engine) = Sam3Engine::new(app) {
@@ -1111,10 +1209,7 @@ pub fn sam3_init(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> std::result::Result<String, String> {
-    let mut sam3_lock = state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
+    let mut sam3_lock = lock_sam3(&state)?;
     if sam3_lock.is_none() {
         match Sam3Engine::new(&app) {
             Ok(engine) => {
@@ -1147,13 +1242,7 @@ pub fn sam3_text_prompt(
     prompt: String,
 ) -> std::result::Result<serde_json::Value, String> {
     let masks = with_sam3(&app, &state, |engine| engine.text_prompt(prompt.clone()))?;
-    let count = masks.len();
-    let (mask_b64s, scores): (Vec<String>, Vec<f64>) = masks.into_iter().unzip();
-    Ok(json!({
-        "count": count,
-        "masks": mask_b64s,
-        "scores": scores,
-    }))
+    Ok(masks_to_json(masks))
 }
 
 /// Run a point-click prompt on the currently loaded SAM3 image.
@@ -1168,17 +1257,10 @@ pub fn sam3_point_prompt(
         .into_iter()
         .map(|[x, y]| [x as f32, y as f32])
         .collect();
-    let labels_clone = labels.clone();
     let masks = with_sam3(&app, &state, |engine| {
-        engine.point_prompt(f32_points.clone(), labels_clone.clone())
+        engine.point_prompt(f32_points.clone(), labels.clone())
     })?;
-    let count = masks.len();
-    let (mask_b64s, scores): (Vec<String>, Vec<f64>) = masks.into_iter().unzip();
-    Ok(json!({
-        "count": count,
-        "masks": mask_b64s,
-        "scores": scores,
-    }))
+    Ok(masks_to_json(masks))
 }
 
 /// Run a box prompt on the currently loaded SAM3 image.
@@ -1193,13 +1275,7 @@ pub fn sam3_box_prompt(
         .map(|[x1, y1, x2, y2]| [x1 as f32, y1 as f32, x2 as f32, y2 as f32])
         .collect();
     let masks = with_sam3(&app, &state, |engine| engine.box_prompt(f32_boxes.clone()))?;
-    let count = masks.len();
-    let (mask_b64s, scores): (Vec<String>, Vec<f64>) = masks.into_iter().unzip();
-    Ok(json!({
-        "count": count,
-        "masks": mask_b64s,
-        "scores": scores,
-    }))
+    Ok(masks_to_json(masks))
 }
 
 /// Run auto-mask grid generation on the currently loaded SAM3 image.
@@ -1214,13 +1290,7 @@ pub fn sam3_auto_mask(
     let masks = with_sam3(&app, &state, |engine| {
         engine.auto_mask(grid_size, iou_threshold, min_mask_region_area)
     })?;
-    let count = masks.len();
-    let (mask_b64s, scores): (Vec<String>, Vec<f64>) = masks.into_iter().unzip();
-    Ok(json!({
-        "count": count,
-        "masks": mask_b64s,
-        "scores": scores,
-    }))
+    Ok(masks_to_json(masks))
 }
 
 /// Run video predictor on a list of frames.
@@ -1230,10 +1300,7 @@ pub fn sam3_video_predictor(
     frames: Vec<String>,
     prompt: Option<String>,
 ) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
+    let sam3_lock = lock_sam3(&state)?;
     let engine = sam3_lock
         .as_ref()
         .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
@@ -1262,23 +1329,12 @@ pub fn sam3_refine_mask(
         .into_iter()
         .map(|[x, y]| [x as f32, y as f32])
         .collect();
-    let mask_b64_clone = mask_b64.clone();
-    let labels_clone = labels.clone();
     let masks = with_sam3(&app, &state, |engine| {
-        engine.refine_mask(
-            mask_b64_clone.clone(),
-            f32_points.clone(),
-            labels_clone.clone(),
-        )
+        engine.refine_mask(mask_b64.clone(), f32_points.clone(), labels.clone())
     })?;
-    let count = masks.len();
-    let (mask_b64s, scores): (Vec<String>, Vec<f64>) = masks.into_iter().unzip();
-    Ok(json!({
-        "status": "ok",
-        "count": count,
-        "masks": mask_b64s,
-        "scores": scores,
-    }))
+    let mut result = masks_to_json(masks);
+    result["status"] = json!("ok");
+    Ok(result)
 }
 
 /// Post-process a single mask (grow/shrink/feather/fill holes).
@@ -1292,19 +1348,15 @@ pub fn sam3_postprocess_mask(
     feather: i32,
     fill_holes: bool,
 ) -> std::result::Result<String, String> {
-    let mask_b64_clone = mask_b64.clone();
     with_sam3(&app, &state, |engine| {
-        engine.postprocess_mask(mask_b64_clone.clone(), grow, shrink, feather, fill_holes)
+        engine.postprocess_mask(mask_b64.clone(), grow, shrink, feather, fill_holes)
     })
 }
 
 /// Clear SAM3 state (image + masks).
 #[tauri::command]
 pub fn sam3_clear(state: State<'_, AppState>) -> std::result::Result<String, String> {
-    let sam3_lock = state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
+    let sam3_lock = lock_sam3(&state)?;
     if let Some(engine) = sam3_lock.as_ref() {
         engine.clear().map_err(|e| e.to_string())?;
     }
@@ -1314,10 +1366,7 @@ pub fn sam3_clear(state: State<'_, AppState>) -> std::result::Result<String, Str
 /// Shutdown the SAM3 bridge process.
 #[tauri::command]
 pub fn sam3_shutdown(state: State<'_, AppState>) -> std::result::Result<String, String> {
-    let mut sam3_lock = state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))?;
+    let mut sam3_lock = lock_sam3(&state)?;
     if let Some(engine) = sam3_lock.take() {
         let _ = engine.shutdown();
     }
@@ -1506,6 +1555,117 @@ mod integration_tests {
         // registry.get(..).ok_or(..). Confirm the lookup returns None (not panic).
         let reg = EffectRegistry::new();
         assert!(reg.get("totally.bogus.effect.id").is_none());
+    }
+
+    #[test]
+    fn test_params_match_for_cache_ignores_time_for_effects_that_dont_use_it() {
+        // Reproduces the "dithering looks choppy" bug directly: the frontend
+        // injects a per-frame `time` value into every effect's params during
+        // playback, even for effects (like a plain Bayer dither) that never
+        // read it. Without this, a changing time value alone would defeat
+        // the cache for every static effect on every playback tick.
+        let reg = EffectRegistry::new();
+        let bayer = reg
+            .get("dithering.bayer")
+            .expect("dithering.bayer should be registered");
+
+        let mut a = serde_json::Map::new();
+        a.insert("threshold".to_string(), json!(128));
+        a.insert("time".to_string(), json!(0.0));
+
+        let mut b = a.clone();
+        b.insert("time".to_string(), json!(1.5));
+        assert!(
+            params_match_for_cache(bayer, &a, &b),
+            "a static effect's cache-key comparison must ignore a changing time value"
+        );
+
+        let mut c = a.clone();
+        c.insert("threshold".to_string(), json!(200));
+        assert!(
+            !params_match_for_cache(bayer, &a, &c),
+            "a real (non-time) param change must still be treated as a cache miss"
+        );
+    }
+
+    #[test]
+    fn test_params_match_for_cache_respects_time_for_effects_that_use_it() {
+        let reg = EffectRegistry::new();
+        let databend = reg
+            .get("glitch.databend")
+            .expect("glitch.databend should be registered");
+
+        let mut a = serde_json::Map::new();
+        a.insert("time".to_string(), json!(0.0));
+        let mut b = a.clone();
+        b.insert("time".to_string(), json!(1.5));
+
+        assert!(
+            !params_match_for_cache(databend, &a, &b),
+            "a genuinely time-based effect's changing time value must still be a cache miss"
+        );
+        assert!(params_match_for_cache(databend, &a, &a.clone()));
+    }
+
+    fn solid_frame(width: u32, height: u32, rgba: [u8; 4]) -> Frame {
+        let mut data = Vec::with_capacity((width * height * 4) as usize);
+        for _ in 0..(width * height) {
+            data.extend_from_slice(&rgba);
+        }
+        Frame {
+            width,
+            height,
+            data,
+        }
+    }
+
+    #[test]
+    fn test_apply_stack_to_frame_actually_modifies_pixels() {
+        // This is what save_processed_image relies on to save the
+        // effects-applied result rather than a silent copy of the original --
+        // apply_effect_stack itself never persists its output anywhere, so a
+        // regression here would make "Save Image" save the untouched source.
+        let reg = EffectRegistry::new();
+        let frame = solid_frame(4, 4, [128, 128, 128, 255]);
+        let stack = vec![EffectCall {
+            effect_id: "dithering.bayer".to_string(),
+            params: serde_json::Map::new(),
+            mask_b64: None,
+            mask_mode: None,
+        }];
+
+        let result = apply_stack_to_frame(&reg, frame.clone(), &stack, None)
+            .expect("bayer dither should succeed on a valid frame");
+
+        assert_eq!(result.width, frame.width);
+        assert_eq!(result.height, frame.height);
+        assert_ne!(
+            result.data, frame.data,
+            "a dither effect must actually change the frame's pixel data"
+        );
+    }
+
+    #[test]
+    fn test_apply_stack_to_frame_empty_stack_returns_original_frame() {
+        let reg = EffectRegistry::new();
+        let frame = solid_frame(2, 2, [10, 20, 30, 255]);
+        let result = apply_stack_to_frame(&reg, frame.clone(), &[], None)
+            .expect("an empty stack should be a no-op, not an error");
+        assert_eq!(result.data, frame.data);
+    }
+
+    #[test]
+    fn test_apply_stack_to_frame_unknown_effect_id_errors() {
+        let reg = EffectRegistry::new();
+        let frame = solid_frame(2, 2, [0, 0, 0, 255]);
+        let stack = vec![EffectCall {
+            effect_id: "totally.bogus.effect.id".to_string(),
+            params: serde_json::Map::new(),
+            mask_b64: None,
+            mask_mode: None,
+        }];
+        let result = apply_stack_to_frame(&reg, frame, &stack, None);
+        assert!(result.is_err(), "an unknown effect id must error, not panic");
     }
 
     #[test]
@@ -2132,9 +2292,184 @@ fn find_python() -> Option<String> {
     None
 }
 
+/// Spawn `cmd`, polling for completion while checking `cancel` and an
+/// overall `timeout`, instead of a single blocking `wait_with_output()`.
+///
+/// This is the mechanism that makes FFglitch cancellable and un-hangable
+/// (see `run_ffglitch_subprocess` below), factored out on its own so it can
+/// be exercised directly with an arbitrary command rather than only through
+/// a full mosh_cli.py invocation. Mirrors `ffmpeg::output_with_timeout`
+/// (stdout/stderr drained on separate threads while waiting, so a chatty
+/// process cannot deadlock on a full pipe buffer) with the addition of the
+/// cancel check, since this is the one subprocess path in the app a user
+/// can proactively cancel mid-run rather than only time out.
+fn run_cancellable(
+    cmd: &mut Command,
+    cancel: &AtomicBool,
+    timeout: Duration,
+    poll_interval: Duration,
+) -> std::result::Result<std::process::Output, String> {
+    use child_wait_timeout::ChildWT;
+    use std::io::{ErrorKind, Read};
+
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn process: {}", e))?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to open child stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Failed to open child stderr".to_string())?;
+    let stdout_buf = Arc::new(Mutex::new(Vec::new()));
+    let stderr_buf = Arc::new(Mutex::new(Vec::new()));
+    let stdout_thread = {
+        let buf = Arc::clone(&stdout_buf);
+        std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(stdout);
+            let mut data = Vec::new();
+            let _ = reader.read_to_end(&mut data);
+            if let Ok(mut guard) = buf.lock() {
+                *guard = data;
+            }
+        })
+    };
+    let stderr_thread = {
+        let buf = Arc::clone(&stderr_buf);
+        std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(stderr);
+            let mut data = Vec::new();
+            let _ = reader.read_to_end(&mut data);
+            if let Ok(mut guard) = buf.lock() {
+                *guard = data;
+            }
+        })
+    };
+    let join_readers = |stdout_thread: std::thread::JoinHandle<()>,
+                        stderr_thread: std::thread::JoinHandle<()>| {
+        let _ = stdout_thread.join();
+        let _ = stderr_thread.join();
+    };
+
+    let started = std::time::Instant::now();
+    let status = loop {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait_timeout(Duration::from_secs(10));
+            join_readers(stdout_thread, stderr_thread);
+            return Err("Cancelled by user".to_string());
+        }
+        if started.elapsed() > timeout {
+            let _ = child.kill();
+            let _ = child.wait_timeout(Duration::from_secs(10));
+            join_readers(stdout_thread, stderr_thread);
+            return Err(format!("Process timed out after {:?}", timeout));
+        }
+        match child.wait_timeout(poll_interval) {
+            Ok(status) => break status,
+            Err(e) if e.kind() == ErrorKind::TimedOut => continue,
+            Err(e) => {
+                let _ = child.kill();
+                join_readers(stdout_thread, stderr_thread);
+                return Err(format!("Failed to wait for process: {}", e));
+            }
+        }
+    };
+
+    join_readers(stdout_thread, stderr_thread);
+    let stdout = stdout_buf.lock().map(|g| g.clone()).unwrap_or_default();
+    let stderr = stderr_buf.lock().map(|g| g.clone()).unwrap_or_default();
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+/// FFglitch (mosh_cli.py, which itself shells out to ffgac/ffedit/ffmpeg
+/// across multiple passes) has no built-in bound on how long it can run.
+/// Without `run_cancellable`'s poll loop, a hung/stuck run could not be
+/// cancelled (via `cancel`, the same `AtomicBool` `cancel_export` sets --
+/// reused here so the one Cancel button in the UI works for both real
+/// export and FFglitch) or force-killed after an overall timeout -- the
+/// same "await that can never resolve" defect class as the mask-texture
+/// freeze already fixed, plus a Cancel button with no actual path to the
+/// subprocess it claimed to cancel.
+fn run_ffglitch_subprocess(
+    python: &str,
+    mosh_cli: &Path,
+    temp_config_path: &str,
+    ffgac: &str,
+    ffedit: &str,
+    ffmpeg: &str,
+    cancel: &AtomicBool,
+) -> std::result::Result<std::process::Output, String> {
+    // Generous: raw-frame extraction plus two ffglitch passes plus re-encode
+    // can legitimately take a while on a long/high-res clip. Doubled versus
+    // the export path's own ENCODE_TIMEOUT (1800s) since FFglitch does more
+    // total subprocess work per clip than a single ffmpeg encode.
+    const FFGLITCH_TIMEOUT: Duration = Duration::from_secs(3600);
+    const POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+    run_cancellable(
+        Command::new(python)
+            .arg(mosh_cli)
+            .arg(temp_config_path)
+            .env("MOSHDITHER_FFGAC_PATH", ffgac)
+            .env("MOSHDITHER_FFEDIT_PATH", ffedit)
+            .env("MOSHDITHER_FFMPEG_PATH", ffmpeg),
+        cancel,
+        FFGLITCH_TIMEOUT,
+        POLL_INTERVAL,
+    )
+    .map_err(|e| format!("FFglitch: {e}"))
+}
+
+/// Validates the extra file-path parameters that the motion_transfer/combine
+/// modes forward to mosh_cli.py (params.motionUrl / params.combineVideos).
+/// mosh_cli.py feeds these straight into FFglitch/ffmpeg as further input
+/// files, with no validation on either side of the IPC boundary -- unlike
+/// input_path/output_path, which are already checked. Returns Err on the
+/// first path that fails the path_guard check; all other modes are left
+/// untouched since they carry no file-path params. combineVideos mirrors
+/// Python's own "media://" prefix stripping (mosh_cli.py) so this validates
+/// the actual filesystem path Python will use, not the prefixed string.
+fn validate_ffglitch_extra_paths(
+    mode: &str,
+    params: &serde_json::Value,
+) -> std::result::Result<(), String> {
+    if mode == "motion_transfer" {
+        if let Some(url) = params.get("motionUrl").and_then(|v| v.as_str()) {
+            validate_io_path(url, true)?;
+        }
+    } else if mode == "combine" {
+        let videos: Vec<String> = match params.get("combineVideos") {
+            Some(serde_json::Value::String(s)) => vec![s.clone()],
+            Some(serde_json::Value::Array(items)) => items
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect(),
+            _ => Vec::new(),
+        };
+        for video in &videos {
+            let stripped = video.strip_prefix("media://").unwrap_or(video);
+            if !stripped.is_empty() {
+                validate_io_path(stripped, true)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Apply an FFglitch datamoshing effect by delegating to the Python mosh_cli.py.
 #[tauri::command]
 pub async fn apply_ffglitch(
+    state: State<'_, AppState>,
     input_path: String,
     output_path: String,
     mode: String,
@@ -2144,6 +2479,8 @@ pub async fn apply_ffglitch(
     let validated_output = validate_io_path(&output_path, false)?;
     let input_path = validated_input.to_string_lossy().into_owned();
     let output_path = validated_output.to_string_lossy().into_owned();
+
+    validate_ffglitch_extra_paths(&mode, &params)?;
 
     let python = find_python()
         .ok_or("Python interpreter not found. Install sam3_env or add python to PATH")?;
@@ -2177,28 +2514,39 @@ pub async fn apply_ffglitch(
     ));
     std::fs::write(&temp_config, config.to_string()).map_err(|e| e.to_string())?;
 
+    // Serialize against export_video (this file, ~line 615): the two
+    // commands share one export_cancel AtomicBool, so without this permit a
+    // concurrently-running export_video and apply_ffglitch could reset or
+    // trigger each other's cancel signal. Acquire the permit BEFORE
+    // resetting the flag so a stale `true` left over from a previously
+    // cancelled operation can't immediately abort this new one, and so this
+    // reset can't race a still-running or queued export_video call.
+    let permit = state
+        .export_semaphore
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|e| format!("Export queue error: {}", e))?;
+    let cancel = state.export_cancel.clone();
+    cancel.store(false, Ordering::Relaxed);
+
     // Run the blocking Python process on a spawn_blocking task to avoid
     // blocking the Tauri async runtime (which can cause command timeouts
     // and leave 0-byte output files).
     let temp_config_path = temp_config.to_string_lossy().to_string();
     let output_path_clone = output_path.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let child = Command::new(&python)
-            .arg(&mosh_cli)
-            .arg(&temp_config_path)
-            .env("MOSHDITHER_FFGAC_PATH", &ffgac)
-            .env("MOSHDITHER_FFEDIT_PATH", &ffedit)
-            .env("MOSHDITHER_FFMPEG_PATH", &ffmpeg)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("Failed to spawn mosh_cli.py: {}", e))?;
-
-        let output = child
-            .wait_with_output()
-            .map_err(|e| format!("Failed to wait for mosh_cli.py: {}", e))?;
-
-        Ok::<_, String>((output, output_path_clone))
+        let _permit = permit;
+        run_ffglitch_subprocess(
+            &python,
+            &mosh_cli,
+            &temp_config_path,
+            &ffgac,
+            &ffedit,
+            &ffmpeg,
+            &cancel,
+        )
+        .map(|output| (output, output_path_clone))
     })
     .await
     .map_err(|e| format!("Task failed: {}", e))?;
@@ -2254,6 +2602,27 @@ pub async fn generate_proxy_command(
     let path = validated.to_string_lossy().into_owned();
     tauri::async_runtime::spawn_blocking(move || {
         generate_proxy(&path, max_width, crf).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("Task failed: {}", e))?
+}
+
+/// Turn a currently-loaded still image into a real multi-frame video by
+/// looping its single frame for `duration_secs` at `fps`, then returns the
+/// generated file's path so the frontend can load it back in through the
+/// normal video-loading path (`load_media`). This is what lets the
+/// video-only effect family (frame_reverse, shuffle, motion_transfer, ...)
+/// operate on what started out as a still image.
+#[tauri::command]
+pub async fn animate_still_as_video(
+    image_path: String,
+    duration_secs: f64,
+    fps: f64,
+) -> std::result::Result<String, String> {
+    let validated = validate_io_path(&image_path, true)?;
+    let path = validated.to_string_lossy().into_owned();
+    tauri::async_runtime::spawn_blocking(move || {
+        image_to_video(&path, duration_secs, fps).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| format!("Task failed: {}", e))?
@@ -2357,5 +2726,198 @@ mod project_path_tests {
     #[test]
     fn rejects_unc_project_paths() {
         assert!(validate_project_path(r"\\attacker\share\project.json", true).is_err());
+    }
+}
+
+#[cfg(test)]
+mod run_cancellable_tests {
+    use super::*;
+
+    // A short, reliable "hang" for exactly `secs` seconds, without depending
+    // on a shell interactively (avoids `timeout`'s console-attachment quirk
+    // on Windows). `ping` is present on every Windows install by default;
+    // `sleep` is present on every Linux CI image (this project's `cargo
+    // test` runs on ubuntu-latest) and macOS.
+    fn hang_command(secs: u32) -> Command {
+        #[cfg(target_os = "windows")]
+        {
+            let mut cmd = Command::new("ping");
+            cmd.args(["-n", &(secs + 1).to_string(), "127.0.0.1"]);
+            cmd
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let mut cmd = Command::new("sleep");
+            cmd.arg(secs.to_string());
+            cmd
+        }
+    }
+
+    fn fast_command() -> Command {
+        #[cfg(target_os = "windows")]
+        {
+            let mut c = Command::new("cmd");
+            c.args(["/C", "echo hello"]);
+            c
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let mut c = Command::new("echo");
+            c.arg("hello");
+            c
+        }
+    }
+
+    #[test]
+    fn returns_output_for_a_command_that_finishes_quickly() {
+        let cancel = AtomicBool::new(false);
+        let mut cmd = fast_command();
+        let output = run_cancellable(
+            &mut cmd,
+            &cancel,
+            Duration::from_secs(10),
+            Duration::from_millis(50),
+        )
+        .expect("a fast, well-behaved command should succeed");
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("hello"));
+    }
+
+    #[test]
+    fn kills_a_hung_process_on_timeout_instead_of_blocking_forever() {
+        // This is the exact defect class the FFglitch fix closes: without a
+        // bound, a hung subprocess left the awaiting Tauri command's promise
+        // unresolved forever (the same "stuck at ~0% CPU, looks frozen,
+        // isn't a crash" signature diagnosed for the mask-texture bug).
+        let cancel = AtomicBool::new(false);
+        let mut cmd = hang_command(30);
+        let started = std::time::Instant::now();
+        let result = run_cancellable(
+            &mut cmd,
+            &cancel,
+            Duration::from_secs(1),
+            Duration::from_millis(50),
+        );
+        let elapsed = started.elapsed();
+
+        assert!(
+            result.is_err(),
+            "a hung process must error, not hang the caller"
+        );
+        assert!(result.unwrap_err().contains("timed out"));
+        assert!(
+            elapsed < std::time::Duration::from_secs(20),
+            "expected the timeout path to return well before the process's own 30s runtime, took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn stops_a_running_process_when_cancel_flag_is_set() {
+        // This is the other half of the FFglitch fix: the Cancel button used
+        // to only reset local UI state while the subprocess kept running
+        // untouched. Confirms flipping the same AtomicBool cancel_export
+        // sets actually stops an in-progress run, well before its own
+        // timeout or natural completion.
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_setter = Arc::clone(&cancel);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            cancel_setter.store(true, Ordering::Relaxed);
+        });
+
+        let mut cmd = hang_command(30);
+        let started = std::time::Instant::now();
+        let result = run_cancellable(
+            &mut cmd,
+            &cancel,
+            Duration::from_secs(30),
+            Duration::from_millis(50),
+        );
+        let elapsed = started.elapsed();
+
+        assert!(
+            result.is_err(),
+            "a cancelled process must error, not hang the caller"
+        );
+        assert!(result.unwrap_err().contains("Cancelled"));
+        assert!(
+            elapsed < std::time::Duration::from_secs(20),
+            "expected cancellation to stop the process well before its own 30s runtime, took {elapsed:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod ffglitch_extra_path_tests {
+    use super::*;
+    use std::fs;
+
+    fn temp_media(name: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(name);
+        fs::write(&p, b"fake media").expect("write temp media fixture");
+        p
+    }
+
+    #[test]
+    fn motion_transfer_accepts_an_existing_motion_url() {
+        let p = temp_media("mosh_ffglitch_guard_motion_ok.mp4");
+        let params = serde_json::json!({ "motionUrl": p.to_string_lossy() });
+        let result = validate_ffglitch_extra_paths("motion_transfer", &params);
+        let _ = fs::remove_file(&p);
+        assert!(result.is_ok(), "existing motionUrl should be accepted: {result:?}");
+    }
+
+    #[test]
+    fn motion_transfer_rejects_a_motion_url_that_does_not_exist() {
+        let missing = std::env::temp_dir().join("mosh_ffglitch_guard_motion_missing.mp4");
+        let params = serde_json::json!({ "motionUrl": missing.to_string_lossy() });
+        let result = validate_ffglitch_extra_paths("motion_transfer", &params);
+        assert!(
+            result.is_err(),
+            "a motionUrl pointing at a nonexistent file must be rejected before reaching Python"
+        );
+    }
+
+    #[test]
+    fn combine_accepts_existing_videos_and_strips_the_media_prefix_before_checking() {
+        let a = temp_media("mosh_ffglitch_guard_combine_a.mp4");
+        let b = temp_media("mosh_ffglitch_guard_combine_b.mp4");
+        // Mirrors mosh_cli.py's own "media://" prefix stripping.
+        let prefixed = format!("media://{}", b.to_string_lossy());
+        let params = serde_json::json!({ "combineVideos": [a.to_string_lossy(), prefixed] });
+        let result = validate_ffglitch_extra_paths("combine", &params);
+        let _ = fs::remove_file(&a);
+        let _ = fs::remove_file(&b);
+        assert!(
+            result.is_ok(),
+            "existing combineVideos entries, including a media://-prefixed one, should be accepted: {result:?}"
+        );
+    }
+
+    #[test]
+    fn combine_rejects_a_video_that_does_not_exist() {
+        let a = temp_media("mosh_ffglitch_guard_combine_real.mp4");
+        let missing = std::env::temp_dir().join("mosh_ffglitch_guard_combine_missing.mp4");
+        let params =
+            serde_json::json!({ "combineVideos": [a.to_string_lossy(), missing.to_string_lossy()] });
+        let result = validate_ffglitch_extra_paths("combine", &params);
+        let _ = fs::remove_file(&a);
+        assert!(
+            result.is_err(),
+            "a combineVideos entry pointing at a nonexistent file must be rejected before reaching Python"
+        );
+    }
+
+    #[test]
+    fn other_modes_are_left_untouched_even_with_bogus_path_like_params() {
+        // Modes like "fluid"/"stretch"/"classic" carry no file-path params,
+        // so validation must not reach into params for them at all -- even
+        // a nonsense/malicious-looking value here must not cause a reject.
+        let params = serde_json::json!({ "motionUrl": "C:\\nonexistent\\evil.mp4" });
+        let result = validate_ffglitch_extra_paths("fluid", &params);
+        assert!(
+            result.is_ok(),
+            "modes without file-path params must not validate unrelated fields: {result:?}"
+        );
     }
 }

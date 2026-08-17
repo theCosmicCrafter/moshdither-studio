@@ -217,9 +217,7 @@ impl Effect for BlueNoiseDither {
             for x in 0..w {
                 let idx = (y * w + x) * 4;
                 let threshold = self.noise[(y % 64) * 64 + (x % 64)] as f32;
-                let lum = 0.299 * data[idx] as f32
-                    + 0.587 * data[idx + 1] as f32
-                    + 0.114 * data[idx + 2] as f32;
+                let lum = crate::effects::luminance_f32(data[idx], data[idx + 1], data[idx + 2]);
                 // Apply strength: higher strength pushes more pixels to extremes
                 let adjusted = if strength > 1.0 {
                     let center = 128.0;

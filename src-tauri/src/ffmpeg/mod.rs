@@ -186,7 +186,10 @@ pub fn generate_proxy(source_path: &str, max_width: u32, crf: u32) -> Result<Str
         scale_height
     };
 
-    let proxy_dir = std::env::temp_dir().join("moshdither-proxy");
+    // Nested under moshdither-studio so it falls inside the Tauri asset-protocol
+    // scope allowlist ($TEMP/moshdither-studio/** in tauri.conf.json) -- the
+    // proxy path is fed straight into convertFileSrc() for webview playback.
+    let proxy_dir = std::env::temp_dir().join("moshdither-studio").join("proxy");
     std::fs::create_dir_all(&proxy_dir).map_err(AppError::Io)?;
 
     let source_name = Path::new(source_path)
@@ -195,8 +198,9 @@ pub fn generate_proxy(source_path: &str, max_width: u32, crf: u32) -> Result<Str
         .unwrap_or("proxy");
     let proxy_path = proxy_dir.join(format!("{}_proxy_{}p.mp4", source_name, max_width));
 
-    let output = Command::new(&ffmpeg)
-        .args([
+    const PROXY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+    let output = output_with_timeout(
+        Command::new(&ffmpeg).args([
             "-i",
             source_path,
             "-vf",
@@ -210,11 +214,9 @@ pub fn generate_proxy(source_path: &str, max_width: u32, crf: u32) -> Result<Str
             "-an",
             "-y",
             proxy_path.to_string_lossy().as_ref(),
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(AppError::Io)?;
+        ]),
+        PROXY_TIMEOUT,
+    )?;
 
     if !output.status.success() {
         return Err(AppError::Ffmpeg(format!(
@@ -224,6 +226,159 @@ pub fn generate_proxy(source_path: &str, max_width: u32, crf: u32) -> Result<Str
     }
 
     Ok(proxy_path.to_string_lossy().to_string())
+}
+
+/// Bounds on the duration/fps accepted by [`image_to_video`]. These stop a
+/// malformed or hostile frontend value (zero, negative, NaN, or an absurdly
+/// large duration) from producing a pathological FFmpeg invocation -- an
+/// unbounded `-t` would just burn the timeout-guarded subprocess's full
+/// budget for no benefit, and a zero/negative/non-finite value produces
+/// either an empty file or an FFmpeg parse error instead of a clear one.
+const MIN_STILL_ANIMATION_DURATION_SECS: f64 = 0.1;
+const MAX_STILL_ANIMATION_DURATION_SECS: f64 = 600.0;
+const MIN_STILL_ANIMATION_FPS: f64 = 1.0;
+const MAX_STILL_ANIMATION_FPS: f64 = 120.0;
+
+/// Validate and clamp the duration/fps requested for [`image_to_video`].
+/// Pulled out as its own function so the bounds-checking logic is testable
+/// without invoking FFmpeg. Rejects non-finite or non-positive values
+/// outright (those are almost certainly a caller bug, not a deliberate
+/// request); in-range-but-too-large values are silently clamped to the
+/// nearest bound rather than rejected, matching this file's existing
+/// `clamp()`-based tolerance for slightly-out-of-range UI input (e.g.
+/// `wm.font_size.clamp(1, 999)` in `apply_watermark_args`).
+fn validate_still_animation_params(duration_secs: f64, fps: f64) -> Result<(f64, f64)> {
+    if !duration_secs.is_finite() || duration_secs <= 0.0 {
+        return Err(AppError::Ffmpeg(format!(
+            "duration_secs must be a positive, finite number of seconds, got {duration_secs}"
+        )));
+    }
+    if !fps.is_finite() || fps <= 0.0 {
+        return Err(AppError::Ffmpeg(format!(
+            "fps must be a positive, finite frame rate, got {fps}"
+        )));
+    }
+    let duration = duration_secs.clamp(
+        MIN_STILL_ANIMATION_DURATION_SECS,
+        MAX_STILL_ANIMATION_DURATION_SECS,
+    );
+    let fps = fps.clamp(MIN_STILL_ANIMATION_FPS, MAX_STILL_ANIMATION_FPS);
+    Ok((duration, fps))
+}
+
+/// Build the FFmpeg argument vector for [`image_to_video`]. A pure function
+/// (no subprocess) so the argv shape -- flag ordering, the even-dimension
+/// pad filter, and where the output path lands -- is unit-testable directly,
+/// mirroring `apply_watermark_args`/`find_output_arg_index` above.
+fn build_image_to_video_args(
+    image_path: &str,
+    duration_secs: f64,
+    fps: f64,
+    width: u32,
+    height: u32,
+    output_path: &str,
+) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "-y".to_string(),
+        "-loop".to_string(),
+        "1".to_string(),
+        "-i".to_string(),
+        image_path.to_string(),
+        "-t".to_string(),
+        format!("{duration_secs}"),
+        "-r".to_string(),
+        format!("{fps}"),
+        "-c:v".to_string(),
+        "libx264".to_string(),
+        "-pix_fmt".to_string(),
+        "yuv420p".to_string(),
+    ];
+
+    // yuv420p requires even dimensions. Pad (rather than crop) so no source
+    // pixels are lost -- mirrors encode_video's own even-dimension handling
+    // further down this file.
+    if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
+        args.push("-vf".to_string());
+        args.push("pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0:black".to_string());
+    }
+
+    args.push(output_path.to_string());
+    args
+}
+
+/// Build a collision-resistant output filename for [`image_to_video`]. Hashes
+/// the full source path (not just its file stem) so two different images
+/// that happen to share a filename in different folders can't collide on the
+/// same output path and silently overwrite each other's animated clip.
+fn build_animated_still_filename(image_path: &str, duration_secs: f64, fps: f64) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    image_path.hash(&mut hasher);
+    let path_hash = format!("{:016x}", hasher.finish());
+
+    let source_name = Path::new(image_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("still");
+    format!(
+        "{}_{}_animated_{:.2}s_{:.0}fps.mp4",
+        source_name, path_hash, duration_secs, fps
+    )
+}
+
+/// Generate a video from a single still image by looping it for
+/// `duration_secs` seconds at `fps`. This is how a still-image session
+/// becomes a real multi-frame video that the video-only effect family
+/// (frame_reverse, shuffle, motion_transfer, mv_effects, profiles, ...) can
+/// meaningfully operate on -- those effects read/write multiple frames and
+/// are structurally meaningless applied to a single still.
+///
+/// The source image's own dimensions are probed and used as-is (no
+/// hardcoded resolution); only even-ness is corrected for, via padding, if
+/// needed for `yuv420p`. Returns the path to the generated `.mp4` in the
+/// system temp directory.
+pub fn image_to_video(image_path: &str, duration_secs: f64, fps: f64) -> Result<String> {
+    let (duration_secs, fps) = validate_still_animation_params(duration_secs, fps)?;
+    let ffmpeg = ffmpeg_binary()?;
+
+    let (width, height) = image::image_dimensions(image_path)
+        .map_err(|e| AppError::Ffmpeg(format!("Could not read image dimensions: {e}")))?;
+
+    // Nested under moshdither-studio so it falls inside the Tauri asset-protocol
+    // scope allowlist, matching extract_audio_to_wav/LUT temp dirs.
+    let out_dir = std::env::temp_dir()
+        .join("moshdither-studio")
+        .join("animated-stills");
+    std::fs::create_dir_all(&out_dir).map_err(AppError::Io)?;
+
+    let output_path = out_dir.join(build_animated_still_filename(image_path, duration_secs, fps));
+    let output_path_str = output_path.to_string_lossy().to_string();
+
+    let args = build_image_to_video_args(
+        image_path,
+        duration_secs,
+        fps,
+        width,
+        height,
+        &output_path_str,
+    );
+
+    const IMAGE_TO_VIDEO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+    let output = output_with_timeout(Command::new(&ffmpeg).args(&args), IMAGE_TO_VIDEO_TIMEOUT)?;
+
+    if !output.status.success() {
+        return Err(AppError::Ffmpeg(format!(
+            "FFmpeg image-to-video failed (exit {}): {}",
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stderr)
+                .chars()
+                .take(2000)
+                .collect::<String>()
+        )));
+    }
+
+    Ok(output_path_str)
 }
 
 /// Locate the FFgac binary (FFglitch encoder). Tries bundled sidecar first, then PATH.
@@ -322,8 +477,8 @@ pub fn decode_video_with_options(
     let budget_frames = budget / frame_size;
     let max_frames = requested_max.min(budget_frames).max(1);
     if max_frames < requested_max {
-        eprintln!(
-            "[ffmpeg] WARNING: requested {} frames but only {} fit in memory budget \
+        tracing::warn!(
+            "Requested {} frames but only {} fit in memory budget \
              ({}x{} @ {} bytes/frame, budget {} bytes). Clip will be truncated.",
             requested_max, max_frames, width, height, frame_size, budget
         );
@@ -353,11 +508,10 @@ pub fn decode_video_with_options(
         "format=rgba".to_string()
     };
     cmd.args(["-vf", &vf]);
-    cmd.args(["-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    cmd.args(["-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"]);
 
-    let output = cmd.output().map_err(AppError::Io)?;
+    const DECODE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+    let output = output_with_timeout(&mut cmd, DECODE_TIMEOUT)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(AppError::Ffmpeg(format!(
@@ -391,8 +545,8 @@ pub fn decode_video_with_options(
     // limit outright is not safe either, since the decode is fully buffered in
     // memory. The real fix is streaming decode, which is a larger change.
     if frames.len() == max_frames {
-        eprintln!(
-            "[ffmpeg] WARNING: decode stopped at the {}-frame limit ({:.1}s at {:.0} fps). \
+        tracing::warn!(
+            "Decode stopped at the {}-frame limit ({:.1}s at {:.0} fps). \
              If the source is longer, the result is TRUNCATED. Raise the limit by passing \
              max_frames, or lower memory per frame with a smaller scale.",
             max_frames,
@@ -407,7 +561,21 @@ pub fn decode_video_with_options(
 /// Encode a sequence of raw RGBA frames to a video file.
 /// `codec`: "libx264" | "libx265" | "libvpx-vp9" | "prores_ks"
 /// `fps_override`: optional target fps (defaults to segment fps)
-fn apply_watermark_args(mut args: Vec<String>, wm: &WatermarkSettings) -> Vec<String> {
+/// Locate the output path argument by exact string identity, not by guessing
+/// a file extension. Extension-based lookups (`a.ends_with(".mp4") || ...`)
+/// broke in two ways: the extension allow-list didn't include every
+/// container (e.g. .webm was missing at some call sites but not others), and
+/// `position()` (first match) could match the SOURCE input's `-i <path>`
+/// argument instead of the output path whenever the source happened to share
+/// a listed extension and audio was included -- corrupting the argv by
+/// splicing a filter flag between `-i` and the source filename. Matching the
+/// known `output_path` value directly is immune to both: it can't collide
+/// with a different string, and it needs no extension list at all.
+fn find_output_arg_index(args: &[String], output_path: &str) -> Option<usize> {
+    args.iter().rposition(|a| a == output_path)
+}
+
+fn apply_watermark_args(mut args: Vec<String>, wm: &WatermarkSettings, output_path: &str) -> Vec<String> {
     if !wm.enabled {
         return args;
     }
@@ -427,7 +595,15 @@ fn apply_watermark_args(mut args: Vec<String>, wm: &WatermarkSettings) -> Vec<St
     }
 
     fn escape_path(path: &str) -> String {
-        path.replace('\'', "\\'").replace(':', "\\:")
+        // Comma and semicolon are filtergraph-level separators (chain
+        // multiple filters / filter stages within one -vf argument) even
+        // though this value is unquoted -- without escaping them, a
+        // font_path containing one lets a caller splice extra FFmpeg
+        // filters/options into the export's filtergraph.
+        path.replace('\'', "\\'")
+            .replace(':', "\\:")
+            .replace(',', "\\,")
+            .replace(';', "\\;")
     }
 
     fn to_drawtext_color(color: &str) -> &str {
@@ -489,9 +665,7 @@ fn apply_watermark_args(mut args: Vec<String>, wm: &WatermarkSettings) -> Vec<St
                 args[idx + 1] = format!("{},{}", args[idx + 1], drawtext);
             }
         } else {
-            let insert_index = args
-                .iter()
-                .position(|a| a.ends_with(".mp4") || a.ends_with(".mov") || a.ends_with(".mkv"));
+            let insert_index = find_output_arg_index(&args, output_path);
             if let Some(idx) = insert_index {
                 args.insert(idx, "-vf".to_string());
                 args.insert(idx + 1, drawtext);
@@ -552,9 +726,7 @@ fn apply_watermark_args(mut args: Vec<String>, wm: &WatermarkSettings) -> Vec<St
                     args[idx + 1] = format!("{};{}", existing, filter);
                 }
             } else {
-                let insert_index = args.iter().position(|a| {
-                    a.ends_with(".mp4") || a.ends_with(".mov") || a.ends_with(".mkv")
-                });
+                let insert_index = find_output_arg_index(&args, output_path);
                 if let Some(idx) = insert_index {
                     args.insert(idx, "-filter_complex".to_string());
                     args.insert(idx + 1, filter);
@@ -565,12 +737,20 @@ fn apply_watermark_args(mut args: Vec<String>, wm: &WatermarkSettings) -> Vec<St
             }
 
             if !args.iter().any(|a| a == "-map") {
-                let output_index = args.iter().position(|a| {
-                    a.ends_with(".mp4") || a.ends_with(".mov") || a.ends_with(".mkv")
-                });
+                let output_index = find_output_arg_index(&args, output_path);
                 if let Some(idx) = output_index {
                     args.insert(idx, "-map".to_string());
                     args.insert(idx + 1, "[out]".to_string());
+                } else {
+                    // output_path is pushed unconditionally before this fn runs
+                    // (encode_video always calls args.push(path) first), so
+                    // reaching here means it went missing from args entirely --
+                    // a deeper bug upstream, not a routine lookup miss.
+                    tracing::warn!(
+                        "Output path not found in ffmpeg args while inserting watermark -map; audio/video mapping may be wrong"
+                    );
+                    args.push("-map".to_string());
+                    args.push("[out]".to_string());
                 }
             }
         }
@@ -602,6 +782,33 @@ fn add_metadata_args(mut args: Vec<String>, source_path: &str) -> Vec<String> {
     args
 }
 
+/// Removes the file at `path` on drop unless `disarm()` was called first.
+/// Used so a temp export file is cleaned up on every exit path out of
+/// `encode_video` -- early `?` returns included -- without having to thread
+/// a manual cleanup call through each one by hand.
+struct TempFileGuard {
+    path: std::path::PathBuf,
+    armed: bool,
+}
+
+impl TempFileGuard {
+    fn new(path: std::path::PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
 pub fn encode_video(
     segment: &VideoSegment,
     path: &str,
@@ -621,6 +828,22 @@ pub fn encode_video(
     if segment.frames.is_empty() {
         return Err(AppError::Ffmpeg("No frames to encode".to_string()));
     }
+
+    // Encode to a temp file beside the final destination, then atomically
+    // rename onto it only after FFmpeg fully succeeds. Without this, a
+    // cancelled, timed-out, or failed encode -- which FFmpeg (`-y`) has
+    // already started writing directly to `path` -- leaves a truncated or
+    // corrupt file at the user's chosen destination, silently destroying
+    // whatever was there before if they picked an existing file to overwrite.
+    let final_path = path;
+    let dest = std::path::Path::new(final_path);
+    let temp_path_buf = dest.with_file_name(format!(
+        ".{}.moshdither-tmp",
+        dest.file_name().and_then(|f| f.to_str()).unwrap_or("export")
+    ));
+    let temp_path = temp_path_buf.to_string_lossy().into_owned();
+    let path: &str = &temp_path;
+    let mut temp_guard = TempFileGuard::new(temp_path_buf.clone());
 
     let ffmpeg = ffmpeg_binary()?;
     let first = &segment.frames[0];
@@ -736,7 +959,7 @@ pub fn encode_video(
     // Apply watermark if enabled
     if let Some(wm) = watermark {
         if wm.enabled {
-            args = apply_watermark_args(args, wm);
+            args = apply_watermark_args(args, wm, path);
         }
     }
 
@@ -752,13 +975,7 @@ pub fn encode_video(
             let input_count = args.iter().filter(|a| *a == "-i").count();
             // Audio source is the last input (pipe:0 is input 0, watermark image may be input 1, audio is last)
             let audio_idx = (input_count - 1) as u32;
-            // Find the output path (last arg ending with video extension)
-            let output_pos = args.iter().rposition(|a| {
-                a.ends_with(".mp4")
-                    || a.ends_with(".mov")
-                    || a.ends_with(".mkv")
-                    || a.ends_with(".webm")
-            });
+            let output_pos = find_output_arg_index(&args, path);
             if let Some(pos) = output_pos {
                 args.insert(pos, "-map".to_string());
                 args.insert(pos + 1, format!("{}:a", audio_idx));
@@ -791,18 +1008,13 @@ pub fn encode_video(
                 }
             } else {
                 // No existing video filter — add -vf scale before output
-                let out_pos = args.iter().rposition(|a| {
-                    a.ends_with(".mp4")
-                        || a.ends_with(".mov")
-                        || a.ends_with(".mkv")
-                        || a.ends_with(".webm")
-                });
+                let out_pos = find_output_arg_index(&args, path);
                 if let Some(pos) = out_pos {
                     args.insert(pos, scale_filter.clone());
                     args.insert(pos, "-vf".to_string());
                 }
             }
-            eprintln!("[export] Applied FFmpeg scale filter: {}", scale_filter);
+            tracing::debug!("Applied FFmpeg scale filter: {}", scale_filter);
         }
     }
 
@@ -811,19 +1023,14 @@ pub fn encode_video(
     // frame dimensions when they are already even.
     if !w.is_multiple_of(2) || !h.is_multiple_of(2) {
         let pad_filter = "pad=ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2:black".to_string();
-        eprintln!("[export] DEBUG: ensuring even dimensions for {}x{}", w, h);
+        tracing::debug!("Ensuring even dimensions for {}x{}", w, h);
         if let Some(vf_pos) = args.iter().position(|a| a == "-vf") {
             args[vf_pos + 1] = format!("{}, {}", args[vf_pos + 1], pad_filter);
         } else if let Some(fc_pos) = args.iter().position(|a| a == "-filter_complex") {
             let existing = args[fc_pos + 1].clone();
             args[fc_pos + 1] = format!("{};[out]{}[out]", existing, pad_filter);
         } else {
-            let out_pos = args.iter().rposition(|a| {
-                a.ends_with(".mp4")
-                    || a.ends_with(".mov")
-                    || a.ends_with(".mkv")
-                    || a.ends_with(".webm")
-            });
+            let out_pos = find_output_arg_index(&args, path);
             if let Some(pos) = out_pos {
                 args.insert(pos, pad_filter);
                 args.insert(pos, "-vf".to_string());
@@ -831,15 +1038,15 @@ pub fn encode_video(
         }
     }
 
-    eprintln!(
-        "[export] FFmpeg encode: {} frames, {}x{}, fps={}, codec={}",
+    tracing::info!(
+        "FFmpeg encode: {} frames, {}x{}, fps={}, codec={}",
         segment.frames.len(),
         w,
         h,
         fps,
         encoder
     );
-    eprintln!("[export] FFmpeg args: {}", args.join(" "));
+    tracing::debug!("FFmpeg args: {}", args.join(" "));
 
     let mut child = Command::new(&ffmpeg)
         .args(&args)
@@ -880,7 +1087,7 @@ pub fn encode_video(
         for (i, frame) in segment.frames.iter().enumerate() {
             if let Some(c) = cancel {
                 if c.load(Ordering::Relaxed) {
-                    eprintln!("[export] FFmpeg encode cancelled by user");
+                    tracing::info!("FFmpeg encode cancelled by user");
                     let _ = stdin.flush();
                     drop(stdin);
                     let _ = child.kill();
@@ -892,13 +1099,13 @@ pub fn encode_video(
                 }
             }
             if i % 50 == 0 || i == total - 1 {
-                eprintln!("[export] Writing frame {}/{} to FFmpeg stdin", i + 1, total);
+                tracing::debug!("Writing frame {}/{} to FFmpeg stdin", i + 1, total);
             }
             stdin.write_all(&frame.data).map_err(AppError::Io)?;
         }
         // Close stdin so FFmpeg sees EOF and can finish encoding the final frames.
         drop(stdin);
-        eprintln!("[export] FFmpeg stdin closed (EOF sent), waiting for encode to finish...");
+        tracing::debug!("FFmpeg stdin closed (EOF sent), waiting for encode to finish...");
     }
 
     // Wait for the child with a bounded timeout (default 10 minutes). If it
@@ -909,8 +1116,8 @@ pub fn encode_video(
     let status = match child.wait_timeout(timeout) {
         Ok(status) => status,
         Err(e) if e.kind() == ErrorKind::TimedOut => {
-            eprintln!(
-                "[export] FFmpeg encode timed out after {:?}, killing process",
+            tracing::warn!(
+                "FFmpeg encode timed out after {:?}, killing process",
                 timeout
             );
             let _ = child.kill();
@@ -938,14 +1145,24 @@ pub fn encode_video(
     let stderr_bytes = stderr_buf.lock().map(|g| g.clone()).unwrap_or_default();
     if !status.success() {
         let stderr = String::from_utf8_lossy(&stderr_bytes);
-        eprintln!("[export] FFmpeg FAILED. stderr:\n{}", stderr);
+        tracing::error!("FFmpeg FAILED. stderr:\n{}", stderr);
         return Err(AppError::Ffmpeg(format!(
             "FFmpeg encode failed (exit {}): {}",
             status.code().unwrap_or(-1),
             stderr.chars().take(2000).collect::<String>()
         )));
     }
-    eprintln!("[export] FFmpeg encode completed successfully");
+
+    // Only now, after FFmpeg has fully and successfully finished, does the
+    // final destination change -- atomically, so a reader never observes a
+    // partially-written file at `final_path`. Disarm the guard first so a
+    // successful rename doesn't get immediately deleted by Drop.
+    temp_guard.disarm();
+    if let Err(e) = std::fs::rename(&temp_path_buf, final_path) {
+        let _ = std::fs::remove_file(&temp_path_buf);
+        return Err(AppError::Io(e));
+    }
+    tracing::info!("FFmpeg encode completed successfully");
     Ok(())
 }
 
@@ -955,6 +1172,105 @@ const PROBE_CACHE_CAPACITY: usize = 128;
 struct ProbeCache {
     entries: HashMap<String, (u32, u32, f64)>,
     order: VecDeque<String>,
+}
+
+/// Run a command to completion, piping stdout/stderr, bounded by `timeout`.
+///
+/// `Command::output()` has no timeout: if the child process hangs (a
+/// well-documented real occurrence for ffmpeg/ffprobe on malformed or
+/// truncated containers), the calling Tauri command's future never
+/// resolves. That is architecturally the same "await that never settles"
+/// bug already fixed once in this codebase (EffectChain.getMaskTexture's
+/// unguarded `<img>` load) -- just one layer down, at a subprocess instead
+/// of a DOM event. `encode_video` (below) already solves this for the
+/// export path with `child.wait_timeout` plus a stderr-draining thread (so
+/// a chatty process cannot deadlock on a full pipe buffer while we wait);
+/// this is that same pattern, generalized for callers that don't need to
+/// stream input to stdin.
+fn output_with_timeout(
+    cmd: &mut Command,
+    timeout: std::time::Duration,
+) -> Result<std::process::Output> {
+    use child_wait_timeout::ChildWT;
+    use std::io::{ErrorKind, Read};
+
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(AppError::Io)?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| AppError::Ffmpeg("Failed to open child stdout".to_string()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| AppError::Ffmpeg("Failed to open child stderr".to_string()))?;
+
+    let stdout_buf = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let stderr_buf = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+    let stdout_thread = {
+        let buf = Arc::clone(&stdout_buf);
+        std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(stdout);
+            let mut data = Vec::new();
+            let _ = reader.read_to_end(&mut data);
+            if let Ok(mut guard) = buf.lock() {
+                *guard = data;
+            }
+        })
+    };
+    let stderr_thread = {
+        let buf = Arc::clone(&stderr_buf);
+        std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(stderr);
+            let mut data = Vec::new();
+            let _ = reader.read_to_end(&mut data);
+            if let Ok(mut guard) = buf.lock() {
+                *guard = data;
+            }
+        })
+    };
+
+    let join_readers = |stdout_thread: std::thread::JoinHandle<()>,
+                        stderr_thread: std::thread::JoinHandle<()>| {
+        let _ = stdout_thread.join();
+        let _ = stderr_thread.join();
+    };
+
+    let status = match child.wait_timeout(timeout) {
+        Ok(status) => status,
+        Err(e) if e.kind() == ErrorKind::TimedOut => {
+            tracing::warn!(
+                "Command timed out after {:?}, killing process",
+                timeout
+            );
+            let _ = child.kill();
+            let _ = child.wait_timeout(std::time::Duration::from_secs(10));
+            join_readers(stdout_thread, stderr_thread);
+            return Err(AppError::Ffmpeg(format!(
+                "Process timed out after {:?}",
+                timeout
+            )));
+        }
+        Err(e) => {
+            let _ = child.kill();
+            join_readers(stdout_thread, stderr_thread);
+            return Err(AppError::Io(e));
+        }
+    };
+
+    join_readers(stdout_thread, stderr_thread);
+    let stdout = stdout_buf.lock().map(|g| g.clone()).unwrap_or_default();
+    let stderr = stderr_buf.lock().map(|g| g.clone()).unwrap_or_default();
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
 }
 
 /// Parse an ffprobe `r_frame_rate` string, which is typically a ratio such as
@@ -989,8 +1305,9 @@ pub fn probe_video(path: &str) -> Result<(u32, u32, f64)> {
 
     let bin = ffprobe_binary()?;
 
-    let output = Command::new(&bin)
-        .args([
+    const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    let output = output_with_timeout(
+        Command::new(&bin).args([
             "-v",
             "error",
             "-select_streams",
@@ -1000,9 +1317,9 @@ pub fn probe_video(path: &str) -> Result<(u32, u32, f64)> {
             "-of",
             "json",
             path,
-        ])
-        .output()
-        .map_err(AppError::Io)?;
+        ]),
+        PROBE_TIMEOUT,
+    )?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1078,8 +1395,9 @@ pub struct MediaMetadata {
 
 pub fn probe_metadata(path: &str) -> Result<MediaMetadata> {
     let bin = ffprobe_binary()?;
-    let output = Command::new(&bin)
-        .args([
+    const PROBE_METADATA_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    let output = output_with_timeout(
+        Command::new(&bin).args([
             "-v",
             "error",
             "-show_entries",
@@ -1087,9 +1405,9 @@ pub fn probe_metadata(path: &str) -> Result<MediaMetadata> {
             "-of",
             "json",
             path,
-        ])
-        .output()
-        .map_err(AppError::Io)?;
+        ]),
+        PROBE_METADATA_TIMEOUT,
+    )?;
     if !output.status.success() {
         return Err(AppError::Ffmpeg(format!(
             "FFprobe metadata failed: {}",
@@ -1172,8 +1490,9 @@ pub fn probe_metadata(path: &str) -> Result<MediaMetadata> {
 /// audio from a loaded video for audio-reactive effects.
 pub fn has_audio_stream(path: &str) -> Result<bool> {
     let bin = ffprobe_binary()?;
-    let output = Command::new(&bin)
-        .args([
+    const HAS_AUDIO_STREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    let output = output_with_timeout(
+        Command::new(&bin).args([
             "-v",
             "error",
             "-select_streams",
@@ -1183,9 +1502,9 @@ pub fn has_audio_stream(path: &str) -> Result<bool> {
             "-of",
             "csv=p=0",
             path,
-        ])
-        .output()
-        .map_err(AppError::Io)?;
+        ]),
+        HAS_AUDIO_STREAM_TIMEOUT,
+    )?;
     // ffprobe prints one line per audio stream; if stdout is empty, no audio.
     let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(stdout.trim().lines().any(|l| l.trim() == "audio"))
@@ -1214,9 +1533,10 @@ pub fn extract_audio_to_wav(
         }
     }
     cmd.args([output_wav_path]);
-    cmd.stdout(Stdio::null());
-    cmd.stderr(Stdio::piped());
-    let output = cmd.output().map_err(AppError::Io)?;
+    // Generous timeout since this transcodes real audio data (unlike the
+    // structural-only probes above); matches encode_video's own default.
+    const AUDIO_EXTRACT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+    let output = output_with_timeout(&mut cmd, AUDIO_EXTRACT_TIMEOUT)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         // If the source has no audio stream, ffmpeg exits non-zero with a
@@ -1237,4 +1557,439 @@ pub fn extract_audio_to_wav(
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod output_with_timeout_tests {
+    use super::*;
+
+    // A short, reliable "hang" for exactly `secs` seconds, without depending
+    // on a shell interactively (avoids `timeout`'s console-attachment quirk
+    // on Windows). `ping` is present on every Windows install by default;
+    // `sleep` is present on every Linux CI image (this project's `cargo
+    // test` runs on ubuntu-latest) and macOS.
+    fn hang_command(secs: u32) -> Command {
+        #[cfg(target_os = "windows")]
+        {
+            let mut cmd = Command::new("ping");
+            cmd.args(["-n", &(secs + 1).to_string(), "127.0.0.1"]);
+            cmd
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let mut cmd = Command::new("sleep");
+            cmd.arg(secs.to_string());
+            cmd
+        }
+    }
+
+    #[test]
+    fn returns_output_for_a_command_that_finishes_within_the_timeout() {
+        #[cfg(target_os = "windows")]
+        let mut cmd = {
+            let mut c = Command::new("cmd");
+            c.args(["/C", "echo hello"]);
+            c
+        };
+        #[cfg(not(target_os = "windows"))]
+        let mut cmd = {
+            let mut c = Command::new("echo");
+            c.arg("hello");
+            c
+        };
+
+        let output = output_with_timeout(&mut cmd, std::time::Duration::from_secs(10))
+            .expect("a fast, well-behaved command should succeed");
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("hello"));
+    }
+
+    #[test]
+    fn kills_a_hung_process_and_returns_an_error_instead_of_blocking_forever() {
+        // This is the exact defect class the fix closes: without a timeout,
+        // a hung ffmpeg/ffprobe call left the awaiting Tauri command's
+        // promise unresolved forever (the same "stuck at ~0% CPU, looks
+        // frozen, isn't a crash" signature diagnosed for the mask-texture
+        // bug). The command below would otherwise run far longer than the
+        // 1s timeout given to it here.
+        let mut cmd = hang_command(30);
+        let started = std::time::Instant::now();
+        let result = output_with_timeout(&mut cmd, std::time::Duration::from_secs(1));
+        let elapsed = started.elapsed();
+
+        assert!(
+            result.is_err(),
+            "a hung process must produce a timeout error, not hang the caller"
+        );
+        let message = result.unwrap_err().to_string();
+        assert!(
+            message.contains("timed out"),
+            "error should say it timed out, got: {message}"
+        );
+        // Generous upper bound (the 1s timeout, plus the 10s grace period
+        // for the post-kill wait_timeout, plus scheduler slack) -- the point
+        // isn't precise timing, it's proving this returns at all instead of
+        // hanging for the full 30s the underlying process was given.
+        assert!(
+            elapsed < std::time::Duration::from_secs(20),
+            "expected the timeout path to return well before the process's own 30s runtime, took {elapsed:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod output_arg_lookup_tests {
+    use super::*;
+
+    fn text_watermark(text: &str) -> WatermarkSettings {
+        WatermarkSettings {
+            enabled: true,
+            watermark_type: "text".to_string(),
+            text: text.to_string(),
+            image_path: None,
+            position: "bottom-right".to_string(),
+            font_size: 24,
+            font_path: None,
+            color: "white".to_string(),
+            opacity: 0.8,
+            scale: 20,
+            rotation: 0,
+        }
+    }
+
+    fn image_watermark(image_path: &str) -> WatermarkSettings {
+        WatermarkSettings {
+            enabled: true,
+            watermark_type: "image".to_string(),
+            text: String::new(),
+            image_path: Some(image_path.to_string()),
+            position: "bottom-right".to_string(),
+            font_size: 24,
+            font_path: None,
+            color: "white".to_string(),
+            opacity: 1.0,
+            scale: 20,
+            rotation: 0,
+        }
+    }
+
+    // This is the exact shape of `args` right before `apply_watermark_args`
+    // runs in `encode_video` when audio is included: the source clip's `-i
+    // <path>` (pushed early for the second/audio input), then encoder flags,
+    // then `-y <output_path>` (pushed last). Deliberately gives the source
+    // and the output the SAME extension -- the exact condition that made
+    // `position()` (first match) find the wrong one.
+    fn args_with_shared_extension_source_and_output(source: &str, output: &str) -> Vec<String> {
+        vec![
+            "-f".to_string(),
+            "rawvideo".to_string(),
+            "-i".to_string(),
+            "pipe:0".to_string(),
+            "-i".to_string(),
+            source.to_string(),
+            "-c:v".to_string(),
+            "libx264".to_string(),
+            "-c:a".to_string(),
+            "aac".to_string(),
+            "-y".to_string(),
+            output.to_string(),
+        ]
+    }
+
+    #[test]
+    fn find_output_arg_index_finds_the_real_output_even_when_source_shares_its_extension() {
+        let args = args_with_shared_extension_source_and_output("source.mp4", "output.mp4");
+        let idx = find_output_arg_index(&args, "output.mp4");
+        assert_eq!(
+            idx,
+            Some(args.len() - 1),
+            "must match the output path itself, not the earlier source -i argument with the same extension"
+        );
+    }
+
+    #[test]
+    fn find_output_arg_index_is_immune_to_extensions_missing_from_any_allow_list() {
+        // .avi was never in any of the old hardcoded extension lists (some
+        // had .mp4/.mov/.mkv, some added .webm) -- exact-identity matching
+        // needs no allow-list at all.
+        let args = args_with_shared_extension_source_and_output("source.mp4", "output.avi");
+        let idx = find_output_arg_index(&args, "output.avi");
+        assert_eq!(idx, Some(args.len() - 1));
+    }
+
+    #[test]
+    fn text_watermark_inserts_before_the_real_output_not_the_shared_extension_source() {
+        // Regression test for the live bug: watermark + include_audio on a
+        // source that shares the output's extension used to splice "-vf"
+        // between "-i" and the source filename, corrupting that input pair.
+        let args = args_with_shared_extension_source_and_output("source.mp4", "output.mp4");
+        let wm = text_watermark("hello");
+        let result = apply_watermark_args(args, &wm, "output.mp4");
+
+        let vf_idx = result
+            .iter()
+            .position(|a| a == "-vf")
+            .expect("-vf must be inserted");
+        // The source "-i source.mp4" pair must be left completely intact and
+        // untouched -- "-i" immediately followed by the literal source path,
+        // nothing spliced between them.
+        let source_i_idx = result
+            .iter()
+            .position(|a| a == "source.mp4")
+            .expect("source path must still be present");
+        assert_eq!(
+            result[source_i_idx - 1],
+            "-i",
+            "the source input pair must stay adjacent -- got {:?} immediately before the source path",
+            result[source_i_idx - 1]
+        );
+        // -vf must land before the real output path, not before the source.
+        let output_idx = result
+            .iter()
+            .rposition(|a| a == "output.mp4")
+            .expect("output path must still be present");
+        assert!(
+            vf_idx < output_idx,
+            "-vf (at {vf_idx}) must be inserted before the output path (at {output_idx})"
+        );
+        assert!(
+            vf_idx > source_i_idx,
+            "-vf (at {vf_idx}) must not be spliced before/into the source -i pair (source path at {source_i_idx})"
+        );
+    }
+
+    #[test]
+    fn font_path_with_a_comma_is_escaped_so_it_cannot_inject_an_extra_filter() {
+        // FFmpeg's filtergraph syntax treats an unescaped comma as a filter
+        // separator even inside one -vf argument string. A font_path
+        // containing a comma must not be able to splice a second filter in.
+        let args = vec![
+            "-f".to_string(),
+            "rawvideo".to_string(),
+            "-i".to_string(),
+            "pipe:0".to_string(),
+            "-c:v".to_string(),
+            "libx264".to_string(),
+            "-y".to_string(),
+            "output.mp4".to_string(),
+        ];
+        let mut wm = text_watermark("hello");
+        wm.font_path = Some("C:/fonts/evil.ttf,drawbox=0:0:10:10:red".to_string());
+        let result = apply_watermark_args(args, &wm, "output.mp4");
+
+        let vf_idx = result
+            .iter()
+            .position(|a| a == "-vf")
+            .expect("-vf must be inserted");
+        let filter_value = &result[vf_idx + 1];
+        assert!(
+            filter_value.contains("evil.ttf\\,drawbox"),
+            "the comma in font_path must be backslash-escaped so FFmpeg treats it as a literal character, not a filter separator; got: {filter_value}"
+        );
+        assert!(
+            !filter_value.contains("evil.ttf,drawbox"),
+            "an unescaped comma would let font_path splice a second filter (drawbox) into the filtergraph; got: {filter_value}"
+        );
+    }
+
+    #[test]
+    fn image_watermark_map_fallback_still_maps_output_when_lookup_somehow_misses() {
+        // args deliberately does NOT contain the literal output_path string,
+        // simulating the "should be unreachable" case the fallback guards.
+        let args = vec![
+            "-i".to_string(),
+            "pipe:0".to_string(),
+            "-filter_complex".to_string(),
+            "[0:v][1:v]overlay=0:0".to_string(),
+        ];
+        let wm = image_watermark("logo.png");
+        let result = apply_watermark_args(args, &wm, "output.mp4");
+        assert!(
+            result.windows(2).any(|w| w[0] == "-map" && w[1] == "[out]"),
+            "must still push a -map [out] fallback instead of silently dropping the mapping, got {result:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod image_to_video_tests {
+    use super::*;
+
+    #[test]
+    fn validate_rejects_zero_or_negative_duration() {
+        assert!(validate_still_animation_params(0.0, 30.0).is_err());
+        assert!(validate_still_animation_params(-5.0, 30.0).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_zero_or_negative_fps() {
+        assert!(validate_still_animation_params(5.0, 0.0).is_err());
+        assert!(validate_still_animation_params(5.0, -1.0).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_non_finite_values() {
+        assert!(validate_still_animation_params(f64::NAN, 30.0).is_err());
+        assert!(validate_still_animation_params(f64::INFINITY, 30.0).is_err());
+        assert!(validate_still_animation_params(5.0, f64::NAN).is_err());
+        assert!(validate_still_animation_params(5.0, f64::INFINITY).is_err());
+    }
+
+    #[test]
+    fn validate_passes_through_in_range_values_unchanged() {
+        let (d, f) = validate_still_animation_params(5.0, 30.0)
+            .expect("in-range duration/fps must be accepted");
+        assert_eq!(d, 5.0);
+        assert_eq!(f, 30.0);
+    }
+
+    #[test]
+    fn validate_clamps_duration_and_fps_to_their_bounds_instead_of_rejecting() {
+        // Deliberately way outside both bounds -- must clamp, not error, so
+        // a slightly-too-enthusiastic UI value degrades gracefully instead
+        // of failing the whole operation.
+        let (d, f) = validate_still_animation_params(100_000.0, 100_000.0)
+            .expect("out-of-range-but-positive values must be clamped, not rejected");
+        assert_eq!(d, MAX_STILL_ANIMATION_DURATION_SECS);
+        assert_eq!(f, MAX_STILL_ANIMATION_FPS);
+
+        let (d, f) = validate_still_animation_params(0.0001, 0.0001)
+            .expect("tiny-but-positive values must be clamped up to the floor, not rejected");
+        assert_eq!(d, MIN_STILL_ANIMATION_DURATION_SECS);
+        assert_eq!(f, MIN_STILL_ANIMATION_FPS);
+    }
+
+    #[test]
+    fn build_args_includes_loop_duration_fps_and_output_path() {
+        let args = build_image_to_video_args("in.png", 5.0, 30.0, 100, 100, "out.mp4");
+        assert!(
+            args.windows(2).any(|w| w[0] == "-loop" && w[1] == "1"),
+            "must loop the single input frame: {args:?}"
+        );
+        assert!(
+            args.windows(2).any(|w| w[0] == "-i" && w[1] == "in.png"),
+            "must pass the source image as -i: {args:?}"
+        );
+        assert!(
+            args.windows(2).any(|w| w[0] == "-t" && w[1] == "5"),
+            "must cap output length with -t <duration>: {args:?}"
+        );
+        assert!(
+            args.windows(2).any(|w| w[0] == "-r" && w[1] == "30"),
+            "must set the output frame rate with -r <fps>: {args:?}"
+        );
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "-pix_fmt" && w[1] == "yuv420p"),
+            "must encode as yuv420p for broad player/codec compatibility: {args:?}"
+        );
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some("out.mp4"),
+            "the output path must be the final argument: {args:?}"
+        );
+    }
+
+    #[test]
+    fn build_args_omits_pad_filter_for_already_even_dimensions() {
+        let args = build_image_to_video_args("in.png", 5.0, 30.0, 100, 200, "out.mp4");
+        assert!(
+            !args.iter().any(|a| a == "-vf"),
+            "even width and height need no padding filter: {args:?}"
+        );
+    }
+
+    #[test]
+    fn build_args_adds_pad_filter_for_odd_width_or_height() {
+        let odd_width = build_image_to_video_args("in.png", 5.0, 30.0, 101, 200, "out.mp4");
+        let vf_idx = odd_width
+            .iter()
+            .position(|a| a == "-vf")
+            .expect("odd width must trigger a pad filter to reach even dimensions");
+        assert!(
+            odd_width[vf_idx + 1].starts_with("pad="),
+            "the -vf value must be a pad filter: {:?}",
+            odd_width[vf_idx + 1]
+        );
+
+        let odd_height = build_image_to_video_args("in.png", 5.0, 30.0, 100, 201, "out.mp4");
+        assert!(
+            odd_height.iter().any(|a| a == "-vf"),
+            "odd height must also trigger a pad filter: {odd_height:?}"
+        );
+    }
+
+    #[test]
+    fn animated_still_filename_differs_for_different_source_paths_with_the_same_stem() {
+        let a = build_animated_still_filename("C:/folderA/photo.jpg", 5.0, 30.0);
+        let b = build_animated_still_filename("C:/folderB/photo.jpg", 5.0, 30.0);
+        assert_ne!(
+            a, b,
+            "two different images that merely share a file stem must not collide on the same output filename"
+        );
+    }
+
+    #[test]
+    fn animated_still_filename_is_deterministic_for_the_same_source_and_params() {
+        let a = build_animated_still_filename("C:/folder/photo.jpg", 5.0, 30.0);
+        let b = build_animated_still_filename("C:/folder/photo.jpg", 5.0, 30.0);
+        assert_eq!(
+            a, b,
+            "repeat calls with the same source+params should reuse the same filename (bounded, not accumulating)"
+        );
+    }
+
+    #[test]
+    fn animated_still_filename_differs_for_different_params_on_the_same_source() {
+        let a = build_animated_still_filename("C:/folder/photo.jpg", 5.0, 30.0);
+        let b = build_animated_still_filename("C:/folder/photo.jpg", 10.0, 30.0);
+        assert_ne!(
+            a, b,
+            "different duration/fps on the same source must not collide on the same output filename"
+        );
+    }
+}
+
+#[cfg(test)]
+mod temp_file_guard_tests {
+    use super::*;
+
+    #[test]
+    fn drop_removes_the_file_while_still_armed() {
+        let path = std::env::temp_dir().join("moshdither_test_temp_file_guard_armed.txt");
+        std::fs::write(&path, b"partial encode").expect("failed to write test fixture");
+        {
+            let _guard = TempFileGuard::new(path.clone());
+            assert!(path.exists(), "fixture should exist while the guard is alive");
+        }
+        assert!(
+            !path.exists(),
+            "an armed guard must delete its file on drop -- this is what protects a cancelled/timed-out/failed export from leaving a stray temp file behind"
+        );
+    }
+
+    #[test]
+    fn disarm_prevents_deletion_on_drop() {
+        let path = std::env::temp_dir().join("moshdither_test_temp_file_guard_disarmed.txt");
+        std::fs::write(&path, b"finished encode").expect("failed to write test fixture");
+        {
+            let mut guard = TempFileGuard::new(path.clone());
+            guard.disarm();
+        }
+        assert!(
+            path.exists(),
+            "a disarmed guard must NOT delete its file on drop -- this is what lets a successfully renamed export survive"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn drop_does_not_panic_when_the_file_is_already_gone() {
+        // Mirrors the real success path: the temp file gets renamed away
+        // (moved) before the guard drops. Even without an explicit disarm,
+        // a missing file must not panic -- remove_file's error is swallowed.
+        let path = std::env::temp_dir().join("moshdither_test_temp_file_guard_missing.txt");
+        let _ = std::fs::remove_file(&path); // ensure it doesn't exist
+        drop(TempFileGuard::new(path));
+    }
 }

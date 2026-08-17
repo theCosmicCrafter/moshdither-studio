@@ -53,19 +53,6 @@ export async function sam3AutoMask(
   });
 }
 
-export async function sam3RefineMask(
-  maskB64: string,
-  points: [number, number][],
-  labels?: number[]
-): Promise<{
-  status: string;
-  count: number;
-  masks: string[];
-  scores: number[];
-}> {
-  if (!isTauriAvailable()) return { status: "browser-fallback", count: 0, masks: [], scores: [] };
-  return invoke("sam3_refine_mask", { maskB64, points, labels });
-}
 
 export async function sam3PostprocessMask(
   maskB64: string,
@@ -196,6 +183,26 @@ export async function loadMediaFromPath(path: string): Promise<void> {
   await invoke("load_media", { path });
 }
 
+/**
+ * Turn a currently-loaded still image into a real multi-frame video by
+ * looping its single frame for `durationSecs` at `fps` (a classic
+ * freeze-frame "image to video" operation). This is what lets the
+ * video-only effect family (frame_reverse, shuffle, motion_transfer, ...)
+ * operate on what started out as a still image -- those effects read/write
+ * multiple frames and are meaningless applied to a single still.
+ *
+ * Returns the absolute path to the generated `.mp4`. The caller is
+ * responsible for loading it back in via `loadMediaFromPath` (the normal
+ * video-loading path) to make it the active session.
+ */
+export async function animateStillAsVideo(
+  imagePath: string,
+  durationSecs: number = 5,
+  fps: number = 30
+): Promise<string> {
+  return invoke("animate_still_as_video", { imagePath, durationSecs, fps });
+}
+
 // Browser-mode media cache: stores the last loaded data URL so getMediaInfo/getFrameData can return it
 let browserMedia: { dataUrl: string; width: number; height: number } | null = null;
 
@@ -238,10 +245,6 @@ export async function listEffects(): Promise<EffectMeta[]> {
   const rustIds = new Set(rustEffects.map((e) => e.id));
   const webglOnly = fallback.filter((e) => !rustIds.has(e.id));
   return [...rustEffects, ...webglOnly];
-}
-
-export async function listEffectsByCategory(category: string): Promise<EffectMeta[]> {
-  return invoke("list_effects_by_category", { category });
 }
 
 export async function getMediaInfo(): Promise<{ width: number; height: number; loaded: boolean }> {
@@ -299,15 +302,21 @@ export async function applyEffectStack(
   return invoke("apply_effect_stack", { stack, maskB64, previewScale });
 }
 
-export async function applyEffect(
-  effectId: string,
-  params: Record<string, unknown>,
-  maskB64?: string | null
+/** Applies the effect stack to the currently loaded frame and saves the
+ * result to disk as a still image (png/jpg/bmp/tiff), via a native save
+ * dialog. Unlike exportVideo, this never duplicates the frame into a
+ * multi-frame clip -- the output is exactly one image. */
+export async function saveImage(
+  stack: {
+    effect_id: string;
+    params: Record<string, unknown>;
+    mask_b64?: string | null;
+    mask_mode?: string;
+  }[],
+  maskB64?: string | null,
+  format: "png" | "jpg" | "bmp" | "tiff" = "png",
+  quality?: number
 ): Promise<string> {
-  return invoke("apply_effect", { effectId, params, maskB64 });
-}
-
-export async function saveMedia(): Promise<void> {
   const path = await save({
     filters: [
       { name: "PNG", extensions: ["png"] },
@@ -315,12 +324,18 @@ export async function saveMedia(): Promise<void> {
       { name: "BMP", extensions: ["bmp"] },
       { name: "TIFF", extensions: ["tiff", "tif"] },
     ],
+    defaultPath: `image.${format}`,
   });
-  if (path && typeof path === "string") {
-    const ext = path.split(".").pop()?.toLowerCase() || "png";
-    const format = ["png", "jpg", "jpeg", "bmp", "tiff", "tif"].includes(ext) ? ext : "png";
-    await invoke("save_media", { path, format, quality: 90 });
+  if (!path || typeof path !== "string") {
+    throw new Error("Save cancelled");
   }
+  return invoke("save_processed_image", {
+    stack,
+    maskB64: maskB64 ?? null,
+    path,
+    format,
+    quality: quality ?? null,
+  });
 }
 
 export async function exportVideo(
@@ -403,6 +418,15 @@ export async function applyFfglitch(
   });
 }
 
+/** Request cancellation of an in-progress export (real export or FFglitch --
+ *  both check the same server-side AtomicBool). Without this, the Cancel
+ *  button only reset local UI state (progress bar, running flag) while the
+ *  actual ffmpeg/mosh_cli.py subprocess kept running untouched in the
+ *  background -- purely cosmetic cancellation. */
+export async function cancelExport(): Promise<void> {
+  return invoke("cancel_export");
+}
+
 // ── Effect Verification ──────────────────────────────────────
 
 export interface VerificationChecks {
@@ -434,55 +458,6 @@ export interface VerificationReport {
 
 export async function verifyEffects(): Promise<VerificationReport> {
   return invoke("verify_effects");
-}
-
-// ── Functional Tests ─────────────────────────────────────────
-
-export interface FunctionTestResult {
-  test_name: string;
-  category: string;
-  passed: boolean;
-  error_message: string | null;
-  duration_ms: number;
-  details: string | null;
-}
-
-export interface FunctionTestReport {
-  total_tests: number;
-  passed: number;
-  failed: number;
-  results: FunctionTestResult[];
-  summary: string;
-  timestamp: string;
-}
-
-export async function testAllFunctions(): Promise<FunctionTestReport> {
-  return invoke("test_all_functions");
-}
-
-export interface EnvStatus {
-  mode: string;
-  python_ok: boolean;
-  venv_ok: boolean;
-  pip_ok: boolean;
-  ffmpeg_ok: boolean;
-  ffprobe_ok: boolean;
-  ffglitch_ok: boolean;
-  python_path?: string;
-  venv_dir?: string;
-  ffmpeg_path?: string;
-  ffprobe_path?: string;
-  ffgac_path?: string;
-  ffedit_path?: string;
-  mosh_cli_path?: string;
-}
-
-export async function getEnvironmentStatus(): Promise<EnvStatus> {
-  return invoke("get_environment_status");
-}
-
-export async function installLocalEnvironment(): Promise<EnvStatus> {
-  return invoke("install_local_environment");
 }
 
 // ── Proxy Media ──────────────────────────────────────────────
@@ -521,20 +496,6 @@ export async function savePresetsFile(json: string): Promise<void> {
 
 // ── Window Edge Snapping & AppBar Docking ─────────────────────
 
-export interface MonitorInfo {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  scaleFactor: number;
-}
-
-/** Returns the current monitor's position and size for edge proximity calculations. */
-export async function getMonitorInfo(): Promise<MonitorInfo | null> {
-  if (!isTauriAvailable()) return null;
-  return invoke<MonitorInfo>("get_monitor_info");
-}
-
 /** Snaps the window to the specified display edge (`left`, `right`, `top`, `bottom`). */
 export async function snapToEdge(edge: string): Promise<void> {
   if (!isTauriAvailable()) return;
@@ -554,4 +515,30 @@ export async function dockWindowAppbar(edge: string, size: number): Promise<void
 export async function undockWindowAppbar(): Promise<void> {
   if (!isTauriAvailable()) return;
   await invoke("undock_window_appbar");
+}
+
+// ── App Updates ──────────────────────────────────────────────
+
+export interface UpdateInfo {
+  version: string;
+  date: string | null;
+  body: string | null;
+  url: string;
+  signature: string;
+}
+
+/** Checks the configured updater endpoint. Returns null when already up to date. */
+export async function checkForUpdate(): Promise<UpdateInfo | null> {
+  if (!isTauriAvailable()) return null;
+  return invoke<UpdateInfo | null>("check_update");
+}
+
+/**
+ * Downloads, verifies, and installs the latest signed update, then restarts
+ * the app. Resolves with "up to date" instead of installing anything if no
+ * update was actually available at install time.
+ */
+export async function installUpdate(): Promise<string> {
+  if (!isTauriAvailable()) return "up to date";
+  return invoke<string>("install_update");
 }

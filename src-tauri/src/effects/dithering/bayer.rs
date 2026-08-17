@@ -97,7 +97,7 @@ impl BayerDither {
         let threshold_scaled = (threshold as f32 / divisor) * 255.0;
 
         // Use luminance for threshold comparison
-        let lum = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
+        let lum = crate::effects::luminance_f32(r, g, b);
 
         if lum > threshold_scaled {
             (255, 255, 255)

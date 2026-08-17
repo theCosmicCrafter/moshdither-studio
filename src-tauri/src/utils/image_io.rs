@@ -11,8 +11,8 @@ pub fn load_image<P: AsRef<Path>>(path: P) -> Result<Frame> {
     // NOTE: Automatic downscale is disabled by default. If image exceeds 2048px, a warning is logged and original size is kept.
     let (w, h) = (img.width(), img.height());
     if w > 2048 || h > 2048 {
-        eprintln!(
-            "[WARN] Image dimensions {}x{} exceed 2048px limit. No automatic resize applied.",
+        tracing::warn!(
+            "Image dimensions {}x{} exceed 2048px limit. No automatic resize applied.",
             w, h
         );
         // No resize performed.
@@ -34,8 +34,8 @@ pub fn load_image_from_memory(bytes: &[u8]) -> Result<Frame> {
     // NOTE: Automatic downscale is disabled by default. If image exceeds 2048px, a warning is logged and original size is kept.
     let (w, h) = (img.width(), img.height());
     if w > 2048 || h > 2048 {
-        eprintln!(
-            "[WARN] Image dimensions {}x{} exceed 2048px limit. No automatic resize applied.",
+        tracing::warn!(
+            "Image dimensions {}x{} exceed 2048px limit. No automatic resize applied.",
             w, h
         );
         // No resize performed.

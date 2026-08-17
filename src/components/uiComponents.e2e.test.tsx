@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import { useAppStore } from "../store";
 import StatusBar from "../components/StatusBar";
-import FloatingPanel from "../components/FloatingPanel";
 import OnboardingModal from "../components/OnboardingModal";
 import EffectStack from "../components/EffectStack";
 
@@ -66,52 +65,6 @@ describe("UI Components E2E", () => {
       fireEvent.click(histBtn);
       expect(useAppStore.getState().scopesVisible).toBe(true);
       expect(useAppStore.getState().scopeMode).toBe("histogram");
-    });
-  });
-
-  describe("FloatingPanel", () => {
-    it("renders title and children", () => {
-      render(
-        <FloatingPanel id="test" title="Test Panel" defaultX={10} defaultY={10} defaultWidth={300} defaultHeight={200}>
-          <div data-testid="child">Content</div>
-        </FloatingPanel>
-      );
-      expect(screen.getByText("Test Panel")).toBeInTheDocument();
-      expect(screen.getByTestId("child")).toBeInTheDocument();
-    });
-
-    it("minimize button hides children", () => {
-      render(
-        <FloatingPanel id="test" title="Test" defaultX={0} defaultY={0} defaultWidth={300} defaultHeight={200}>
-          <div data-testid="child">Content</div>
-        </FloatingPanel>
-      );
-      expect(screen.getByTestId("child")).toBeInTheDocument();
-      fireEvent.click(screen.getByLabelText("Minimize panel"));
-      expect(screen.queryByTestId("child")).not.toBeInTheDocument();
-    });
-
-    it("restore button shows children again", () => {
-      render(
-        <FloatingPanel id="test" title="Test" defaultX={0} defaultY={0} defaultWidth={300} defaultHeight={200}>
-          <div data-testid="child">Content</div>
-        </FloatingPanel>
-      );
-      fireEvent.click(screen.getByLabelText("Minimize panel"));
-      expect(screen.queryByTestId("child")).not.toBeInTheDocument();
-      fireEvent.click(screen.getByLabelText("Restore panel"));
-      expect(screen.getByTestId("child")).toBeInTheDocument();
-    });
-
-    it("calls onActivate on mousedown", () => {
-      let activated = false;
-      render(
-        <FloatingPanel id="test" title="Test" defaultX={0} defaultY={0} defaultWidth={300} defaultHeight={200} onActivate={() => { activated = true; }}>
-          <div>Content</div>
-        </FloatingPanel>
-      );
-      fireEvent.mouseDown(screen.getByText("Test"));
-      expect(activated).toBe(true);
     });
   });
 

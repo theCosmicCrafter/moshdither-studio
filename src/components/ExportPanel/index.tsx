@@ -1,10 +1,12 @@
 import { useState, useEffect, useRef } from "react";
 import { useAppStore } from "../../store";
-import { exportVideo, applyFfglitch } from "../../lib/tauri";
+import { exportVideo, applyFfglitch, cancelExport } from "../../lib/tauri";
 import { stackToRustPayload } from "../../utils/effectConverter";
 import { useBatchQueue } from "../../hooks/useBatchQueue";
 import type { WatermarkSettings } from "../../utils/watermark";
 import { listen } from "@tauri-apps/api/event";
+import ChipButton from "./ChipButton";
+import LabeledSlider from "../LabeledSlider";
 
 const CODECS = [
   { id: "h264", label: "H.264", desc: "Best compatibility" },
@@ -105,6 +107,14 @@ export default function ExportPanel() {
   }, []);
 
   const handleExport = async () => {
+    // Guards both call paths: the in-panel button (already unmounted while
+    // exportIsRunning, but defense-in-depth) and the File-menu/triggerExport
+    // path below, which has no other guard -- without this, triggering a
+    // second export mid-flight opens a second Save dialog and can silently
+    // overwrite the first job's still-encoding output.
+    if (exportIsRunning) {
+      return;
+    }
     if (!mediaInfo || !filePath) {
       setStatusMessage("Load media before exporting");
       return;
@@ -212,6 +222,13 @@ export default function ExportPanel() {
 
   const handleCancel = () => {
     requestExportCancel();
+    // requestExportCancel() only resets local UI state (progress bar,
+    // running flag) -- it never told the backend anything. Without this
+    // call, the actual ffmpeg/mosh_cli.py subprocess kept running untouched
+    // after the UI already claimed the export was cancelled.
+    void cancelExport().catch((err) => {
+      console.error("Failed to cancel export on the backend:", err);
+    });
     if (progressTimerRef.current) {
       clearInterval(progressTimerRef.current);
       progressTimerRef.current = null;
@@ -256,21 +273,16 @@ export default function ExportPanel() {
         <span style={{ fontSize: 10, color: "var(--text-muted)" }}>Format</span>
         <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
           {(["mp4", "webm", "gif", "png_seq"] as const).map((f) => (
-            <button
+            <ChipButton
               key={f}
+              active={format === f}
               onClick={() => setFormat(f)}
-              style={{
-                padding: "2px 8px",
-                fontSize: 10,
-                borderRadius: 3,
-                border: "none",
-                cursor: "pointer",
-                background: format === f ? "rgba(255, 173, 224, 0.25)" : "var(--surface-container-low)",
-                color: format === f ? "var(--accent-pink)" : "var(--text-muted)",
-              }}
+              activeColor="var(--accent-pink)"
+              activeBackground="rgba(255, 173, 224, 0.25)"
+              style={{ padding: "2px 8px" }}
             >
               {f.toUpperCase().replace("_", "-")}
-            </button>
+            </ChipButton>
           ))}
         </div>
       </div>
@@ -280,46 +292,30 @@ export default function ExportPanel() {
         <span style={{ fontSize: 10, color: "var(--text-muted)" }}>Quality</span>
         <div style={{ display: "flex", gap: 2 }}>
           {(["draft", "good", "best"] as const).map((q) => (
-            <button
+            <ChipButton
               key={q}
+              active={quality === q}
               onClick={() => setQuality(q)}
-              style={{
-                flex: 1,
-                padding: "2px 0",
-                fontSize: 10,
-                borderRadius: 3,
-                border: "none",
-                cursor: "pointer",
-                background: quality === q ? "rgba(184, 211, 0, 0.25)" : "var(--surface-container-low)",
-                color: quality === q ? "var(--accent-gold)" : "var(--text-muted)",
-                textTransform: "capitalize",
-              }}
+              activeColor="var(--accent-gold)"
+              activeBackground="rgba(184, 211, 0, 0.25)"
+              style={{ flex: 1, padding: "2px 0", textTransform: "capitalize" }}
             >
               {q}
-            </button>
+            </ChipButton>
           ))}
         </div>
       </div>
 
       {/* FPS */}
-      <div className="space-y-1">
-        <span style={{ fontSize: 10, color: "var(--text-muted)" }}>Frame Rate</span>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <input
-            aria-label="FPS"
-            type="range"
-            min={1}
-            max={60}
-            step={1}
-            value={fps}
-            onChange={(e) => setFps(Number.parseInt(e.target.value))}
-            style={{ flex: 1 }}
-          />
-          <span style={{ minWidth: 28, textAlign: "right", fontFamily: "var(--font-mono)", color: "var(--text-primary)" }}>
-            {fps}
-          </span>
-        </div>
-      </div>
+      <LabeledSlider
+        label="Frame Rate"
+        ariaLabel="FPS"
+        value={fps}
+        min={1}
+        max={60}
+        step={1}
+        onChange={setFps}
+      />
 
       {/* Include audio */}
       {audioEnabled && audioFilePath && (
@@ -352,22 +348,16 @@ export default function ExportPanel() {
         </span>
         <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
           {RESOLUTIONS.map((r) => (
-            <button
+            <ChipButton
               key={r.id}
+              active={resolutionId === r.id}
               onClick={() => setResolutionId(r.id)}
               title={r.w > 0 ? `${r.w}x${r.h}` : "Original source dimensions"}
-              style={{
-                padding: "2px 6px",
-                fontSize: 10,
-                borderRadius: 3,
-                border: "none",
-                cursor: "pointer",
-                background: resolutionId === r.id ? "rgba(0, 244, 254, 0.25)" : "var(--surface-container-low)",
-                color: resolutionId === r.id ? "var(--accent-teal)" : "var(--text-muted)",
-              }}
+              activeColor="var(--accent-teal)"
+              activeBackground="rgba(0, 244, 254, 0.25)"
             >
               {r.label}
-            </button>
+            </ChipButton>
           ))}
         </div>
       </div>
@@ -393,32 +383,20 @@ export default function ExportPanel() {
         </span>
         <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
           {PROCESSING_SCALES.map((s) => (
-            <button
+            <ChipButton
               key={s.id}
+              active={processingScaleId === s.id}
               onClick={() => setProcessingScaleId(s.id)}
               title={
                 s.scale
                   ? `Downscale source so longest side ≤ ${s.scale}px during processing`
                   : "Pick largest resolution that fits memory budget (recommended)"
               }
-              style={{
-                padding: "2px 6px",
-                fontSize: 10,
-                borderRadius: 3,
-                border: "none",
-                cursor: "pointer",
-                background:
-                  processingScaleId === s.id
-                    ? "rgba(184, 211, 0, 0.25)"
-                    : "var(--surface-container-low)",
-                color:
-                  processingScaleId === s.id
-                    ? "var(--accent-gold)"
-                    : "var(--text-muted)",
-              }}
+              activeColor="var(--accent-gold)"
+              activeBackground="rgba(184, 211, 0, 0.25)"
             >
               {s.label}
-            </button>
+            </ChipButton>
           ))}
         </div>
       </div>
@@ -445,21 +423,15 @@ export default function ExportPanel() {
               { label: "21:9", value: 21 / 9 },
               { label: "3:2", value: 3 / 2 },
             ].map((r) => (
-              <button
+              <ChipButton
                 key={r.label}
+                active={aspectRatio === r.value}
                 onClick={() => setAspectRatio(r.value)}
-                style={{
-                  padding: "2px 6px",
-                  fontSize: 10,
-                  borderRadius: 3,
-                  border: "none",
-                  cursor: "pointer",
-                  background: aspectRatio === r.value ? "rgba(0, 244, 254, 0.25)" : "var(--surface-container-low)",
-                  color: aspectRatio === r.value ? "var(--accent-teal)" : "var(--text-muted)",
-                }}
+                activeColor="var(--accent-teal)"
+                activeBackground="rgba(0, 244, 254, 0.25)"
               >
                 {r.label}
-              </button>
+              </ChipButton>
             ))}
           </div>
         )}
@@ -473,25 +445,22 @@ export default function ExportPanel() {
         </span>
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           {CODECS.map((c) => (
-            <button
+            <ChipButton
               key={c.id}
+              active={codec === c.id}
               onClick={() => setCodec(c.id)}
+              activeColor="var(--accent-pink)"
+              activeBackground="rgba(255, 173, 224, 0.25)"
               style={{
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
                 padding: "4px 8px",
-                fontSize: 10,
-                borderRadius: 3,
-                border: "none",
-                cursor: "pointer",
-                background: codec === c.id ? "rgba(255, 173, 224, 0.25)" : "var(--surface-container-low)",
-                color: codec === c.id ? "var(--accent-pink)" : "var(--text-muted)",
               }}
             >
               <span>{c.label}</span>
               <span style={{ fontSize: 9, opacity: 0.6 }}>{c.desc}</span>
-            </button>
+            </ChipButton>
           ))}
         </div>
       </div>
@@ -712,24 +681,17 @@ export default function ExportPanel() {
                 <option value="center">Center</option>
               </select>
             </span>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <label style={{ fontSize: 10, color: "var(--text-muted)", minWidth: 42 }} htmlFor="wm-opacity">
-                Opacity
-              </label>
-              <input
-                id="wm-opacity"
-                type="range"
-                min={0}
-                max={1}
-                step={0.05}
-                value={watermark.opacity}
-                onChange={(e) => setWatermark({ opacity: Number.parseFloat(e.target.value) })}
-                style={{ flex: 1 }}
-              />
-              <span style={{ fontSize: 10, color: "var(--text-muted)", minWidth: 32 }}>
-                {Math.round(watermark.opacity * 100)}%
-              </span>
-            </div>
+            <LabeledSlider
+              id="wm-opacity"
+              label="Opacity"
+              value={watermark.opacity}
+              displayValue={Math.round(watermark.opacity * 100)}
+              min={0}
+              max={1}
+              step={0.05}
+              onChange={(v) => setWatermark({ opacity: v })}
+              unit="%"
+            />
           </div>
         )}
       </div>

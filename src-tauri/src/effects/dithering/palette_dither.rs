@@ -6,14 +6,12 @@ use serde_json::json;
 /// Palette-based dithering: quantize pixels to nearest colors from a custom palette.
 pub struct PaletteDither;
 
+/// Normalizes `bayer_tables::BAYER_4` by dividing by 16.0 (one past the max
+/// cell value), landing in `[0, 15/16]`. `custom_matrix.rs` shares the same
+/// raw table but divides by the matrix's actual max value instead, landing
+/// in `[0, 1]` inclusive -- that's a real behavioral difference, kept as-is.
 fn bayer4(x: usize, y: usize) -> f32 {
-    let p = [
-        [0.0, 8.0, 2.0, 10.0],
-        [12.0, 4.0, 14.0, 6.0],
-        [3.0, 11.0, 1.0, 9.0],
-        [15.0, 7.0, 13.0, 5.0],
-    ];
-    p[y % 4][x % 4] / 16.0
+    super::bayer_tables::BAYER_4[y % 4][x % 4] as f32 / 16.0
 }
 
 /// Map a rotated coordinate to a Bayer-matrix block index in `[0, 4)`.
@@ -39,7 +37,7 @@ fn dist_sq(a: [u8; 3], b: [u8; 3]) -> u32 {
 }
 
 fn luma(c: [u8; 3]) -> f32 {
-    0.299 * c[0] as f32 + 0.587 * c[1] as f32 + 0.114 * c[2] as f32
+    crate::effects::luminance_f32(c[0], c[1], c[2])
 }
 
 impl Effect for PaletteDither {
@@ -214,6 +212,25 @@ impl Effect for PaletteDither {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pins `bayer4`'s output against the literal table it was hardcoding,
+    /// before extracting that table into `bayer_tables::BAYER_4`. If the
+    /// extraction ever transcribes a value wrong, this fails immediately
+    /// instead of silently shifting every dithered pixel's threshold.
+    #[test]
+    fn bayer4_matches_the_known_reference_table() {
+        let expected = [
+            [0.0, 8.0, 2.0, 10.0],
+            [12.0, 4.0, 14.0, 6.0],
+            [3.0, 11.0, 1.0, 9.0],
+            [15.0, 7.0, 13.0, 5.0],
+        ];
+        for (y, row) in expected.iter().enumerate() {
+            for (x, &value) in row.iter().enumerate() {
+                assert_eq!(bayer4(x, y), value / 16.0, "bayer4({x}, {y}) mismatch");
+            }
+        }
+    }
 
     /// The bug fixed here: `bayer_block_index` used to saturate every
     /// negative coordinate to 0 instead of wrapping, so this would return 0

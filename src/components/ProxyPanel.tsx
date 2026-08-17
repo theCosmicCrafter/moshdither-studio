@@ -1,5 +1,6 @@
 import { useAppStore } from "../store";
 import { generateProxy } from "../lib/tauri";
+import LabeledSlider from "./LabeledSlider";
 
 export default function ProxyPanel() {
   const proxyEnabled = useAppStore((s) => s.proxyEnabled);
@@ -36,7 +37,7 @@ export default function ProxyPanel() {
 
   return (
     <div className="flex flex-col gap-2 p-2">
-      <label className="flex items-center gap-2 font-label-sm text-label-sm text-on-surface-variant">
+      <label className="flex items-center gap-2 font-label-md text-label-md text-on-surface-variant">
         <input
           type="checkbox"
           checked={proxyEnabled}
@@ -46,46 +47,37 @@ export default function ProxyPanel() {
         Use Proxy
       </label>
 
-      <div className="flex flex-col gap-1">
-        <label className="font-label-sm text-label-sm text-on-surface-variant">
-          Max Width: {proxyMaxWidth}px
-        </label>
-        <input
-          type="range"
-          min={320}
-          max={1920}
-          step={160}
-          value={proxyMaxWidth}
-          onChange={(e) => setProxyMaxWidth(Number(e.target.value))}
-          className="w-full"
-        />
-      </div>
+      <LabeledSlider
+        layout="stacked"
+        label="Max Width"
+        value={proxyMaxWidth}
+        min={320}
+        max={1920}
+        step={160}
+        onChange={setProxyMaxWidth}
+        unit="px"
+      />
 
-      <div className="flex flex-col gap-1">
-        <label className="font-label-sm text-label-sm text-on-surface-variant">
-          Quality (CRF): {proxyCrf}
-        </label>
-        <input
-          type="range"
-          min={18}
-          max={40}
-          step={1}
-          value={proxyCrf}
-          onChange={(e) => setProxyCrf(Number(e.target.value))}
-          className="w-full"
-        />
-      </div>
+      <LabeledSlider
+        layout="stacked"
+        label="Quality (CRF)"
+        value={proxyCrf}
+        min={18}
+        max={40}
+        step={1}
+        onChange={setProxyCrf}
+      />
 
       <button
         onClick={handleGenerate}
         disabled={proxyGenerating || !filePath}
-        className="neo-btn rounded-md px-3 py-1.5 font-label-sm text-label-sm text-accent-cyan hover:text-accent-pink transition-colors disabled:opacity-50"
+        className="neo-btn rounded-md px-3 py-1.5 font-label-md text-label-md text-accent-cyan hover:text-accent-pink transition-colors disabled:opacity-50"
       >
         {proxyGenerating ? "Generating..." : "Generate Proxy"}
       </button>
 
       {proxyPath && (
-        <div className="font-label-sm text-label-sm text-on-surface-variant truncate">
+        <div className="font-code-sm text-code-sm text-on-surface-variant truncate">
           Proxy: {proxyPath.split(/[\\/]/).pop()}
         </div>
       )}

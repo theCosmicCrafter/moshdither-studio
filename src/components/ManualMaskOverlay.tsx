@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore } from "../store";
+import { getThemeColor } from "../utils/themeColor";
 
 export default function ManualMaskOverlay() {
   const mediaInfo = useAppStore((s) => s.mediaInfo);
   const activeMask = useAppStore((s) => s.activeMask);
   const maskTool = useAppStore((s) => s.maskTool);
   const brushSize = useAppStore((s) => s.brushSize);
+  const theme = useAppStore((s) => s.theme);
   const setActiveMask = useAppStore((s) => s.setActiveMask);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -88,7 +90,13 @@ export default function ManualMaskOverlay() {
 
     const baseImage = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
-    ctx.strokeStyle = "rgba(108, 204, 255, 0.8)";
+    // This preview is a transient one-frame flash (reverted below via
+    // putImageData before it's ever committed to the mask), so its color is
+    // UI chrome, not mask data -- safe to read from the theme.
+    const previewColor = getThemeColor("--accent-teal", "#66ccff");
+    ctx.save();
+    ctx.globalAlpha = 0.8;
+    ctx.strokeStyle = previewColor;
     ctx.lineWidth = 2;
     ctx.setLineDash([4, 4]);
     ctx.beginPath();
@@ -101,11 +109,12 @@ export default function ManualMaskOverlay() {
     }
     ctx.stroke();
     ctx.setLineDash([]);
+    ctx.restore();
 
     for (const pt of polygonPoints) {
       ctx.beginPath();
       ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2);
-      ctx.fillStyle = "#6cf";
+      ctx.fillStyle = previewColor;
       ctx.fill();
       ctx.strokeStyle = "#fff";
       ctx.lineWidth = 1;
@@ -117,7 +126,7 @@ export default function ManualMaskOverlay() {
     }, 0);
 
     return () => clearTimeout(timer);
-  }, [maskTool, polygonPoints, hoverPoint]);
+  }, [maskTool, polygonPoints, hoverPoint, theme]);
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {

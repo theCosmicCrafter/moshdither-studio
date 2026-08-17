@@ -157,12 +157,8 @@ jobs:
           # ./references (~1 GB of vendored third-party repositories), the SAM3
           # trees and the recycling bin, so this job scanned other people's code
           # and reported their findings as ours.
-          #
-          # packages/python-backend/test_* is excluded for the same reason
-          # ./tests is: hardcoded /tmp paths in tests for main.py, which the app
-          # never spawns. The production legacy backend IS scanned and is clean.
           bandit -r . -ll -f sarif -o bandit.sarif \
-            --exclude ./tests,./venv,./node_modules,./sam3_env,./audit_venv,./references,./sam3_repo,./recycling,./dist,./src-tauri/target,./packages/python-backend/venv,./packages/python-backend/sam3_repo,./packages/python-backend/test_main.py,./packages/python-backend/test_coordinates.py
+            --exclude ./tests,./venv,./node_modules,./sam3_env,./audit_venv,./references,./sam3_repo,./recycling,./dist,./src-tauri/target,./packages/python-backend/venv,./packages/python-backend/sam3_repo
           # No `|| true`: bandit exiting 1 on a finding IS the gate, since the
           # SARIF upload cannot work on this repository.
       - uses: github/codeql-action/upload-sarif@v3

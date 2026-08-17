@@ -135,10 +135,6 @@ export const PALETTE_PRESETS: PalettePreset[] = [
   },
 ];
 
-export function getPalettePreset(name: string): PalettePreset | undefined {
-  return PALETTE_PRESETS.find((p) => p.name === name);
-}
-
 export function fillPaletteParams(
   preset: PalettePreset,
   existing: Record<string, unknown>

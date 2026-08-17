@@ -37,6 +37,10 @@ Thumbs.db
 /test-outputs
 *.tsbuildinfo
 
+# live-preview-param-update.spec.ts writes fresh before/after diffs on every
+# run; cpu.png/webgl.png in the same directory are committed goldens and stay tracked.
+/tests/e2e/output/param-update-*.png
+
 # Downloaded SAM3 checkpoint (fetched at build time).
 #
 # The WEIGHTS are ignored (see the /models/**/*.pt rules below), but the
@@ -69,6 +73,21 @@ Thumbs.db
 
 # SAM3 sidecar binaries (built per target in CI / local release builds)
 /src-tauri/bin/sam3-bridge*
+
+# Local checkouts of the SAM3 upstream repo (facebookresearch/sam3),
+# vendored the same way as the Python venvs above rather than as a git
+# submodule: sam3_bridge.py needs a build compatible with this project's
+# pinned torch version, which requires facebookresearch/sam3 plus a
+# "relax torch.load's weights_only constraint to False in
+# model_builder's checkpoint loading" patch (newer PyTorch defaults
+# weights_only=True, which this checkpoint format doesn't satisfy) --
+# see docs/SAM3_SETUP.md for how to obtain a working copy.
+# packages/python-backend/sam3_repo is the one sam3_engine.rs's
+# resolve_sam3_repo() actually reads; the root-level sam3_repo is a
+# second local clone (with its own real git history/remote) kept around
+# incidentally, not required by the app.
+/packages/python-backend/sam3_repo
+/sam3_repo
 
 # Bundled model weights; the directory is tracked but .pt files are not
 /models/**/*.pt

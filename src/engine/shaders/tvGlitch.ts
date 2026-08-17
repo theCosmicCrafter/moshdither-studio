@@ -3,6 +3,7 @@ import { EffectShader } from "../webgl2/types";
 export const tvGlitchShader: EffectShader = {
   id: "tv_glitch",
   name: "TV Glitch",
+  animated: true,
   vertexSource: `
     attribute vec2 a_position;
     attribute vec2 a_texCoord;
