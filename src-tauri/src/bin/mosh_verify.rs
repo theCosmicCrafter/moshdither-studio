@@ -364,9 +364,19 @@ fn build_default_params(
     map
 }
 
-/// Sanitize an effect ID into a filesystem-safe filename.
+/// Sanitize an effect ID or preset name into a filesystem-safe filename.
+///
+/// This started out handling effect IDs, which are only ever `[a-z0-9._]`, so
+/// replacing the separators was enough. It is also applied to preset and LUT
+/// names, which are free-form human text -- `b&w-halftone` ships today -- and
+/// those can carry characters Windows flatly refuses in a filename (`<>:"|?*`).
+/// Letting one through means the render fails at the write rather than
+/// producing a slightly odd name, so every reserved character is mapped.
 fn sanitize_filename(id: &str) -> String {
-    id.replace(['.', '/', '\\'], "_")
+    id.replace(
+        ['.', '/', '\\', '&', '<', '>', ':', '"', '|', '?', '*'],
+        "_",
+    )
 }
 
 /// Create a circular gradient mask for testing mask-dependent effects.
@@ -1871,5 +1881,38 @@ fn main() -> ExitCode {
             print_usage();
             ExitCode::from(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_filename;
+
+    #[test]
+    fn effect_ids_keep_their_shape_with_separators_flattened() {
+        assert_eq!(
+            sanitize_filename("color.brightness_contrast"),
+            "color_brightness_contrast"
+        );
+        assert_eq!(sanitize_filename(r"a/b\c"), "a_b_c");
+    }
+
+    #[test]
+    fn preset_names_lose_characters_windows_refuses_in_a_filename() {
+        // `b&w-halftone` is a real preset in scripts/presets.json.
+        assert_eq!(sanitize_filename("b&w-halftone"), "b_w-halftone");
+
+        // Any of these would make the write fail outright on Windows.
+        for reserved in ['<', '>', ':', '"', '|', '?', '*'] {
+            let out = sanitize_filename(&format!("retro{reserved}vhs"));
+            assert_eq!(out, "retro_vhs", "{reserved:?} must not survive");
+        }
+    }
+
+    #[test]
+    fn ordinary_names_are_left_alone() {
+        // Spaces, hyphens and case are legal and worth preserving -- the point
+        // is filesystem safety, not aggressive slugification.
+        assert_eq!(sanitize_filename("Deep Bass-Pulse 2"), "Deep Bass-Pulse 2");
     }
 }

@@ -7,7 +7,7 @@ use crate::effects::types::{Frame, VideoSegment};
 use crate::error::{AppError, Result};
 use parking_lot::Mutex as ParkingLotMutex;
 use std::collections::{HashMap, VecDeque};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, OnceLock};
 
@@ -159,6 +159,24 @@ fn locate_binary(base: &str) -> Result<String> {
 /// Locate the FFmpeg binary. Tries bundled sidecar first, then PATH.
 pub fn ffmpeg_binary() -> Result<String> {
     locate_binary("ffmpeg")
+}
+
+/// Hidden sibling of `dest` that an encode writes to before being renamed onto
+/// the real destination.
+///
+/// The destination's extension is preserved deliberately: FFmpeg chooses its
+/// muxer from the output filename, so a temp name ending in `.moshdither-tmp`
+/// aborts the encode with "Unable to choose an output format" before a single
+/// frame is read. Keeping it a sibling (rather than using the system temp dir)
+/// keeps the final rename on one filesystem, so it stays atomic.
+fn encode_temp_path(dest: &Path) -> PathBuf {
+    dest.with_file_name(format!(
+        ".{}.moshdither-tmp.{}",
+        dest.file_stem()
+            .and_then(|f| f.to_str())
+            .unwrap_or("export"),
+        dest.extension().and_then(|e| e.to_str()).unwrap_or("mp4")
+    ))
 }
 
 /// Locate the FFprobe binary. Tries bundled sidecar first, then PATH.
@@ -848,14 +866,15 @@ pub fn encode_video(
     // already started writing directly to `path` -- leaves a truncated or
     // corrupt file at the user's chosen destination, silently destroying
     // whatever was there before if they picked an existing file to overwrite.
+    //
+    // The temp name must keep the destination's extension. FFmpeg picks the
+    // muxer from the output filename, so a bare `.moshdither-tmp` suffix makes
+    // it exit with "Unable to choose an output format" before reading a single
+    // frame -- which reaches the caller only as a broken stdin pipe ("The pipe
+    // has been ended"), with the real reason buried in FFmpeg's stderr.
     let final_path = path;
     let dest = std::path::Path::new(final_path);
-    let temp_path_buf = dest.with_file_name(format!(
-        ".{}.moshdither-tmp",
-        dest.file_name()
-            .and_then(|f| f.to_str())
-            .unwrap_or("export")
-    ));
+    let temp_path_buf = encode_temp_path(dest);
     let temp_path = temp_path_buf.to_string_lossy().into_owned();
     let path: &str = &temp_path;
     let mut temp_guard = TempFileGuard::new(temp_path_buf.clone());
@@ -1116,7 +1135,30 @@ pub fn encode_video(
             if i % 50 == 0 || i == total - 1 {
                 tracing::debug!("Writing frame {}/{} to FFmpeg stdin", i + 1, total);
             }
-            stdin.write_all(&frame.data).map_err(AppError::Io)?;
+            if let Err(e) = stdin.write_all(&frame.data) {
+                // A write failure here almost always means FFmpeg already
+                // exited -- bad arguments, an unsupported codec, a full disk.
+                // The IO error is only ever "the pipe has been ended", which
+                // says nothing about the cause; FFmpeg's own diagnosis is
+                // sitting in `stderr_buf`. Surface that instead of the errno.
+                use child_wait_timeout::ChildWT;
+                let _ = child.wait_timeout(std::time::Duration::from_secs(10));
+                if let Some(t) = stderr_thread.take() {
+                    let _ = t.join();
+                }
+                let stderr = stderr_buf
+                    .lock()
+                    .map(|g| String::from_utf8_lossy(&g).into_owned())
+                    .unwrap_or_default();
+                tracing::error!("FFmpeg exited early. stderr:\n{}", stderr);
+                return Err(AppError::Ffmpeg(format!(
+                    "FFmpeg exited while writing frame {}/{} ({}): {}",
+                    i + 1,
+                    total,
+                    e,
+                    stderr.trim().chars().take(2000).collect::<String>()
+                )));
+            }
         }
         // Close stdin so FFmpeg sees EOF and can finish encoding the final frames.
         drop(stdin);
@@ -1853,6 +1895,41 @@ mod image_to_video_tests {
             .expect("in-range duration/fps must be accepted");
         assert_eq!(d, 5.0);
         assert_eq!(f, 30.0);
+    }
+
+    #[test]
+    fn encode_temp_path_keeps_the_destination_extension() {
+        // Regression: the temp name used to be `.<file>.moshdither-tmp`, which
+        // left FFmpeg unable to infer a muxer. Every video export aborted before
+        // reading a frame and surfaced only as a broken stdin pipe.
+        for (dest, want_ext) in [
+            ("C:/out/render.mp4", "mp4"),
+            ("C:/out/render.mov", "mov"),
+            ("C:/out/render.webm", "webm"),
+        ] {
+            let tmp = encode_temp_path(Path::new(dest));
+            assert_eq!(
+                tmp.extension().and_then(|e| e.to_str()),
+                Some(want_ext),
+                "temp file for {dest} must keep the extension FFmpeg muxes on"
+            );
+            assert_eq!(
+                tmp.parent(),
+                Path::new(dest).parent(),
+                "temp file must stay a sibling so the final rename is atomic"
+            );
+            assert_ne!(
+                tmp.as_path(),
+                Path::new(dest),
+                "temp file must not collide with the destination"
+            );
+        }
+    }
+
+    #[test]
+    fn encode_temp_path_falls_back_to_mp4_when_destination_has_no_extension() {
+        let tmp = encode_temp_path(Path::new("C:/out/render"));
+        assert_eq!(tmp.extension().and_then(|e| e.to_str()), Some("mp4"));
     }
 
     #[test]

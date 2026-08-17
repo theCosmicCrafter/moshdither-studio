@@ -42,8 +42,14 @@ const BIN =
   join(process.cwd(), "src-tauri", "target", "release", "mosh-verify") +
     (process.platform === "win32" ? ".exe" : "");
 
-const TEST_IMAGE = process.env.MOSHDITHER_TEST_IMAGE ?? "";
-const TEST_VIDEO = process.env.MOSHDITHER_TEST_VIDEO ?? "";
+// Small committed fixtures (139 KB total) so these tests actually run. They
+// previously defaulted to "", which made every media-dependent case skip
+// silently -- indistinguishable from passing. Override to point at heavier
+// media when exercising the pipeline at real resolutions.
+const TEST_IMAGE =
+  process.env.MOSHDITHER_TEST_IMAGE ?? join(process.cwd(), "tests", "fixtures", "test-image.png");
+const TEST_VIDEO =
+  process.env.MOSHDITHER_TEST_VIDEO ?? join(process.cwd(), "tests", "fixtures", "test-video.mp4");
 
 const canRun = BIN.length > 0 && existsSync(BIN);
 
