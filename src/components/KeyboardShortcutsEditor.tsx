@@ -16,11 +16,11 @@ import { getCommands } from "../utils/commands";
 // metrics and stroke weights, for four glyphs.
 //
 // Note the font is subsetted by scripts/subset-material-symbols.mjs to the
-// glyph names it finds in source, so any icon added here must already be in
-// public/fonts/material-symbols-outlined.icons.json or be added to that
-// script's EXTRA_ICONS and re-subsetted. `undo` stands in for lucide's
-// RotateCcw because Material's usual reset glyph (restart_alt) is not in the
-// current subset, and the button carries a "Reset Defaults" text label.
+// glyph names it finds in source, so any icon added here must be picked up by
+// that script (or added to its EXTRA_ICONS) and the subset regenerated.
+// `restart_alt` replaces lucide's RotateCcw: it was initially swapped for
+// `undo`, but `undo` already means Edit -> Undo elsewhere in the app, and this
+// button discards every custom binding rather than reversing one step.
 
 interface KeyboardShortcutsEditorProps {
   readonly onClose: () => void;
@@ -214,7 +214,7 @@ export default function KeyboardShortcutsEditor({ onClose }: KeyboardShortcutsEd
               gap: 6,
             }}
           >
-            <span className="material-symbols-outlined" style={{ fontSize: 14 }}>undo</span>
+            <span className="material-symbols-outlined" style={{ fontSize: 14 }}>restart_alt</span>
             Reset Defaults
           </button>
 

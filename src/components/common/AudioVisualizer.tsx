@@ -29,7 +29,12 @@ export function AudioVisualizer({ variant = "bars", maxBars = 32, className = ""
         return (
           <div
             key={i}
-            className={`w-1 rounded-t transition duration-75 ${
+            // Bar height is driven by the inline style below, and `height` is
+            // not in Tailwind's bare `transition` property list, so it must be
+            // named explicitly or the meter jumps between values instead of
+            // animating. `transition-all` would cover it but also animates
+            // `outline`, which suppresses the app's :focus-visible ring.
+            className={`w-1 rounded-t transition-[height] duration-75 ${
               variant === "spectrum" ? "" : "bg-accent-teal"
             }`}
             style={{

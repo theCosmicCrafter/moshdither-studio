@@ -44,9 +44,37 @@ if (-not $trufflehog) {
     # into both halves produced a 404, so the download always failed, the binary
     # was never installed, and the pre-commit secret gate could not run at all.
     $version = $latest -replace '^v', ''
-    $url = "https://github.com/trufflesecurity/trufflehog/releases/download/$latest/trufflehog_${version}_windows_amd64.tar.gz"
+    $base = "https://github.com/trufflesecurity/trufflehog/releases/download/$latest"
+    $asset = "trufflehog_${version}_windows_amd64.tar.gz"
     $tmp = [System.IO.Path]::GetTempFileName() + ".tar.gz"
-    Invoke-WebRequest -Uri $url -OutFile $tmp
+    Invoke-WebRequest -Uri "$base/$asset" -OutFile $tmp
+
+    # This archive is unpacked and then executed on every commit, so verify it
+    # against the checksums the release publishes before trusting it. Without
+    # this a substituted or tampered asset would run with the developer's
+    # privileges, and the extracted binary is gitignored so it never gets
+    # reviewed. Note this authenticates the download against GitHub's release
+    # metadata only; it is not a signature check against TruffleHog's signing
+    # key (the .sig/.pem cosign bundle beside it would be needed for that).
+    # -UseBasicParsing hands back a Byte[] for text/plain here, not a string, so
+    # decode before splitting or the line match silently finds nothing.
+    $raw = (Invoke-WebRequest -Uri "$base/trufflehog_${version}_checksums.txt" -UseBasicParsing).Content
+    $sums = if ($raw -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($raw) } else { $raw }
+    $expected = ($sums -split "`n" | Where-Object { $_ -match [regex]::Escape($asset) } |
+        Select-Object -First 1) -split '\s+' | Select-Object -First 1
+    if (-not $expected) {
+        Remove-Item $tmp
+        Write-Error "No checksum published for $asset -- refusing to install."
+        exit 1
+    }
+    $actual = (Get-FileHash -Path $tmp -Algorithm SHA256).Hash
+    if ($actual -ne $expected.ToUpper()) {
+        Remove-Item $tmp
+        Write-Error "Checksum mismatch for $asset. Expected $expected, got $actual. Refusing to install."
+        exit 1
+    }
+    Write-Host "Checksum verified ($expected)." -ForegroundColor Green
+
     tar -xzf $tmp -C (Split-Path $trufflehog)
     Remove-Item $tmp
     Write-Host "TruffleHog installed: $trufflehog" -ForegroundColor Green

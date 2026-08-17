@@ -28,7 +28,7 @@ export default defineConfig({
         manualChunks(id) {
           const normalizedId = id.replace(/\\/g, "/");
           // Vendor chunk: framework + state management libraries.
-          const vendor = ["react", "react-dom", "zustand", "lucide-react"];
+          const vendor = ["react", "react-dom", "zustand"];
           if (vendor.some((module) => normalizedId.includes(`node_modules/${module}/`))) {
             return "vendor";
           }

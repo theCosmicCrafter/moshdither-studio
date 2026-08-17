@@ -375,7 +375,12 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                 }}
               >
                 <div
-                  className="absolute top-[1px] w-4 h-4 rounded-full bg-white transition duration-300"
+                  // The knob slides via the inline `left` below, and `left` is
+                  // not in Tailwind's bare `transition` property list, so it
+                  // must be named explicitly or the switch snaps between its
+                  // two positions. `transition-all` would cover it but also
+                  // animates `outline`, suppressing the :focus-visible ring.
+                  className="absolute top-[1px] w-4 h-4 rounded-full bg-white transition-[left] duration-300"
                   style={{
                     left: value ? "calc(100% - 18px)" : "2px",
                     boxShadow: "0 1px 2px rgba(0,0,0,0.4)",

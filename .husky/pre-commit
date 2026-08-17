@@ -14,7 +14,15 @@
 # that does not exist in this repository; package.json is at the root.
 #
 # Modern husky (v9+) does not need the bootstrap line anyway, so this runs as a
-# plain git hook via core.hooksPath and needs no husky install.
+# plain git hook and needs no husky install.
+#
+# Git only looks in .git/hooks unless core.hooksPath says otherwise, and that
+# setting is per-clone local config -- it cannot be committed. The `prepare`
+# script in package.json points it at this directory, and npm runs `prepare`
+# automatically after `npm install`, so a fresh clone gets the gate wired up
+# without anyone remembering to do it. To enable it by hand:
+#
+#     git config core.hooksPath .husky
 
 echo "Running secret scan..."
 npm run secret-scan

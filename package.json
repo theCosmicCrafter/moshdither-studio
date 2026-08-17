@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "prepare": "node -e \"try{require('child_process').execSync('git config core.hooksPath .husky')}catch(e){}\"",
     "dev": "vite",
     "prebuild": "node scripts/verify-external-bins.mjs",
     "build": "tsc && vite build",

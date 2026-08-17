@@ -9,10 +9,21 @@
  * transparent and tinted borders rendered in Tailwind's default gray. 105 such
  * usages across 19 files were affected.
  *
- * Routing each token through `token()` keeps the bare utility byte-identical
- * (`var(--x)`) while making the `/<alpha>` form resolve through color-mix,
- * which supports a `var()` operand. Requires Chromium 111+ / Safari 16.2+ /
- * Firefox 113+; the Tauri v2 webview and all dev browsers are well past that.
+ * Routing each token through `token()` makes the `/<alpha>` form resolve
+ * through color-mix, which does accept a `var()` operand.
+ *
+ * Note this is NOT limited to the alpha-modified utilities. Tailwind v3's
+ * `withAlphaVariable` passes `opacityValue: 'var(--tw-bg-opacity)'` to a
+ * function color even with no `/alpha` present, so `bg-surface` now emits
+ * `color-mix(in srgb, var(--surface) calc(var(--tw-bg-opacity) * 100%),
+ * transparent)` rather than a bare `var(--surface)`. It resolves to the same
+ * color (and as a bonus the legacy `bg-opacity-*` utilities work again), but
+ * it means every themed color goes through color-mix, so an engine without
+ * color-mix support would lose all of them rather than just the ~105
+ * alpha-modified ones. Baseline is Chromium 111 / Safari 16.2 / Firefox 113.
+ * Windows ships WebView2 (evergreen Chromium) and macOS Tauri requires far
+ * newer WebKit, so the floor here is Linux webkit2gtk: 2.40+ (Apr 2023) is
+ * required, which is satisfied by the distros in the CI matrix.
  */
 const token =
   (name) =>
@@ -21,9 +32,6 @@ const token =
       ? `var(${name})`
       : `color-mix(in srgb, var(${name}) calc(${opacityValue} * 100%), transparent)`;
 
-/** A token at partial alpha, for use in keyframes where no utility applies. */
-const glow = (name, alpha) =>
-  `color-mix(in srgb, var(${name}) ${alpha * 100}%, transparent)`;
 
 /** @type {import('tailwindcss').Config} */
 export default {
@@ -173,9 +181,12 @@ export default {
       animation: {
         "fade-in": "fadeIn 0.2s ease-in-out",
         "slide-up": "slideUp 0.3s ease-out",
-        "pulse-glow": "pulseGlow 2s infinite ease-in-out",
-        shimmer: "shimmer 1.5s infinite ease-in-out",
         scanline: "scanline 3s linear infinite",
+        // `pulse-glow` and `shimmer` are intentionally absent: index.css owns
+        // both the `@keyframes` and the `.animate-pulse-glow` class for them.
+        // Declaring them here too produced a second, competing definition --
+        // for `shimmer` the names collided outright and index.css won, so
+        // theming the copy here changed nothing that renders.
       },
       keyframes: {
         fadeIn: {
@@ -185,22 +196,6 @@ export default {
         slideUp: {
           "0%": { opacity: "0", transform: "translateY(10px)" },
           "100%": { opacity: "1", transform: "translateY(0)" },
-        },
-        // These two animations hard-coded rgba(255,0,127) and rgba(255,223,0).
-        // Neither is a current brand color: the pink is the high-contrast
-        // theme's accent (#ff007f) rather than the default #ffade0, and the
-        // gold (#ffdf00) appears in no theme at all. Being literals they also
-        // stayed fixed while the rest of the UI re-themed. Routing them through
-        // the accent tokens keeps the same glow shape but follows the theme.
-        pulseGlow: {
-          "0%": { boxShadow: `0 0 5px ${glow("--accent-pink", 0.4)}`, opacity: "0.8" },
-          "50%": { boxShadow: `0 0 20px ${glow("--accent-gold", 0.8)}`, opacity: "1" },
-          "100%": { boxShadow: `0 0 5px ${glow("--accent-pink", 0.4)}`, opacity: "0.8" },
-        },
-        shimmer: {
-          "0%": { opacity: "0.5", filter: `drop-shadow(0 0 2px ${glow("--accent-pink", 0.5)})` },
-          "50%": { opacity: "1", filter: `drop-shadow(0 0 8px ${glow("--accent-gold", 0.8)})` },
-          "100%": { opacity: "0.5", filter: `drop-shadow(0 0 2px ${glow("--accent-pink", 0.5)})` },
         },
         scanline: {
           "0%": { top: "0%" },
