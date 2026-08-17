@@ -138,6 +138,10 @@ impl EffectRegistry {
         self.register(super::audio_reactive::BeatGlitch);
         self.register(super::audio_reactive::SpectralShift);
         self.register(super::audio_reactive::AudioDither);
+        self.register(super::audio_visual::AudioSpectrum);
+        self.register(super::audio_visual::AudioWaveform);
+        self.register(super::audio_visual::AudioChromatic);
+        self.register(super::audio_visual::AudioPixelate);
     }
 
     /// Retired effect IDs and what they now resolve to.

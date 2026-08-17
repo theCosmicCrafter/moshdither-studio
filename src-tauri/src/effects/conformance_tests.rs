@@ -153,7 +153,15 @@ fn atkinson_discards_error_by_design() {
 const SINGLE_FRAME_NOOPS: &[&str] = &[
     "audio_reactive.bass_pulse",
     "audio_reactive.beat_glitch",
+    // Audio-reactive effects are driven entirely by the `_audio_*` params the
+    // export bake injects. With no audio loaded there is nothing to react to,
+    // so passing the frame through unchanged is the correct behaviour rather
+    // than a silent failure -- the same reason the three above are listed.
+    "audio_reactive.chromatic",
+    "audio_reactive.pixelate",
     "audio_reactive.spectral_shift",
+    "audio_reactive.spectrum",
+    "audio_reactive.waveform",
     "color.lift_gamma_gain",
     "color.lut_grading",
     "composite.overlay",

@@ -1,6 +1,7 @@
 pub mod analog;
 pub mod artistic;
 pub mod audio_reactive;
+pub mod audio_visual;
 pub mod color;
 pub mod color_math;
 pub mod composite;

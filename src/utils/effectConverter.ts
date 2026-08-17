@@ -585,6 +585,35 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   },
 
   // Audio-Reactive
+  // The four effects below pair with shaders that already existed but had no
+  // Rust counterpart, so nothing could reference them. The band/flux/energy
+  // uniforms they read are injected globally by PreviewViewport for every
+  // pass, so only each effect's own controls need mapping here.
+  //
+  // All are marked inaccurate: the CPU implementations are the export truth and
+  // the shaders approximate them (the waveform trace in particular is a
+  // different curve), so a stack containing one routes through the Rust path
+  // for a faithful preview.
+  "audio_reactive.spectrum": {
+    shaderId: "audioSpectrum",
+    paramMap: { intensity: "u_intensity", bar_count: "u_barCount" },
+    accurate: false,
+  },
+  "audio_reactive.waveform": {
+    shaderId: "audioWaveform",
+    paramMap: { amplitude: "u_amplitude", thickness: "u_thickness", glow: "u_glow" },
+    accurate: false,
+  },
+  "audio_reactive.chromatic": {
+    shaderId: "audioReactiveChromatic",
+    paramMap: { max_shift: "u_maxShift", direction: "u_direction" },
+    accurate: false,
+  },
+  "audio_reactive.pixelate": {
+    shaderId: "audioReactivePixelate",
+    paramMap: { min_block: "u_minBlock", max_block: "u_maxBlock" },
+    accurate: false,
+  },
   "audio_reactive.bass_pulse": {
     shaderId: "audioBassPulse",
     // Rust 'sensitivity' is a multiplier in [0.1, 5] and the shader's
