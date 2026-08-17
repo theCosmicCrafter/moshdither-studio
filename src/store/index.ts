@@ -234,6 +234,21 @@ export interface AppState {
   customBg: string;
   customUiModalOpen: boolean;
   setCustomThemeColors: (primary: string, secondary: string, bg: string) => void;
+
+  // Animate-as-video. Length and frame rate used when turning a still into a
+  // clip. Clip length is a creative parameter for datamoshing -- how long an
+  // I-frame's corruption smears for is a function of how many frames follow it
+  // -- so these are user settings rather than the constants they used to be.
+  // The still's path is kept so the conversion can be undone in-app; the file
+  // itself is untouched, but without this the only way back was reopening it.
+  animateDurationSecs: number;
+  animateFps: number;
+  animateSourceStillPath: string | null;
+  animateDialogOpen: boolean;
+  setAnimateDurationSecs: (v: number) => void;
+  setAnimateFps: (v: number) => void;
+  setAnimateSourceStillPath: (p: string | null) => void;
+  setAnimateDialogOpen: (open: boolean) => void;
   setCustomUiModalOpen: (open: boolean) => void;
 
   // Output sizing
@@ -513,6 +528,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   appBarSize: 300,
   theme: "dark",
   panelOpacity: 0.65,
+  animateDurationSecs: 5,
+  animateFps: 30,
+  animateSourceStillPath: null,
+  animateDialogOpen: false,
   customPrimary: "#00f4fe",
   customSecondary: "#ffade0",
   customBg: "#131314",
@@ -742,6 +761,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   setTheme: (theme) => set({ theme }),
   toggleTheme: () => set((state) => ({ theme: state.theme === "dark" ? "light" : "dark" })),
   setPanelOpacity: (v) => set({ panelOpacity: Math.max(0.2, Math.min(1, v)) }),
+  // Clamped rather than validated at the call site so a bad value cannot reach
+  // ffmpeg's -t/-r. The ceilings are practical, not technical: a still expands
+  // to duration*fps identical frames, so 120s at 120fps is already 14400 frames
+  // of freeze-frame before any effect runs.
+  setAnimateDurationSecs: (v) =>
+    set({ animateDurationSecs: Number.isFinite(v) ? Math.max(0.1, Math.min(120, v)) : 5 }),
+  setAnimateFps: (v) =>
+    set({ animateFps: Number.isFinite(v) ? Math.max(1, Math.min(120, Math.round(v))) : 30 }),
+  setAnimateSourceStillPath: (p) => set({ animateSourceStillPath: p }),
+  setAnimateDialogOpen: (open) => set({ animateDialogOpen: open }),
   setCustomThemeColors: (primary, secondary, bg) =>
     set({ customPrimary: primary, customSecondary: secondary, customBg: bg, theme: "custom" }),
   setCustomUiModalOpen: (open) => set({ customUiModalOpen: open }),

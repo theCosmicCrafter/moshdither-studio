@@ -20,21 +20,21 @@ import WindowControls from "./WindowControls";
 import KeyboardShortcutsEditor from "./KeyboardShortcutsEditor";
 import UpdateChecker from "./UpdateChecker";
 import LabeledSlider from "./LabeledSlider";
+import AnimateAsVideoModal from "./AnimateAsVideoModal";
 import { PANEL_REGISTRY } from "./DockSystem/panelRegistry";
 
 interface Props {
   readonly onFileLoaded: () => Promise<boolean>;
 }
 
-// "Animate as Video" (still image -> looped freeze-frame video) defaults.
-// Fixed values instead of a duration/fps prompt modal -- 5s @ 30fps (150
-// frames) gives every video-only effect (frame_reverse, shuffle,
-// motion_transfer, ...) real multi-frame material to operate on, and a
-// still image has no "existing fps" to inherit the way a video would. A v1
-// modal was judged not worth the complexity for a one-off conversion; see
-// the PR description for the full tradeoff.
-const ANIMATE_AS_VIDEO_DURATION_SECS = 5;
-const ANIMATE_AS_VIDEO_FPS = 30;
+// "Animate as Video" (still image -> looped freeze-frame video) now prompts for
+// length and frame rate rather than using fixed 5s/30fps constants. The v1
+// reasoning -- that 150 frames is enough material for any video-only effect and
+// a still has no source fps to inherit -- justified a sane default, not a fixed
+// value: how far an I-frame's corruption smears is a function of how many
+// frames follow it, so for datamoshing the clip length is the creative control.
+// The old constants survive as the store's defaults (see animateDurationSecs /
+// animateFps), and the last values used are remembered.
 
 export default function Toolbar({ onFileLoaded }: Props) {
   const mediaLoaded = useAppStore((s) => s.mediaLoaded);
@@ -42,6 +42,8 @@ export default function Toolbar({ onFileLoaded }: Props) {
   const isProcessing = useAppStore((s) => s.isProcessing);
   const setIsVideo = useAppStore((s) => s.setIsVideo);
   const setDuration = useAppStore((s) => s.setDuration);
+  const setAnimateDialogOpen = useAppStore((s) => s.setAnimateDialogOpen);
+  const setAnimateSourceStillPath = useAppStore((s) => s.setAnimateSourceStillPath);
   const setProxyUrl = useAppStore((s) => s.setProxyUrl);
   const showBeforeAfter = useAppStore((s) => s.showBeforeAfter);
   const zoom = useAppStore((s) => s.zoom);
@@ -210,7 +212,17 @@ export default function Toolbar({ onFileLoaded }: Props) {
   // elsewhere. Only meaningful when a still image (not already a video) is
   // loaded, matching the isVideoOnlyEffect gating used across
   // EffectBrowser/EffectStack.
-  const handleAnimateAsVideo = async () => {
+  // Opens the prompt; the conversion itself runs from its onConfirm.
+  const handleAnimateAsVideo = () => {
+    if (!mediaLoaded || isVideo || isProcessing) return;
+    if (!useAppStore.getState().filePath) {
+      setStatusMessage("Animate as Video: no file path for the loaded image (reopen it via File > Open first)");
+      return;
+    }
+    setAnimateDialogOpen(true);
+  };
+
+  const runAnimateAsVideo = async (durationSecs: number, fps: number) => {
     if (!mediaLoaded || isVideo || isProcessing) return;
     const state = useAppStore.getState();
     const path = state.filePath;
@@ -221,11 +233,10 @@ export default function Toolbar({ onFileLoaded }: Props) {
     setStatusMessage("Animating still image as video...");
     setIsProcessing(true);
     try {
-      const videoPath = await animateStillAsVideo(
-        path,
-        ANIMATE_AS_VIDEO_DURATION_SECS,
-        ANIMATE_AS_VIDEO_FPS
-      );
+      const videoPath = await animateStillAsVideo(path, durationSecs, fps);
+      // Remember what this was made from so the conversion can be undone
+      // without hunting for the original file again.
+      setAnimateSourceStillPath(path);
       // Only point filePath at the generated video once it's actually loaded --
       // otherwise a failed loadMediaFromPath below leaves filePath referencing
       // a video while isVideo/mediaLoaded still reflect the prior still image.
@@ -238,7 +249,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
       // which is the only other place isVideo/proxyUrl get set for real:
       // the WebGL preview's video texture only activates when both are set.
       setIsVideo(true);
-      setDuration(ANIMATE_AS_VIDEO_DURATION_SECS);
+      setDuration(durationSecs);
       try {
         const proxy = await generateProxy(videoPath, 1280, 28);
         setProxyUrl(convertFileSrc(proxy));
@@ -759,6 +770,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
         </button>
         <WindowControls />
       </div>
+      <AnimateAsVideoModal onConfirm={runAnimateAsVideo} />
       {showShortcuts && <KeyboardShortcutsEditor onClose={() => setShowShortcuts(false)} />}
       {showUpdateChecker && <UpdateChecker onClose={() => setShowUpdateChecker(false)} />}
     </header>
