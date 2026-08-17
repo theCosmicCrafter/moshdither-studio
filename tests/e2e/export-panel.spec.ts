@@ -19,57 +19,67 @@ test.beforeEach(async ({ page }) => {
     .catch(() => {});
 });
 
-test("export panel renders", async ({ page }) => {
-  // Look for export-related UI (kept as a smoke selector)
-  void page
-    .locator("text=Export, [title*='export'], [title*='Export'], [aria-label*='export']")
-    .first();
-  // Export panel might be in a tab or side panel
-  const toolbar = page.locator("header").first();
-  await expect(toolbar).toBeVisible();
-});
+// The Export panel shares the right-hand tabset with Mask/Audio/LUTs and Mask
+// is active on load, so flexlayout has not mounted Export's contents yet.
+// Every test here opens the tab first -- the versions these replaced skipped
+// that step, found nothing, and fell back to asserting the header was visible.
+async function openExportPanel(page: import("@playwright/test").Page) {
+  await page.getByRole("tab", { name: "Export" }).click();
+  const panel = page.locator(".flexlayout__tab").filter({ hasText: "Format" });
+  await expect(panel.getByRole("button", { name: "MP4", exact: true })).toBeVisible();
+  return panel;
+}
 
-test("export button shows warning when no media loaded", async ({ page }) => {
-  // Find export button
-  const exportBtn = page.locator("text=Export, button:has-text('Export')").first();
+test("export panel renders its format and quality controls", async ({ page }) => {
+  const panel = await openExportPanel(page);
 
-  if (await exportBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
-    await exportBtn.click();
-    await page.waitForTimeout(500);
-    // Should show a message about loading media first
-    // The status message should appear somewhere
+  for (const format of ["MP4", "WEBM", "GIF", "PNG-SEQ"]) {
+    await expect(panel.getByRole("button", { name: format, exact: true })).toBeVisible();
   }
-
-  // App should still be responsive
-  const toolbar = page.locator("header").first();
-  await expect(toolbar).toBeVisible();
-});
-
-test("export panel shows resolution options", async ({ page }) => {
-  // Look for resolution-related selectors (kept as a smoke selector)
-  void page
-    .locator("text=Resolution, text=Width, text=Height, select, [title*='resolution']")
-    .first();
-
-  // App should be responsive regardless
-  const toolbar = page.locator("header").first();
-  await expect(toolbar).toBeVisible();
-});
-
-test("export format dropdown works", async ({ page }) => {
-  // Look for format selector
-  const formatSelect = page.locator("select").first();
-
-  if (await formatSelect.isVisible({ timeout: 3000 }).catch(() => false)) {
-    // Get current value, then try to change it
-    void (await formatSelect.inputValue());
-    const options = await formatSelect.locator("option").allTextContents();
-    if (options.length > 1) {
-      await formatSelect.selectOption({ index: 1 });
-      await page.waitForTimeout(300);
-    }
+  for (const quality of ["draft", "good", "best"]) {
+    await expect(panel.getByRole("button", { name: quality, exact: true })).toBeVisible();
   }
+  await expect(panel.getByLabel("FPS")).toBeVisible();
+});
 
-  const toolbar = page.locator("header").first();
-  await expect(toolbar).toBeVisible();
+test("export button warns instead of exporting when no media is loaded", async ({ page }) => {
+  const panel = await openExportPanel(page);
+
+  // ExportPanel short-circuits with this exact status before touching the
+  // backend (index.tsx: setStatusMessage("Load media before exporting")).
+  await panel.getByRole("button", { name: /Export Video/ }).click();
+  await expect(page.getByText("Load media before exporting")).toBeVisible();
+});
+
+test("export panel shows the resolution presets", async ({ page }) => {
+  const panel = await openExportPanel(page);
+
+  // Buttons are labelled by their friendly name; the pixel dimensions live in
+  // the title attribute, so both are worth pinning.
+  for (const res of ["Source", "4K UHD", "1080p HD", "720p", "480p"]) {
+    await expect(panel.getByRole("button", { name: res, exact: true })).toBeVisible();
+  }
+  await expect(panel.getByTitle("3840x2160")).toBeVisible();
+  await expect(panel.getByTitle("1920x1080")).toBeVisible();
+});
+
+test("selecting a format marks it as the active choice", async ({ page }) => {
+  const panel = await openExportPanel(page);
+
+  // Format is a button group, not a <select> -- the old test grabbed the page's
+  // first <select>, which is the Timeline's playback-speed dropdown, so it
+  // exercised the wrong control entirely.
+  //
+  // Selection state is carried only in an inline style (accent background), so
+  // that is what we assert. These are toggle buttons with no aria-pressed, so
+  // there is no accessible state to check instead.
+  const mp4 = panel.getByRole("button", { name: "MP4", exact: true });
+  const webm = panel.getByRole("button", { name: "WEBM", exact: true });
+
+  const mp4Selected = (await mp4.getAttribute("style")) ?? "";
+  expect(mp4Selected).toContain("background");
+
+  await webm.click();
+  await expect.poll(async () => (await webm.getAttribute("style")) ?? "").toContain("background");
+  expect((await mp4.getAttribute("style")) ?? "").not.toBe(mp4Selected);
 });
