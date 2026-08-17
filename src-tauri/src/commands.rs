@@ -941,9 +941,16 @@ fn export_video_blocking(
         };
 
         if effect.is_temporal() {
-            // Temporal effects: must use sequential process_video for cross-frame correctness
+            // Temporal effects: must use sequential process_video for cross-frame correctness.
+            // Per-frame audio injection is meaningless here -- the effect gets the
+            // whole segment at once -- so hand it the beat timeline instead, which
+            // is what lets a datamosh cut on the beat rather than on a clock.
+            let mut temporal_params = params.clone();
+            if let Some(ref audio) = audio_data {
+                audio.inject_timeline_params(&mut temporal_params);
+            }
             segment = effect
-                .process_video(&segment, active_mask, &params)
+                .process_video(&segment, active_mask, &temporal_params)
                 .map_err(|e| e.to_string())?;
         } else if audio_data.is_none() {
             // Non-temporal, no audio: parallelize frame processing with rayon

@@ -165,6 +165,11 @@ const SINGLE_FRAME_NOOPS: &[&str] = &[
     "color.lift_gamma_gain",
     "color.lut_grading",
     "composite.overlay",
+    // Beat-synced effects are temporal and act on the beat timeline the export
+    // bake supplies; a lone frame carries neither, so identity is correct here
+    // in the same way it is for the frame_* entries below.
+    "datamoshing.beat_hold",
+    "datamoshing.beat_smear",
     "datamoshing.cross_video",
     "datamoshing.frame_hold",
     "datamoshing.frame_reverse",

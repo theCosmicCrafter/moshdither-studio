@@ -104,6 +104,8 @@ impl EffectRegistry {
         self.register(super::artistic::Grayscale::default());
 
         // Datamoshing
+        self.register(super::datamoshing::beat_sync::BeatHold);
+        self.register(super::datamoshing::beat_sync::BeatSmear);
         self.register(super::datamoshing::IFrameRemoval::default());
         self.register(super::datamoshing::IFrameRemovalAdvanced);
         self.register(super::datamoshing::ClassicDatamosh::default());

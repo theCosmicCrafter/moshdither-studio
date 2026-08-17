@@ -43,6 +43,44 @@ impl AudioBakeData {
         self.frames.get(idx)
     }
 
+    /// Frame indices on which a beat lands, from the low band.
+    ///
+    /// Bass is the useful default here: kick and snare hits drive the felt
+    /// pulse of a track, whereas the treble flag fires on hi-hats and would
+    /// trigger far too often to cut on.
+    pub fn beat_frames(&self) -> Vec<usize> {
+        self.frames
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.beat_bass)
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Inject whole-timeline audio data, for effects that run over a segment
+    /// rather than a frame.
+    ///
+    /// `inject_params` gives a single frame's values, which is meaningless to a
+    /// temporal effect: it receives the whole segment at once and must decide
+    /// for itself which frames to act on. Passing the beat positions and tempo
+    /// lets it do that -- this is what makes cutting on the beat possible at
+    /// all, since the export path never calls `process_frame` for these.
+    pub fn inject_timeline_params(&self, params: &mut serde_json::Map<String, serde_json::Value>) {
+        let beats: Vec<serde_json::Value> = self
+            .beat_frames()
+            .into_iter()
+            .map(|i| serde_json::Value::from(i as u64))
+            .collect();
+        params.insert(
+            "_audio_beat_frames".to_string(),
+            serde_json::Value::Array(beats),
+        );
+        if let Some(bpm) = self.bpm {
+            params.insert("_audio_bpm".to_string(), serde_json::Value::from(bpm));
+        }
+        params.insert("_audio_fps".to_string(), serde_json::Value::from(self.fps));
+    }
+
     /// Inject audio feature values into a parameter map with `_audio_` prefixed keys.
     pub fn inject_params(
         &self,
