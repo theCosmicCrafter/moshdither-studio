@@ -60,8 +60,20 @@ if (-not $trufflehog) {
     # decode before splitting or the line match silently finds nothing.
     $raw = (Invoke-WebRequest -Uri "$base/trufflehog_${version}_checksums.txt" -UseBasicParsing).Content
     $sums = if ($raw -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($raw) } else { $raw }
-    $expected = ($sums -split "`n" | Where-Object { $_ -match [regex]::Escape($asset) } |
-        Select-Object -First 1) -split '\s+' | Select-Object -First 1
+    # Compare the filename field exactly rather than searching for the asset
+    # name anywhere in the line. The release also ships entries whose names
+    # merely start with this one (.sig, .pem, SBOM variants), so a substring
+    # test can match a sibling and hand back that file's hash -- which would
+    # then never equal the tarball's and would fail the install for the wrong
+    # reason, or worse, match an attacker-chosen entry.
+    $expected = $null
+    foreach ($line in ($sums -split "`r?`n")) {
+        $fields = $line.Trim() -split '\s+'
+        if ($fields.Count -ge 2 -and $fields[-1] -eq $asset) {
+            $expected = $fields[0]
+            break
+        }
+    }
     # Report before cleaning up, and use Write-Host rather than Write-Error:
     # $ErrorActionPreference is "Stop" at the top of this script, so Write-Error
     # would terminate immediately, making the `exit 1` unreachable and surfacing
