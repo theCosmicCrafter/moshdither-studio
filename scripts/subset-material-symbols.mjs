@@ -55,7 +55,13 @@ const EXTRA_ICONS = new Set([
   "drag_indicator",
   "image",
   "folder_open",
-  "movie_export",
+  // "movie_export" was pinned here, but no such glyph exists in Material
+  // Symbols (checked against all 4226 names in Google's icon metadata). The
+  // Fonts API silently ignores unknown names rather than erroring, so the
+  // subset was requested and built without it and the two call sites rendered
+  // the raw ligature text "movie_export" instead of an icon. Those now use
+  // "movie", which parallels the "image" glyph on the sibling Save Image item
+  // and is picked up from source automatically.
   "bug_report",
   "delete",
   "visibility",
@@ -64,7 +70,6 @@ const EXTRA_ICONS = new Set([
   "tune",
   "palette",
   "diamond",
-  "audio",
   "layers",
   "add_circle",
   "search",
@@ -106,7 +111,12 @@ const EXTRA_ICONS = new Set([
   "filter_none",
   "fullscreen_exit",
   "unfold_more",
-  "magnet"
+  // Neither "magnet" nor "audio" is a real Material Symbols name, so the Fonts
+  // API quietly built the subset without them and their call sites rendered the
+  // ligature text ("MAGNET" in the window toolbar). Replaced in source by
+  // border_outer (edge snapping) and graphic_eq (audio binding, matching the
+  // Audio Reactive panel's own icon).
+  "border_outer"
 ]);
 
 async function* walk(dir) {

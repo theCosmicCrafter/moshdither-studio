@@ -504,7 +504,7 @@ function AudioBindingControl({
             color: isBound ? "var(--accent-teal, #6cf)" : "var(--text-muted, #888)",
           }}
         >
-          <span className="material-symbols-outlined" style={{ fontSize: 10 }}>audio</span>
+          <span className="material-symbols-outlined" style={{ fontSize: 10 }}>graphic_eq</span>
           {isBound ? "Audio Bound" : "Bind Audio"}
         </button>
         {isBound && (

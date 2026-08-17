@@ -732,7 +732,7 @@ export default function ExportPanel() {
             color: "var(--on-primary)",
           }}
         >
-          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>movie_export</span>
+          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>movie</span>
           Export Video
         </button>
       )}

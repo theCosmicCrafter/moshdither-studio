@@ -443,7 +443,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   role="menuitem"
                   aria-disabled={!mediaLoaded}
                 >
-                  <span className="material-symbols-outlined menu-item-icon">movie_export</span>
+                  <span className="material-symbols-outlined menu-item-icon">movie</span>
                   Export Video
                 </button>
                 <button
