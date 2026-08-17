@@ -191,6 +191,50 @@ fn locate_sam3_binary() -> Option<PathBuf> {
     None
 }
 
+/// Locate the dev-mode SAM3 interpreter.
+///
+/// `sam3_env` is a multi-gigabyte gitignored virtualenv, so in practice it is
+/// created once per machine rather than once per checkout. Looking for it only
+/// directly under the resolved project root meant that running from a git
+/// worktree -- where the root is `<repo>/.claude/worktrees/<name>` and the venv
+/// lives back in the main checkout -- always failed with "SAM3 Python not
+/// found", even though a perfectly good interpreter existed a few directories
+/// up. Walking the ancestors finds it from a worktree, and also covers keeping
+/// one venv beside several sibling checkouts.
+///
+/// `MOSHDITHER_SAM3_PYTHON` overrides the search outright, for a venv kept
+/// somewhere unrelated to the source tree.
+fn locate_dev_python(root: &Path) -> Option<PathBuf> {
+    if let Ok(explicit) = std::env::var("MOSHDITHER_SAM3_PYTHON") {
+        let p = PathBuf::from(explicit);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+
+    let rel: &[&str] = if cfg!(windows) {
+        &["sam3_env", "Scripts", "python.exe"]
+    } else {
+        &["sam3_env", "bin", "python"]
+    };
+
+    let mut dir = Some(root);
+    // The worktree layout puts the main checkout three levels up; allow a
+    // little more headroom without wandering off toward the filesystem root.
+    for _ in 0..5 {
+        let current = dir?;
+        let mut candidate = current.to_path_buf();
+        for segment in rel {
+            candidate.push(segment);
+        }
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        dir = current.parent();
+    }
+    None
+}
+
 /// Resolve the project root for dev-mode Python fallback. Probes the directory
 /// above the executable (target/{debug,release}), then CARGO_MANIFEST_DIR, then cwd.
 fn dev_project_root() -> Option<PathBuf> {
@@ -278,18 +322,16 @@ impl Sam3Engine {
                     "Could not resolve project root for SAM3 dev environment.".into(),
                 )
             })?;
-            let python = if cfg!(windows) {
-                root.join("sam3_env").join("Scripts").join("python.exe")
-            } else {
-                root.join("sam3_env").join("bin").join("python")
-            };
             let bridge = root.join("src-tauri").join("sam3_bridge.py");
-            if !python.exists() {
-                return Err(crate::error::AppError::Generic(format!(
-                    "SAM3 Python not found at {}. Build the sidecar with `npm run build:sam3-sidecar` or create a sam3_env.",
-                    python.display()
-                )));
-            }
+            let python = locate_dev_python(&root).ok_or_else(|| {
+                crate::error::AppError::Generic(format!(
+                    "SAM3 Python not found. Looked for sam3_env/{} under {} and its parent directories. \
+                     Build the sidecar with `npm run build:sam3-sidecar`, create a sam3_env, or point \
+                     MOSHDITHER_SAM3_PYTHON at an existing interpreter.",
+                    if cfg!(windows) { "Scripts/python.exe" } else { "bin/python" },
+                    root.display()
+                ))
+            })?;
             if !bridge.exists() {
                 return Err(crate::error::AppError::Generic(format!(
                     "SAM3 bridge script not found at {}",
@@ -845,5 +887,70 @@ impl Drop for Sam3Engine {
     fn drop(&mut self) {
         let mut child = self.child.lock().take();
         let _ = Sam3Engine::kill_child(&mut child);
+    }
+}
+
+#[cfg(test)]
+mod dev_python_tests {
+    use super::locate_dev_python;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn venv_rel() -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from("sam3_env").join("Scripts").join("python.exe")
+        } else {
+            PathBuf::from("sam3_env").join("bin").join("python")
+        }
+    }
+
+    /// Unique scratch root so parallel test runs cannot collide.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join("moshdither-sam3-tests")
+            .join(format!("{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn plant_venv(root: &Path) {
+        let python = root.join(venv_rel());
+        fs::create_dir_all(python.parent().unwrap()).unwrap();
+        fs::write(&python, b"stub").unwrap();
+    }
+
+    #[test]
+    fn finds_a_venv_directly_under_the_project_root() {
+        let root = scratch("direct");
+        plant_venv(&root);
+        assert_eq!(locate_dev_python(&root), Some(root.join(venv_rel())));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The case this function exists for: running from `.claude/worktrees/<name>`
+    /// while the venv lives back in the main checkout, four levels up.
+    #[test]
+    fn finds_a_venv_from_a_git_worktree_layout() {
+        let main = scratch("worktree");
+        plant_venv(&main);
+        let worktree = main.join(".claude").join("worktrees").join("some-branch");
+        fs::create_dir_all(&worktree).unwrap();
+
+        assert_eq!(
+            locate_dev_python(&worktree),
+            Some(main.join(venv_rel())),
+            "should walk up out of the worktree to the main checkout's venv"
+        );
+        let _ = fs::remove_dir_all(&main);
+    }
+
+    #[test]
+    fn returns_none_when_no_venv_exists_anywhere_above() {
+        let root = scratch("absent");
+        let deep = root.join("a").join("b");
+        fs::create_dir_all(&deep).unwrap();
+        assert_eq!(locate_dev_python(&deep), None);
+        let _ = fs::remove_dir_all(&root);
     }
 }
