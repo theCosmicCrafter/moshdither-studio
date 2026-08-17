@@ -31,20 +31,28 @@ test("dock system renders with panel rail", async ({ page }) => {
 });
 
 test("dock tabs are clickable", async ({ page }) => {
-  // Look for dock tabs
-  const dockTabs = page.locator("[data-testid*='dock-tab-']");
-  const count = await dockTabs.count();
+  // flexlayout gives every docked tab a real role="tab" + accessible name,
+  // and its content pane is role="tabpanel" aria-labelledby that tab -- so
+  // Playwright resolves getByRole("tabpanel", { name }) to the pane owned by
+  // that specific tab, not just "something" on screen.
+  const dockTabs = page.getByRole("tab");
+  await expect(dockTabs.first()).toBeVisible({ timeout: 10000 });
+  expect(await dockTabs.count()).toBeGreaterThan(0);
 
-  if (count > 0) {
-    // Click each tab
-    for (let i = 0; i < Math.min(count, 5); i++) {
-      await dockTabs.nth(i).click();
-      await page.waitForTimeout(300);
-    }
+  // A handful of tabs from the default layout (defaultLayout.ts), each in a
+  // different tabset so this also exercises independent dock zones.
+  const knownTabs = ["Effects", "Preview", "Timeline", "Stack"];
+
+  for (const label of knownTabs) {
+    const tab = page.getByRole("tab", { name: label }).first();
+    await expect(tab).toBeVisible();
+    await tab.click();
+
+    // Clicking must actually switch the visible panel content, not just
+    // leave the rest of the app looking unchanged.
+    const panel = page.getByRole("tabpanel", { name: label });
+    await expect(panel).toBeVisible({ timeout: 5000 });
   }
-
-  const toolbar = page.locator("header").first();
-  await expect(toolbar).toBeVisible();
 });
 
 test("floating windows can be opened and closed", async ({ page }) => {
