@@ -125,7 +125,7 @@ export default function FloatingPanel({
         className="h-7 flex items-center justify-between px-3 select-none cursor-grab active:cursor-grabbing border-b border-outline-variant/20 bg-surface/50"
         onMouseDown={handleDragStart}
       >
-        <span className="text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider">{title}</span>
+        <span className="text-dense-sm font-semibold text-on-surface-variant uppercase tracking-wider">{title}</span>
         <div className="flex items-center gap-1">
           <button
             onClick={handleMinimize}

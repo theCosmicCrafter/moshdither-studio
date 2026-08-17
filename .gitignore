@@ -1,6 +1,17 @@
 /node_modules
 /.vscode
 /.idea
+# Local agent/editor tooling. launch.json holds a machine-specific dev-server
+# command, so it is per-developer rather than shared project config.
+/.claude/launch.json
+
+# TruffleHog binary and the docs bundled in its release tarball, fetched on
+# demand by scripts/secret-scan.ps1. The executable alone is ~170 MB. The rest
+# of tools/ is checked-in project scripts, so this ignores the download only.
+/tools/trufflehog.exe
+/tools/LICENSE
+/tools/README.md
+/tools/docs/
 /dist
 /dist-ssr
 *.local

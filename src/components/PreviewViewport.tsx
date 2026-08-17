@@ -32,7 +32,7 @@ function AudioWaveform() {
   if (Object.keys(audioBandEnergies).length === 0) return null;
   return (
     <div className="absolute bottom-10 left-1/2 -translate-x-1/2 w-1/2 h-20 neo-panel rounded-lg bg-surface/80 backdrop-blur-md p-3 flex flex-col justify-end z-50 border border-accent-teal/20 pointer-events-none">
-      <div className="text-[8px] font-label-sm text-accent-teal/70 absolute top-2 left-2 uppercase">Audio/Pixel Intensity</div>
+      <div className="text-dense-3xs font-label-sm text-accent-teal/70 absolute top-2 left-2 uppercase">Audio/Pixel Intensity</div>
       <AudioVisualizer className="h-full pt-4" />
     </div>
   );
@@ -1264,7 +1264,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
               — or click to browse —
             </div>
             <div
-              className="text-[11px] px-3 py-1.5 rounded-md dropzone-formats"
+              className="text-dense-sm px-3 py-1.5 rounded-md dropzone-formats"
             >
               PNG, JPG, GIF, WEBP, TIFF, BMP, MP4, MOV, MKV, AVI, WEBM
             </div>
@@ -1339,10 +1339,10 @@ function PreviewViewport({ isDropTarget = false }: Props) {
                       <span className="material-symbols-outlined mi-sm text-black">center_focus_strong</span>
                     </div>
                   </button>
-                  <div className="absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded split-label">
+                  <div className="absolute top-2 left-2 text-dense-xs font-bold px-2 py-0.5 rounded split-label">
                     BEFORE
                   </div>
-                  <div className="absolute top-2 right-2 text-[10px] font-bold px-2 py-0.5 rounded split-label-after">
+                  <div className="absolute top-2 right-2 text-dense-xs font-bold px-2 py-0.5 rounded split-label-after">
                     AFTER
                   </div>
                 </>
@@ -1416,7 +1416,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       {/* Bottom Info */}
       {mediaInfo && (
         <div
-          className="flex items-center justify-between px-3 h-7 flex-shrink-0 text-[11px] info-bar"
+          className="flex items-center justify-between px-3 h-7 flex-shrink-0 text-dense-sm info-bar"
         >
           <div className="flex items-center gap-3">
             <span>

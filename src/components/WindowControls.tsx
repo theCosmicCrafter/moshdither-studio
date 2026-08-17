@@ -172,7 +172,7 @@ export default function WindowControls() {
                 role="menuitem"
                 tabIndex={0}
                 onClick={() => void handleDockToEdge("left")}
-                className="flex items-center gap-2 w-full px-2 py-1 rounded text-[11px] text-on-surface hover:bg-accent-teal/10 transition-colors"
+                className="flex items-center gap-2 w-full px-2 py-1 rounded text-dense-sm text-on-surface hover:bg-accent-teal/10 transition-colors"
               >
                 <span className="material-symbols-outlined" style={{ fontSize: 14 }}>dock_to_right</span>
                 Dock Left
@@ -181,7 +181,7 @@ export default function WindowControls() {
                 role="menuitem"
                 tabIndex={0}
                 onClick={() => void handleDockToEdge("right")}
-                className="flex items-center gap-2 w-full px-2 py-1 rounded text-[11px] text-on-surface hover:bg-accent-teal/10 transition-colors"
+                className="flex items-center gap-2 w-full px-2 py-1 rounded text-dense-sm text-on-surface hover:bg-accent-teal/10 transition-colors"
               >
                 <span className="material-symbols-outlined" style={{ fontSize: 14, transform: "scaleX(-1)" }}>dock_to_right</span>
                 Dock Right

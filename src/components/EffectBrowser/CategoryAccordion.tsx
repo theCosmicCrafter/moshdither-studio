@@ -162,7 +162,7 @@ function EffectItem({
   return (
     <button
       onClick={() => addToStack(effect)}
-      className="group w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-lg transition-all duration-300 neo-flat filigree-corner hover:border-accent-pink"
+      className="group w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-lg transition duration-300 neo-flat filigree-corner hover:border-accent-pink"
     >
       <div className="flex-1 min-w-0">
         <div className="text-label-md font-label-md text-on-surface group-hover:text-accent-pink transition-colors truncate">

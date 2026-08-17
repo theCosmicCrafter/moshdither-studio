@@ -39,7 +39,12 @@ if (-not $trufflehog) {
     Write-Host "TruffleHog not found in tools directories or on PATH." -ForegroundColor Yellow
     Write-Host "Downloading (~170 MB)..." -ForegroundColor Yellow
     $latest = (Invoke-RestMethod "https://api.github.com/repos/trufflesecurity/trufflehog/releases/latest").tag_name
-    $url = "https://github.com/trufflesecurity/trufflehog/releases/download/$latest/trufflehog_${latest}_windows_amd64.tar.gz"
+    # The git tag carries a leading "v" (v3.97.0) but the release asset filename
+    # does not (trufflehog_3.97.0_windows_amd64.tar.gz). Interpolating the tag
+    # into both halves produced a 404, so the download always failed, the binary
+    # was never installed, and the pre-commit secret gate could not run at all.
+    $version = $latest -replace '^v', ''
+    $url = "https://github.com/trufflesecurity/trufflehog/releases/download/$latest/trufflehog_${version}_windows_amd64.tar.gz"
     $tmp = [System.IO.Path]::GetTempFileName() + ".tar.gz"
     Invoke-WebRequest -Uri $url -OutFile $tmp
     tar -xzf $tmp -C (Split-Path $trufflehog)

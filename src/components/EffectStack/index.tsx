@@ -88,7 +88,7 @@ export default function EffectStack() {
               placeholder="Filter effects..."
               value={filterQuery}
               onChange={(e) => setFilterQuery(e.target.value)}
-              className="w-full bg-surface/50 border border-outline/20 rounded pl-8 pr-2 py-1 text-[11px] text-on-surface outline-none focus:border-accent-teal/50 transition-colors"
+              className="w-full bg-surface/50 border border-outline/20 rounded pl-8 pr-2 py-1 text-dense-sm text-on-surface outline-none focus:border-accent-teal/50 transition-colors"
             />
           </div>
         </div>
@@ -130,7 +130,7 @@ export default function EffectStack() {
               <div
                 key={entry.id}
                 onClick={() => selectStackItem(entry.id)}
-                className={`group relative flex flex-col p-3 rounded-lg cursor-pointer transition-all duration-300 filigree-corner ${
+                className={`group relative flex flex-col p-3 rounded-lg cursor-pointer transition duration-300 filigree-corner ${
                   isSelected ? "neo-pressed active-card-pulse border border-accent-pink/40" : "neo-flat hover:border-outline-variant/50"
                 } ${entry.maskId ? "ring-1 ring-accent-pink/50 shadow-[0_0_10px_rgba(236,72,153,0.2)]" : ""}`}
                 style={{ opacity: entry.enabled ? 1 : 0.4 }}
@@ -161,7 +161,8 @@ export default function EffectStack() {
                     </div>
                     <div className="flex items-center gap-1">
                       <span className="text-label-sm font-label-sm text-on-surface-variant opacity-70 truncate">
-                        {Object.keys(entry.params).length} params
+                        {Object.keys(entry.params).length} parameter
+                        {Object.keys(entry.params).length !== 1 ? "s" : ""}
                       </span>
                       {entry.maskId && (
                         <span className="material-symbols-outlined text-accent-pink" style={{ fontSize: 12 }} title="Effect locked to mask">

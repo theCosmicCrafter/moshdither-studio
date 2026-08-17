@@ -29,7 +29,7 @@ export function AudioVisualizer({ variant = "bars", maxBars = 32, className = ""
         return (
           <div
             key={i}
-            className={`w-1 rounded-t transition-all duration-75 ${
+            className={`w-1 rounded-t transition duration-75 ${
               variant === "spectrum" ? "" : "bg-accent-teal"
             }`}
             style={{

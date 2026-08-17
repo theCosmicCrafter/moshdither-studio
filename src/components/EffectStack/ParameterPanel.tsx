@@ -89,7 +89,7 @@ function ParameterWheel({
           style={{ transform: `rotate(${angle}deg)`, boxShadow: "0 0 8px #ffade0" }}
         />
         <div className="w-6 h-6 rounded-full neo-pressed flex items-center justify-center">
-          <span className="text-[8px] font-code-sm text-accent-teal">{value.toFixed(0)}</span>
+          <span className="text-dense-3xs font-code-sm text-accent-teal">{value.toFixed(0)}</span>
         </div>
       </div>
     </div>
@@ -121,7 +121,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
         style={{ color: "var(--text-dim)" }}
       >
         <span className="material-symbols-outlined" style={{ fontSize: 20, opacity: 0.3 }}>tune</span>
-        <span className="text-[11px]">Select an effect to edit parameters</span>
+        <span className="text-dense-sm">Select an effect to edit parameters</span>
       </div>
     );
   }
@@ -131,7 +131,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
   return (
     <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4 custom-scrollbar">
       <div
-        className="text-[13px] font-semibold filigree-header"
+        className="text-dense-lg font-semibold filigree-header"
         style={{ color: "var(--text-secondary)", fontFamily: "var(--font-hand)" }}
       >
         {entry.effectName} Parameters
@@ -141,14 +141,14 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
         <div className="space-y-2">
           <div className="flex items-center gap-1.5">
             <span className="material-symbols-outlined" style={{ fontSize: 12, color: "var(--accent)" }}>palette</span>
-            <span className="text-[10px] font-medium" style={{ color: "var(--text-secondary)" }}>
+            <span className="text-dense-xs font-medium" style={{ color: "var(--text-secondary)" }}>
               Palette Preset
             </span>
           </div>
           <select
             title="Palette preset"
             aria-label="Palette preset"
-            className="w-full text-[10px] rounded px-2 py-1 border-none cursor-pointer"
+            className="w-full text-dense-xs rounded px-2 py-1 border-none cursor-pointer"
             style={{
               background: "var(--bg-input)",
               color: "var(--text-primary)",
@@ -195,7 +195,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
           <div key={param.id} className="space-y-1.5">
             <div className="flex items-center justify-between">
               <label
-                className="text-[11px] font-medium cursor-pointer hover:text-accent-teal transition-colors"
+                className="text-dense-sm font-medium cursor-pointer hover:text-accent-teal transition-colors"
                 style={{ color: "var(--text-secondary)" }}
                 title="Double-click to reset to default"
                 onDoubleClick={() => updateStackParams(entry.id, { [param.id]: param.default })}
@@ -267,7 +267,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                   const idx = param.options!.indexOf(e.target.value);
                   updateStackParams(entry.id, { [param.id]: idx });
                 }}
-                className="w-full text-xs rounded px-2 py-1.5 outline-none"
+                className="w-full text-xs rounded px-2 py-1.5"
                 style={{
                   background: "var(--bg-input)",
                   border: "1px solid var(--border-secondary)",
@@ -292,7 +292,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                 onChange={(e) =>
                   updateStackParams(entry.id, { [param.id]: e.target.value })
                 }
-                className="w-full text-xs rounded px-2 py-1.5 outline-none"
+                className="w-full text-xs rounded px-2 py-1.5"
                 style={{
                   background: "var(--bg-input)",
                   border: "1px solid var(--border-secondary)",
@@ -310,7 +310,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                     [param.id]: !value,
                   })
                 }
-                className="w-10 h-5 rounded-full relative transition-all duration-300 shadow-inner"
+                className="w-10 h-5 rounded-full relative transition duration-300 shadow-inner"
                 style={{
                   background: value
                     ? "var(--accent)"
@@ -322,7 +322,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                 }}
               >
                 <div
-                  className="absolute top-[1px] w-4 h-4 rounded-full bg-white transition-all duration-300"
+                  className="absolute top-[1px] w-4 h-4 rounded-full bg-white transition duration-300"
                   style={{
                     left: value ? "calc(100% - 18px)" : "2px",
                     boxShadow: "0 1px 2px rgba(0,0,0,0.4)",
@@ -469,7 +469,7 @@ function AudioBindingControl({
             onChange={(e) =>
               onSet(stackId, paramId, { ...binding, source: e.target.value })
             }
-            className="w-full text-[10px] rounded px-1 py-0.5 outline-none"
+            className="w-full text-dense-xs rounded px-1 py-0.5"
             style={{
               background: "var(--bg-input)",
               border: "1px solid var(--border-secondary)",
@@ -493,7 +493,7 @@ function AudioBindingControl({
               onChange={(e) =>
                 onSet(stackId, paramId, { ...binding, inputMin: parseFloat(e.target.value) || 0 })
               }
-              className="w-10 text-[9px] px-1 py-0.5 rounded outline-none"
+              className="w-10 text-dense-2xs px-1 py-0.5 rounded"
               style={{
                 background: "var(--bg-input)",
                 border: "1px solid var(--border-secondary)",
@@ -509,7 +509,7 @@ function AudioBindingControl({
               onChange={(e) =>
                 onSet(stackId, paramId, { ...binding, inputMax: parseFloat(e.target.value) || 1 })
               }
-              className="w-10 text-[9px] px-1 py-0.5 rounded outline-none"
+              className="w-10 text-dense-2xs px-1 py-0.5 rounded"
               style={{
                 background: "var(--bg-input)",
                 border: "1px solid var(--border-secondary)",
@@ -528,7 +528,7 @@ function AudioBindingControl({
               onChange={(e) =>
                 onSet(stackId, paramId, { ...binding, outputMin: parseFloat(e.target.value) || 0 })
               }
-              className="w-10 text-[9px] px-1 py-0.5 rounded outline-none"
+              className="w-10 text-dense-2xs px-1 py-0.5 rounded"
               style={{
                 background: "var(--bg-input)",
                 border: "1px solid var(--border-secondary)",
@@ -544,7 +544,7 @@ function AudioBindingControl({
               onChange={(e) =>
                 onSet(stackId, paramId, { ...binding, outputMax: parseFloat(e.target.value) || 1 })
               }
-              className="w-10 text-[9px] px-1 py-0.5 rounded outline-none"
+              className="w-10 text-dense-2xs px-1 py-0.5 rounded"
               style={{
                 background: "var(--bg-input)",
                 border: "1px solid var(--border-secondary)",

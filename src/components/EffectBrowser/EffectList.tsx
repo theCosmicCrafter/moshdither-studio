@@ -55,7 +55,7 @@ export default function EffectList() {
           <button
             key={effect.id}
             onClick={() => addToStack(effect)}
-            className="group w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-lg transition-all duration-300 neo-flat filigree-corner hover:border-accent-pink"
+            className="group w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-lg transition duration-300 neo-flat filigree-corner hover:border-accent-pink"
           >
             {/* Category indicator line */}
             <div

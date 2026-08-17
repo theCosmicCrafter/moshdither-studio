@@ -320,7 +320,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
               >
                 <button
                   onClick={() => { handleOpen(); setFileMenuOpen(false); }}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors"
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-dense-md text-on-surface hover:bg-accent-teal/10 transition-colors"
                   role="menuitem"
                 >
                   <span className="material-symbols-outlined menu-item-icon" aria-hidden="true">folder_open</span>
@@ -330,7 +330,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                 <button
                   onClick={() => { handleExport(); setFileMenuOpen(false); }}
                   disabled={!mediaLoaded}
-                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded ? "toolbar-enabled" : "toolbar-disabled"}`}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-dense-md text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded ? "toolbar-enabled" : "toolbar-disabled"}`}
                   role="menuitem"
                   aria-disabled={!mediaLoaded}
                 >
@@ -340,7 +340,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                 <button
                   onClick={() => { handleFfglitchExport(); setFileMenuOpen(false); }}
                   disabled={!mediaLoaded}
-                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded ? "toolbar-enabled" : "toolbar-disabled"}`}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-dense-md text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded ? "toolbar-enabled" : "toolbar-disabled"}`}
                 >
                   <span className="material-symbols-outlined menu-item-icon">bug_report</span>
                   Export FFglitch
@@ -348,7 +348,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                 <button
                   onClick={() => { handleProcess(); setFileMenuOpen(false); }}
                   disabled={!mediaLoaded || stackCount === 0}
-                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded && stackCount > 0 ? "toolbar-enabled" : "toolbar-disabled"}`}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-dense-md text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded && stackCount > 0 ? "toolbar-enabled" : "toolbar-disabled"}`}
                 >
                   <span className="material-symbols-outlined menu-item-icon">image</span>
                   Save Image
@@ -373,7 +373,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                 <button
                   onClick={() => { handleUndo(); setEditMenuOpen(false); }}
                   disabled={!canUndo}
-                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors ${canUndo ? "toolbar-enabled" : "toolbar-disabled"}`}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-dense-md text-on-surface hover:bg-accent-teal/10 transition-colors ${canUndo ? "toolbar-enabled" : "toolbar-disabled"}`}
                 >
                   <span className="material-symbols-outlined menu-item-icon">undo</span>
                   Undo
@@ -381,7 +381,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                 <button
                   onClick={() => { handleRedo(); setEditMenuOpen(false); }}
                   disabled={!canRedo}
-                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors ${canRedo ? "toolbar-enabled" : "toolbar-disabled"}`}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-dense-md text-on-surface hover:bg-accent-teal/10 transition-colors ${canRedo ? "toolbar-enabled" : "toolbar-disabled"}`}
                 >
                   <span className="material-symbols-outlined menu-item-icon">redo</span>
                   Redo
@@ -389,13 +389,13 @@ export default function Toolbar({ onFileLoaded }: Props) {
                 <button
                   onClick={() => { handleClearAll(); setEditMenuOpen(false); }}
                   disabled={stackCount === 0}
-                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors ${stackCount > 0 ? "toolbar-enabled" : "toolbar-disabled"}`}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-dense-md text-on-surface hover:bg-accent-teal/10 transition-colors ${stackCount > 0 ? "toolbar-enabled" : "toolbar-disabled"}`}
                 >
                   <span className="material-symbols-outlined menu-item-icon">delete_sweep</span>
                   Clear Stack
                 </button>
                 <div className="border-t border-outline/10 my-1" />
-                <div className="px-3 py-1 text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">
+                <div className="px-3 py-1 text-dense-xs font-semibold text-on-surface-variant uppercase tracking-wider">
                   Panels
                 </div>
                 {PANEL_REGISTRY.map((p) => {
@@ -410,7 +410,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                           triggerLayoutAction("add", p.id);
                         }
                       }}
-                      className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors"
+                      className="w-full flex items-center justify-between px-3 py-1.5 text-dense-md text-on-surface hover:bg-accent-teal/10 transition-colors"
                     >
                       <span className="flex items-center gap-1.5">
                         <span className="material-symbols-outlined panel-menu-icon">{p.icon}</span>
@@ -433,7 +433,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                         }
                       });
                     }}
-                    className="text-[10px] text-on-surface-variant hover:text-accent-teal transition-colors"
+                    className="text-dense-xs text-on-surface-variant hover:text-accent-teal transition-colors"
                   >
                     Show All
                   </button>
@@ -443,7 +443,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                         useAppStore.getState().triggerLayoutAction("remove", p.id);
                       });
                     }}
-                    className="text-[10px] text-on-surface-variant hover:text-accent-pink transition-colors"
+                    className="text-dense-xs text-on-surface-variant hover:text-accent-pink transition-colors"
                   >
                     Hide All
                   </button>
@@ -467,7 +467,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
               <div className="absolute left-0 top-full mt-1 z-[200] min-w-[220px] neo-flat rounded-lg bg-surface/90 backdrop-blur-xl border border-outline/20 py-2 shadow-xl">
                 <button
                   onClick={() => { setShowBeforeAfter(!showBeforeAfter); setViewMenuOpen(false); }}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors"
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-dense-md text-on-surface hover:bg-accent-teal/10 transition-colors"
                 >
                   <span className="material-symbols-outlined menu-item-icon">{showBeforeAfter ? "toggle_on" : "toggle_off"}</span>
                   Before/After Split
@@ -475,11 +475,11 @@ export default function Toolbar({ onFileLoaded }: Props) {
                 <div className="border-t border-outline/20 my-1" />
                 <div className="px-3 py-1.5">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-[11px] text-on-surface-variant flex items-center gap-1.5">
+                    <span className="text-dense-sm text-on-surface-variant flex items-center gap-1.5">
                       <span className="material-symbols-outlined panel-menu-icon">opacity</span>
                       Panel Opacity
                     </span>
-                    <span className="text-[10px] font-mono text-on-surface-variant">{Math.round(panelOpacity * 100)}%</span>
+                    <span className="text-dense-xs font-mono text-on-surface-variant">{Math.round(panelOpacity * 100)}%</span>
                   </div>
                   <input
                     type="range"
@@ -494,7 +494,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   />
                 </div>
                 <div className="border-t border-outline/20 my-1" />
-                <div className="px-3 py-1 text-[10px] uppercase font-bold text-on-surface-variant/70 tracking-wider">
+                <div className="px-3 py-1 text-dense-xs uppercase font-bold text-on-surface-variant/70 tracking-wider">
                   Theme Presets
                 </div>
                 {(["cosmic", "dark", "high-contrast", "light", "custom"] as const).map((t) => (
@@ -508,7 +508,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                       }
                       setViewMenuOpen(false);
                     }}
-                    className={`w-full flex items-center justify-between px-3 py-1.5 text-[12px] transition-colors ${theme === t ? "text-accent-teal font-bold bg-accent-teal/10" : "text-on-surface hover:bg-accent-teal/5"}`}
+                    className={`w-full flex items-center justify-between px-3 py-1.5 text-dense-md transition-colors ${theme === t ? "text-accent-teal font-bold bg-accent-teal/10" : "text-on-surface hover:bg-accent-teal/5"}`}
                   >
                     <span className="capitalize">{t === "custom" ? "Custom UI..." : t.replace("-", " ")}</span>
                     {theme === t && <span className="material-symbols-outlined text-xs">check</span>}
@@ -521,7 +521,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                     useAppStore.getState().triggerLayoutAction("reset");
                     setViewMenuOpen(false);
                   }}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-on-surface hover:bg-accent-teal/10 transition-colors"
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-dense-md text-on-surface hover:bg-accent-teal/10 transition-colors"
                 >
                   <span className="material-symbols-outlined menu-item-icon">dashboard_customize</span>
                   Reset Standard Layout

@@ -77,7 +77,7 @@ export default function OnboardingModal() {
           <li>Export to PNG, JPG, GIF, or MP4</li>
         </ul>
         <div className="p-3 rounded bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-start gap-2">
-          <span className="font-semibold uppercase tracking-wider text-[10px] bg-amber-500/20 px-1.5 py-0.5 rounded text-amber-200 shrink-0">
+          <span className="font-semibold uppercase tracking-wider text-dense-xs bg-amber-500/20 px-1.5 py-0.5 rounded text-amber-200 shrink-0">
             Advisory
           </span>
           <span>

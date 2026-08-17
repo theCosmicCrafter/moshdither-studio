@@ -1,3 +1,30 @@
+/**
+ * Design tokens are stored as complete CSS colors (`--surface: #131314`) so
+ * that hand-written rules in index.css can use `var(--surface)` directly.
+ *
+ * Tailwind cannot apply an opacity modifier to an opaque `var()` string: for
+ * `bg-surface/40` it emits `rgb(var(--surface) / 0.4)`, which is invalid once
+ * the variable expands to a hex literal, so the browser drops the declaration
+ * and the utility silently falls back — translucent panels rendered fully
+ * transparent and tinted borders rendered in Tailwind's default gray. 105 such
+ * usages across 19 files were affected.
+ *
+ * Routing each token through `token()` keeps the bare utility byte-identical
+ * (`var(--x)`) while making the `/<alpha>` form resolve through color-mix,
+ * which supports a `var()` operand. Requires Chromium 111+ / Safari 16.2+ /
+ * Firefox 113+; the Tauri v2 webview and all dev browsers are well past that.
+ */
+const token =
+  (name) =>
+  ({ opacityValue } = {}) =>
+    opacityValue === undefined
+      ? `var(${name})`
+      : `color-mix(in srgb, var(${name}) calc(${opacityValue} * 100%), transparent)`;
+
+/** A token at partial alpha, for use in keyframes where no utility applies. */
+const glow = (name, alpha) =>
+  `color-mix(in srgb, var(${name}) ${alpha * 100}%, transparent)`;
+
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
@@ -5,80 +32,76 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Legacy compat
-        background: "var(--background)",
-        foreground: "var(--on-background)",
-        "primary-foreground": "var(--bg-primary)",
-        "accent-2": "var(--accent-2)",
-        teal: "var(--teal)",
-        card: "var(--bg-panel)",
-        "card-foreground": "var(--text-primary)",
-        border: "var(--border-primary)",
-        input: "var(--bg-input)",
-        ring: "var(--accent)",
-        muted: "var(--text-muted)",
-        "muted-foreground": "var(--text-secondary)",
-        destructive: "var(--danger)",
+        // Legacy compat. Ten further shims once sat here -- background,
+        // foreground, primary-foreground, accent-2, teal, card,
+        // card-foreground, ring, muted-foreground and destructive -- with zero
+        // references left anywhere in src/ (there is no @apply in this project,
+        // so component class strings are the only consumer). They were removed;
+        // the three below are still in use, so they stay until their call sites
+        // migrate to the Material-style tokens listed underneath.
+        border: token("--border-primary"), // 2 uses
+        input: token("--bg-input"), // 9 uses
+        muted: token("--text-muted"), // 76 uses
 
         // Cyber-Urban design tokens
-        "accent-cyan": "var(--teal)",
-        surface: "var(--surface)",
-        "surface-main": "var(--surface-main)",
-        "surface-dim": "var(--surface-dim)",
-        "surface-bright": "var(--surface-bright)",
-        "surface-variant": "var(--surface-variant)",
-        "surface-container-lowest": "var(--surface-container-lowest)",
-        "surface-container-low": "var(--surface-container-low)",
-        "surface-container": "var(--surface-container)",
-        "surface-container-high": "var(--surface-container-high)",
-        "surface-container-highest": "var(--surface-container-highest)",
-        "surface-tint": "var(--surface-tint)",
+        "accent-cyan": token("--teal"),
+        surface: token("--surface"),
+        "surface-main": token("--surface-main"),
+        "surface-dim": token("--surface-dim"),
+        "surface-bright": token("--surface-bright"),
+        "surface-variant": token("--surface-variant"),
+        "surface-container-lowest": token("--surface-container-lowest"),
+        "surface-container-low": token("--surface-container-low"),
+        "surface-container": token("--surface-container"),
+        "surface-container-high": token("--surface-container-high"),
+        "surface-container-highest": token("--surface-container-highest"),
+        "surface-tint": token("--surface-tint"),
 
-        "on-surface": "var(--on-surface)",
-        "on-surface-variant": "var(--on-surface-variant)",
-        "on-background": "var(--on-background)",
-        outline: "var(--outline)",
-        "outline-variant": "var(--outline-variant)",
+        "on-surface": token("--on-surface"),
+        "on-surface-variant": token("--on-surface-variant"),
+        "on-background": token("--on-background"),
+        outline: token("--outline"),
+        "outline-variant": token("--outline-variant"),
 
-        "accent-pink": "var(--accent-pink)",
-        "accent-gold": "var(--accent-gold)",
-        "accent-teal": "var(--accent-teal)",
+        "accent-pink": token("--accent-pink"),
+        "accent-gold": token("--accent-gold"),
+        "accent-teal": token("--accent-teal"),
 
-        primary: "var(--primary)",
-        "primary-container": "var(--primary-container)",
-        "on-primary": "var(--on-primary)",
-        "on-primary-container": "var(--on-primary-container)",
-        "primary-fixed": "var(--primary-fixed)",
-        "primary-fixed-dim": "var(--primary-fixed-dim)",
-        "on-primary-fixed": "var(--on-primary-fixed)",
-        "on-primary-fixed-variant": "var(--on-primary-fixed-variant)",
+        primary: token("--primary"),
+        "primary-container": token("--primary-container"),
+        "on-primary": token("--on-primary"),
+        "on-primary-container": token("--on-primary-container"),
+        "primary-fixed": token("--primary-fixed"),
+        "primary-fixed-dim": token("--primary-fixed-dim"),
+        "on-primary-fixed": token("--on-primary-fixed"),
+        "on-primary-fixed-variant": token("--on-primary-fixed-variant"),
 
-        secondary: "var(--secondary)",
-        "secondary-container": "var(--secondary-container)",
-        "on-secondary": "var(--on-secondary)",
-        "on-secondary-container": "var(--on-secondary-container)",
-        "secondary-fixed": "var(--secondary-fixed)",
-        "secondary-fixed-dim": "var(--secondary-fixed-dim)",
-        "on-secondary-fixed": "var(--on-secondary-fixed)",
-        "on-secondary-fixed-variant": "var(--on-secondary-fixed-variant)",
+        secondary: token("--secondary"),
+        "secondary-container": token("--secondary-container"),
+        "on-secondary": token("--on-secondary"),
+        "on-secondary-container": token("--on-secondary-container"),
+        "secondary-fixed": token("--secondary-fixed"),
+        "secondary-fixed-dim": token("--secondary-fixed-dim"),
+        "on-secondary-fixed": token("--on-secondary-fixed"),
+        "on-secondary-fixed-variant": token("--on-secondary-fixed-variant"),
 
-        tertiary: "var(--tertiary)",
-        "tertiary-fixed": "var(--tertiary-fixed)",
-        "tertiary-fixed-dim": "var(--tertiary-fixed-dim)",
-        "tertiary-container": "var(--tertiary-container)",
-        "on-tertiary": "var(--on-tertiary)",
-        "on-tertiary-container": "var(--on-tertiary-container)",
-        "on-tertiary-fixed": "var(--on-tertiary-fixed)",
-        "on-tertiary-fixed-variant": "var(--on-tertiary-fixed-variant)",
+        tertiary: token("--tertiary"),
+        "tertiary-fixed": token("--tertiary-fixed"),
+        "tertiary-fixed-dim": token("--tertiary-fixed-dim"),
+        "tertiary-container": token("--tertiary-container"),
+        "on-tertiary": token("--on-tertiary"),
+        "on-tertiary-container": token("--on-tertiary-container"),
+        "on-tertiary-fixed": token("--on-tertiary-fixed"),
+        "on-tertiary-fixed-variant": token("--on-tertiary-fixed-variant"),
 
-        error: "var(--danger)",
-        "error-container": "var(--error-container)",
-        "on-error": "var(--on-error)",
-        "on-error-container": "var(--on-error-container)",
+        error: token("--danger"),
+        "error-container": token("--error-container"),
+        "on-error": token("--on-error"),
+        "on-error-container": token("--on-error-container"),
 
-        "inverse-surface": "var(--inverse-surface)",
-        "inverse-on-surface": "var(--inverse-on-surface)",
-        "inverse-primary": "var(--inverse-primary)",
+        "inverse-surface": token("--inverse-surface"),
+        "inverse-on-surface": token("--inverse-on-surface"),
+        "inverse-primary": token("--inverse-primary"),
       },
       fontFamily: {
         display: ["Geist Variable", "system-ui", "sans-serif"],
@@ -103,6 +126,32 @@ export default {
         "body-md": ["14px", { lineHeight: "20px", fontWeight: "400" }],
         "body-sm": ["12px", { lineHeight: "16px", fontWeight: "400" }],
         "data-micro": ["8px", { lineHeight: "10px", fontWeight: "700" }],
+
+        // ── Dense tool-chrome sizes ──────────────────────────────────────
+        // These capture, 1:1, the raw pixel sizes that were previously written
+        // as arbitrary `text-[Npx]` values at 75 call sites across 14 files.
+        //
+        // They deliberately declare font-size and NOTHING else: no weight, no
+        // letter-spacing, no line-height. That makes `.text-dense-xs` byte-
+        // identical to the `.text-[10px]` it replaced, so adopting them moved
+        // no pixels. Mapping those call sites onto the *semantic* roles above
+        // instead would have restyled them -- `label-sm` carries 500-weight and
+        // 0.05em tracking, which fights the `tracking-wider` some sites already
+        // set and risks overflow in the width-constrained numeric readouts
+        // (`w-8 text-right`, `min-w-[50px]`).
+        //
+        // The point of naming them is that arbitrary values can't be audited or
+        // linted, so drift was invisible; a named ramp makes the remaining
+        // consolidation onto real roles a deliberate, reviewable change. Prefer
+        // a semantic role above for new code -- reach here only to match the
+        // density of surrounding tool chrome.
+        "dense-3xs": "8px",
+        "dense-2xs": "9px",
+        "dense-xs": "10px",
+        "dense-sm": "11px",
+        "dense-md": "12px",
+        "dense-lg": "13px",
+        "dense-xl": "14px",
       },
       spacing: {
         "container-padding": "1rem",
@@ -137,15 +186,21 @@ export default {
           "0%": { opacity: "0", transform: "translateY(10px)" },
           "100%": { opacity: "1", transform: "translateY(0)" },
         },
+        // These two animations hard-coded rgba(255,0,127) and rgba(255,223,0).
+        // Neither is a current brand color: the pink is the high-contrast
+        // theme's accent (#ff007f) rather than the default #ffade0, and the
+        // gold (#ffdf00) appears in no theme at all. Being literals they also
+        // stayed fixed while the rest of the UI re-themed. Routing them through
+        // the accent tokens keeps the same glow shape but follows the theme.
         pulseGlow: {
-          "0%": { boxShadow: "0 0 5px rgba(255,0,127,0.4)", opacity: "0.8" },
-          "50%": { boxShadow: "0 0 20px rgba(255,223,0,0.8)", opacity: "1" },
-          "100%": { boxShadow: "0 0 5px rgba(255,0,127,0.4)", opacity: "0.8" },
+          "0%": { boxShadow: `0 0 5px ${glow("--accent-pink", 0.4)}`, opacity: "0.8" },
+          "50%": { boxShadow: `0 0 20px ${glow("--accent-gold", 0.8)}`, opacity: "1" },
+          "100%": { boxShadow: `0 0 5px ${glow("--accent-pink", 0.4)}`, opacity: "0.8" },
         },
         shimmer: {
-          "0%": { opacity: "0.5", filter: "drop-shadow(0 0 2px rgba(255,0,127,0.5))" },
-          "50%": { opacity: "1", filter: "drop-shadow(0 0 8px rgba(255,223,0,0.8))" },
-          "100%": { opacity: "0.5", filter: "drop-shadow(0 0 2px rgba(255,0,127,0.5))" },
+          "0%": { opacity: "0.5", filter: `drop-shadow(0 0 2px ${glow("--accent-pink", 0.5)})` },
+          "50%": { opacity: "1", filter: `drop-shadow(0 0 8px ${glow("--accent-gold", 0.8)})` },
+          "100%": { opacity: "0.5", filter: `drop-shadow(0 0 2px ${glow("--accent-pink", 0.5)})` },
         },
         scanline: {
           "0%": { top: "0%" },

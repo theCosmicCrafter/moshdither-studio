@@ -58,7 +58,7 @@ export default function CustomUiModal() {
               <label htmlFor="primary-color" className="text-xs font-medium text-on-surface block">
                 Primary Accent Color
               </label>
-              <span className="text-[10px] text-on-surface-variant">Active elements, highlights</span>
+              <span className="text-dense-xs text-on-surface-variant">Active elements, highlights</span>
             </div>
             <div className="flex items-center gap-2">
               <input
@@ -78,7 +78,7 @@ export default function CustomUiModal() {
               <label htmlFor="secondary-color" className="text-xs font-medium text-on-surface block">
                 Secondary Accent Color
               </label>
-              <span className="text-[10px] text-on-surface-variant">Hover states, badges</span>
+              <span className="text-dense-xs text-on-surface-variant">Hover states, badges</span>
             </div>
             <div className="flex items-center gap-2">
               <input
@@ -98,7 +98,7 @@ export default function CustomUiModal() {
               <label htmlFor="bg-color" className="text-xs font-medium text-on-surface block">
                 Workspace Surface Color
               </label>
-              <span className="text-[10px] text-on-surface-variant">Panel background tint</span>
+              <span className="text-dense-xs text-on-surface-variant">Panel background tint</span>
             </div>
             <div className="flex items-center gap-2">
               <input
@@ -145,7 +145,7 @@ export default function CustomUiModal() {
           </button>
           <button
             onClick={handleApply}
-            className="px-4 py-1.5 text-xs rounded bg-accent-teal text-surface font-bold hover:brightness-110 transition-all shadow-md"
+            className="px-4 py-1.5 text-xs rounded bg-accent-teal text-surface font-bold hover:brightness-110 transition shadow-md"
           >
             Apply Theme
           </button>

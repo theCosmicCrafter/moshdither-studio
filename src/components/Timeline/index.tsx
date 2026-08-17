@@ -89,7 +89,7 @@ export default function Timeline() {
           <button
             onClick={() => setInPoint(Math.round(currentTime))}
             title="Set in point (I)"
-            className="font-data-micro text-data-micro rounded px-1 cursor-pointer transition-all"
+            className="font-data-micro text-data-micro rounded px-1 cursor-pointer transition"
             style={{
               border: "1px solid var(--cat-analog)",
               background: inPoint !== null ? "rgba(255, 215, 0, 0.15)" : "transparent",
@@ -101,7 +101,7 @@ export default function Timeline() {
           <button
             onClick={() => setOutPoint(Math.round(currentTime))}
             title="Set out point (O)"
-            className="font-data-micro text-data-micro rounded px-1 cursor-pointer transition-all"
+            className="font-data-micro text-data-micro rounded px-1 cursor-pointer transition"
             style={{
               border: "1px solid var(--accent-pink)",
               background: outPoint !== null ? "rgba(255, 173, 224, 0.15)" : "transparent",
