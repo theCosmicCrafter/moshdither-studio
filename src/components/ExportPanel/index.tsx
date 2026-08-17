@@ -176,7 +176,13 @@ export default function ExportPanel() {
         fps,
         width,
         height,
-        audioBakeJson: includeAudio ? audioBakeJson : null,
+        // Sent whenever a bake exists, independent of includeAudio. These are
+        // unrelated concerns: the bake is what makes audio-reactive effects
+        // respond to the track, while includeAudio decides whether that track
+        // is muxed into the output. Gating one on the other meant unticking
+        // "Include audio track" silently froze every audio-reactive effect,
+        // with nothing in the UI explaining why the export came out static.
+        audioBakeJson,
         watermark: watermark.enabled ? watermark : null,
         trimStart: typeof inPoint === "number" ? inPoint : undefined,
         trimEnd,
@@ -317,16 +323,22 @@ export default function ExportPanel() {
         onChange={setFps}
       />
 
-      {/* Include audio */}
+      {/* Include audio. Affects only whether the source track is muxed into the
+          output -- audio-reactive effects are driven by the bake below and work
+          either way. The title spells that out, because the previous coupling
+          taught the opposite. */}
       {audioEnabled && audioFilePath && (
-        <span style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 11 }}>
+        <label
+          style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 11 }}
+          title="Mux the source audio into the exported file. Audio-reactive effects respond to the track regardless of this setting."
+        >
           <input
             type="checkbox"
             checked={includeAudio}
             onChange={(e) => setIncludeAudio(e.target.checked)}
           />
           Include audio track
-        </span>
+        </label>
       )}
 
       {/* Audio bake status */}

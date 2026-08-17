@@ -894,9 +894,6 @@ fn export_video_blocking(
 
     let global_mask = decode_mask_b64(mask_b64.as_deref())?;
 
-    // Track whether audio bake data was provided (before it's consumed)
-    let has_audio_bake = audio_bake_json.is_some();
-
     // Deserialize audio bake data if provided
     let audio_data: Option<crate::audio::AudioBakeData> =
         audio_bake_json.and_then(|json| serde_json::from_str(&json).ok());
@@ -1029,8 +1026,14 @@ fn export_video_blocking(
         }
     });
 
-    // If include_audio is set, skip audio bake (we'll copy source audio directly)
-    let effective_include_audio = include_audio.unwrap_or(false) && !has_audio_bake;
+    // Muxing the source audio track is independent of whether an audio bake was
+    // supplied. This previously read `include_audio && !has_audio_bake`, which
+    // made the two mutually exclusive: a bake is only produced for
+    // audio-reactive work, so exactly the exports that wanted the track lost it,
+    // and no combination of settings could produce reactive visuals *and* audio.
+    // The bake drives per-frame effect params; this only decides whether a
+    // second input is mapped in at encode time.
+    let effective_include_audio = include_audio.unwrap_or(false);
 
     // Cap a single encode at 30 minutes. This is generous for high-resolution
     // exports while preventing a hung FFmpeg process from blocking indefinitely.
