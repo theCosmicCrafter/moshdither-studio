@@ -1,8 +1,12 @@
 /node_modules
 /.vscode
 /.idea
-# Local agent/editor tooling. launch.json holds a machine-specific dev-server
-# command, so it is per-developer rather than shared project config.
+# Local agent/editor tooling. launch.json is a per-developer run configuration.
+# It had already been committed once, and .gitignore does not affect tracked
+# paths, so it is untracked here (`git rm --cached`) for this to take effect --
+# the file itself stays on disk. Its current contents happen to be generic
+# (`npm run dev` on the project's fixed port), so if you would rather share it
+# than ignore it, drop this rule and re-add the file.
 /.claude/launch.json
 
 # TruffleHog binary and the docs bundled in its release tarball, fetched on

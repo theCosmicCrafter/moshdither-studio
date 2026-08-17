@@ -136,28 +136,18 @@ export default {
         "data-micro": ["8px", { lineHeight: "10px", fontWeight: "700" }],
 
         // ── Dense tool-chrome sizes ──────────────────────────────────────
-        // These capture, 1:1, the raw pixel sizes that were previously written
-        // as arbitrary `text-[Npx]` values at 75 call sites across 14 files.
+        // Raw pixel sizes that were previously written as arbitrary
+        // `text-[Npx]` values. They declare font-size and nothing else, so
+        // adopting one is byte-identical to the arbitrary value it replaced and
+        // moves no pixels -- unlike the semantic roles above, which also carry
+        // weight and letter-spacing.
         //
-        // They deliberately declare font-size and NOTHING else: no weight, no
-        // letter-spacing, no line-height. That makes `.text-dense-xs` byte-
-        // identical to the `.text-[10px]` it replaced, so adopting them moved
-        // no pixels. Mapping those call sites onto the *semantic* roles above
-        // instead would have restyled them -- `label-sm` carries 500-weight and
-        // 0.05em tracking, which fights the `tracking-wider` some sites already
-        // set and risks overflow in the width-constrained numeric readouts
-        // (`w-8 text-right`, `min-w-[50px]`).
-        //
-        // The point of naming them is that arbitrary values can't be audited or
-        // linted, so drift was invisible; a named ramp makes the remaining
-        // consolidation onto real roles a deliberate, reviewable change. Prefer
-        // a semantic role above for new code -- reach here only to match the
-        // density of surrounding tool chrome.
-        "dense-3xs": "8px",
-        "dense-2xs": "9px",
-        "dense-xs": "10px",
+        // Only the three sizes still in use are defined. Most call sites landed
+        // on the semantic roles instead when this branch merged master, which
+        // had migrated them independently; keeping tokens for sizes nothing
+        // references would just re-create the unauditable drift these replaced.
+        // Prefer a semantic role for new code.
         "dense-sm": "11px",
-        "dense-md": "12px",
         "dense-lg": "13px",
         "dense-xl": "14px",
       },
