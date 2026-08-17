@@ -16,7 +16,7 @@ const BAND_COLORS = [
   "#cc44ff",
 ];
 
-export function AudioVisualizer({ variant = "bars", maxBars = 32, className = "" }: AudioVisualizerProps) {
+function AudioVisualizer({ variant = "bars", maxBars = 32, className = "" }: AudioVisualizerProps) {
   const audioBandEnergies = useAppStore((s) => s.audioBandEnergies);
   const values = Object.values(audioBandEnergies);
 
