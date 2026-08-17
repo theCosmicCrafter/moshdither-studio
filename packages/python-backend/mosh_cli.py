@@ -66,9 +66,16 @@ def _ffmpeg_error_summary(stderr, max_chars=600):
     meaningful = [ln for ln in lines if not ln.lstrip().startswith(skip_prefixes)]
     # If filtering removed everything, the banner really was all there was.
     tail = meaningful or lines
-    summary = "\n".join(tail[-12:])
+    selected = tail[-12:]
+    # Drop whole lines to fit the budget rather than slicing characters, which
+    # left the message opening mid-token (".​..393733 (Error number ...").
+    while selected and len("\n".join(selected)) > max_chars and len(selected) > 1:
+        selected.pop(0)
+    summary = "\n".join(selected)
     if len(summary) > max_chars:
-        summary = "..." + summary[-max_chars:]
+        # A single line longer than the budget: keep its end, where ffmpeg's
+        # reason sits, but say so rather than appearing to start mid-word.
+        summary = "(truncated) ..." + summary[-max_chars:]
     return summary
 
 
