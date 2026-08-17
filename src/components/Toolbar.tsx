@@ -285,11 +285,27 @@ export default function Toolbar({ onFileLoaded }: Props) {
     setStatusMessage("Export started from Export panel...");
   };
 
+  // FFglitch/datamosh works by corrupting interframe compression, so it needs a
+  // real multi-frame video. Run against a still it produced an unreadable
+  // intermediate and surfaced as a raw ffmpeg traceback from mosh_cli.py
+  // ("ffmpeg failed: ffmpeg version 8.0-essentials_build ..."), which gave no
+  // hint that the input was simply the wrong kind of media. Gate it the same
+  // way handleAnimateAsVideo gates the inverse case, and point at the
+  // conversion that makes the export possible.
   const handleFfglitchExport = async () => {
-    if (!mediaLoaded) return;
+    if (!mediaLoaded || isProcessing) return;
+    if (!isVideo) {
+      setStatusMessage(
+        "FFglitch needs a video — it datamoshes between frames. Use File > Animate as Video first to turn this still into one."
+      );
+      return;
+    }
     const state = useAppStore.getState();
     const path = state.filePath;
-    if (!path) return;
+    if (!path) {
+      setStatusMessage("FFglitch export: no file path for the loaded video (reopen it via File > Open first)");
+      return;
+    }
     setStatusMessage("FFglitch export started...");
     setIsProcessing(true);
     try {
@@ -448,10 +464,15 @@ export default function Toolbar({ onFileLoaded }: Props) {
                 </button>
                 <button
                   onClick={() => { handleFfglitchExport(); setFileMenuOpen(false); }}
-                  disabled={!mediaLoaded}
-                  className={`w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded ? "toolbar-enabled" : "toolbar-disabled"}`}
+                  disabled={!mediaLoaded || !isVideo}
+                  title={
+                    mediaLoaded && !isVideo
+                      ? "FFglitch datamoshes between video frames — use Animate as Video first"
+                      : undefined
+                  }
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded && isVideo ? "toolbar-enabled" : "toolbar-disabled"}`}
                   role="menuitem"
-                  aria-disabled={!mediaLoaded}
+                  aria-disabled={!mediaLoaded || !isVideo}
                 >
                   <span className="material-symbols-outlined menu-item-icon">bug_report</span>
                   Export FFglitch

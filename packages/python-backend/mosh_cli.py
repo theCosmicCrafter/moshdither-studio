@@ -37,6 +37,41 @@ basic_modes.ffedit = ffedit_path
 external_script.ffgac = ffgac_path
 external_script.ffedit = ffedit_path
 
+def _ffmpeg_error_summary(stderr, max_chars=600):
+    """Pull the part of ffmpeg's stderr that actually says what went wrong.
+
+    ffmpeg opens every run with a banner -- version line, build flags, then one
+    `lib*` line per linked library -- which on its own runs well past 500
+    characters. Reporting `stderr[:500]` therefore surfaced nothing but that
+    boilerplate and cut off before the real message, which ffmpeg prints last.
+    Errors that reached the UI looked like "ffmpeg failed: ffmpeg version
+    8.0-essentials_build ... --enable-gpl --enable-version3 ..." and were
+    impossible to act on.
+
+    Take the tail instead, after dropping the banner and progress spam.
+    """
+    if not stderr:
+        return "(no stderr)"
+    skip_prefixes = (
+        "ffmpeg version",
+        "built with",
+        "configuration:",
+        "lib",
+        "Press [q]",
+        "frame=",
+        "size=",
+        "video:",
+    )
+    lines = [ln.rstrip() for ln in stderr.splitlines() if ln.strip()]
+    meaningful = [ln for ln in lines if not ln.lstrip().startswith(skip_prefixes)]
+    # If filtering removed everything, the banner really was all there was.
+    tail = meaningful or lines
+    summary = "\n".join(tail[-12:])
+    if len(summary) > max_chars:
+        summary = "..." + summary[-max_chars:]
+    return summary
+
+
 # Helper to run ffmpeg
 def ffmpeg_convert(input_path, output_path, extra_args=None):
     """Run ffmpeg safely using argument list (no shell injection)."""
@@ -77,7 +112,11 @@ def ffmpeg_convert(input_path, output_path, extra_args=None):
     if result.returncode != 0:
         print(f"ffmpeg failed with code {result.returncode}")
         print(f"stderr: {result.stderr}")
-        raise RuntimeError(f"ffmpeg failed: {result.stderr[:500]}")
+        raise RuntimeError(
+            f"ffmpeg failed (exit {result.returncode}) converting "
+            f"{os.path.basename(input_path)} -> {os.path.basename(output_path)}: "
+            f"{_ffmpeg_error_summary(result.stderr)}"
+        )
 
 def configure_js_script(effect_name, params):
     # Locate original JS file
