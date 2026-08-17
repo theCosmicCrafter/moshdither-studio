@@ -366,7 +366,7 @@
        to its pre-focus computed value (0-width/none) instead of resolving to
        the `:focus-visible` ring below -- keyboard focus was invisible on every
        .neo-* surface. Keep `outline` out of this list. */
-    transition-property: background-color, border-color, box-shadow, color, transform, opacity,
+    transition-property: background-color, border-color, border-width, box-shadow, color, transform, opacity,
       filter, backdrop-filter, -webkit-backdrop-filter;
     transition-duration: 0.3s;
     transition-timing-function: cubic-bezier(0.25, 0.8, 0.25, 1);
@@ -389,7 +389,7 @@
     box-shadow:
       3px 3px 6px var(--neo-dark),
       -3px -3px 6px var(--neo-light);
-    transition-property: background-color, border-color, box-shadow, color, transform, opacity,
+    transition-property: background-color, border-color, border-width, box-shadow, color, transform, opacity,
       filter, backdrop-filter, -webkit-backdrop-filter;
     transition-duration: 0.3s;
     transition-timing-function: cubic-bezier(0.25, 0.8, 0.25, 1);
@@ -519,7 +519,7 @@
     height: 20px;
     border: 1px solid transparent;
     pointer-events: none;
-    transition-property: background-color, border-color, box-shadow, color, transform, opacity,
+    transition-property: background-color, border-color, border-width, box-shadow, color, transform, opacity,
       filter, backdrop-filter, -webkit-backdrop-filter;
     transition-duration: 0.3s;
     transition-timing-function: ease;
@@ -642,7 +642,7 @@
     cursor: pointer;
     border: 2px solid var(--accent);
     margin-top: -5px;
-    transition-property: background-color, border-color, box-shadow, color, transform, opacity,
+    transition-property: background-color, border-color, border-width, box-shadow, color, transform, opacity,
       filter, backdrop-filter, -webkit-backdrop-filter;
     transition-duration: 0.2s;
     transition-timing-function: cubic-bezier(0.25, 0.8, 0.25, 1);
@@ -708,7 +708,7 @@
     border-radius: 6px;
     border: none;
     cursor: pointer;
-    transition-property: background-color, border-color, box-shadow, color, transform, opacity,
+    transition-property: background-color, border-color, border-width, box-shadow, color, transform, opacity,
       filter, backdrop-filter, -webkit-backdrop-filter;
     transition-duration: 0.3s;
     transition-timing-function: cubic-bezier(0.25, 0.8, 0.25, 1);
@@ -733,7 +733,7 @@
     border-radius: 6px;
     border: 1px solid var(--border-secondary);
     cursor: pointer;
-    transition-property: background-color, border-color, box-shadow, color, transform, opacity,
+    transition-property: background-color, border-color, border-width, box-shadow, color, transform, opacity,
       filter, backdrop-filter, -webkit-backdrop-filter;
     transition-duration: 0.15s;
     transition-timing-function: ease;
@@ -760,7 +760,7 @@
     border: 1px solid transparent;
     color: var(--text-muted);
     cursor: pointer;
-    transition-property: background-color, border-color, box-shadow, color, transform, opacity,
+    transition-property: background-color, border-color, border-width, box-shadow, color, transform, opacity,
       filter, backdrop-filter, -webkit-backdrop-filter;
     transition-duration: 0.3s;
     transition-timing-function: cubic-bezier(0.25, 0.8, 0.25, 1);
@@ -818,7 +818,7 @@
     cursor: pointer;
     border: 2px solid var(--accent);
     margin-top: -5px;
-    transition-property: background-color, border-color, box-shadow, color, transform, opacity,
+    transition-property: background-color, border-color, border-width, box-shadow, color, transform, opacity,
       filter, backdrop-filter, -webkit-backdrop-filter;
     transition-duration: 0.2s;
     transition-timing-function: cubic-bezier(0.25, 0.8, 0.25, 1);

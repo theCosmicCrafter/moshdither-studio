@@ -278,6 +278,31 @@ async function main() {
     return;
   }
 
+  // --check verifies the committed subset matches the icons referenced in
+  // source, without hitting the network. Adding or renaming a glyph without
+  // re-subsetting is invisible at build time -- the ligature simply fails to
+  // form and the raw name is painted into the UI -- and that has now happened
+  // twice, so `prebuild` runs this and fails loudly instead.
+  if (process.argv.includes("--check")) {
+    let manifest = { icons: "" };
+    try {
+      manifest = JSON.parse(readFileSync(iconsManifestPath, "utf8"));
+    } catch {
+      /* treated as empty below */
+    }
+    const have = new Set((manifest.icons || "").split(",").filter(Boolean));
+    const missing = [...found].filter((n) => !have.has(n)).sort();
+    const extra = [...have].filter((n) => !found.has(n)).sort();
+    console.error("[subset-material-symbols] Icon subset is stale.");
+    if (missing.length) {
+      console.error(`  Referenced in source but not in the font: ${missing.join(", ")}`);
+      console.error("  These render as their literal ligature name in the UI.");
+    }
+    if (extra.length) console.error(`  In the font but unreferenced: ${extra.join(", ")}`);
+    console.error("  Run `npm run subset:icons` and commit public/fonts/.");
+    process.exit(1);
+  }
+
   console.log(`[subset-material-symbols] Generating subset for ${found.size} icons...`);
 
   const googleCss = await fetchGoogleFontsCss(found);

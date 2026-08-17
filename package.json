@@ -6,7 +6,7 @@
   "scripts": {
     "prepare": "node -e \"try{require('child_process').execSync('git config core.hooksPath .husky')}catch(e){}\"",
     "dev": "vite",
-    "prebuild": "node scripts/verify-external-bins.mjs",
+    "prebuild": "node scripts/verify-external-bins.mjs && node scripts/subset-material-symbols.mjs --check",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "verify:external": "node scripts/verify-external-bins.mjs",
@@ -26,7 +26,8 @@
     "audit:features": "python tools/feature_audit.py",
     "audit:parity": "playwright test tests/e2e/run-parity.spec.ts",
     "secret-scan": "pwsh -ExecutionPolicy Bypass -File scripts/secret-scan.ps1",
-    "secret-scan:history": "pwsh -ExecutionPolicy Bypass -File scripts/secret-scan.ps1 -History"
+    "secret-scan:history": "pwsh -ExecutionPolicy Bypass -File scripts/secret-scan.ps1 -History",
+    "verify:icons": "node scripts/subset-material-symbols.mjs --check"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",

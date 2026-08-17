@@ -62,20 +62,36 @@ if (-not $trufflehog) {
     $sums = if ($raw -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($raw) } else { $raw }
     $expected = ($sums -split "`n" | Where-Object { $_ -match [regex]::Escape($asset) } |
         Select-Object -First 1) -split '\s+' | Select-Object -First 1
-    if (-not $expected) {
-        Remove-Item $tmp
-        Write-Error "No checksum published for $asset -- refusing to install."
+    # Report before cleaning up, and use Write-Host rather than Write-Error:
+    # $ErrorActionPreference is "Stop" at the top of this script, so Write-Error
+    # would terminate immediately, making the `exit 1` unreachable and surfacing
+    # the refusal as an unhandled error rather than a clean abort. The
+    # Remove-Item is best-effort so a locked temp file cannot swallow the
+    # message explaining why the install was refused.
+    $abort = {
+        param($Reason)
+        Write-Host $Reason -ForegroundColor Red
+        try { Remove-Item $tmp -ErrorAction SilentlyContinue } catch { }
         exit 1
+    }
+    if (-not $expected) {
+        & $abort "No checksum published for $asset -- refusing to install."
     }
     $actual = (Get-FileHash -Path $tmp -Algorithm SHA256).Hash
     if ($actual -ne $expected.ToUpper()) {
-        Remove-Item $tmp
-        Write-Error "Checksum mismatch for $asset. Expected $expected, got $actual. Refusing to install."
-        exit 1
+        & $abort "Checksum mismatch for $asset. Expected $expected, got $actual. Refusing to install."
     }
     Write-Host "Checksum verified ($expected)." -ForegroundColor Green
 
-    tar -xzf $tmp -C (Split-Path $trufflehog)
+    # Resolve tar explicitly rather than trusting PATH. When this script is
+    # invoked through `npm run` from a Git Bash shell, PATH puts GNU tar
+    # (/usr/bin/tar) ahead of the Windows one, and GNU tar reads the leading
+    # "C:" of an absolute Windows path as a remote host spec -- it fails with
+    # "Cannot connect to C: resolve failed" and leaves no binary behind, so the
+    # scan then dies on a missing executable.
+    $sysTar = Join-Path $env:SystemRoot "System32\tar.exe"
+    $tarExe = if (Test-Path $sysTar) { $sysTar } else { "tar" }
+    & $tarExe -xzf $tmp -C (Split-Path $trufflehog)
     Remove-Item $tmp
     Write-Host "TruffleHog installed: $trufflehog" -ForegroundColor Green
 }
