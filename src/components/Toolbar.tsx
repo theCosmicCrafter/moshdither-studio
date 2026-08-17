@@ -44,6 +44,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
   const setDuration = useAppStore((s) => s.setDuration);
   const setAnimateDialogOpen = useAppStore((s) => s.setAnimateDialogOpen);
   const setAnimateSourceStillPath = useAppStore((s) => s.setAnimateSourceStillPath);
+  const animateSourceStillPath = useAppStore((s) => s.animateSourceStillPath);
   const setProxyUrl = useAppStore((s) => s.setProxyUrl);
   const showBeforeAfter = useAppStore((s) => s.showBeforeAfter);
   const zoom = useAppStore((s) => s.zoom);
@@ -212,6 +213,46 @@ export default function Toolbar({ onFileLoaded }: Props) {
   // elsewhere. Only meaningful when a still image (not already a video) is
   // loaded, matching the isVideoOnlyEffect gating used across
   // EffectBrowser/EffectStack.
+  // Undo of Animate as Video. The conversion replaced filePath/isVideo with the
+  // generated clip, which left no way back short of reopening the original by
+  // hand -- the still on disk was never touched, the app had simply forgotten
+  // it. Reloads the remembered still through the same path as File > Open so
+  // isVideo, duration, proxy and SAM3 are all re-derived rather than patched.
+  const handleRevertToStill = async () => {
+    const state = useAppStore.getState();
+    const stillPath = state.animateSourceStillPath;
+    if (!stillPath || isProcessing) return;
+    setStatusMessage("Reverting to the original still...");
+    setIsProcessing(true);
+    try {
+      await loadMediaFromPath(stillPath);
+      setFilePath(stillPath);
+      setIsVideo(false);
+      setProxyUrl(null);
+      setAnimateSourceStillPath(null);
+      const synced = await onFileLoaded();
+      try {
+        setMediaMetadata(await getMediaMetadata(stillPath));
+      } catch (e) {
+        console.warn("Failed to load metadata for reverted still", e);
+      }
+      if (useAppStore.getState().sam3Ready) {
+        try {
+          await sam3LoadImage(await getFrameData());
+        } catch (e) {
+          console.warn("Failed to load reverted still into SAM3", e);
+        }
+      }
+      setStatusMessage(
+        synced ? `Reverted to still: ${stillPath}` : `Reverted to still: ${stillPath} (preview sync pending)`
+      );
+    } catch (err) {
+      setStatusMessage(`Revert to still failed: ${err}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   // Opens the prompt; the conversion itself runs from its onConfirm.
   const handleAnimateAsVideo = () => {
     if (!mediaLoaded || isVideo || isProcessing) return;
@@ -462,6 +503,19 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   <span className="material-symbols-outlined menu-item-icon" aria-hidden="true">animation</span>
                   Animate as Video
                 </button>
+                {animateSourceStillPath && (
+                  <button
+                    onClick={() => { handleRevertToStill(); setFileMenuOpen(false); }}
+                    disabled={isProcessing}
+                    className={`w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors ${isProcessing ? "toolbar-disabled" : "toolbar-enabled"}`}
+                    role="menuitem"
+                    aria-disabled={isProcessing}
+                    title="Load the still this clip was animated from. The generated video file is left on disk."
+                  >
+                    <span className="material-symbols-outlined menu-item-icon" aria-hidden="true">undo</span>
+                    Revert to Still
+                  </button>
+                )}
                 <div className="border-t border-outline/10 my-1" />
                 <button
                   onClick={() => { handleExport(); setFileMenuOpen(false); }}
