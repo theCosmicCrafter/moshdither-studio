@@ -88,8 +88,8 @@ describe("EffectChain GL checkpoint", () => {
     ckpt("draw to screen (bayer)");
 
     expect(errorSpy).toHaveBeenCalledTimes(2);
-    const labels = errorSpy.mock.calls.map((c) => String(c[0]));
-    expect(labels.some((m) => m.includes("useProgram(bayer)"))).toBe(true);
-    expect(labels.some((m) => m.includes("draw to screen (bayer)"))).toBe(true);
+    const labels = errorSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(labels.some((m: string) => m.includes("useProgram(bayer)"))).toBe(true);
+    expect(labels.some((m: string) => m.includes("draw to screen (bayer)"))).toBe(true);
   });
 });
