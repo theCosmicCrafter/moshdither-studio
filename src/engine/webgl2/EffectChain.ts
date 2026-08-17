@@ -22,6 +22,8 @@ export class EffectChain {
   // Without bounding, long editing sessions with many distinct masks would leak
   // GPU memory indefinitely.
   private maskTextureCache = new Map<string, WebGLTexture>();
+  /** Labels already reported by `ckpt`, so a per-frame fault logs once. */
+  private reportedGlFaults = new Set<string>();
   private static readonly MASK_CACHE_MAX = 8;
 
   constructor(ctx: WebGLContext, width: number, height: number) {
@@ -223,12 +225,14 @@ export class EffectChain {
       );
 
       gl.useProgram(program);
+      this.ckpt(`useProgram(${pass.shaderId})`);
 
       // Bind input texture to unit 0
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, inputTex);
       const samplerLoc = gl.getUniformLocation(program, "tDiffuse");
       if (samplerLoc !== null) gl.uniform1i(samplerLoc, 0);
+      this.ckpt(`bind input texture (${pass.shaderId})`);
 
       // For maskBlend: bind tPrevious to unit 2 and tMask to unit 3
       if (isMaskBlend && previousTex && maskTex) {
@@ -280,6 +284,8 @@ export class EffectChain {
         }
       }
 
+      this.ckpt(`pass uniforms (${pass.shaderId})`);
+
       // Set default uniform values from shader definition for uniforms not already set
       for (const u of shader.uniforms) {
         if (pass.uniforms[u.name] !== undefined) continue;
@@ -299,6 +305,8 @@ export class EffectChain {
           gl.uniform1i(loc, u.default ? 1 : 0);
         }
       }
+
+      this.ckpt(`default uniforms (${pass.shaderId})`);
 
       // Set resolution uniform
       const resLoc = gl.getUniformLocation(program, "resolution");
@@ -333,6 +341,7 @@ export class EffectChain {
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
         this.quad.draw();
+        this.ckpt(`draw to ${fbName} (${pass.shaderId})`);
         inputTex = this.ctx.getTexture(
           fbName === "fb_a" ? "fbo_a" : fbName === "fb_b" ? "fbo_b" : "fbo_c"
         )!;
@@ -343,6 +352,7 @@ export class EffectChain {
         gl.clearColor(0, 0, 0, 1);
         gl.clear(gl.COLOR_BUFFER_BIT);
         this.quad.draw();
+        this.ckpt(`draw to screen (${pass.shaderId})`);
       }
       renderedAnyPass = true;
     }
@@ -352,6 +362,43 @@ export class EffectChain {
       console.warn("[EffectChain] No passes were rendered — falling back to blit");
       this.blit(sourceTexture);
     }
+  }
+
+  /**
+   * Dev-only labelled GL error checkpoint.
+   *
+   * PreviewViewport calls `gl.getError()` once at the end of a frame, which
+   * reports *that* something failed but not *what* -- in practice a wall of
+   * bare "WebGL error after render: 1282" with no way to attribute it (741 of
+   * them in one session). getError also clears the flag, so a single trailing
+   * call collapses every fault in the frame into one number.
+   *
+   * Calling it at labelled points names the offending operation instead. This
+   * is deliberately DEV-only: getError forces a synchronous pipeline flush, so
+   * it must not sit in the per-pass hot path of a release build.
+   *
+   * Each label reports once per chain instance -- a fault that recurs every
+   * frame is one bug, not hundreds.
+   */
+  private ckpt(label: string) {
+    if (!import.meta.env.DEV) return;
+    const err = this.gl.getError();
+    if (err === this.gl.NO_ERROR) return;
+    const names: Record<number, string> = {
+      0x0500: "INVALID_ENUM",
+      0x0501: "INVALID_VALUE",
+      0x0502: "INVALID_OPERATION",
+      0x0505: "OUT_OF_MEMORY",
+      0x0506: "INVALID_FRAMEBUFFER_OPERATION",
+      0x9242: "CONTEXT_LOST_WEBGL",
+    };
+    const key = `${label}:${err}`;
+    if (this.reportedGlFaults.has(key)) return;
+    this.reportedGlFaults.add(key);
+    console.error(
+      `[EffectChain] GL ${names[err] ?? err} (${err}) at ${label} — reported once per chain; ` +
+        "later occurrences of this same label are suppressed."
+    );
   }
 
   private blit(sourceTexture: WebGLTexture) {
