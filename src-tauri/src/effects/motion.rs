@@ -171,7 +171,8 @@ fn to_luma(frame: &Frame) -> Vec<f32> {
     let mut luma = vec![0.0f32; w * h];
     for i in (0..frame.data.len()).step_by(4) {
         let idx = i / 4;
-        luma[idx] = crate::effects::luminance_f32(frame.data[i], frame.data[i + 1], frame.data[i + 2]);
+        luma[idx] =
+            crate::effects::luminance_f32(frame.data[i], frame.data[i + 1], frame.data[i + 2]);
     }
     luma
 }

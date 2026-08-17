@@ -13,7 +13,8 @@ pub fn load_image<P: AsRef<Path>>(path: P) -> Result<Frame> {
     if w > 2048 || h > 2048 {
         tracing::warn!(
             "Image dimensions {}x{} exceed 2048px limit. No automatic resize applied.",
-            w, h
+            w,
+            h
         );
         // No resize performed.
     }
@@ -36,7 +37,8 @@ pub fn load_image_from_memory(bytes: &[u8]) -> Result<Frame> {
     if w > 2048 || h > 2048 {
         tracing::warn!(
             "Image dimensions {}x{} exceed 2048px limit. No automatic resize applied.",
-            w, h
+            w,
+            h
         );
         // No resize performed.
     }

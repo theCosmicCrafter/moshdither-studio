@@ -137,7 +137,8 @@ fn cleanup_stale_sam3_bridge() {
         } else {
             tracing::debug!(
                 "Stale SAM3 PID file points to non-bridge process {} ({}), skipping",
-                pid, name
+                pid,
+                name
             );
         }
     }

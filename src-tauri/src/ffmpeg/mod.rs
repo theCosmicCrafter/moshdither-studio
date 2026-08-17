@@ -352,7 +352,11 @@ pub fn image_to_video(image_path: &str, duration_secs: f64, fps: f64) -> Result<
         .join("animated-stills");
     std::fs::create_dir_all(&out_dir).map_err(AppError::Io)?;
 
-    let output_path = out_dir.join(build_animated_still_filename(image_path, duration_secs, fps));
+    let output_path = out_dir.join(build_animated_still_filename(
+        image_path,
+        duration_secs,
+        fps,
+    ));
     let output_path_str = output_path.to_string_lossy().to_string();
 
     let args = build_image_to_video_args(
@@ -480,7 +484,12 @@ pub fn decode_video_with_options(
         tracing::warn!(
             "Requested {} frames but only {} fit in memory budget \
              ({}x{} @ {} bytes/frame, budget {} bytes). Clip will be truncated.",
-            requested_max, max_frames, width, height, frame_size, budget
+            requested_max,
+            max_frames,
+            width,
+            height,
+            frame_size,
+            budget
         );
     }
 
@@ -575,7 +584,11 @@ fn find_output_arg_index(args: &[String], output_path: &str) -> Option<usize> {
     args.iter().rposition(|a| a == output_path)
 }
 
-fn apply_watermark_args(mut args: Vec<String>, wm: &WatermarkSettings, output_path: &str) -> Vec<String> {
+fn apply_watermark_args(
+    mut args: Vec<String>,
+    wm: &WatermarkSettings,
+    output_path: &str,
+) -> Vec<String> {
     if !wm.enabled {
         return args;
     }
@@ -839,7 +852,9 @@ pub fn encode_video(
     let dest = std::path::Path::new(final_path);
     let temp_path_buf = dest.with_file_name(format!(
         ".{}.moshdither-tmp",
-        dest.file_name().and_then(|f| f.to_str()).unwrap_or("export")
+        dest.file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or("export")
     ));
     let temp_path = temp_path_buf.to_string_lossy().into_owned();
     let path: &str = &temp_path;
@@ -1244,10 +1259,7 @@ fn output_with_timeout(
     let status = match child.wait_timeout(timeout) {
         Ok(status) => status,
         Err(e) if e.kind() == ErrorKind::TimedOut => {
-            tracing::warn!(
-                "Command timed out after {:?}, killing process",
-                timeout
-            );
+            tracing::warn!("Command timed out after {:?}, killing process", timeout);
             let _ = child.kill();
             let _ = child.wait_timeout(std::time::Duration::from_secs(10));
             join_readers(stdout_thread, stderr_thread);
@@ -1960,7 +1972,10 @@ mod temp_file_guard_tests {
         std::fs::write(&path, b"partial encode").expect("failed to write test fixture");
         {
             let _guard = TempFileGuard::new(path.clone());
-            assert!(path.exists(), "fixture should exist while the guard is alive");
+            assert!(
+                path.exists(),
+                "fixture should exist while the guard is alive"
+            );
         }
         assert!(
             !path.exists(),

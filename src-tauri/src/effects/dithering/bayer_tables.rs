@@ -12,9 +12,4 @@
 pub const BAYER_2: [[u32; 2]; 2] = [[0, 2], [3, 1]];
 
 /// 4x4 Bayer matrix, raw integer values (unnormalized).
-pub const BAYER_4: [[u32; 4]; 4] = [
-    [0, 8, 2, 10],
-    [12, 4, 14, 6],
-    [3, 11, 1, 9],
-    [15, 7, 13, 5],
-];
+pub const BAYER_4: [[u32; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];

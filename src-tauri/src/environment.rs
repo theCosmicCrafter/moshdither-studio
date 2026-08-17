@@ -349,10 +349,7 @@ pub async fn install_local_environment(app: AppHandle) -> std::result::Result<En
     } else {
         // Minimal fallback set for mosh_cli.py (numpy/Pillow are transitive
         // deps of the DatamoshLib.FFG_effects modules it imports)
-        run_command(
-            &pip.to_string_lossy(),
-            &["install", "numpy", "Pillow"],
-        )?;
+        run_command(&pip.to_string_lossy(), &["install", "numpy", "Pillow"])?;
     }
 
     copy_bundled_ffmpeg(&app)?;

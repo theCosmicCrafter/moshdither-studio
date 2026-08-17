@@ -105,8 +105,8 @@ impl Effect for PixelSort {
 
             for x in 0..w {
                 let idx = (y * w + x) * 4;
-                let lum = crate::effects::luminance_f32(data[idx], data[idx + 1], data[idx + 2])
-                    as u8;
+                let lum =
+                    crate::effects::luminance_f32(data[idx], data[idx + 1], data[idx + 2]) as u8;
 
                 if lum > threshold && !in_run {
                     run_start = x;

@@ -1,8 +1,8 @@
 #![allow(clippy::too_many_arguments)]
 
 use crate::effects::{
-    blend_mask, functional_tests::run_all_function_tests, verification::verify_all_effects,
-    Effect, EffectCategory, EffectMeta, EffectRegistry, Frame, Mask,
+    blend_mask, functional_tests::run_all_function_tests, verification::verify_all_effects, Effect,
+    EffectCategory, EffectMeta, EffectRegistry, Frame, Mask,
 };
 use crate::ffmpeg::{
     decode_video, encode_video, extract_audio_to_wav, ffedit_binary, ffgac_binary, ffmpeg_binary,
@@ -785,7 +785,8 @@ fn export_video_blocking(
     // chose n px on the longest side.
     tracing::info!(
         "Planning export decode for source: {} (preferred scale: {:?})",
-        source_path, processing_scale
+        source_path,
+        processing_scale
     );
     let _ = app_handle.emit(
         "export-progress",
@@ -796,7 +797,8 @@ fn export_video_blocking(
     let budget_mb = budget_bytes as f64 / (1024.0 * 1024.0);
     tracing::info!(
         "Export decode plan: scale={:?}, memory budget={:.0} MB",
-        decode_scale, budget_mb
+        decode_scale,
+        budget_mb
     );
     if let Some(s) = decode_scale {
         let message = format!(
@@ -1665,7 +1667,10 @@ mod integration_tests {
             mask_mode: None,
         }];
         let result = apply_stack_to_frame(&reg, frame, &stack, None);
-        assert!(result.is_err(), "an unknown effect id must error, not panic");
+        assert!(
+            result.is_err(),
+            "an unknown effect id must error, not panic"
+        );
     }
 
     #[test]
@@ -2864,7 +2869,10 @@ mod ffglitch_extra_path_tests {
         let params = serde_json::json!({ "motionUrl": p.to_string_lossy() });
         let result = validate_ffglitch_extra_paths("motion_transfer", &params);
         let _ = fs::remove_file(&p);
-        assert!(result.is_ok(), "existing motionUrl should be accepted: {result:?}");
+        assert!(
+            result.is_ok(),
+            "existing motionUrl should be accepted: {result:?}"
+        );
     }
 
     #[test]
@@ -2898,8 +2906,7 @@ mod ffglitch_extra_path_tests {
     fn combine_rejects_a_video_that_does_not_exist() {
         let a = temp_media("mosh_ffglitch_guard_combine_real.mp4");
         let missing = std::env::temp_dir().join("mosh_ffglitch_guard_combine_missing.mp4");
-        let params =
-            serde_json::json!({ "combineVideos": [a.to_string_lossy(), missing.to_string_lossy()] });
+        let params = serde_json::json!({ "combineVideos": [a.to_string_lossy(), missing.to_string_lossy()] });
         let result = validate_ffglitch_extra_paths("combine", &params);
         let _ = fs::remove_file(&a);
         assert!(
