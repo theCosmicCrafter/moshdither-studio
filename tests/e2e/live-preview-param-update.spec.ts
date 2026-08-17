@@ -65,7 +65,11 @@ test("changing a static effect's parameter updates the WebGL live preview canvas
   // isPlaying` condition and keeps it looping regardless of the bug under
   // test -- pause explicitly so the loop only continues if something in the
   // stack is actually animated (it isn't, for Bayer).
-  await page.getByRole("button", { name: "Pause playback" }).click();
+  // The transport lives in the Timeline, not the toolbar: the duplicate
+  // play/scrub/speed controls were removed from Toolbar, so "Pause playback"
+  // no longer exists anywhere and this click timed out. The Timeline button is
+  // titled "Pause" while playing and "Play" when stopped.
+  await page.getByTitle("Pause").click();
 
   // Add Bayer Dither -- a static effect (no animated shader), previewed via
   // an accurate WebGL shader (not routed to the CPU backend), exactly the

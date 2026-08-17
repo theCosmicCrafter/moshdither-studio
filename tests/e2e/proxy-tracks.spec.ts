@@ -47,8 +47,15 @@ test("proxy panel has generate button", async ({ page }) => {
 
 test("proxy panel has quality slider", async ({ page }) => {
   await openPanelTab(page, "Proxy Media");
-  const qualityLabel = page.locator("text=/Quality \\(CRF\\):/").first();
-  await expect(qualityLabel).toBeVisible({ timeout: 10000 });
+  // Matched without a trailing colon: this slider was migrated to
+  // LabeledSlider, which renders the bare label, so the old
+  // /Quality \(CRF\):/ pattern no longer matched anything. Assert on the
+  // control rather than only its text, so a label that renders while its
+  // slider is missing cannot pass.
+  await expect(page.getByText(/Quality \(CRF\)/).first()).toBeVisible({ timeout: 10000 });
+  await expect(page.getByRole("slider", { name: /Quality \(CRF\)/ }).first()).toBeVisible({
+    timeout: 10000,
+  });
 });
 
 test("tracks panel is visible", async ({ page }) => {
