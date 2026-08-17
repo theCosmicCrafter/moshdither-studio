@@ -262,6 +262,35 @@ describe("Store Edge Cases", () => {
     });
   });
 
+  describe("playhead (currentTime) edge cases", () => {
+    // currentTime is fed to shader uniforms as animTime and used to index
+    // sam3FrameMasks, so a non-finite value corrupts the render silently
+    // instead of throwing. setDuration/setInPoint/setOutPoint were already
+    // guarded; this one was not.
+    it("rejects non-finite times instead of storing them", () => {
+      const s = useAppStore.getState();
+      for (const bad of [NaN, Infinity, -Infinity]) {
+        s.setCurrentTime(bad);
+        expect(Number.isFinite(useAppStore.getState().currentTime)).toBe(true);
+      }
+    });
+
+    it("never stores a negative playhead", () => {
+      useAppStore.getState().setCurrentTime(-42);
+      expect(useAppStore.getState().currentTime).toBe(0);
+    });
+
+    // Deliberately NOT clamped to duration: duration arrives asynchronously as
+    // media loads, so clamping here would truncate a seek that lands first.
+    // The playback loop wraps to 0 before calling this, and the call sites that
+    // know the end (Go to end, frame-step) bound it themselves.
+    it("allows a time beyond the current duration, which loads may not have set yet", () => {
+      useAppStore.getState().setDuration(5);
+      useAppStore.getState().setCurrentTime(30);
+      expect(useAppStore.getState().currentTime).toBe(30);
+    });
+  });
+
   describe("audio state edge cases", () => {
     it("setAudioVolume clamps to [0, 1]", () => {
       useAppStore.getState().setAudioVolume(0.5);

@@ -266,11 +266,24 @@ describe("CommandPalette", () => {
       expect(useAppStore.getState().currentTime).toBe(0);
     });
 
-    it("Go to end sets currentTime to 300", () => {
+    // Previously asserted a literal 300, which pinned the bug rather than the
+    // behaviour: "Go to end" hard-coded 300 seconds regardless of the media, so
+    // on any real clip it jumped far past the end instead of to it.
+    it("Go to end moves the playhead to the clip duration", () => {
+      useAppStore.getState().setDuration(42);
       render(<CommandPalette />);
       fireEvent.keyDown(window, { key: "p", ctrlKey: true, shiftKey: true });
       fireEvent.click(screen.getByText("Go to end").closest("button")!);
-      expect(useAppStore.getState().currentTime).toBe(300);
+      expect(useAppStore.getState().currentTime).toBe(42);
+    });
+
+    it("Go to end tracks a duration change rather than a value captured at registration", () => {
+      useAppStore.getState().setDuration(10);
+      render(<CommandPalette />);
+      useAppStore.getState().setDuration(7.5);
+      fireEvent.keyDown(window, { key: "p", ctrlKey: true, shiftKey: true });
+      fireEvent.click(screen.getByText("Go to end").closest("button")!);
+      expect(useAppStore.getState().currentTime).toBe(7.5);
     });
 
     it("Clear effect stack clears the stack", () => {

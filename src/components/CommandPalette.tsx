@@ -68,7 +68,11 @@ export default function CommandPalette() {
 
   useEffect(() => {
     registerCommand({ id: "go-to-start", label: "Go to start", category: "Timeline", shortcut: "Home", action: () => setCurrentTime(0) });
-    registerCommand({ id: "go-to-end", label: "Go to end", category: "Timeline", shortcut: "End", action: () => setCurrentTime(300) });
+    // Reads duration at invocation rather than closing over it, so the command
+    // stays correct as media changes. It was previously a hard-coded 300, which
+    // is not the end of anything -- on a 5s clip "Go to end" jumped a minute
+    // past it, and since setCurrentTime did not clamp, the playhead stuck there.
+    registerCommand({ id: "go-to-end", label: "Go to end", category: "Timeline", shortcut: "End", action: () => setCurrentTime(useAppStore.getState().duration) });
     registerCommand({ id: "play-pause", label: "Play / pause", category: "Timeline", shortcut: "Space", action: () => setAudioPlaying(!audioPlaying) });
     registerCommand({ id: "undo", label: "Undo", category: "Edit", shortcut: "Ctrl+Z", action: () => { if (canUndo()) undo(); } });
     registerCommand({ id: "redo", label: "Redo", category: "Edit", shortcut: "Ctrl+Shift+Z", action: () => { if (canRedo()) redo(); } });

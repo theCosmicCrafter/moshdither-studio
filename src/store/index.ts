@@ -578,7 +578,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   exportTriggerId: 0,
   watermark: DEFAULT_WATERMARK,
 
-  setCurrentTime: (t) => set({ currentTime: t }),
+  // Guarded like setDuration/setInPoint/setOutPoint, which this alone was
+  // missing. currentTime reaches shader uniforms (PreviewViewport passes it as
+  // animTime) and indexes sam3FrameMasks, so a NaN or Infinity here corrupts
+  // the render silently rather than throwing.
+  //
+  // Only the lower bound is enforced here, not `duration`: duration is set
+  // asynchronously while media loads, so clamping to it would truncate a seek
+  // that arrives before the real duration does. The upper bound belongs at the
+  // call sites that actually know it -- the playback loop already wraps to 0
+  // before calling this.
+  setCurrentTime: (t) =>
+    set({ currentTime: Number.isFinite(t) ? Math.max(0, t) : 0 }),
   togglePlay: () => set((state) => ({ isPlaying: !state.isPlaying })),
   stopPlayback: () => set({ isPlaying: false }),
   setLoopMode: (mode) => set({ loopMode: mode }),

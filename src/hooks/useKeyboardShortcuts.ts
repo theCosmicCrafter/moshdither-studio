@@ -116,7 +116,12 @@ export function useKeyboardShortcuts() {
         case "ArrowRight":
           if (!isInput) {
             e.preventDefault();
-            setCurrentTime(currentTimeRef.current + 1 / 30);
+            // Bounded by duration, mirroring ArrowLeft's Math.max(0, ...).
+            // Without it, holding the key walked the playhead indefinitely past
+            // the end of the clip.
+            setCurrentTime(
+              Math.min(useAppStore.getState().duration, currentTimeRef.current + 1 / 30)
+            );
           }
           break;
 
