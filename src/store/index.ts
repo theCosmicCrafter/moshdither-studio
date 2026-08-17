@@ -298,6 +298,20 @@ export interface AppState {
   setStackItemMaskMode: (id: string, mode: "inside" | "outside" | "alpha") => void;
   toggleStackItem: (id: string) => void;
   selectStackItem: (id: string | null) => void;
+
+  /** Insert a copy of an entry directly above it, params and mask included. */
+  duplicateStackItem: (id: string) => void;
+  /**
+   * Isolate one entry: disable every other entry, or restore them if this
+   * entry is already the only one enabled. Soloing is a view state expressed
+   * through `enabled`, so it survives export exactly as it previews.
+   */
+  soloStackItem: (id: string) => void;
+  /** Clipboard holding a detached copy of an entry, or null. */
+  copiedStackEntry: StackEntry | null;
+  copyStackItem: (id: string) => void;
+  /** Append the clipboard entry with a fresh instance id. No-op when empty. */
+  pasteStackItem: () => void;
   setIsProcessing: (v: boolean) => void;
   setShowBeforeAfter: (v: boolean) => void;
   setZoom: (z: number) => void;
@@ -741,6 +755,68 @@ export const useAppStore = create<AppState>((set, get) => ({
       ...pushHistory(state),
       effectStack: state.effectStack.map((e) => (e.id === id ? { ...e, enabled: !e.enabled } : e)),
     })),
+
+  duplicateStackItem: (id) =>
+    set((state) => {
+      const index = state.effectStack.findIndex((e) => e.id === id);
+      if (index === -1) return state;
+      // Params are cloned rather than shared: they are a mutable object, and a
+      // shared reference would make editing the copy silently edit the original.
+      const copy: StackEntry = {
+        ...state.effectStack[index],
+        id: nextStackId(),
+        params: { ...state.effectStack[index].params },
+      };
+      const newStack = [...state.effectStack];
+      // Directly above the source, where stacking order makes the relationship
+      // obvious -- appending to the end would change what the copy composites over.
+      newStack.splice(index + 1, 0, copy);
+      return { ...pushHistory(state), effectStack: newStack, selectedStackId: copy.id };
+    }),
+
+  soloStackItem: (id) =>
+    set((state) => {
+      const target = state.effectStack.find((e) => e.id === id);
+      if (!target) return state;
+      const othersAllDisabled = state.effectStack.every((e) => e.id === id || !e.enabled);
+      // Already soloed -> restore everything, so the same action toggles both
+      // ways and cannot strand the user with one effect and no way back.
+      const enableAll = othersAllDisabled && target.enabled;
+      return {
+        ...pushHistory(state),
+        effectStack: state.effectStack.map((e) => ({
+          ...e,
+          enabled: enableAll ? true : e.id === id,
+        })),
+        selectedStackId: id,
+      };
+    }),
+
+  copiedStackEntry: null,
+  copyStackItem: (id) =>
+    set((state) => {
+      const entry = state.effectStack.find((e) => e.id === id);
+      if (!entry) return state;
+      // Detached copy: holding the live object would let later edits to the
+      // source mutate what gets pasted.
+      return { copiedStackEntry: { ...entry, params: { ...entry.params } } };
+    }),
+
+  pasteStackItem: () =>
+    set((state) => {
+      const copied = state.copiedStackEntry;
+      if (!copied) return state;
+      const entry: StackEntry = {
+        ...copied,
+        id: nextStackId(),
+        params: { ...copied.params },
+      };
+      return {
+        ...pushHistory(state),
+        effectStack: [...state.effectStack, entry],
+        selectedStackId: entry.id,
+      };
+    }),
 
   selectStackItem: (id) => set({ selectedStackId: id }),
   setIsProcessing: (v) => set({ isProcessing: v }),

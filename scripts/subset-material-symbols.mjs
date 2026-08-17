@@ -116,7 +116,14 @@ const EXTRA_ICONS = new Set([
   // ligature text ("MAGNET" in the window toolbar). Replaced in source by
   // border_outer (edge snapping) and graphic_eq (audio binding, matching the
   // Audio Reactive panel's own icon).
-  "border_outer"
+  "border_outer",
+  // Effect-stack context menu (StackContextMenu.tsx). Listed here rather than
+  // relying on extraction because they are supplied as data in a menu-item
+  // array rather than written as literal element children.
+  "file_copy",
+  "content_copy",
+  "content_paste",
+  "headphones"
 ]);
 
 async function* walk(dir) {
