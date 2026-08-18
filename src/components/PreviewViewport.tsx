@@ -721,6 +721,16 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       glCtxRef.current = ctx;
       uploaderRef.current = new MediaUploader(ctx);
       chainRef.current = new EffectChain(ctx, 1024, 1024);
+      // Surface render faults where the user can actually see them. A black
+      // preview in the installed build previously produced nothing but a
+      // console line, so the only way to diagnose one was to read source and
+      // guess. Both of these say which step failed and on what.
+      chainRef.current.onGlFault = (error, step) => {
+        setStatusMessage(`Preview error: GL ${error} at ${step}`);
+      };
+      chainRef.current.onTextureError = (uniform, url) => {
+        setStatusMessage(`Preview: texture "${uniform}" failed to load (${url})`);
+      };
       logger.log("Preview", "WebGL2 context initialized OK");
     } catch (e) {
       logger.error("Preview", "WebGL2 not available", { err: e });

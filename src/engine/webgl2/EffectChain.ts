@@ -138,6 +138,9 @@ export class EffectChain {
     this.initialized = true;
   }
 
+  /** Notified on a WebGL fault, with the error name and the step that hit it. */
+  onGlFault?: (error: string, step: string) => void;
+
   /**
    * Notified when a sampler2D texture fails to load. The chain keeps
    * rendering without it; this exists so the UI can tell the user why an
@@ -421,8 +424,17 @@ export class EffectChain {
    * Each label reports once per chain instance -- a fault that recurs every
    * frame is one bug, not hundreds.
    */
+  /**
+   * Report a WebGL fault, naming the step that caused it.
+   *
+   * This used to bail out unless `import.meta.env.DEV`, which meant the
+   * shipping build was silent exactly where faults matter. A preview that goes
+   * black in a packaged app gave the user nothing and left diagnosis to
+   * reading source and guessing -- which produced two wrong diagnoses for the
+   * black-LUT-preview bug before this changed. The check costs one
+   * `gl.getError()` per checkpoint and each distinct fault is reported once.
+   */
   private ckpt(label: string) {
-    if (!import.meta.env.DEV) return;
     const err = this.gl.getError();
     if (err === this.gl.NO_ERROR) return;
     const names: Record<number, string> = {
@@ -436,10 +448,15 @@ export class EffectChain {
     const key = `${label}:${err}`;
     if (this.reportedGlFaults.has(key)) return;
     this.reportedGlFaults.add(key);
+    const name = names[err] ?? String(err);
     console.error(
-      `[EffectChain] GL ${names[err] ?? err} (${err}) at ${label} — reported once per chain; ` +
+      `[EffectChain] GL ${name} (${err}) at ${label} — reported once per chain; ` +
         "later occurrences of this same label are suppressed."
     );
+    // Surfaced to the UI as well: a console message cannot be read by someone
+    // running the installed build, and this is the only signal that explains a
+    // black preview.
+    this.onGlFault?.(name, label);
   }
 
   private blit(sourceTexture: WebGLTexture) {
