@@ -165,7 +165,19 @@ export class EffectChain {
     const gl = this.gl;
     let inputTex = sourceTexture;
     let outputFB = "fb_a";
-    let nextTextureUnit = 1;
+    // Texture units 0, 2 and 3 are reserved by the chain itself: 0 is the pass
+    // input, 2 the pre-effect frame and 3 the mask (see the maskBlend binding
+    // below). Extra samplers such as a LUT must therefore start above all of
+    // them.
+    //
+    // This counter used to start at 1 and was never reset, so it ran 1, 2, 3...
+    // across the whole render: a *second* LUT in the stack landed on unit 2 and
+    // a third on unit 3. Passes without a mask then unbind those very units,
+    // wiping the texture that had just been bound there, and sampling an
+    // unbound texture returns black -- the preview went black the moment a
+    // second LUT was added, while a single LUT worked fine.
+    const FIRST_FREE_TEXTURE_UNIT = 4;
+    let nextTextureUnit = FIRST_FREE_TEXTURE_UNIT;
     let renderedAnyPass = false;
 
     // Expand passes: after each pass with a mask, insert a maskBlend pass
@@ -196,6 +208,10 @@ export class EffectChain {
     }
 
     for (let i = 0; i < expandedPasses.length; i++) {
+      // Units are per-pass: nothing bound for one pass needs to survive into
+      // the next, and letting the counter climb would eventually walk past
+      // MAX_COMBINED_TEXTURE_IMAGE_UNITS on a long stack.
+      nextTextureUnit = FIRST_FREE_TEXTURE_UNIT;
       const pass = expandedPasses[i];
       const shader = shaders.get(pass.shaderId);
       if (!shader) {
