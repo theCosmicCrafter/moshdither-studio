@@ -49,13 +49,13 @@ fn print_usage() {
     );
     eprintln!("    --image <path>         Path to test image (required)");
     eprintln!("    --video <path>         Path to test video (required for video effects)");
-    eprintln!("    --output <dir>         Output directory (default: ./test-outputs)");
+    eprintln!("    --output <dir>         Output directory (default: ./outputs/render)");
     eprintln!("    --filter <substring>   Only render effects whose ID contains substring");
     eprintln!("    --duration <secs>      Clip duration in seconds (default: 5)");
     eprintln!();
     eprintln!("  animate-all              Animate a still image through every effect (time 0→1)");
     eprintln!("    --image <path>         Path to still image (required)");
-    eprintln!("    --output <dir>         Output directory (default: ./test-outputs/animated)");
+    eprintln!("    --output <dir>         Output directory (default: ./outputs/animated)");
     eprintln!("    --filter <substring>   Only animate effects whose ID contains substring");
     eprintln!("    --duration <secs>      Clip duration in seconds (default: 5)");
     eprintln!("    --fps <n>              Frames per second (default: 24)");
@@ -63,7 +63,7 @@ fn print_usage() {
     eprintln!("  audio-render            Render audio-reactive effects with baked audio features");
     eprintln!("    --video <path>        Path to input video (required)");
     eprintln!("    --audio-bake <path>   Path to AudioBakeData JSON (required)");
-    eprintln!("    --output <dir>        Output directory (default: ./audio-outputs)");
+    eprintln!("    --output <dir>        Output directory (default: ./outputs/audio)");
     eprintln!("    --filter <substring>  Only render effects whose ID contains substring");
     eprintln!("    --max-frames <n>      Max frames to decode (default: 450 = 15s @ 30fps)");
     eprintln!("    --scale <n>           Downscale so longest side = n px (e.g. 720 for 720p)");
@@ -73,12 +73,12 @@ fn print_usage() {
     eprintln!("  render-presets          Render preset stacks on a test image");
     eprintln!("    --image <path>        Path to test image (required)");
     eprintln!("    --presets <path>      JSON file with preset specs (required)");
-    eprintln!("    --output <dir>        Output directory (default: ./preset-outputs)");
+    eprintln!("    --output <dir>        Output directory (default: ./outputs/presets)");
     eprintln!();
     eprintln!("  render-luts             Render every LUT in a directory via color.lut_grading");
     eprintln!("    --image <path>        Path to test image (required)");
     eprintln!("    --lut-dir <dir>       Directory containing LUT PNGs (default: ./public/lut)");
-    eprintln!("    --output <dir>        Output directory (default: ./lut-outputs)");
+    eprintln!("    --output <dir>        Output directory (default: ./outputs/luts)");
     eprintln!();
     eprintln!("EXAMPLES:");
     eprintln!("  mosh-verify verify-all --format json > report.json");
@@ -87,7 +87,7 @@ fn print_usage() {
     eprintln!("  mosh-verify list-effects --category dithering");
     eprintln!("  mosh-verify test-all --format json");
     eprintln!(
-        "  mosh-verify render-all --image photo.png --video clip.mp4 --output ./test-outputs"
+        "  mosh-verify render-all --image photo.png --video clip.mp4 --output ./outputs/render"
     );
     eprintln!("  mosh-verify status");
 }
@@ -412,7 +412,7 @@ struct RenderStats {
 fn cmd_render_all(args: &[String]) -> ExitCode {
     let mut image_path: Option<&str> = None;
     let mut video_path: Option<&str> = None;
-    let mut output_dir = "./test-outputs".to_string();
+    let mut output_dir = "./outputs/render".to_string();
     let mut filter: Option<&str> = None;
     let mut duration_secs = 5.0f64;
 
@@ -710,7 +710,7 @@ struct PresetSpec {
 
 fn cmd_render_presets(args: &[String]) -> ExitCode {
     let mut image_path: Option<&str> = None;
-    let mut output_dir = "./preset-outputs".to_string();
+    let mut output_dir = "./outputs/presets".to_string();
     let mut presets_file: Option<&str> = None;
 
     let mut i = 0;
@@ -873,7 +873,7 @@ fn cmd_render_presets(args: &[String]) -> ExitCode {
 
 fn cmd_render_luts(args: &[String]) -> ExitCode {
     let mut image_path: Option<&str> = None;
-    let mut output_dir = "./lut-outputs".to_string();
+    let mut output_dir = "./outputs/luts".to_string();
     let mut lut_dir = "./public/lut".to_string();
 
     let mut i = 0;
@@ -1006,7 +1006,7 @@ fn cmd_render_luts(args: &[String]) -> ExitCode {
 fn cmd_audio_render(args: &[String]) -> ExitCode {
     let mut video_path: Option<&str> = None;
     let mut audio_bake_path: Option<&str> = None;
-    let mut output_dir = "./audio-outputs".to_string();
+    let mut output_dir = "./outputs/audio".to_string();
     let mut filter: Option<&str> = None;
     let mut max_frames: usize = 450; // 15s @ 30fps default
     let mut scale: Option<usize> = None;
@@ -1479,7 +1479,7 @@ const INTENDED_STATIC_EFFECTS: &[&str] = &["datamoshing.frame_hold"];
 
 fn cmd_animate_all(args: &[String]) -> ExitCode {
     let mut image_path: Option<&str> = None;
-    let mut output_dir = "./test-outputs/animated".to_string();
+    let mut output_dir = "./outputs/animated".to_string();
     let mut filter: Option<&str> = None;
     let mut duration_secs = 5.0f64;
     let mut fps = 24.0f64;

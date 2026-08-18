@@ -127,5 +127,10 @@ test_*.txt
 /recycling/
 /desktop.png
 
-# Scratch/output directory used by audit and export tooling
+# Single root for generated artifacts. Every mosh-verify subcommand defaults
+# under here (outputs/render, /animated, /audio, /presets, /luts) so one rule
+# covers them all. Previously each had its own top-level default and only
+# test-outputs was ignored, so `render-presets`, `render-luts` and
+# `audio-render` dropped hundreds of MB of PNGs into the repo root as
+# untracked files. Pass --output to write elsewhere.
 /outputs/
