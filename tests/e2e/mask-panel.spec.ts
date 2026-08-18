@@ -19,74 +19,47 @@ test.beforeEach(async ({ page }) => {
     .catch(() => {});
 });
 
-test("mask panel renders", async ({ page }) => {
-  // Look for mask-related UI (kept as a smoke selector)
-  void page.locator("text=Mask, [title*='mask'], [aria-label*='mask']").first();
-  // App should be responsive
-  const toolbar = page.locator("header").first();
-  await expect(toolbar).toBeVisible();
+const GATE = "Load media to use SAM3 segmentation.";
+
+/** Drive the real open flow. The mock returns a path from plugin:dialog|open
+ *  only when a test sets __MOSH_E2E_MEDIA_PATH__, so every other spec keeps its
+ *  no-media start state (export's "Load media before exporting" depends on it). */
+async function loadMedia(page: import("@playwright/test").Page) {
+  await page.getByText("click to browse").click();
+  await expect(page.getByText(GATE)).toHaveCount(0);
+}
+
+test("mask panel requires media and says so", async ({ page }) => {
+  await page.getByRole("tab", { name: "Mask" }).click();
+  await expect(page.getByText(GATE)).toBeVisible();
 });
 
-test("mask mode selector works", async ({ page }) => {
-  // Look for mask mode buttons (inside/outside/alpha)
-  const insideBtn = page.locator("text=Inside, [title*='inside'], [data-mode='inside']").first();
-  const outsideBtn = page
-    .locator("text=Outside, [title*='outside'], [data-mode='outside']")
-    .first();
+test("mask panel replaces its prerequisite notice once media loads", async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as unknown as Record<string, unknown>).__MOSH_E2E_MEDIA_PATH__ = "C:/fake/clip.png";
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForSelector("header", { timeout: 15000 });
+  await page
+    .locator("text=Discard")
+    .click({ timeout: 2000 })
+    .catch(() => {});
 
-  // Try clicking mask mode buttons if visible
-  if (await insideBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await insideBtn.click();
-    await page.waitForTimeout(300);
-  }
-  if (await outsideBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await outsideBtn.click();
-    await page.waitForTimeout(300);
-  }
+  await page.getByRole("tab", { name: "Mask" }).click();
+  await expect(page.getByText(GATE)).toBeVisible();
 
-  const toolbar = page.locator("header").first();
-  await expect(toolbar).toBeVisible();
+  await loadMedia(page);
 });
 
-test("mask invert button doesn't crash", async ({ page }) => {
-  const invertBtn = page.locator("text=Invert, [title*='invert'], [title*='Invert']").first();
-
-  if (await invertBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await invertBtn.click();
-    await page.waitForTimeout(300);
-  }
-
-  const toolbar = page.locator("header").first();
-  await expect(toolbar).toBeVisible();
-});
-
-test("mask clear button doesn't crash", async ({ page }) => {
-  const clearBtn = page.locator("text=Clear, [title*='clear mask'], [title*='Clear Mask']").first();
-
-  if (await clearBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await clearBtn.click();
-    await page.waitForTimeout(300);
-  }
-
-  const toolbar = page.locator("header").first();
-  await expect(toolbar).toBeVisible();
-});
-
-test("brush size slider responds to input", async ({ page }) => {
-  // Look for brush size control
-  const brushSlider = page
-    .locator(
-      "input[type='range'][title*='brush'], input[type='range'][title*='Brush'], input[type='range'][class*='brush']"
-    )
-    .first();
-
-  if (await brushSlider.isVisible({ timeout: 3000 }).catch(() => false)) {
-    // Get current value, then change it
-    void (await brushSlider.inputValue());
-    await brushSlider.fill("50");
-    await page.waitForTimeout(300);
-  }
-
-  const toolbar = page.locator("header").first();
-  await expect(toolbar).toBeVisible();
+// The remaining mask controls -- mode selector, invert, clear, brush size --
+// only render once a SAM3 mask exists, which requires the Python sidecar. This
+// harness cannot produce one, so those controls are unreachable here and the
+// tests below are honest smoke checks rather than assertions about behaviour
+// they cannot observe. They were previously named "mask mode selector works"
+// and "brush size slider responds to input", which claimed otherwise.
+test("mask keyboard shortcuts don't crash without a mask", async ({ page }) => {
+  await page.getByRole("tab", { name: "Mask" }).click();
+  await page.keyboard.press("KeyI");
+  await page.keyboard.press("KeyC");
+  await expect(page.getByText(GATE)).toBeVisible();
 });

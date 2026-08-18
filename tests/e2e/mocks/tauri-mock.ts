@@ -14,6 +14,9 @@ export const tauriMockScript = `
   } catch (e) {}
 
   // Mock invoke — returns canned data per command
+  // Set true once a test drives a successful open (see plugin:dialog|open).
+  let mediaOpened = false;
+
   const mockResponses = {
     list_effects: [
       { id: "dithering.bayer", name: "Bayer Dither", category: "dithering", media_type: "image", parameters: [] },
@@ -29,7 +32,12 @@ export const tauriMockScript = `
       ];
       return all.filter(e => e.category === args.category);
     },
-    get_media_info: { width: 1920, height: 1080, loaded: false },
+    // Reports loaded only after a test has opted in by setting
+    // window.__MOSH_E2E_MEDIA_PATH__ and driving the open flow. Panels gated on
+    // media (Mask, and parts of Export) cannot otherwise be reached, while
+    // tests that assert the empty state -- "Load media before exporting" --
+    // still get a no-media app by default.
+    get_media_info: () => ({ width: 1920, height: 1080, loaded: mediaOpened }),
     get_environment_status: {
       mode: "portable",
       python_ok: true,
@@ -69,7 +77,13 @@ export const tauriMockScript = `
       console.log('[TAURI MOCK] invoke:', command, args);
       if (command === 'plugin:event|listen') return Promise.resolve(1);
       if (command === 'plugin:event|unlisten') return Promise.resolve();
-      if (command === 'plugin:dialog|open') return Promise.resolve(null);
+      if (command === 'plugin:dialog|open') {
+        // Default is null (user cancelled). A test opts in to a successful open
+        // by setting window.__MOSH_E2E_MEDIA_PATH__ before navigation.
+        const chosen = window.__MOSH_E2E_MEDIA_PATH__ || null;
+        if (chosen) mediaOpened = true;
+        return Promise.resolve(chosen);
+      }
       if (command === 'plugin:dialog|save') return Promise.resolve(null);
       const response = mockResponses[command];
       if (typeof response === 'function') return Promise.resolve(response(args));
