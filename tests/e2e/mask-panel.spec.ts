@@ -51,6 +51,60 @@ test("mask panel replaces its prerequisite notice once media loads", async ({ pa
   await loadMedia(page);
 });
 
+/** Load media and return the Mask panel, which only renders its controls once
+ *  media exists. */
+async function openMaskPanelWithMedia(page: import("@playwright/test").Page) {
+  await page.addInitScript(() => {
+    (window as unknown as Record<string, unknown>).__MOSH_E2E_MEDIA_PATH__ = "C:/fake/clip.png";
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForSelector("header", { timeout: 15000 });
+  await page
+    .locator("text=Discard")
+    .click({ timeout: 2000 })
+    .catch(() => {});
+  await page.getByRole("tab", { name: "Mask" }).click();
+  await loadMedia(page);
+  const panel = page.locator(".flexlayout__tab").filter({ hasText: "SAM3" }).last();
+  await expect(panel).toBeVisible();
+  return panel;
+}
+
+test("mask panel offers SAM3 and Manual modes once media is loaded", async ({ page }) => {
+  const panel = await openMaskPanelWithMedia(page);
+
+  await expect(panel.getByRole("button", { name: "SAM3", exact: true })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Manual", exact: true })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Go", exact: true })).toBeVisible();
+});
+
+test("mask prompt-mode selector switches between Text, Point, Box and Auto", async ({ page }) => {
+  // This is the control the old "mask mode selector works" test named but never
+  // reached -- it lives behind the media gate, so that test only ever asserted
+  // the header was visible.
+  const panel = await openMaskPanelWithMedia(page);
+  const selector = panel.locator("select").first();
+  await expect(selector).toBeVisible();
+
+  for (const mode of ["point", "box", "auto", "text"]) {
+    await selector.selectOption(mode);
+    await expect(selector).toHaveValue(mode);
+  }
+});
+
+test("switching to Manual mode changes the panel's controls", async ({ page }) => {
+  const panel = await openMaskPanelWithMedia(page);
+  await expect(panel.locator("select")).toHaveCount(1);
+
+  await panel.getByRole("button", { name: "Manual", exact: true }).click();
+  // Manual painting has no prompt selector; asserting its disappearance proves
+  // the toggle actually swapped the UI rather than just restyling a button.
+  await expect(panel.locator("select")).toHaveCount(0);
+
+  await panel.getByRole("button", { name: "SAM3", exact: true }).click();
+  await expect(panel.locator("select")).toHaveCount(1);
+});
+
 // The remaining mask controls -- mode selector, invert, clear, brush size --
 // only render once a SAM3 mask exists, which requires the Python sidecar. This
 // harness cannot produce one, so those controls are unreachable here and the

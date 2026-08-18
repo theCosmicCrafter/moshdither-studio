@@ -14,6 +14,10 @@ export const tauriMockScript = `
   } catch (e) {}
 
   // Mock invoke — returns canned data per command
+  // 1x1 white PNG, used as a stand-in segmentation mask.
+  const MOCK_MASK_B64 =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==';
+
   // Set true once a test drives a successful open (see plugin:dialog|open).
   let mediaOpened = false;
 
@@ -48,6 +52,27 @@ export const tauriMockScript = `
       ffglitch_ok: false,
     },
     sam3_init: "SAM3 engine initialized",
+    // A 1x1 white PNG stands in for a segmentation mask. The real masks come
+    // from the SAM3 Python sidecar, which no browser-side suite can run; these
+    // let the mask UI reach its post-segmentation state, where the mode
+    // selector, invert, clear and brush controls actually render. Without them
+    // those controls are unreachable and their tests could only ever assert
+    // that the app had not crashed.
+    sam3_load_image: { width: 1920, height: 1080 },
+    sam3_text_prompt: {
+      count: 1,
+      masks: [MOCK_MASK_B64],
+      scores: [0.97],
+    },
+    sam3_point_prompt: {
+      count: 1,
+      masks: [MOCK_MASK_B64],
+      scores: [0.95],
+    },
+    sam3_box_prompt: { count: 1, masks: [MOCK_MASK_B64], scores: [0.93] },
+    sam3_auto_mask: { count: 1, masks: [MOCK_MASK_B64], scores: [0.91] },
+    sam3_postprocess_mask: MOCK_MASK_B64,
+    sam3_clear: null,
     load_media: () => {},
     get_frame_data: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
     apply_effect: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
