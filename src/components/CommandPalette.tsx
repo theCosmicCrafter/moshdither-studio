@@ -1,12 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useAppStore } from "../store";
-import { registerCommand, getCommands, fuzzyMatch, type Command } from "../utils/commands";
+import {
+  registerCommand,
+  subscribeCommands,
+  getCommandsSnapshot,
+  fuzzyMatch,
+  type Command,
+} from "../utils/commands";
 import { dockWindowAppbar, undockWindowAppbar } from "../lib/tauri";
 
 export default function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+
   const inputRef = useRef<HTMLInputElement>(null);
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
   const setCurrentTime = useAppStore((s) => s.setCurrentTime);
@@ -28,8 +35,14 @@ export default function CommandPalette() {
   const clearInOut = useAppStore((s) => s.clearInOut);
   const setScopesVisible = useAppStore((s) => s.setScopesVisible);
 
+  // Subscribed rather than read once: the commands below are registered in an
+  // effect that runs after this component's first render, so a plain
+  // getCommands() here captured an empty registry and the palette opened
+  // showing "No commands found" until the user typed.
+  const registered = useSyncExternalStore(subscribeCommands, getCommandsSnapshot);
+
   const commands = useMemo(() => {
-    const all = getCommands();
+    const all = registered;
     if (!query.trim()) return all;
     return all
       .map((cmd) => ({
@@ -39,7 +52,7 @@ export default function CommandPalette() {
       .filter((r) => r.score > 0)
       .sort((a, b) => b.score - a.score)
       .map((r) => r.cmd);
-  }, [query]);
+  }, [query, registered]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {

@@ -15,6 +15,34 @@ export interface Command {
 
 let registry: Command[] = [];
 
+// Commands are registered from a component effect, i.e. after that component's
+// first render. Consumers therefore need to be *notified* when the registry
+// fills, not merely able to read it -- the palette previously built its list in
+// a useMemo keyed on the search query, so it kept the empty first result and
+// rendered "No commands found" until the user typed. This is the external-store
+// contract React provides for exactly this case (useSyncExternalStore).
+const listeners = new Set<() => void>();
+
+// A stable snapshot is required: useSyncExternalStore compares by reference and
+// will loop forever if getSnapshot returns a fresh array each call.
+let snapshot: Command[] = [];
+
+function emit(): void {
+  snapshot = [...registry];
+  for (const listener of listeners) listener();
+}
+
+export function subscribeCommands(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+export function getCommandsSnapshot(): Command[] {
+  return snapshot;
+}
+
 export function registerCommand(cmd: Command): void {
   const existing = registry.findIndex((c) => c.id === cmd.id);
   if (existing >= 0) {
@@ -22,6 +50,7 @@ export function registerCommand(cmd: Command): void {
   } else {
     registry.push(cmd);
   }
+  emit();
 }
 
 export function getCommands(): Command[] {
@@ -30,6 +59,7 @@ export function getCommands(): Command[] {
 
 export function clearCommands(): void {
   registry = [];
+  emit();
 }
 
 /**
