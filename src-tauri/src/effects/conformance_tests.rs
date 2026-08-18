@@ -144,8 +144,13 @@ fn atkinson_discards_error_by_design() {
 /// * `mask_isolate` needs a mask.
 /// * `color.lift_gamma_gain` and `color.lut_grading` are identity at their
 ///   default parameters, which is correct.
-/// * `composite.overlay` is a known no-op pending real blend-mode compositing
-///   (see effectConverter.ts and HARDENING_PLAN).
+/// * `composite.overlay` is identity only because no overlay is selected by
+///   default (`overlay_path` is empty). Blend-mode compositing itself is
+///   implemented -- normal, screen, multiply and overlay -- and is covered by
+///   tests in composite/overlay.rs. This entry previously read "pending real
+///   blend-mode compositing", which was wrong: the blending existed but the
+///   bundled `overlays/*.mp4` paths never resolved, so the effect returned
+///   early and looked unimplemented.
 ///
 /// A new entry appearing here means an effect silently does nothing — the
 /// failure mode `verification`'s `non_empty_output` check records but does not
