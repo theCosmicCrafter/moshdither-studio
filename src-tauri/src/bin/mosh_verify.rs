@@ -305,15 +305,40 @@ fn cmd_status() -> ExitCode {
 
 // ── render-all: render every effect on real image + video ──────────────────
 
-/// Build default params from an effect's ParameterDef list.
-/// `effect_id` lets us apply effect-specific strong defaults so every effect is
-/// immediately noticeable in the test outputs.
+/// Build params from an effect's ParameterDef list, using each parameter's own
+/// declared default -- what a user actually gets on first drop.
 fn build_default_params(
     effect_id: &str,
     params: &[ParameterDef],
 ) -> serde_json::Map<String, serde_json::Value> {
+    build_params(effect_id, params, false)
+}
+
+/// Build params, optionally substituting deliberately strong values so every
+/// effect is unmistakable in a sweep.
+///
+/// The strong values are keyed by parameter *name*, but names are not unique
+/// across scales: six effects declare a `threshold`, ranging from 0.1-0.9
+/// (line_screen) to 0-255 (dithering.threshold, solarize, pixel_sort). Feeding
+/// the same literal 0.3 to all of them drove five to a degenerate end of their
+/// range -- `dithering.threshold` rendered pure white, and `profile_smear` at
+/// `strength: 1.0` (its max, vs a 0.8 default) collapsed every row onto the one
+/// above it and output vertical stripes. Both looked exactly like product bugs.
+///
+/// So exaggeration is now opt-in via `--exaggerate`. Injected `_audio_*` values
+/// are always applied: they are not user-facing parameters, and without them the
+/// audio-reactive family is inert in a sweep that has no audio.
+fn build_params(
+    effect_id: &str,
+    params: &[ParameterDef],
+    exaggerate: bool,
+) -> serde_json::Map<String, serde_json::Value> {
     let mut map = serde_json::Map::new();
     for p in params {
+        if !exaggerate && !p.id.starts_with('_') {
+            map.insert(p.id.clone(), p.default.clone());
+            continue;
+        }
         // Use the default value, but override zero-amount/zero-lift effects
         // and clamp audio-reactive audio params to neutral so they are animated by
         // the animate-all command rather than left silent.
