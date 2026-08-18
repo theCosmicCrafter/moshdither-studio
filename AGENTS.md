@@ -23,6 +23,7 @@ Python SAM3 bridge, FFmpeg/FFglitch sidecars.
 | Rust Build | `cd src-tauri && cargo build` | Clean exit |
 | Rust Tests | `cd src-tauri && cargo test` | All pass |
 | Secret Scan | `npm run secret-scan` | 0 findings |
+| **All gates** | `npm run gate` (add `:quick` to skip the Rust release build) |
 | Regression | `pwsh evals/regression.ps1` | All gates pass |
 
 ## SECURITY — ALWAYS ACTIVE

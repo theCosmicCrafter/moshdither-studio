@@ -25,6 +25,8 @@
     "test:e2e": "playwright test",
     "test:e2e:backend": "cargo build --release --bin mosh-verify --manifest-path src-tauri/Cargo.toml && playwright test tests/e2e/real-backend.spec.ts tests/e2e/render-presets-luts.spec.ts",
     "test:all": "vitest run && playwright test",
+    "gate": "pwsh -ExecutionPolicy Bypass -File evals/regression.ps1",
+    "gate:quick": "pwsh -ExecutionPolicy Bypass -File evals/regression.ps1 -Quick",
     "audit:features": "python tools/feature_audit.py",
     "audit:parity": "playwright test tests/e2e/run-parity.spec.ts",
     "secret-scan": "pwsh -ExecutionPolicy Bypass -File scripts/secret-scan.ps1",
