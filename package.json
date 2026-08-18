@@ -6,7 +6,7 @@
   "scripts": {
     "prepare": "node -e \"try{require('child_process').execSync('git config core.hooksPath .husky',{stdio:'ignore'})}catch(e){console.warn('[prepare] Could not set core.hooksPath, so the pre-commit secret scan will NOT run. If this is a git checkout, run: git config core.hooksPath .husky')}\"",
     "dev": "vite",
-    "prebuild": "node scripts/verify-external-bins.mjs && node scripts/subset-material-symbols.mjs --check",
+    "prebuild": "node scripts/verify-external-bins.mjs && node scripts/subset-material-symbols.mjs --check && node scripts/generate-lut-thumbs.mjs --check",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "verify:external": "node scripts/verify-external-bins.mjs",
@@ -31,7 +31,8 @@
     "audit:parity": "playwright test tests/e2e/run-parity.spec.ts",
     "secret-scan": "pwsh -ExecutionPolicy Bypass -File scripts/secret-scan.ps1",
     "secret-scan:history": "pwsh -ExecutionPolicy Bypass -File scripts/secret-scan.ps1 -History",
-    "verify:icons": "node scripts/subset-material-symbols.mjs --check"
+    "verify:icons": "node scripts/subset-material-symbols.mjs --check",
+    "verify:lut-thumbs": "node scripts/generate-lut-thumbs.mjs --check"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",
