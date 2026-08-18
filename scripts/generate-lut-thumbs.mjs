@@ -5,12 +5,17 @@
  * meant applying it and undoing until something fit. These thumbnails let you
  * see what each LUT does before committing to it.
  *
- * The sample is synthetic and generated here rather than shipped as a photo:
- * the repo has no photographic asset that is ours to redistribute, and a
- * reference chart is actually more informative for a colour transform than a
- * photo would be. It carries a hue sweep (shows hue rotation), a neutral grey
- * ramp (shows crushed blacks, lifted shadows and colour casts, which are what
- * a grade LUT mostly does) and saturated primaries plus skin-tone patches.
+ * The sample is a four-quadrant reference built from three free-use stock
+ * photographs plus one synthetic band (see assets/lut-preview-samples/README.md):
+ *
+ *   portrait  | mountain     skin tone, and neutral whites + blue sky + greens
+ *   landscape | grey ramp    saturated greens/warm sunset, and a neutral ramp
+ *
+ * Photographs alone are not enough -- the grey ramp is what exposes crushed
+ * blacks, lifted shadows and colour casts, which is most of what a grade LUT
+ * does and which no photograph shows as legibly. Equally, a chart alone was not
+ * enough: skin tone is the surface where a bad grade is most obvious, and a
+ * synthetic swatch does not stand in for a face.
  *
  * Thumbnails are committed, so no build step depends on FFmpeg or the Rust
  * binary. Re-run this only when LUTs are added or removed.
@@ -79,13 +84,34 @@ rmSync(tmp, { recursive: true, force: true });
 mkdirSync(tmp, { recursive: true });
 const sample = join(tmp, "sample.png");
 
-// 512x512: hue sweep band, neutral grey ramp, primaries and skin tones.
+// 512x512 quadrants: portrait | mountain over landscape | grey ramp.
+const sampleDir = join(projectRoot, "assets", "lut-preview-samples");
+for (const f of ["portrait.jpg", "mountain.jpg", "landscape.jpg"]) {
+  if (!existsSync(join(sampleDir, f))) fail(`missing preview sample: ${join(sampleDir, f)}`);
+}
+// The ramp is drawn with `geq` from an explicit per-pixel expression, not with
+// the `gradients` source. `gradients` animates, and rendering a single frame of
+// it produced a *different image on every invocation* -- three consecutive runs
+// gave three different checksums. That silently varied the ramp's tonal range
+// (sometimes nearly blown out) and made thumbnail output non-reproducible,
+// which the --check guard in prebuild depends on. `geq` is byte-identical
+// across runs.
+const ramp = join(tmp, "ramp.png");
 run(ffmpeg, [
   "-y", "-v", "error",
-  "-f", "lavfi", "-i", "gradients=s=512x170:c0=#FF0000:c1=#00FF00:c2=#0000FF:x0=0:y0=0:x1=512:y1=0:nb_colors=3,format=rgb24",
-  "-f", "lavfi", "-i", "gradients=s=512x171:c0=black:c1=white:x0=0:y0=0:x1=512:y1=0,format=rgb24",
-  "-f", "lavfi", "-i", "gradients=s=512x171:c0=#F1C27D:c1=#8D5524:x0=0:y0=0:x1=512:y1=0,format=rgb24",
-  "-filter_complex", "[0:v][1:v][2:v]vstack=inputs=3[out]",
+  "-f", "lavfi", "-i", "color=c=black:s=256x256",
+  "-vf", "geq=r='X*255/(W-1)':g='X*255/(W-1)':b='X*255/(W-1)'",
+  "-frames:v", "1", "-pix_fmt", "rgb24", ramp,
+]);
+run(ffmpeg, [
+  "-y", "-v", "error",
+  "-i", join(sampleDir, "portrait.jpg"),
+  "-i", join(sampleDir, "mountain.jpg"),
+  "-i", join(sampleDir, "landscape.jpg"),
+  "-i", ramp,
+  "-filter_complex",
+  "[0:v]scale=256:256[a];[1:v]scale=256:256[b];[2:v]scale=256:256[c];[3:v]scale=256:256[d];" +
+    "[a][b]hstack[top];[c][d]hstack[bot];[top][bot]vstack[out]",
   "-map", "[out]", "-frames:v", "1", sample,
 ]);
 
@@ -106,5 +132,5 @@ for (const name of lutNames) {
   written++;
   bytes += statSync(dst).size;
 }
-rmSync(tmp, { recursive: true, force: true });
+if (!process.env.LUT_THUMBS_KEEP_TMP) rmSync(tmp, { recursive: true, force: true });
 console.log(`[lut-thumbs] wrote ${written} thumbnails to public/lut/thumbs (${(bytes / 1024).toFixed(0)} KB total)`);
