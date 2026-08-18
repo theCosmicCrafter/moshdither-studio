@@ -138,6 +138,13 @@ export class EffectChain {
     this.initialized = true;
   }
 
+  /**
+   * Notified when a sampler2D texture fails to load. The chain keeps
+   * rendering without it; this exists so the UI can tell the user why an
+   * effect silently did nothing, rather than leaving it to the console.
+   */
+  onTextureError?: (uniform: string, url: string, error: unknown) => void;
+
   async render(
     sourceTexture: WebGLTexture,
     passes: RenderPass[],
@@ -263,11 +270,29 @@ export class EffectChain {
         const type = udef?.type;
         if (typeof value === "string") {
           if (type === "sampler2D") {
-            const tex = await this.lutLoader.loadLUT(value);
-            const unit = nextTextureUnit++;
-            gl.activeTexture(gl.TEXTURE0 + unit);
-            gl.bindTexture(gl.TEXTURE_2D, tex);
-            gl.uniform1i(loc, unit);
+            // A texture that will not load must not take the whole preview
+            // with it. This await used to be unguarded, so one failed LUT
+            // image rejected out of render() entirely -- PreviewViewport
+            // caught it, logged "WebGL render failed", and left the canvas
+            // undrawn. The user saw the preview go black on applying a LUT,
+            // with the only explanation in a console they cannot see.
+            //
+            // Skipping the sampler renders the frame ungraded instead, which
+            // is wrong but visible and recoverable.
+            try {
+              const tex = await this.lutLoader.loadLUT(value);
+              const unit = nextTextureUnit++;
+              gl.activeTexture(gl.TEXTURE0 + unit);
+              gl.bindTexture(gl.TEXTURE_2D, tex);
+              gl.uniform1i(loc, unit);
+            } catch (err) {
+              console.error(
+                `[EffectChain] texture for uniform "${name}" failed to load (${value}); ` +
+                  `rendering this pass without it`,
+                err
+              );
+              this.onTextureError?.(name, value, err);
+            }
           }
         } else if (typeof value === "number") {
           if (type === "int") {
