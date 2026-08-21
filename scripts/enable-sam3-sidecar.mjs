@@ -4,7 +4,7 @@
 // builds can fall back to a local sam3_env; this overlay is merged only during
 // release builds via `tauri build --config tauri.release.conf.json`.
 
-import { existsSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -45,10 +45,23 @@ if (sidecars.length === 0) {
 }
 console.log(`Found SAM3 sidecar: ${sidecars.join(", ")}`);
 
+// Tauri merges a --config overlay by REPLACING arrays and objects, not by
+// concatenating them. An overlay that named only the sidecar would therefore
+// drop the four FFmpeg binaries from externalBin, and an overlay naming only
+// ../models would drop python-backend and the entire LUT library from
+// resources -- shipping an installer with SAM3 but no video processing and no
+// LUTs. Both lists are rebuilt from the base config here so the overlay is
+// strictly additive.
+const baseConf = JSON.parse(readFileSync(baseConfPath, "utf8"));
+const baseBundle = baseConf.bundle ?? {};
+const baseExternalBin = baseBundle.externalBin ?? [];
+const baseResources = baseBundle.resources ?? {};
+
 const overlay = {
   bundle: {
-    externalBin: ["bin/sam3-bridge"],
+    externalBin: [...new Set([...baseExternalBin, "bin/sam3-bridge"])],
     resources: {
+      ...baseResources,
       "../models": "models",
     },
   },

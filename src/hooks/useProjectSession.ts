@@ -169,10 +169,13 @@ export function useProjectSession() {
         store.setFilePath(session.filePath);
         try {
           await loadMediaFromPath(session.filePath);
-          if (onRefreshPreview) {
-            await onRefreshPreview();
-          }
-          mediaRestored = true;
+          // Honour what the refresh reports. It returns false when the backend
+          // says the media is not loaded yet, and it is the call that populates
+          // originalDataUrl -- which PreviewViewport requires before it will
+          // render the WebGL preview at all. Treating a failed refresh as
+          // success meant the status bar claimed "Session restored (N effects)"
+          // while the preview stayed black, with no error anywhere.
+          mediaRestored = onRefreshPreview ? await onRefreshPreview() : true;
         } catch (err) {
           console.error("[useProjectSession] Failed to load media from filePath:", err);
         }
@@ -181,10 +184,7 @@ export function useProjectSession() {
       if (!mediaRestored && session.mediaDataUrl) {
         try {
           await loadMediaFromBase64(session.mediaDataUrl);
-          if (onRefreshPreview) {
-            await onRefreshPreview();
-          }
-          mediaRestored = true;
+          mediaRestored = onRefreshPreview ? await onRefreshPreview() : true;
         } catch (err) {
           console.error("[useProjectSession] Failed to load media from base64:", err);
         }
@@ -193,7 +193,7 @@ export function useProjectSession() {
       setStatusMessage(
         mediaRestored
           ? `Session restored (${session.effectStack?.length ?? 0} effects)`
-          : "Session restored"
+          : "Session restored, but the media could not be reloaded - reopen the file"
       );
     },
     [setStatusMessage]
