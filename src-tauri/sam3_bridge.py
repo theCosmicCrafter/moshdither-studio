@@ -182,6 +182,76 @@ def _do_auth_handshake():
     send_response({"status": "auth_ok"})
 
 
+NL = chr(10)
+NL2 = chr(10) + chr(10)
+
+# Weights are ~3.2 GB and are deliberately NOT bundled: shipping them would take
+# the installer from ~1.5 GB to ~4.7 GB, and they version independently of the
+# app. Fetched once on first use and cached forever -- the same shape Ollama and
+# LM Studio use.
+_CHECKPOINT_REPO = os.environ.get("SAM3_REPO_ID", "facebook/sam3.1")
+_CHECKPOINT_FILE = os.environ.get("SAM3_FILENAME", "sam3.1_multiplex.pt")
+
+
+def _ensure_checkpoint():
+    """Download the SAM3 checkpoint on first use, or explain precisely why not.
+
+    This previously raised a FileNotFoundError telling the user to run
+    `python scripts/setup_sam3.py` -- a developer script that does not exist in
+    an installed app. That message was a dead end for anyone who had not built
+    the project from source, and it is the "SAM3 unavailable" wall users hit.
+    """
+    import shutil
+
+    dest = Path(CHECKPOINT_PATH)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    log(
+        "SAM3 checkpoint missing; downloading %s from %s (~3.2 GB, one time)",
+        _CHECKPOINT_FILE,
+        _CHECKPOINT_REPO,
+    )
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError as exc:
+        raise RuntimeError(
+            "SAM3 weights are missing and huggingface_hub is unavailable to "
+            "fetch them. Expected the checkpoint at: " + str(dest)
+        ) from exc
+
+    try:
+        fetched = hf_hub_download(
+            repo_id=_CHECKPOINT_REPO, filename=_CHECKPOINT_FILE, token=token
+        )
+    except Exception as exc:
+        # facebook/sam3.1 is gated: Meta requires accepting the licence, so a
+        # first-use fetch cannot be fully automatic however the app is packaged.
+        raise RuntimeError(
+            "SAM3 weights could not be downloaded."
+            + NL2
+            + "The model is gated by Meta, so it needs a one-time approval:"
+            + NL
+            + "  1. Accept the licence at https://huggingface.co/"
+            + _CHECKPOINT_REPO
+            + NL
+            + "  2. Create a token at https://huggingface.co/settings/tokens"
+            + NL
+            + "  3. Set HF_TOKEN to that token and retry."
+            + NL2
+            + "Already have the file? Point SAM3_CHECKPOINT at it, or place it at:"
+            + NL
+            + "  "
+            + str(dest)
+            + NL2
+            + "Underlying error: "
+            + str(exc)
+        ) from exc
+
+    if Path(fetched) != dest:
+        shutil.copyfile(fetched, dest)
+    log("SAM3 checkpoint ready at %s", dest)
+
+
 def ensure_model_loaded():
     """Lazy-load SAM3 model on first use."""
     global model, processor, model_manager
@@ -191,14 +261,7 @@ def ensure_model_loaded():
         return
     log("Loading SAM3 model from %s on CPU (pinned) ...", CHECKPOINT_PATH)
     if not Path(CHECKPOINT_PATH).exists():
-        raise FileNotFoundError(
-            f"Checkpoint not found: {CHECKPOINT_PATH}\n"
-            "To use SAM3, either:\n"
-            "  1. Request access at https://huggingface.co/facebook/sam3, then run:\n"
-            "       python scripts/setup_sam3.py --download-hf\n"
-            "  2. Provide a direct URL: python scripts/setup_sam3.py --checkpoint-url <url>\n"
-            "  3. Set SAM3_CHECKPOINT env var to an existing sam3.pt file."
-        )
+        _ensure_checkpoint()
     # torch.compile can cause inaccurate results on some Windows/GPU combos.
     # Enable only if explicitly requested via env var.
     use_compile = DEVICE == "cuda" and os.environ.get("SAM3_ENABLE_COMPILE", "0") == "1"
