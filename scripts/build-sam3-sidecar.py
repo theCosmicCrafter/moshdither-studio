@@ -72,6 +72,8 @@ def _candidate_roots() -> list[Path]:
 # interpreter before building, because PyInstaller treats a missing one as a
 # warning and still exits 0.
 REQUIRED_MODULES = ("torch", "iopath", "sam3")
+NL = chr(10)
+NLNL = chr(10) + chr(10)
 
 
 def find_python() -> Path:
@@ -114,6 +116,42 @@ def verify_interpreter(python: Path) -> None:
         )
         if probe.returncode != 0:
             missing.append(mod)
+    # A CPU-only torch yields a sidecar that builds, packages and starts -- and
+    # then cannot load the model at all. Upstream SAM3 is GPU-only by design: it
+    # hardcodes device="cuda" in 13 files (sam3/model/position_encoding.py:55,
+    # sam3/model/decoder.py:283, sam3/model/io_utils.py, ...). Worse, a bundled
+    # sidecar takes precedence over a working CUDA venv in sam3_engine.rs, so
+    # shipping a CPU build actively breaks SAM3 for users who already had it.
+    if not missing:
+        probe = subprocess.run(
+            [str(python), "-c", "import torch; print(torch.version.cuda or '')"],
+            capture_output=True,
+            text=True,
+        )
+        if probe.returncode == 0 and not probe.stdout.strip():
+            raise RuntimeError(
+                "This interpreter has a CPU-only torch build."
+                + NLNL
+                + "  interpreter: "
+                + str(python)
+                + NLNL
+                + 'SAM3 hardcodes device="cuda" in 13 upstream files, so a CPU sidecar'
+                + NL
+                + "starts and then fails with:"
+                + NL
+                + "  Model load failed: Torch not compiled with CUDA enabled"
+                + NLNL
+                + "A bundled sidecar also wins over a local CUDA venv, so shipping one"
+                + NL
+                + "would break SAM3 for users who already have it working."
+                + NLNL
+                + "Build against a CUDA environment, or skip the sidecar with"
+                + NL
+                + "`npm run tauri:build:no-sam3` and let users point"
+                + NL
+                + "MOSHDITHER_SAM3_PYTHON at their own CUDA interpreter."
+            )
+
     if missing:
         raise RuntimeError(
             "Interpreter is missing modules the sidecar requires: "
