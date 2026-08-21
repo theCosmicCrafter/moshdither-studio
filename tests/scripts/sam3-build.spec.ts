@@ -4,6 +4,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -95,8 +96,10 @@ describe("SAM3 build infrastructure", () => {
       // Must not itself start with "sam3-bridge-", or the generator still
       // finds it and the test proves nothing.
       const to = join(binDir, `parked_${f}`);
-      writeFileSync(to, readFileSync(from));
-      rmSync(from);
+      // rename, not read+write: a GPU sidecar is ~2.9 GB and readFileSync
+      // throws "File size is greater than 2 GiB" on Node's buffer limit --
+      // the same 2 GB class of limit that stops makensis and WiX packaging it.
+      renameSync(from, to);
       return { from, to };
     });
     try {
@@ -106,8 +109,7 @@ describe("SAM3 build infrastructure", () => {
       expect(existsSync(releaseOverlay)).toBe(false);
     } finally {
       for (const { from, to } of parked) {
-        writeFileSync(from, readFileSync(to));
-        rmSync(to);
+        renameSync(to, from);
       }
     }
   });

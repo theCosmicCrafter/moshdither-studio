@@ -73,6 +73,7 @@ Thumbs.db
 # Python venvs
 /audit_venv
 /sam3_env
+/sam3_env_cpu
 /packages/python-backend/venv
 
 # SAM3 sidecar binaries (built per target in CI / local release builds)

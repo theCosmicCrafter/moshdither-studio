@@ -304,8 +304,41 @@ impl Sam3Engine {
         // start a new one and overwrite the PID file.
         cleanup_stale_sam3_bridge();
 
-        // Try the packaged sidecar first (production / Option A).
-        let mut command = if let Some(sidecar) = locate_sam3_binary() {
+        // An explicit interpreter wins over the bundled sidecar. Without this the
+        // sidecar always won, so a user could not opt into their own CUDA
+        // environment -- which matters because a GPU-enabled sidecar carries
+        // ~3.5 GB of CUDA libraries, and shipping a smaller CPU-only build is
+        // only viable if the people with a GPU can still reach it.
+        let explicit_python = std::env::var_os("MOSHDITHER_SAM3_PYTHON")
+            .map(std::path::PathBuf::from)
+            .filter(|p| p.exists());
+
+        let mut command = if let Some(python) = explicit_python {
+            let root = dev_project_root();
+            let bridge = root
+                .as_ref()
+                .map(|r| r.join("src-tauri").join("sam3_bridge.py"))
+                .filter(|b| b.exists());
+            let mut cmd = Command::new(&python);
+            if let Some(bridge) = bridge {
+                cmd.arg(bridge);
+            }
+            if let Some(app_root) = root {
+                if let Some(repo) = resolve_sam3_repo(app).or_else(|| {
+                    let r = app_root
+                        .join("packages")
+                        .join("python-backend")
+                        .join("sam3_repo");
+                    r.exists().then_some(r)
+                }) {
+                    cmd.env("SAM3_REPO", repo.as_os_str());
+                }
+            }
+            if let Some(checkpoint) = resolve_checkpoint_path(app) {
+                cmd.env("SAM3_CHECKPOINT", checkpoint.as_os_str());
+            }
+            cmd
+        } else if let Some(sidecar) = locate_sam3_binary() {
             let mut cmd = Command::new(&sidecar);
             // Point the sidecar at the Tauri resources for the model and the sam3 package.
             if let Some(repo) = resolve_sam3_repo(app) {
