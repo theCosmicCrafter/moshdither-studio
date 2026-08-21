@@ -24,11 +24,19 @@ if (!existsSync(baseConfPath)) {
 // installer shipped without SAM3 and the app fell back to hunting a developer
 // venv that does not exist on a user's machine. That is the "SAM3 unavailable"
 // warning users hit.
+// `--no-sidecar` emits an overlay for a deliberate build without SAM3. It
+// still carries the updater handling below, which is the whole reason it
+// exists: tauri.conf.json sets createUpdaterArtifacts true, so a plain
+// `tauri build` fails at the very end with "A public key has been found,
+// but no private key" on any machine without TAURI_SIGNING_PRIVATE_KEY --
+// after having already produced the installers, which makes it look like a
+// packaging failure when nothing is wrong with the bundle.
+const noSidecar = process.argv.includes("--no-sidecar");
 const binDir = join(projectRoot, "src-tauri", "bin");
 const sidecars = existsSync(binDir)
   ? readdirSync(binDir).filter((f) => f.startsWith("sam3-bridge-"))
   : [];
-if (sidecars.length === 0) {
+if (!noSidecar && sidecars.length === 0) {
   console.error("");
   console.error("  SAM3 sidecar binary not found in src-tauri/bin/");
   console.error("");
@@ -43,7 +51,7 @@ if (sidecars.length === 0) {
   console.error("");
   process.exit(1);
 }
-console.log(`Found SAM3 sidecar: ${sidecars.join(", ")}`);
+if (!noSidecar) console.log(`Found SAM3 sidecar: ${sidecars.join(", ")}`);
 
 // Tauri merges a --config overlay by REPLACING arrays and objects, not by
 // concatenating them. An overlay that named only the sidecar would therefore
@@ -59,7 +67,9 @@ const baseResources = baseBundle.resources ?? {};
 
 const overlay = {
   bundle: {
-    externalBin: [...new Set([...baseExternalBin, "bin/sam3-bridge"])],
+    externalBin: noSidecar
+      ? [...baseExternalBin]
+      : [...new Set([...baseExternalBin, "bin/sam3-bridge"])],
     resources: {
       ...baseResources,
       "../models": "models",
