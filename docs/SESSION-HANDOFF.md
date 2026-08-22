@@ -22,14 +22,41 @@ gitignored, so it never travelled with the branch.
 
 ---
 
-## State: shippable
+## State: builds and runs; not yet distributable
 
-`npm run gate` passes 8/8 (verified 2026-08-22). Both installers build clean:
+`npm run gate` passes 8/8 and `npm run tauri:build:no-sam3` exits 0
+(both verified 2026-08-22), producing NSIS 156 MB + MSI 185 MB.
 
-| Build | Command | Output |
-|---|---|---|
-| With SAM3 | `npm run tauri:build` | NSIS + MSI, ~2.9 GB sidecar |
-| Without SAM3 | `npm run tauri:build:no-sam3` | NSIS 156 MB + MSI 185 MB |
+**What is self-contained.** The core app is: all four FFmpeg-family sidecars
+(`ffmpeg`, `ffprobe`, `ffgac`, `ffedit`), the 35 LUTs, the Python backend and the
+icons are all bundled. Effects, dithering, glitch, LUTs and export need nothing
+from the internet.
+
+**What is not.**
+
+1. *SAM3 needs two large pieces neither of which ships.* `npm run tauri:build`
+   REFUSES in a clean worktree because no `sam3-bridge-*` binary exists in
+   `src-tauri/bin/` -- deliberate, so a broken sidecar cannot ship silently. Build
+   it with `setup:sam3-env` then `build:sam3-sidecar` (~2.9 GB, needs the CUDA
+   torch env). Separately, `models/` is empty: the 3.21 GB checkpoint downloads on
+   first use from a GATED HuggingFace repo, so an end user needs their own HF
+   account and access approval. Not a shippable first-run for strangers.
+   NOTE: `src-tauri/target/release/sam3-bridge.exe` is a STALE 297 MB CPU-only
+   build from 2026-08-21 that cannot load the model. It is not bundled. Do not
+   copy it into `src-tauri/bin/`.
+2. *A fresh clone cannot build.* The four FFmpeg binaries are gitignored and
+   there is no script that fetches them -- `verify-external-bins.mjs` only
+   checks. `packages/python-backend/sam3_repo` is likewise gitignored and needs a
+   PATCHED clone (`weights_only=False`); see `docs/SAM3_SETUP.md`.
+3. *Not code-signed.* `bundle.windows.certificateThumbprint` is null, so
+   SmartScreen warns on every install.
+4. *The updater is configured but dead.* A pubkey and a GitHub releases endpoint
+   are set, but with no `TAURI_SIGNING_PRIVATE_KEY` the overlay disables updater
+   artifacts -- and since Actions never runs on this account by choice, nothing
+   will ever publish `latest.json`. Shipping a live updater endpoint that never
+   serves anything is worse than shipping none; decide before any public release.
+
+Version is still `0.1.0`.
 
 ---
 
