@@ -148,18 +148,22 @@ impl Effect for LineScreen {
                 let proj = (x as f32) * (-sin_a) + (y as f32) * cos_a;
                 let phase = (proj / spacing as f32).fract().abs();
 
-                // The line occupies a fraction of the spacing proportional to brightness.
-                // Bright areas have wider lines (more ink coverage for dark-on-light, or
-                // light-on-dark depending on invert).
-                // Line width fraction = lum_effective (brighter = wider line)
-                // Cap at 0.9 so background is always visible
-                let line_width_frac = lum_effective * 0.9;
+                // Ink coverage follows DARKNESS, the way a press lays down a
+                // line screen: the darker the pixel, the wider the black line.
+                // This was driven by brightness instead, which rendered every
+                // image as its own tonal negative -- on a dark portrait the lit
+                // face filled with solid black hatching while the black
+                // background came out as bare white paper.
+                // Capped at 0.9 so the paper always shows through.
+                let ink = 1.0 - lum_effective;
+                let line_width_frac = ink * 0.9;
 
                 // If the pixel falls within the line region, it's "on"
                 let is_line = phase < line_width_frac;
 
-                // Apply threshold: only show lines where brightness exceeds threshold
-                if lum_effective > threshold {
+                // Below the threshold there is too little tone to carry ink, so
+                // the pixel is left as bare paper.
+                if ink > threshold {
                     if is_line {
                         // Line color: black (or inverted: white)
                         if invert {
@@ -267,62 +271,79 @@ mod tests {
         }
     }
 
+    fn has_both_tones(data: &[u8], px: usize) -> (bool, bool) {
+        let mut black = false;
+        let mut white = false;
+        for i in 0..px {
+            if data[i * 4] == 0 {
+                black = true;
+            }
+            if data[i * 4] == 255 {
+                white = true;
+            }
+        }
+        (black, white)
+    }
+
+    /// A line screen puts ink where the image is DARK. These three tests
+    /// previously asserted the exact opposite -- black in, solid white out --
+    /// which is why the inverted mapping survived: the tests had been written
+    /// to describe the implementation rather than a line screen.
     #[test]
-    fn test_black_produces_background() {
-        // Black image (lum=0) should produce all-white background (non-inverted)
+    fn black_is_where_the_ink_goes() {
         let e = LineScreen;
         let r = e
             .process_frame(&gray(16, 16, 0), None, &serde_json::Map::new())
             .unwrap();
-        for i in 0..(16 * 16) {
-            // Black is below threshold, so background = white
-            assert_eq!(r.data[i * 4], 255);
-            assert_eq!(r.data[i * 4 + 1], 255);
-            assert_eq!(r.data[i * 4 + 2], 255);
-        }
+        let (black, white) = has_both_tones(&r.data, 16 * 16);
+        assert!(
+            black,
+            "a black frame must be inked: it is the darkest tone there is"
+        );
+        assert!(white, "the screen must leave paper between its lines");
     }
 
     #[test]
-    fn test_white_produces_lines() {
-        // White image (lum=1) exceeds threshold, so we should see line patterns
+    fn white_is_left_as_bare_paper() {
         let e = LineScreen;
         let r = e
             .process_frame(&gray(32, 32, 255), None, &serde_json::Map::new())
             .unwrap();
-        let mut has_black = false;
-        let mut has_white = false;
         for i in 0..(32 * 32) {
-            if r.data[i * 4] == 0 {
-                has_black = true;
-            }
-            if r.data[i * 4] == 255 {
-                has_white = true;
-            }
+            assert_eq!(
+                r.data[i * 4],
+                255,
+                "white carries no tone, so it must take no ink"
+            );
         }
-        // Should have both line and background pixels
-        assert!(has_black && has_white);
+    }
+
+    /// Guards the inversion directly: a dark frame must come out darker than a
+    /// light one. Under the old brightness-driven mapping this held in reverse.
+    #[test]
+    fn darker_input_takes_more_ink_than_lighter_input() {
+        let e = LineScreen;
+        let params = serde_json::Map::new();
+        let dark = e.process_frame(&gray(32, 32, 30), None, &params).unwrap();
+        let light = e.process_frame(&gray(32, 32, 200), None, &params).unwrap();
+
+        let coverage = |d: &[u8]| d.iter().step_by(4).filter(|&&v| v == 0).count();
+        assert!(
+            coverage(&dark.data) > coverage(&light.data),
+            "a darker frame must receive more ink than a lighter one"
+        );
     }
 
     #[test]
     fn test_invert_flips_colors() {
+        // invert produces the negative of the whole screen, so the frame that
+        // inks heavily is the light one rather than the dark one.
         let e = LineScreen;
         let mut params = serde_json::Map::new();
         params.insert("invert".to_string(), json!(true));
-        let r = e.process_frame(&gray(16, 16, 0), None, &params).unwrap();
-        // Black inverted: lum=1, exceeds threshold, lines appear as white on black bg
-        // Actually: invert makes lum_effective = 1 - 0 = 1, which exceeds threshold
-        // Lines are white, background is black
-        let mut has_black = false;
-        let mut has_white = false;
-        for i in 0..(16 * 16) {
-            if r.data[i * 4] == 0 {
-                has_black = true;
-            }
-            if r.data[i * 4] == 255 {
-                has_white = true;
-            }
-        }
-        assert!(has_black && has_white);
+        let r = e.process_frame(&gray(16, 16, 255), None, &params).unwrap();
+        let (black, white) = has_both_tones(&r.data, 16 * 16);
+        assert!(black && white);
     }
 
     /// `line_spacing` must be read with `as_f64`, not `as_i64`: a JSON float
@@ -331,9 +352,10 @@ mod tests {
     /// effect would fall back to its hardcoded default of 4.
     #[test]
     fn line_spacing_accepts_a_float_tagged_value_instead_of_falling_back_to_default() {
-        // A bright, uniform frame: lum_effective is constant, so the only
-        // spatially-varying input to the line pattern is line_spacing.
-        let frame = gray(32, 32, 255);
+        // A dark, uniform frame: ink coverage is constant, so the only
+        // spatially-varying input to the line pattern is line_spacing. (White
+        // would take no ink at all now, making every spacing identical.)
+        let frame = gray(32, 32, 0);
         let e = LineScreen;
 
         let mut float_params = serde_json::Map::new();
@@ -359,7 +381,7 @@ mod tests {
 
     #[test]
     fn line_spacing_honours_a_clamp_then_read_round_trip() {
-        let frame = gray(32, 32, 255);
+        let frame = gray(32, 32, 0);
         let e = LineScreen;
 
         // Out of range (declared max is 20); clamp_params rewrites this to
