@@ -657,6 +657,41 @@ export const useAppStore = create<AppState>((set, get) => ({
     // web-style URL with the leading slash removed. Custom user LUTs pass the
     // absolute disk path instead.
     const lut_path = filePath ?? previewUrl.replace(/^\//, "");
+
+    // Applying a look from the LUT library SWAPS the current one rather than
+    // layering a second on top. The library is a gallery of one-click tiles
+    // labelled "Apply <name>", and the status bar reports "LUT applied: <name>"
+    // in the singular, so browsing looks reads as swapping -- but this used to
+    // append, and every LUT grades the output of the one before it. Four clicks
+    // on Gotham took a test image from mean luma 124.8 to 2.5: a black preview,
+    // reported for months as "the LUT blacked out the screen".
+    //
+    // Only the texture is swapped, so a strength the user has dialled in on the
+    // slider carries across the looks they audition. Stacking two LUTs is still
+    // possible deliberately, by duplicating the entry from the effect stack.
+    let existingIndex = -1;
+    for (let i = state.effectStack.length - 1; i >= 0; i--) {
+      if (state.effectStack[i].effectId === "color.lut_grading") {
+        existingIndex = i;
+        break;
+      }
+    }
+    if (existingIndex !== -1) {
+      const existing = state.effectStack[existingIndex];
+      const swapped: StackEntry = {
+        ...existing,
+        params: { ...existing.params, tLUT: previewUrl, lut_path },
+      };
+      const nextStack = [...state.effectStack];
+      nextStack[existingIndex] = swapped;
+      set((s) => ({
+        ...pushHistory(s),
+        effectStack: nextStack,
+        selectedStackId: swapped.id,
+      }));
+      return;
+    }
+
     const entry: StackEntry = {
       id: nextStackId(),
       effectId: "color.lut_grading",

@@ -35,7 +35,21 @@ gitignored, so it never travelled with the branch.
 
 ## Closed this session
 
-**The black preview — root-caused and fixed.** `WebGLContext.destroy()` freed GL
+**The black preview had two independent causes. Both are fixed.**
+
+*Cause 1 — LUTs stacked instead of swapping.* `addLUTEffect` appended a new
+entry on every click, while the tile said "Apply <name>" and the status bar said
+"LUT applied: <name>" in the singular. Each LUT grades the output of the one
+before it, so browsing the library compounded them: on the test image (mean luma
+124.8) four clicks on Gotham gave **2.5** — a black screen. Clicking a library
+tile now swaps the current look in place, keeping any strength the user has
+dialled in. Deliberate stacking is still available by duplicating the entry in
+the effect stack. Measured first: no *single* LUT blacks out — the darkest of
+the 35 lands at 0.65x source, and all 35 are correctly 512x512 — so lowering the
+default strength would have weakened every look while leaving the real cause in
+place.
+
+*Cause 2 — leaked WebGL contexts.* `WebGLContext.destroy()` freed GL
 objects but never released the context; browsers cap live contexts at 16 and
 force-lose the oldest, so every preview panel remount leaked one until the
 browser killed the visible preview's context. Fixed with `loseContext()` in
@@ -56,14 +70,18 @@ real protocol (handshake → `auth_ok`, `load_image` → 1600x1216,
 
 ## Open
 
-1. **Confirm the black preview is gone in a real build.** The fix is proven at
-   the unit level but has not been exercised by a human in the installed app.
-   Reproduction recipe: move/dock/undock the Preview panel a dozen or more times,
-   then check the preview is still live. This is the one item that wants your
-   hands rather than mine.
-2. **Mask controls** (mode selector, invert, clear, brush) are untested — they
+1. **Confirm the black preview is gone in a real build.** Both fixes are proven
+   at the unit level but neither has been exercised by a human in the installed
+   app. Two recipes, one per cause: (a) click through a dozen LUT tiles and check
+   the image still reads — the effect stack should hold exactly one LUT entry;
+   (b) move/dock/undock the Preview panel a dozen or more times and check the
+   preview is still live. This is the one item that wants your hands, not mine.
+2. **Consider marking the active LUT tile.** With swap semantics there is exactly
+   one live look, but nothing in the gallery shows which. Not built — it is a
+   design call, not a defect.
+3. **Mask controls** (mode selector, invert, clear, brush) are untested — they
    need a live SAM3 mask to drive them.
-3. **`composite.overlay`** defaults to identity until an overlay is selected.
+4. **`composite.overlay`** defaults to identity until an overlay is selected.
    Correct behaviour, but it lands the user on a control that appears to do
    nothing. Worth a placeholder or a disabled state.
 

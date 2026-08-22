@@ -432,5 +432,52 @@ describe("Store E2E — State Management", () => {
       expect(stack[0].effectId).toBe("color.lut_grading");
       expect(stack[0].params.tLUT).toBe("file:///test.cube");
     });
+
+    it("swaps the current look instead of stacking a second LUT", () => {
+      // Stacking was what blacked out the preview: each LUT grades the output of
+      // the one before it, so a few clicks around the library drove the image to
+      // near-zero luma.
+      useAppStore
+        .getState()
+        .setAllEffects([mockEffect("color.lut_grading", [{ id: "amount", default: 1.0 }])]);
+      useAppStore.getState().addLUTEffect("/lut/gotham.png");
+      useAppStore.getState().addLUTEffect("/lut/sutro.png");
+      useAppStore.getState().addLUTEffect("/lut/walden.png");
+
+      const stack = useAppStore.getState().effectStack;
+      expect(stack).toHaveLength(1);
+      expect(stack[0].params.tLUT).toBe("/lut/walden.png");
+      expect(stack[0].params.lut_path).toBe("lut/walden.png");
+      expect(useAppStore.getState().selectedStackId).toBe(stack[0].id);
+    });
+
+    it("keeps a strength the user has dialled in when swapping looks", () => {
+      useAppStore
+        .getState()
+        .setAllEffects([mockEffect("color.lut_grading", [{ id: "amount", default: 1.0 }])]);
+      useAppStore.getState().addLUTEffect("/lut/gotham.png");
+      const id = useAppStore.getState().effectStack[0].id;
+      useAppStore.getState().updateStackParams(id, { amount: 0.4 });
+
+      useAppStore.getState().addLUTEffect("/lut/sutro.png");
+      const entry = useAppStore.getState().effectStack[0];
+      expect(entry.params.tLUT).toBe("/lut/sutro.png");
+      expect(entry.params.amount).toBe(0.4);
+    });
+
+    it("leaves non-LUT effects in the stack alone", () => {
+      const dither = mockEffect("dither.floyd_steinberg", []);
+      useAppStore
+        .getState()
+        .setAllEffects([mockEffect("color.lut_grading", [{ id: "amount", default: 1.0 }]), dither]);
+      useAppStore.getState().addToStack(dither);
+      useAppStore.getState().addLUTEffect("/lut/gotham.png");
+      useAppStore.getState().addLUTEffect("/lut/sutro.png");
+
+      const stack = useAppStore.getState().effectStack;
+      expect(stack).toHaveLength(2);
+      expect(stack[0].effectId).toBe("dither.floyd_steinberg");
+      expect(stack[1].params.tLUT).toBe("/lut/sutro.png");
+    });
   });
 });
