@@ -58,6 +58,19 @@ browser killed the visible preview's context. Fixed with `loseContext()` in
 diagnoses: [`docs/devlogs/2026-08-22-webgl-context-leak.md`](devlogs/2026-08-22-webgl-context-leak.md).
 Regression cover: `tests/e2e/webgl-context-lifecycle.spec.ts`.
 
+**Effect default-strength audit (99 effects).** All 99 rendered at their
+defaults across four reference images (studio portrait, landscape, mountain,
+repo test frame) with `mosh-verify render-all`, then ranked by mean per-channel
+delta, luminance correlation and share of pixels changed. Agreed bar: a default
+must read unmistakably as the effect; destructive effects should leave the
+subject recognisable. One outright defect found and fixed --
+`dithering.line_screen` inked by brightness instead of darkness, rendering every
+image as its own tonal negative (correlation -0.60, now +0.56); see
+[`docs/devlogs/2026-08-22-effect-default-audit.md`](devlogs/2026-08-22-effect-default-audit.md).
+Contact sheet artifact: https://claude.ai/code/artifact/4479ae94-69b9-410f-af89-0f32b4bbc241
+
+Four proposals are open and deliberately NOT applied (see "Open" below).
+
 Earlier in the session: video export was totally broken (temp file lost the
 destination extension) and now works; FFmpeg mid-write failures report FFmpeg's
 own message instead of `os error 109`; the empty command palette; silent gate
@@ -79,9 +92,17 @@ real protocol (handshake → `auth_ok`, `load_image` → 1600x1216,
 2. **Consider marking the active LUT tile.** With swap semantics there is exactly
    one live look, but nothing in the gallery shows which. Not built — it is a
    design call, not a defect.
-3. **Mask controls** (mode selector, invert, clear, brush) are untested — they
+3. **Effect default retunes, proposed, awaiting a decision.** None applied.
+   - `datamoshing.shuffle` `chunk_size` 5 -> ~18-22: at 5 the subject is gone
+     entirely (correlation 0.06), past the wrecked-but-recognisable bar.
+   - `glitch.crc_mismatch`, `glitch.macroblock_glitch` (0.3),
+     `analog.ghosting` (0.3): all read as mild artifacts rather than effects.
+   - The 14 dithering effects all collapse to ~96% pure black/white pixels.
+     Authentic for 1-bit dithering, but their default frames look alike;
+     palette depth is the knob if you want them distinct.
+4. **Mask controls** (mode selector, invert, clear, brush) are untested — they
    need a live SAM3 mask to drive them.
-4. **`composite.overlay`** defaults to identity until an overlay is selected.
+5. **`composite.overlay`** defaults to identity until an overlay is selected.
    Correct behaviour, but it lands the user on a control that appears to do
    nothing. Worth a placeholder or a disabled state.
 
