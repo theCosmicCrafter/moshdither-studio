@@ -92,14 +92,27 @@ real protocol (handshake → `auth_ok`, `load_image` → 1600x1216,
 2. **Consider marking the active LUT tile.** With swap semantics there is exactly
    one live look, but nothing in the gallery shows which. Not built — it is a
    design call, not a defect.
-3. **Effect default retunes, proposed, awaiting a decision.** None applied.
-   - `datamoshing.shuffle` `chunk_size` 5 -> ~18-22: at 5 the subject is gone
-     entirely (correlation 0.06), past the wrecked-but-recognisable bar.
-   - `glitch.crc_mismatch`, `glitch.macroblock_glitch` (0.3),
-     `analog.ghosting` (0.3): all read as mild artifacts rather than effects.
-   - The 14 dithering effects all collapse to ~96% pure black/white pixels.
-     Authentic for 1-bit dithering, but their default frames look alike;
-     palette depth is the knob if you want them distinct.
+3. **Effect default retunes: reviewed and CLOSED, nothing changed.** The owner's
+   rule is that an effect operating as designed is left alone; only output that
+   is destroyed beyond being usable art gets touched. Under that rule all four
+   proposals were declined, and two speculative edits were reverted:
+   - `datamoshing.shuffle` -- `chunk_size` cannot fix it. `process_frame` does a
+     *global* shuffle (`chunks.swap(i, j)` across the whole buffer), so a chunk
+     from row 10 can land at row 500 at any chunk size. Raising 5 -> 20 was tried
+     and still produced noise. Making it recognisable means changing the
+     algorithm to a local/windowed shuffle -- a redesign, not a default. Left
+     alone: a shuffle that shuffles is working.
+   - `glitch.crc_mismatch`, `glitch.macroblock_glitch`, `analog.ghosting`: quiet
+     but correct. Being faint is not breakage.
+   - The 14 dithering effects and `dithering.custom_matrix` (`bayer2`): left
+     alone. A 2x2 Bayer matrix is coarse *by nature*; that is the effect working.
+     A `bayer2 -> bayer4` edit was made and reverted -- judging "is this usable
+     art" from a dithered frame is the owner's call, not an agent's, and
+     blockiness was being misread as breakage.
+
+   The lesson: of 99 effects, exactly one had a defect that survives review, and
+   it was the one identified by a *measurement* (negative correlation) rather
+   than by an opinion about how the output looked.
 4. **Mask controls** (mode selector, invert, clear, brush) are untested — they
    need a live SAM3 mask to drive them.
 5. **`composite.overlay`** defaults to identity until an overlay is selected.
