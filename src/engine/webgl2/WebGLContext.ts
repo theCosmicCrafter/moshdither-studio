@@ -173,5 +173,15 @@ export class WebGLContext {
     this.programs.clear();
     this.textures.clear();
     this.framebuffers.clear();
+    // Deleting the GL objects does not release the context itself -- the canvas
+    // holds it until garbage collection, and browsers cap how many WebGL
+    // contexts may be live at once (16 in Chrome), force-losing the OLDEST once
+    // that cap is passed. Every preview remount (docking or moving a panel,
+    // StrictMode's double mount in dev) leaked one context, so after enough
+    // remounts the browser killed the context the *visible* preview was drawing
+    // with: onContextLost fired and the preview went black. The listeners are
+    // removed at the top of destroy(), so this loses the context without
+    // invoking our own onContextLost callback.
+    this.gl.getExtension("WEBGL_lose_context")?.loseContext();
   }
 }
