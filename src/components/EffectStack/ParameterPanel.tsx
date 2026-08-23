@@ -1,6 +1,28 @@
 import { useAppStore, type AudioBinding } from "../../store";
 import { PALETTE_PRESETS, fillPaletteParams } from "../../engine/palettePresets";
+
 import { isVideoOnlyEffect, VIDEO_ONLY_ON_IMAGE_WARNING } from "../../utils/effectConverter";
+
+/**
+ * Parameters that a dedicated panel already picks better than a generic control
+ * can, and which are therefore hidden from the effect's parameter list.
+ *
+ * `color.lut_grading.lut_path` is a Select of ~35 bare filenames. The LUTs tab
+ * chooses the same value from a gallery of rendered thumbnails, so the dropdown
+ * was the worse of two pickers for the identical setting -- and a second way to
+ * change a value invites the two controls to disagree.
+ *
+ * The parameter itself is untouched: it stays in the Rust ParameterDef so
+ * clamping and export keep working, and the value still rides in the stack
+ * entry. Only the redundant control is hidden.
+ */
+const PICKED_ELSEWHERE: Record<string, readonly string[]> = {
+  "color.lut_grading": ["lut_path"],
+};
+
+function isPickedElsewhere(effectId: string, paramId: string): boolean {
+  return PICKED_ELSEWHERE[effectId]?.includes(paramId) ?? false;
+}
 
 const AUDIO_SOURCES = [
   { id: "bass", label: "Bass" },
@@ -241,7 +263,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
         </div>
       )}
 
-      {effectMeta.parameters.map((param) => {
+      {effectMeta.parameters.filter((param) => !isPickedElsewhere(entry.effectId, param.id)).map((param) => {
         const value = entry.params[param.id] ?? param.default;
         return (
           <div key={param.id} className="space-y-1.5">
