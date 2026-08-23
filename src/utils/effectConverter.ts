@@ -861,6 +861,21 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
     paramMap: {},
     accurate: false,
   },
+  // Beat-driven siblings of frame_hold. Mapped to pass_through for the same
+  // reason: both need audio AND multiple frames, so there is nothing a
+  // single-frame shader can show. Without an entry at all they fell out of the
+  // conversion table entirely, which forced the whole stack onto the slow CPU
+  // preview path whenever one was present.
+  "datamoshing.beat_hold": {
+    shaderId: "pass_through",
+    paramMap: {},
+    accurate: false,
+  },
+  "datamoshing.beat_smear": {
+    shaderId: "pass_through",
+    paramMap: {},
+    accurate: false,
+  },
   "datamoshing.combine": {
     shaderId: "pass_through",
     paramMap: {},
@@ -1049,6 +1064,38 @@ export function isVideoOnlyEffect(meta: Pick<EffectMeta, "media_type">): boolean
  *  banner in the parameter panel (EffectStack/ParameterPanel.tsx) whenever
  *  `isVideoOnlyEffect` is true and the loaded media is a still image. Kept
  *  in one place so the two surfaces never drift out of sync. */
+/**
+ * Effects that render nothing until a file-valued Select parameter is chosen.
+ *
+ * Their defaults are deliberately empty -- there is no sensible default overlay
+ * or look -- so the effect sits in the stack behaving exactly like a disabled
+ * one, with no indication that it is waiting on a choice. `composite.overlay` is
+ * the obvious case; `color.lut_grading` hits it too whenever it is added from
+ * the effect browser rather than the LUTs tab, which is what fills lut_path in.
+ */
+export const REQUIRES_SELECTION: Record<string, { param: string; message: string }> = {
+  "composite.overlay": {
+    param: "overlay_path",
+    message: "Pick an overlay image — this effect does nothing until one is chosen.",
+  },
+  "color.lut_grading": {
+    param: "lut_path",
+    message: "Pick a look in the LUTs tab — this effect does nothing until one is chosen.",
+  },
+};
+
+/** Message to show when `entry` is waiting on a selection, else null. */
+export function unsetSelectionWarning(
+  effectId: string,
+  params: Record<string, unknown>
+): string | null {
+  const req = REQUIRES_SELECTION[effectId];
+  if (!req) return null;
+  const value = params[req.param];
+  const missing = value === undefined || value === null || value === "";
+  return missing ? req.message : null;
+}
+
 export const VIDEO_ONLY_ON_IMAGE_WARNING =
   "No visible effect on a still image — this effect requires video.";
 

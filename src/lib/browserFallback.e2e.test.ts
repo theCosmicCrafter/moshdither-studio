@@ -65,6 +65,22 @@ describe("Browser Fallback E2E", () => {
       expect(duplicated).toEqual([]);
     });
 
+    it("warns when an effect is waiting on a file selection", async () => {
+      // composite.overlay and a browser-added lut_grading sit in the stack
+      // behaving exactly like a disabled effect until their path is chosen,
+      // with nothing on screen saying so.
+      const { unsetSelectionWarning } = await import("../utils/effectConverter");
+      expect(unsetSelectionWarning("composite.overlay", {})).toContain("overlay");
+      expect(unsetSelectionWarning("composite.overlay", { overlay_path: "" })).toContain("overlay");
+      expect(unsetSelectionWarning("composite.overlay", { overlay_path: "x.png" })).toBeNull();
+
+      expect(unsetSelectionWarning("color.lut_grading", { lut_path: "" })).toContain("LUTs tab");
+      expect(unsetSelectionWarning("color.lut_grading", { lut_path: "lut/gotham.png" })).toBeNull();
+
+      // Effects with no required selection never warn.
+      expect(unsetSelectionWarning("dithering.bayer", {})).toBeNull();
+    });
+
     it("every fallback effect's shaderId exists in registry", () => {
       for (const [effectId, mapping] of Object.entries(rustToWebGL)) {
         if (shaderRegistry.has(mapping.shaderId)) {

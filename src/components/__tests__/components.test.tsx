@@ -84,6 +84,9 @@ vi.mock("../../utils/effectConverter", () => ({
   isVideoOnlyEffect: (meta: { media_type: string }) => meta.media_type === "video",
   VIDEO_ONLY_ON_IMAGE_WARNING:
     "No visible effect on a still image — this effect requires video.",
+  // Real behaviour is covered in browserFallback.e2e.test.ts; here it only has
+  // to exist, so the panel's other tests are not testing a broken import.
+  unsetSelectionWarning: () => null,
 }));
 
 vi.mock("../../lib/tauri", () => ({

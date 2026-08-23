@@ -1,7 +1,7 @@
 import { useAppStore, type AudioBinding } from "../../store";
 import { PALETTE_PRESETS, fillPaletteParams } from "../../engine/palettePresets";
 
-import { isVideoOnlyEffect, VIDEO_ONLY_ON_IMAGE_WARNING } from "../../utils/effectConverter";
+import { isVideoOnlyEffect, VIDEO_ONLY_ON_IMAGE_WARNING, unsetSelectionWarning } from "../../utils/effectConverter";
 
 /**
  * Parameters that a dedicated panel already picks better than a generic control
@@ -179,6 +179,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
   if (!effectMeta) return null;
 
   const showVideoOnlyWarning = mediaLoaded && !isVideo && isVideoOnlyEffect(effectMeta);
+  const selectionWarning = unsetSelectionWarning(entry.effectId, entry.params);
 
   return (
     <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4 custom-scrollbar">
@@ -208,6 +209,28 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
             warning
           </span>
           <span>{VIDEO_ONLY_ON_IMAGE_WARNING}</span>
+        </div>
+      )}
+
+      {selectionWarning && (
+        <div
+          role="alert"
+          style={{
+            padding: "6px 8px",
+            fontSize: 10,
+            borderRadius: 3,
+            background: "rgba(255, 180, 0, 0.15)",
+            border: "1px solid rgba(255, 180, 0, 0.4)",
+            color: "var(--accent-gold, #ffb400)",
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+          }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 12 }}>
+            warning
+          </span>
+          <span>{selectionWarning}</span>
         </div>
       )}
 
