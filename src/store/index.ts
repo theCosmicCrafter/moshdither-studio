@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { logger } from "../utils/logger";
 import type { AudioBakeData, AudioManifest } from "../engine/audio/types";
 import { type WatermarkSettings, DEFAULT_WATERMARK } from "../utils/watermark";
 
@@ -861,7 +862,21 @@ export const useAppStore = create<AppState>((set, get) => ({
   setIsProcessing: (v) => set({ isProcessing: v }),
   setShowBeforeAfter: (v) => set({ showBeforeAfter: v }),
   setZoom: (z) => set({ zoom: clampFinite(z, 0.1, 5, 1) }),
-  setStatusMessage: (msg) => set({ statusMessage: msg }),
+  setStatusMessage: (msg) => {
+    // The status bar is where this app reports failures -- ExportPanel and the
+    // rest call setStatusMessage and nothing else, never the logger -- so a
+    // failure lived only in a line of UI text the user had to relay by hand.
+    // Failure-shaped messages are mirrored into the app's log file.
+    //
+    // Matching on prose is a heuristic, chosen because it covers all ~40
+    // existing call sites at once; the durable fix is an explicit error channel
+    // at each site. Deduplicated against the current message so a per-frame
+    // preview error cannot flood the log.
+    if (msg && msg !== get().statusMessage && /fail|error|unavailable|cannot|could not|denied/i.test(msg)) {
+      logger.error("status", msg);
+    }
+    set({ statusMessage: msg });
+  },
   setPlaybackSpeed: (speed) => set({ playbackSpeed: clampFinite(speed, 0.25, 4, 1) }),
   setScopeMode: (mode) => set({ scopeMode: mode }),
   setScopesVisible: (v) => set({ scopesVisible: v }),

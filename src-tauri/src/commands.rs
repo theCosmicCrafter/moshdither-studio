@@ -666,8 +666,17 @@ pub async fn export_video(
     include_audio: Option<bool>,
     processing_scale: Option<usize>,
 ) -> std::result::Result<String, String> {
-    let validated_source = validate_io_path(&source_path, true)?;
-    let validated_output = validate_io_path(&output_path, false)?;
+    // Logged BEFORE validation, which is the first thing that can fail. A
+    // missing source returned here with no trace at all: the log showed a clean
+    // startup and nothing else, so an export that died on its first line looked
+    // identical to an export that was never attempted.
+    tracing::info!("export_video requested: source={source_path} output={output_path}");
+    let validated_source = validate_io_path(&source_path, true).inspect_err(|e| {
+        tracing::error!("export_video rejected source {source_path}: {e}");
+    })?;
+    let validated_output = validate_io_path(&output_path, false).inspect_err(|e| {
+        tracing::error!("export_video rejected output {output_path}: {e}");
+    })?;
     let registry = state.registry.clone();
     let cancel = state.export_cancel.clone();
 

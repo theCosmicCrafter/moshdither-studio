@@ -178,6 +178,13 @@ export function useProjectSession() {
           mediaRestored = onRefreshPreview ? await onRefreshPreview() : true;
         } catch (err) {
           console.error("[useProjectSession] Failed to load media from filePath:", err);
+          // The file has moved or been deleted since the session was saved.
+          // Drop the path: the base64 fallback below can still restore what the
+          // preview shows, but EXPORT reads filePath, so leaving a dead one set
+          // meant a session that previewed perfectly failed at export with
+          // "Path does not exist ... (os error 2)" -- naming a file the user had
+          // not touched since, at the end of the one operation that mattered.
+          store.setFilePath(null);
         }
       }
 

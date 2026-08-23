@@ -141,7 +141,16 @@ export default function ExportPanel() {
       return;
     }
     if (!mediaInfo || !filePath) {
-      setStatusMessage("Load media before exporting");
+      // Distinguish "nothing open" from "the file behind this session is gone".
+      // A restored session can preview from its autosaved image while its
+      // original file has been moved or deleted; export needs the real file, so
+      // telling the user to "load media" when something is plainly on screen
+      // reads as a bug rather than an instruction.
+      setStatusMessage(
+        mediaInfo
+          ? "The original file is no longer available — reopen it (File ▸ Open) to export."
+          : "Load media before exporting"
+      );
       return;
     }
     if (activeEffects.length === 0) {
