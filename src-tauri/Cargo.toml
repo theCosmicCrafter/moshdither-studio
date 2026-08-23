@@ -54,4 +54,10 @@ windows-sys = { version = "0.59", features = [
     "Win32_UI_Shell",
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
+    # SetUnhandledExceptionFilter, so hard faults (access violations, stack
+    # overflows) are recorded to the log before the process dies. They never
+    # reach the Rust panic hook -- they are CPU exceptions, not panics.
+    "Win32_System_Diagnostics_Debug",
+    # EXCEPTION_POINTERS lives behind this one.
+    "Win32_System_Kernel",
 ] }

@@ -1,6 +1,7 @@
 pub mod audio;
 pub mod commands;
 pub mod config;
+pub mod crash;
 pub mod error;
 pub mod window_commands;
 
