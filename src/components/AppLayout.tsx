@@ -8,7 +8,10 @@ import {
   convertFileSrc,
   generateProxy,
 } from "../lib/tauri";
+import { isTauriAvailable } from "../lib/browserFallback";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { useKeyframePlayback } from "../hooks/useKeyframePlayback";
 import { usePlaybackEngine } from "../hooks/usePlaybackEngine";
@@ -71,19 +74,54 @@ export default function AppLayout() {
     return cleanup;
   }, [attachSounds]);
 
-  // Guard window close with unsaved changes prompt
+  // Guard window close with an unsaved-changes prompt.
+  //
+  // `beforeunload` alone was INERT in the desktop app. The custom titlebar's
+  // close button calls appWindow.close(), a native window close, and the
+  // webview's beforeunload does not fire for that path -- so the guard worked
+  // in a browser and never once appeared in the app it was written for.
+  // Tauri's own onCloseRequested is the event that actually precedes a native
+  // close. beforeunload is kept for browser mode, where it is the only hook.
   const effectStackLength = useAppStore((s) => s.effectStack.length);
   const mediaLoaded = useAppStore((s) => s.mediaLoaded);
   useEffect(() => {
+    const hasWork = () =>
+      useAppStore.getState().mediaLoaded && useAppStore.getState().effectStack.length > 0;
+
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (mediaLoaded && effectStackLength > 0) {
+      if (hasWork()) {
         e.preventDefault();
         e.returnValue = "You have unsaved changes in your project session.";
         return e.returnValue;
       }
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
-    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+
+    let unlisten: (() => void) | undefined;
+    if (isTauriAvailable()) {
+      void getCurrentWindow()
+        .onCloseRequested(async (event) => {
+          if (!hasWork()) return;
+          // The session is autosaved every few seconds and offered back on the
+          // next launch, so this asks rather than warns of loss.
+          const leave = await confirm(
+            "Close MoshDither Studio? Your session is autosaved and will be offered back next time you open it.",
+            { title: "Close", kind: "warning" }
+          );
+          if (!leave) event.preventDefault();
+        })
+        .then((fn) => {
+          unlisten = fn;
+        })
+        .catch(() => {
+          /* no window handle: fall back to beforeunload alone */
+        });
+    }
+
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      unlisten?.();
+    };
   }, [mediaLoaded, effectStackLength]);
 
   // Load available effects on mount
