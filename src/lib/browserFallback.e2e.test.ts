@@ -81,6 +81,39 @@ describe("Browser Fallback E2E", () => {
       expect(unsetSelectionWarning("dithering.bayer", {})).toBeNull();
     });
 
+    it("offers every export format in the save dialog, selected one first", async () => {
+      // Listing only the selected format meant the dialog showed MP4/MOV/MKV
+      // unless the user had already found the right chip elsewhere in the UI,
+      // so GIF and the sequences looked like they did not exist.
+      const { saveFiltersFor } = await import("./tauri");
+      const gif = saveFiltersFor("gif");
+      expect(gif[0].extensions).toEqual(["gif"]);
+      expect(gif.length).toBeGreaterThan(5);
+      expect(gif.some((f) => f.extensions.includes("mp4"))).toBe(true);
+
+      const dflt = saveFiltersFor("mp4");
+      expect(dflt[0].extensions).toEqual(["mp4"]);
+      expect(dflt.some((f) => f.extensions.includes("gif"))).toBe(true);
+    });
+
+    it("lets the chosen file extension decide the export format", async () => {
+      const { formatFromPath } = await import("./tauri");
+      // Extension wins over the panel's selection.
+      expect(formatFromPath("C:/out/clip.gif", "mp4")).toBe("gif");
+      expect(formatFromPath("C:/out/clip.webm", "mp4")).toBe("webm");
+      expect(formatFromPath("C:/out/clip.jpg", "mp4")).toBe("jpg_seq");
+
+      // Ambiguous extensions keep the current selection when it already uses
+      // them: .png is both a PNG sequence and an APNG, .webp is both.
+      expect(formatFromPath("C:/out/clip.png", "apng")).toBe("apng");
+      expect(formatFromPath("C:/out/clip.png", "mp4")).toBe("png_seq");
+      expect(formatFromPath("C:/out/clip.webp", "webp_seq")).toBe("webp_seq");
+      expect(formatFromPath("C:/out/clip.webp", "mp4")).toBe("webp");
+
+      // An unknown extension changes nothing.
+      expect(formatFromPath("C:/out/clip.xyz", "mp4")).toBe("mp4");
+    });
+
     it("every fallback effect's shaderId exists in registry", () => {
       for (const [effectId, mapping] of Object.entries(rustToWebGL)) {
         if (shaderRegistry.has(mapping.shaderId)) {

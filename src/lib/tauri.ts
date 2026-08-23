@@ -374,6 +374,12 @@ export async function exportVideo(
   if (!path || typeof path !== "string") {
     throw new Error("Export cancelled");
   }
+  // The extension the user actually chose wins over the panel's chip: the save
+  // dialog is where people expect to pick a format, and a mismatch would encode
+  // one format under another's file name.
+  const resolvedFormat = options.outputPath
+    ? options.format ?? null
+    : formatFromPath(path, options.format) ?? null;
   return invoke("export_video", {
     sourcePath,
     outputPath: path,
@@ -387,7 +393,7 @@ export async function exportVideo(
     watermark: options.watermark ?? null,
     trimStart: options.trimStart ?? null,
     trimEnd: options.trimEnd ?? null,
-    format: options.format ?? null,
+    format: resolvedFormat,
     quality: options.quality ?? null,
     includeAudio: options.includeAudio ?? null,
     processingScale: options.processingScale ?? null,
@@ -402,48 +408,75 @@ export async function exportVideo(
  * then datamosh that render) prompts once and then drives both steps, and must
  * not raise a second Save dialog part-way through.
  */
+/** Every export format, in the order the Save dialog should list them. */
+const EXPORT_FILTERS: { format: string; name: string; extensions: string[] }[] = [
+  { format: "mp4", name: "MP4", extensions: ["mp4"] },
+  { format: "mov", name: "QuickTime MOV", extensions: ["mov"] },
+  { format: "mkv", name: "Matroska MKV", extensions: ["mkv"] },
+  { format: "webm", name: "WebM", extensions: ["webm"] },
+  { format: "avi", name: "AVI", extensions: ["avi"] },
+  { format: "gif", name: "Animated GIF", extensions: ["gif"] },
+  { format: "apng", name: "Animated PNG", extensions: ["apng", "png"] },
+  { format: "webp", name: "Animated WebP", extensions: ["webp"] },
+  // Sequences write many files; the chosen name seeds the numbered pattern.
+  { format: "png_seq", name: "PNG sequence", extensions: ["png"] },
+  { format: "jpg_seq", name: "JPEG sequence", extensions: ["jpg", "jpeg"] },
+  { format: "webp_seq", name: "WebP sequence", extensions: ["webp"] },
+  { format: "tiff_seq", name: "TIFF sequence", extensions: ["tif", "tiff"] },
+  { format: "bmp_seq", name: "BMP sequence", extensions: ["bmp"] },
+];
+
 /**
- * Save-dialog filters for an export format.
+ * Save-dialog filters, listing EVERY format with the selected one first.
  *
- * The dialog previously offered MP4/MOV/MKV whatever the chosen format was, so
- * a GIF or PNG-sequence export could not even be given the right file name --
- * and the backend ignored `format` anyway, encoding H.264 regardless. Both ends
- * now agree, and the extension the user gets matches the chip they picked.
+ * This used to return only the selected format's filter, which meant the dialog
+ * showed MP4/MOV/MKV unless the user had already found and clicked the right
+ * chip in the export panel -- so the formats looked missing, and the only way
+ * to discover them was to notice a row of chips elsewhere in the UI. Every
+ * other application lets you choose the format in the save dialog itself, and
+ * now so does this one: `formatFromPath` reads the chosen extension back.
  */
 export function saveFiltersFor(format?: string | null): { name: string; extensions: string[] }[] {
-  switch (format) {
-    case "gif":
-      return [{ name: "Animated GIF", extensions: ["gif"] }];
-    case "apng":
-      return [{ name: "Animated PNG", extensions: ["apng", "png"] }];
-    case "webp":
-      return [{ name: "Animated WebP", extensions: ["webp"] }];
-    // An image sequence writes many files; the chosen name seeds the pattern.
-    case "png_seq":
-      return [{ name: "PNG sequence", extensions: ["png"] }];
-    case "jpg_seq":
-      return [{ name: "JPEG sequence", extensions: ["jpg", "jpeg"] }];
-    case "webp_seq":
-      return [{ name: "WebP sequence", extensions: ["webp"] }];
-    case "tiff_seq":
-      return [{ name: "TIFF sequence", extensions: ["tif", "tiff"] }];
-    case "bmp_seq":
-      return [{ name: "BMP sequence", extensions: ["bmp"] }];
-    case "webm":
-      return [{ name: "WebM", extensions: ["webm"] }];
-    case "mov":
-      return [{ name: "QuickTime", extensions: ["mov"] }];
-    case "mkv":
-      return [{ name: "Matroska", extensions: ["mkv"] }];
-    case "avi":
-      return [{ name: "AVI", extensions: ["avi"] }];
-    default:
-      return [
-        { name: "MP4", extensions: ["mp4"] },
-        { name: "MOV", extensions: ["mov"] },
-        { name: "MKV", extensions: ["mkv"] },
-      ];
-  }
+  const selected = EXPORT_FILTERS.filter((f) => f.format === format);
+  const rest = EXPORT_FILTERS.filter((f) => f.format !== format);
+  return [...selected, ...rest].map(({ name, extensions }) => ({ name, extensions }));
+}
+
+/**
+ * How an extension written by more than one format resolves when the current
+ * selection does not already claim it. Explicit so the answer does not depend
+ * on the order the dialog happens to list filters in.
+ */
+const AMBIGUOUS_EXTENSION_DEFAULT: Record<string, string> = {
+  // APNG has its own .apng, so a bare .png reads as a sequence.
+  png: "png_seq",
+  // Animated WebP is one file, which is the likelier reading of a lone .webp.
+  webp: "webp",
+};
+
+/**
+ * The format implied by a chosen filename, or `fallback` when the extension
+ * does not decide it.
+ *
+ * The save dialog is the surface people expect to choose a format on, so the
+ * extension they picked wins over the chip. Two extensions are genuinely
+ * ambiguous -- `.png` is both a PNG sequence and an APNG, `.webp` is both an
+ * animated WebP and a WebP sequence -- so when the current selection already
+ * uses that extension it is kept, and otherwise the single-file reading wins
+ * for `.webp` and the sequence reading for `.png` (APNG has its own `.apng`).
+ */
+export function formatFromPath(path: string, fallback?: string | null): string | undefined {
+  const ext = path.split(".").pop()?.toLowerCase();
+  if (!ext) return fallback ?? undefined;
+
+  const candidates = EXPORT_FILTERS.filter((f) => f.extensions.includes(ext));
+  if (candidates.length === 0) return fallback ?? undefined;
+  // The current selection already writes this extension, so it is what the
+  // user meant -- picking APNG and naming the file .png should stay APNG.
+  if (candidates.some((c) => c.format === fallback)) return fallback ?? undefined;
+  // Otherwise resolve the genuinely ambiguous extensions explicitly, rather
+  // than letting the dialog's display order silently decide.
+  return AMBIGUOUS_EXTENSION_DEFAULT[ext] ?? candidates[0].format;
 }
 
 export async function applyFfglitch(
