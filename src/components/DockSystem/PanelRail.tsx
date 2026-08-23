@@ -1,21 +1,23 @@
-import type { TabNode } from "flexlayout-react";
 import { useDock } from "./DockContext";
 import { PANEL_REGISTRY, type DockZone } from "./panelRegistry";
 import { useAppStore } from "../../store";
 import { setActiveDragPanelId } from "./tabDropState";
 
 export default function PanelRail() {
-  const { model, addPanel } = useDock();
+  const { addPanel } = useDock();
   const panelVisibility = useAppStore((s) => s.panelVisibility);
 
-  const dockedIds = new Set<string>();
-  if (model) {
-    model.visitNodes((n) => {
-      if (n.getType() === "tab") {
-        dockedIds.add((n as TabNode).getComponent() as string);
-      }
-    });
-  }
+  // Read what is docked from the STORE, not by walking the model here.
+  //
+  // flexlayout mutates its model in place, so `model` keeps the same identity
+  // when a panel is added and nothing tells this component to re-render. The
+  // walk therefore produced a snapshot taken at the last render and never
+  // refreshed: after docking a panel from the rail, the rail went on offering
+  // it, and clicking again was a no-op because addPanel saw it already present.
+  // DockLayout's onModelChange keeps dockedPanels current, and subscribing to
+  // it makes this reactive.
+  const dockedPanels = useAppStore((s) => s.dockedPanels);
+  const dockedIds = new Set<string>(dockedPanels);
 
   const availablePanels = PANEL_REGISTRY.filter(
     (p) => !dockedIds.has(p.id) && panelVisibility[p.id] !== false
