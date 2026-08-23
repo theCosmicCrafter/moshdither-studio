@@ -135,3 +135,7 @@ test_*.txt
 # `audio-render` dropped hundreds of MB of PNGs into the repo root as
 # untracked files. Pass --output to write elsewhere.
 /outputs/
+
+# Archived installers (scripts/archive-build.mjs keeps the last few).
+# Large binaries; kept locally for rollback, never committed.
+/build-archive/

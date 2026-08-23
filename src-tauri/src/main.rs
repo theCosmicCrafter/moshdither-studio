@@ -13,9 +13,17 @@ fn main() {
     moshdither_studio_lib::crash::install_panic_hook();
     moshdither_studio_lib::crash::install_exception_handler();
 
+    // Identify the build FIRST, before anything else can fail. Knowing which
+    // commit produced a binary is the difference between debugging the code in
+    // front of you and debugging a build that was already superseded.
+    let build = format!(
+        "v{} ({})",
+        env!("CARGO_PKG_VERSION"),
+        env!("MOSHDITHER_GIT_SHA")
+    );
     match &log_path {
-        Some(p) => tracing::info!("Starting app... (log: {})", p.display()),
-        None => tracing::info!("Starting app... (no log file: log directory unwritable)"),
+        Some(p) => tracing::info!("Starting app {} (log: {})", build, p.display()),
+        None => tracing::info!("Starting app {} (no log file: directory unwritable)", build),
     }
     moshdither_studio_lib::run();
 }
