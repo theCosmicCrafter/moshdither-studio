@@ -1,5 +1,5 @@
 import { useEffect, useState, Suspense } from "react";
-import { Layout, Model, TabNode, Actions, DockLocation } from "flexlayout-react";
+import { Layout, Model, TabNode, Actions, DockLocation, type IJsonModel } from "flexlayout-react";
 import "flexlayout-react/style/dark.css";
 import { useAppStore } from "../../store";
 import { PANEL_REGISTRY } from "./panelRegistry";
@@ -14,6 +14,52 @@ import PreviewViewport from "../PreviewViewport";
 import Timeline from "../Timeline";
 import { ErrorBoundary } from "../ErrorBoundary";
 
+/**
+ * Where the user's arrangement of panels is remembered between runs.
+ *
+ * VERSION exists because a saved layout completely replaces DEFAULT_LAYOUT: a
+ * layout stored before the centre and bottom zones were unlocked would restore
+ * `enableDrop: false` and silently reinstate the bug that made panels
+ * undraggable. Bump it whenever DEFAULT_LAYOUT changes in a way a stored layout
+ * must not be allowed to override, and every saved layout is discarded.
+ */
+const LAYOUT_STORAGE_KEY = "moshdither.dockLayout";
+const LAYOUT_VERSION = 2;
+
+function loadSavedLayout(): Model | null {
+  try {
+    const raw = localStorage.getItem(LAYOUT_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { version?: number; json?: unknown };
+    if (parsed.version !== LAYOUT_VERSION || !parsed.json) return null;
+    return Model.fromJson(parsed.json as IJsonModel);
+  } catch {
+    // A corrupt or incompatible layout must never prevent the app from
+    // starting -- fall back to the default arrangement instead.
+    return null;
+  }
+}
+
+function saveLayout(m: Model): void {
+  try {
+    localStorage.setItem(
+      LAYOUT_STORAGE_KEY,
+      JSON.stringify({ version: LAYOUT_VERSION, json: m.toJson() })
+    );
+  } catch {
+    // Storage full or unavailable: not remembering the layout is a far smaller
+    // problem than failing the interaction that triggered the save.
+  }
+}
+
+function clearSavedLayout(): void {
+  try {
+    localStorage.removeItem(LAYOUT_STORAGE_KEY);
+  } catch {
+    /* nothing to do */
+  }
+}
+
 export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) {
   const panelOpacity = useAppStore((s) => s.panelOpacity);
   const theme = useAppStore((s) => s.theme);
@@ -24,9 +70,7 @@ export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) 
 
   // Initialize model on mount (or if the user resets it)
   useEffect(() => {
-    // We could potentially load from localStorage or the store here
-    // For now, we load the default layout
-    const newModel = Model.fromJson(DEFAULT_LAYOUT);
+    const newModel = loadSavedLayout() ?? Model.fromJson(DEFAULT_LAYOUT);
     setModel(newModel);
     
     // Initial sync
@@ -62,7 +106,13 @@ export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) 
     if (panelMeta) {
       const Component = panelMeta.component;
       return (
-        <div className="w-full h-full overflow-hidden" style={{ ["--panel-opacity" as string]: panelOpacity }}>
+        <div
+          // overflow-auto, not hidden: shrinking a dock used to CLIP its panel
+          // with no way to reach the rest. Scrollbars appear only when the
+          // content genuinely overflows.
+          className="w-full h-full overflow-auto custom-scrollbar"
+          style={{ ["--panel-opacity" as string]: panelOpacity }}
+        >
           <ErrorBoundary
             fallback={(error, reset) => (
               <div className="w-full h-full flex flex-col items-center justify-center gap-2 p-4 text-center">
@@ -154,6 +204,7 @@ export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) 
     if (!model || !layoutTrigger) return;
     
     if (layoutTrigger.action === "reset") {
+      clearSavedLayout();
       const newModel = Model.fromJson(DEFAULT_LAYOUT);
       setModel(newModel);
       const activePanels: string[] = [];
@@ -200,6 +251,7 @@ export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) 
                 }
               });
               useAppStore.getState().setDockedPanels(activePanels);
+              saveLayout(m);
             }}
           />
         </div>
