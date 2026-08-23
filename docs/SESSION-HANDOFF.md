@@ -10,6 +10,23 @@ gitignored, so it never travelled with the branch.
 
 ## Read this first
 
+- **A STALE INSTALL WILL WASTE YOUR SESSION. This has now cost two of them.**
+  `%LOCALAPPDATA%\MoshDither Studio\` is a *separate copy* of the app; editing
+  the repo and running `tauri:dev` does NOT change it. Symptoms reported as app
+  bugs -- "panels won't move", "preview is broken", "still black" -- were an
+  install from the day before, missing every fix made since. Before believing any
+  desktop-app bug report, check the dates:
+
+      Get-Item "$env:LOCALAPPDATA\MoshDither Studio\moshdither-studio.exe" | Select LastWriteTime
+      git log -1 --format=%cd
+
+  If the exe is older than the fix, rebuild and reinstall before debugging
+  anything. "Works in the browser but not the app" is this, until proven
+  otherwise -- it is not a WebView2 quirk.
+  A companion trap: the NSIS uninstaller does NOT remove `sam3-bridge.exe`, so a
+  stale sidecar survives an uninstall/reinstall cycle. Check for it by hand.
+
+
 - **CI is meaningless here.** Every check on PR #49 fails with "The job was not
   started because recent account payments have failed." This is a free-plan
   account with billing deliberately off. Red CI says nothing about the code.
