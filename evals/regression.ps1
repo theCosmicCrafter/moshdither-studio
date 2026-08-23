@@ -45,6 +45,12 @@ if (-not $Quick) {
     # refuses to run if this binary is older than the newest .rs, so a skipped
     # or silently-failed build here surfaces there instead of passing green.
     $gates += @{ Name = "cargo-build"; Desc = "mosh-verify release binary"; Run = { & cargo build --release --bin mosh-verify --manifest-path $manifest 2>&1 } }
+
+    # The E2E suite was NOT gated, and that hole cost a session: a change that
+    # crashed the app under the Tauri mock passed all seven other gates, because
+    # nothing here ever renders the app. It also let a real dock bug sit failing
+    # in the suite unnoticed. Slow (~7 min), so it stays out of -Quick.
+    $gates += @{ Name = "e2e"; Desc = "Playwright E2E suite"; Run = { & npx playwright test 2>&1 } }
 }
 
 Write-Host ""

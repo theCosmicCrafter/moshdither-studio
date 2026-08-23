@@ -199,6 +199,37 @@ Tauri recovers. The precise internals -- which file the loader cannot find --
 remain unidentified; what is established is WHEN it happens and that nothing is
 lost when it does. It is unrelated to the 0xc0000005 crash.
 
+## Logging: how a failure reaches the log file
+
+Fixed 2026-08-23 after a reported export failure left a log holding only three
+startup lines. Four separate faults, each of which hid the next:
+
+1. Release builds detach the console, so `console.error` went nowhere.
+2. ~40 sites call `setStatusMessage` and NEVER the logger, so failures were UI
+   text only.
+3. The bridge between them matched PROSE, and the first message written after it
+   shipped ("The original file is no longer available") matched none of its
+   words. Neither did "WebGL context lost".
+4. `export_video` validated its arguments BEFORE its first tracing call, so a
+   rejected path returned with no trace at all.
+
+`setStatusMessage(msg, level?)` now takes an explicit level. **Pass
+`"error"` when reporting a failure** -- the regex that remains is only a net for
+sites that do not, and widening it is a losing game ("No masks found for prompt"
+cannot be matched robustly). Frontend warn/error forward to the Rust log through
+`log_frontend`; uncaught errors and unhandled rejections are captured too.
+
+Logs live at `~/.moshdither/logs/`, newest 20 kept, path available from
+`get_log_path`.
+
+## E2E is now gated, because it was the hole
+
+`npm run gate` runs Playwright as gate 9 (~6.5 min; excluded from `-Quick`).
+Before this, seven gates could pass while the app crashed on launch under the
+Tauri mock -- which is exactly what a close-guard change did, undetected, and it
+also let a real dock bug sit failing in the suite. If a change touches anything
+the app renders, the gate now proves the app still renders.
+
 ## Adversarial audit, 2026-08-23
 
 Hunting one specific class: **controls and messages that do not mean what they
