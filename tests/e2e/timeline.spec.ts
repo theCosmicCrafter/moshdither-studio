@@ -19,9 +19,11 @@ test.beforeEach(async ({ page }) => {
     .catch(() => {});
 });
 
-// The Timeline is docked into the layout's bottom tabset, which defaultLayout
-// locks open (enableClose/enableDrag false), so its transport is present on
-// load without any navigation.
+// The Timeline is docked into the layout's bottom tabset and defaultLayout
+// keeps it un-closable (enableClose: false), so its transport is present on
+// load without any navigation. It IS draggable -- the zone's enableDrag/
+// enableDrop/enableDivide locks were removed so panels can be rearranged --
+// but nothing here moves it, so it stays where the default layout puts it.
 const DURATION_INPUT = "input[type='number'][title='Clip length (seconds)']";
 
 test("timeline panel renders its transport controls", async ({ page }) => {
