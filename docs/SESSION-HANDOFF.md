@@ -113,6 +113,26 @@ Contact sheet artifact: https://claude.ai/code/artifact/4479ae94-69b9-410f-af89-
 
 Four proposals are open and deliberately NOT applied (see "Open" below).
 
+**Panels can now be rearranged.** `defaultLayout.ts` locked the centre (Preview)
+and bottom (Timeline) tabsets with `enableDrop/enableDrag/enableDivide: false`.
+The centre is the largest region of the window and the obvious place to aim a
+panel, so dragging one there did nothing -- drag started, drop indicator drew,
+drop refused. Confirmed by driving the layout directly: dropping Stack onto
+Preview left the model byte-identical. Both zones now accept drops, drags and
+divides; both tabs keep `enableClose: false` so they cannot be lost. NOTE the
+drop itself is HTML5 drag-and-drop, which synthetic events cannot trigger --
+verifying a rearrange end-to-end needs a real mouse.
+
+**Effect names in the browser fallback were the shader's name.** `deriveName` in
+`browserFallback.ts` returned the SHADER name for any effect whose shader was not
+`pass_through`. Twelve datamoshing effects share `temporalDatamoshing` and all
+read "Temporal Datamoshing"; 29 of 96 mapped effects showed a duplicated name.
+Names now derive from the effect ID, with category-qualification for genuine
+collisions (`pixel_geo.pixelate` vs `audio_reactive.pixelate`). This list is only
+used when `__TAURI_INTERNALS__` is absent, so seeing it in the DESKTOP app would
+mean the app had fallen back and lost its Rust backend -- worth checking if it
+recurs there.
+
 Earlier in the session: video export was totally broken (temp file lost the
 destination extension) and now works; FFmpeg mid-write failures report FFmpeg's
 own message instead of `os error 109`; the empty command palette; silent gate
