@@ -149,12 +149,13 @@ export default function ExportPanel() {
       setStatusMessage(
         mediaInfo
           ? "The original file is no longer available — reopen it (File ▸ Open) to export."
-          : "Load media before exporting"
+          : "Load media before exporting",
+        "error"
       );
       return;
     }
     if (activeEffects.length === 0) {
-      setStatusMessage("No effects enabled — export would be a copy");
+      setStatusMessage("No effects enabled — export would be a copy", "error");
       return;
     }
 

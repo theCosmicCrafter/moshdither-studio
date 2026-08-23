@@ -130,6 +130,7 @@ pub fn run() {
             apply_ffglitch,
             remove_export_temp,
             log_frontend,
+            crash::get_log_path,
             cancel_export,
             check_update,
             install_update,

@@ -316,7 +316,9 @@ export interface AppState {
   setIsProcessing: (v: boolean) => void;
   setShowBeforeAfter: (v: boolean) => void;
   setZoom: (z: number) => void;
-  setStatusMessage: (msg: string) => void;
+  /** `level: "error"` logs the message to the app log file regardless of its
+   *  wording. Prefer it over relying on the prose heuristic below. */
+  setStatusMessage: (msg: string, level?: "info" | "error") => void;
   setPlaybackSpeed: (speed: number) => void;
   setScopeMode: (mode: "none" | "histogram" | "waveform" | "rgb_parade") => void;
   setScopesVisible: (v: boolean) => void;
@@ -862,17 +864,23 @@ export const useAppStore = create<AppState>((set, get) => ({
   setIsProcessing: (v) => set({ isProcessing: v }),
   setShowBeforeAfter: (v) => set({ showBeforeAfter: v }),
   setZoom: (z) => set({ zoom: clampFinite(z, 0.1, 5, 1) }),
-  setStatusMessage: (msg) => {
+  setStatusMessage: (msg, level) => {
     // The status bar is where this app reports failures -- ExportPanel and the
-    // rest call setStatusMessage and nothing else, never the logger -- so a
-    // failure lived only in a line of UI text the user had to relay by hand.
-    // Failure-shaped messages are mirrored into the app's log file.
+    // rest call setStatusMessage and never the logger -- so without this a
+    // failure existed only as UI text the user had to relay by hand.
     //
-    // Matching on prose is a heuristic, chosen because it covers all ~40
-    // existing call sites at once; the durable fix is an explicit error channel
-    // at each site. Deduplicated against the current message so a per-frame
-    // preview error cannot flood the log.
-    if (msg && msg !== get().statusMessage && /fail|error|unavailable|cannot|could not|denied/i.test(msg)) {
+    // `level` is the reliable channel and callers should pass it. The regex is
+    // only a net for the ~40 sites that do not, and it is DEMONSTRABLY leaky:
+    // "The original file is no longer available", "WebGL context lost" and
+    // "Load media before exporting" all describe failures and match none of
+    // these words. Widening it further is a losing game -- "No masks found for
+    // prompt" cannot be matched by any robust pattern -- which is why the
+    // explicit parameter exists.
+    const isFailure =
+      level === "error" ||
+      (level === undefined &&
+        /fail|error|unavailable|cannot|could not|denied|no longer|not available|lost|unable/i.test(msg));
+    if (msg && msg !== get().statusMessage && isFailure) {
       logger.error("status", msg);
     }
     set({ statusMessage: msg });

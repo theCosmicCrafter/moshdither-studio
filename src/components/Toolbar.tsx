@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { logger } from "../utils/logger";
 import { useShallow } from "zustand/react/shallow";
 import {
   animateStillAsVideo,
@@ -192,11 +193,18 @@ export default function Toolbar({ onFileLoaded }: Props) {
             const b64 = await getFrameData();
             await sam3LoadImage(b64);
           } catch (e) {
-            console.warn("Failed to load new image into SAM3", e);
+            logger.warn("sam3", "Failed to load new image into SAM3", { err: String(e) });
           }
         }
 
-        setStatusMessage(synced ? `Loaded: ${path}` : `Loaded: ${path} (preview sync pending)`);
+        // A failed preview sync used to read as "Loaded: <path> (preview sync
+        // pending)" -- success-shaped text for a backend failure, which neither
+        // the log heuristic nor the user could tell had gone wrong.
+        if (synced) {
+          setStatusMessage(`Loaded: ${path}`);
+        } else {
+          setStatusMessage(`Loaded ${path}, but the preview did not refresh`, "error");
+        }
       } else {
         setStatusMessage("Open cancelled");
       }

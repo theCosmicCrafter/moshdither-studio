@@ -161,7 +161,7 @@ export default function AppLayout() {
             const proxy = await generateProxy(path, 1280, 28);
             setProxyUrl(convertFileSrc(proxy));
           } catch (err) {
-            console.warn("[AppLayout] Proxy generation failed:", err);
+            logger.warn("proxy", "Proxy generation failed", { err: String(err) });
             setProxyUrl(null);
           }
         } else {
@@ -171,7 +171,7 @@ export default function AppLayout() {
       }
       return false;
     } catch (err) {
-      console.error("[AppLayout] refreshPreview failed:", err);
+      logger.error("preview", "refreshPreview failed", { err: String(err) });
       const msg = err instanceof Error ? err.message : String(err);
       setStatusMessage(`Preview refresh failed: ${msg}`);
       return false;
@@ -234,7 +234,11 @@ export default function AppLayout() {
                 try {
                   await loadMediaFromPath(path);
                   const synced = await refreshPreview();
-                  setStatusMessage(synced ? `Loaded: ${path}` : `Loaded: ${path} (preview sync pending)`);
+                  if (synced) {
+                    setStatusMessage(`Loaded: ${path}`);
+                  } else {
+                    setStatusMessage(`Loaded ${path}, but the preview did not refresh`, "error");
+                  }
                 } catch (err: unknown) {
                   const msg = err instanceof Error ? err.message : String(err);
                   setStatusMessage(`Load error: ${msg}`);

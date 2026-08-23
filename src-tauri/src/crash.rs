@@ -25,6 +25,15 @@ use std::sync::{Arc, Mutex, OnceLock};
 /// without going through `tracing` (which may itself be unusable by then).
 static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
 
+/// The same handle the tracing subscriber writes through.
+///
+/// `append_raw` used to open its OWN handle in append mode. Two handles means
+/// two file positions: the append extended the file, then the subscriber's next
+/// ordinary line was written at its stale offset, straight over the top of the
+/// panic block that had just been recorded. Sharing one handle keeps the file a
+/// single ordered stream.
+static LOG_FILE: OnceLock<Arc<Mutex<File>>> = OnceLock::new();
+
 /// Directory holding this app's logs: `~/.moshdither/logs`, matching the
 /// `~/.moshdither/models` convention the SAM3 checkpoint already uses.
 pub fn log_dir() -> Option<PathBuf> {
@@ -47,7 +56,54 @@ fn open_log_file() -> Option<(File, PathBuf)> {
         .unwrap_or(0);
     let path = dir.join(format!("moshdither-{}-{}.log", secs, std::process::id()));
     let file = File::create(&path).ok()?;
+    prune_old_logs(&dir);
     Some((file, path))
+}
+
+/// How many runs' logs to keep. The byte cost of more is trivial; the cost that
+/// matters is that "send me the log" stops being answerable once the directory
+/// holds hundreds of files named by epoch seconds, none of which says which run
+/// was the one that failed.
+const KEEP_LOGS: usize = 20;
+
+/// Delete all but the newest `KEEP_LOGS` log files.
+///
+/// Best-effort throughout: a log directory that cannot be tidied is not a reason
+/// to fail startup, and every error here is deliberately swallowed.
+fn prune_old_logs(dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut logs: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let path = e.path();
+            let name = path.file_name()?.to_str()?;
+            if !name.starts_with("moshdither-") || !name.ends_with(".log") {
+                return None;
+            }
+            let modified = e.metadata().ok()?.modified().ok()?;
+            Some((modified, path))
+        })
+        .collect();
+
+    if logs.len() <= KEEP_LOGS {
+        return;
+    }
+    logs.sort_by_key(|entry| std::cmp::Reverse(entry.0)); // newest first
+    for (_, stale) in logs.into_iter().skip(KEEP_LOGS) {
+        let _ = std::fs::remove_file(stale);
+    }
+}
+
+/// Absolute path of this run's log file, for surfacing in the UI.
+///
+/// A crash log only has value if a human can find it, and nothing in the app
+/// said where it was -- least of all the error screen shown after a UI crash,
+/// which is exactly when someone needs it.
+#[tauri::command]
+pub fn get_log_path() -> Option<String> {
+    LOG_PATH.get().map(|p| p.display().to_string())
 }
 
 /// A `MakeWriter` over a shared log file handle.
@@ -90,7 +146,9 @@ pub fn init_logging() -> Option<PathBuf> {
 
     match open_log_file() {
         Some((file, path)) => {
-            let shared = LogFile(Arc::new(Mutex::new(file)));
+            let handle = Arc::new(Mutex::new(file));
+            let _ = LOG_FILE.set(handle.clone());
+            let shared = LogFile(handle);
             tracing_subscriber::fmt()
                 .with_env_filter(filter)
                 .with_ansi(false)
@@ -129,6 +187,20 @@ pub fn install_panic_hook() {
 /// the process may be in a state where the subscriber's machinery is no longer
 /// trustworthy, and a diagnostic that cannot be written is worthless.
 fn append_raw(msg: &str) {
+    // Write through the subscriber's own handle so the file stays one ordered
+    // stream. `try_lock`, never `lock`: this runs from the panic hook and from
+    // the fault filter, where the thread that holds the mutex may be the very
+    // one that died. Blocking there would hang the process instead of recording
+    // why it is dying.
+    if let Some(shared) = LOG_FILE.get() {
+        if let Ok(mut f) = shared.try_lock() {
+            let _ = f.write_all(msg.as_bytes());
+            let _ = f.flush();
+            return;
+        }
+    }
+    // Contended or not yet initialised: a second handle risks interleaving, but
+    // a diagnostic that is written imperfectly beats one that is not written.
     if let Some(path) = LOG_PATH.get() {
         if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(path) {
             let _ = f.write_all(msg.as_bytes());
