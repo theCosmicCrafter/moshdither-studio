@@ -370,13 +370,7 @@ export async function exportVideo(
     outputPath?: string;
   } = {}
 ): Promise<string> {
-  const path = options.outputPath ?? (await save({
-    filters: [
-      { name: "MP4", extensions: ["mp4"] },
-      { name: "MOV", extensions: ["mov"] },
-      { name: "MKV", extensions: ["mkv"] },
-    ],
-  }));
+  const path = options.outputPath ?? (await save({ filters: saveFiltersFor(options.format) }));
   if (!path || typeof path !== "string") {
     throw new Error("Export cancelled");
   }
@@ -408,6 +402,50 @@ export async function exportVideo(
  * then datamosh that render) prompts once and then drives both steps, and must
  * not raise a second Save dialog part-way through.
  */
+/**
+ * Save-dialog filters for an export format.
+ *
+ * The dialog previously offered MP4/MOV/MKV whatever the chosen format was, so
+ * a GIF or PNG-sequence export could not even be given the right file name --
+ * and the backend ignored `format` anyway, encoding H.264 regardless. Both ends
+ * now agree, and the extension the user gets matches the chip they picked.
+ */
+export function saveFiltersFor(format?: string | null): { name: string; extensions: string[] }[] {
+  switch (format) {
+    case "gif":
+      return [{ name: "Animated GIF", extensions: ["gif"] }];
+    case "apng":
+      return [{ name: "Animated PNG", extensions: ["apng", "png"] }];
+    case "webp":
+      return [{ name: "Animated WebP", extensions: ["webp"] }];
+    // An image sequence writes many files; the chosen name seeds the pattern.
+    case "png_seq":
+      return [{ name: "PNG sequence", extensions: ["png"] }];
+    case "jpg_seq":
+      return [{ name: "JPEG sequence", extensions: ["jpg", "jpeg"] }];
+    case "webp_seq":
+      return [{ name: "WebP sequence", extensions: ["webp"] }];
+    case "tiff_seq":
+      return [{ name: "TIFF sequence", extensions: ["tif", "tiff"] }];
+    case "bmp_seq":
+      return [{ name: "BMP sequence", extensions: ["bmp"] }];
+    case "webm":
+      return [{ name: "WebM", extensions: ["webm"] }];
+    case "mov":
+      return [{ name: "QuickTime", extensions: ["mov"] }];
+    case "mkv":
+      return [{ name: "Matroska", extensions: ["mkv"] }];
+    case "avi":
+      return [{ name: "AVI", extensions: ["avi"] }];
+    default:
+      return [
+        { name: "MP4", extensions: ["mp4"] },
+        { name: "MOV", extensions: ["mov"] },
+        { name: "MKV", extensions: ["mkv"] },
+      ];
+  }
+}
+
 export async function applyFfglitch(
   inputPath: string,
   mode: string,

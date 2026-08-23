@@ -38,6 +38,30 @@ const PROCESSING_SCALES = [
   { id: "480", label: "≤480p", scale: 480 },
 ];
 
+// Everything the bundled FFmpeg 8.0 can usefully write for a visual tool:
+// video containers, animated single-file images, and numbered image sequences.
+// (FFmpeg ships hundreds of muxers, but the rest are audio-only, subtitle or
+// streaming targets that have no meaning as an export here.)
+//
+// `gif` and `png_seq` were previously accepted by this list and then silently
+// encoded as H.264 MP4 -- the backend ignored `format` entirely. See
+// output_spec() in ffmpeg/mod.rs.
+const EXPORT_FORMATS = [
+  { id: "mp4", label: "MP4" },
+  { id: "mov", label: "MOV" },
+  { id: "mkv", label: "MKV" },
+  { id: "webm", label: "WEBM" },
+  { id: "avi", label: "AVI" },
+  { id: "gif", label: "GIF" },
+  { id: "apng", label: "APNG" },
+  { id: "webp", label: "WEBP" },
+  { id: "png_seq", label: "PNG SEQ" },
+  { id: "jpg_seq", label: "JPEG SEQ" },
+  { id: "webp_seq", label: "WEBP SEQ" },
+  { id: "tiff_seq", label: "TIFF SEQ" },
+  { id: "bmp_seq", label: "BMP SEQ" },
+] as const;
+
 const FFGITCH_MODES = [
   { id: "classic", label: "Classic" },
   { id: "classic2", label: "Classic 2" },
@@ -79,7 +103,7 @@ export default function ExportPanel() {
     useBatchQueue();
   const [showQueue, setShowQueue] = useState(false);
 
-  const [format, setFormat] = useState<"mp4" | "webm" | "gif" | "png_seq">("mp4");
+  const [format, setFormat] = useState<(typeof EXPORT_FORMATS)[number]["id"]>("mp4");
   const [codec, setCodec] = useState("h264");
   const [resolutionId, setResolutionId] = useState("source");
   const [processingScaleId, setProcessingScaleId] = useState("auto");
@@ -332,7 +356,7 @@ export default function ExportPanel() {
       <div className="space-y-1">
         <span style={{ fontSize: 10, color: "var(--text-muted)" }}>Format</span>
         <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
-          {(["mp4", "webm", "gif", "png_seq"] as const).map((f) => (
+          {EXPORT_FORMATS.map(({ id: f }) => (
             <ChipButton
               key={f}
               active={format === f}
@@ -341,7 +365,7 @@ export default function ExportPanel() {
               activeBackground="rgba(255, 173, 224, 0.25)"
               style={{ padding: "2px 8px" }}
             >
-              {f.toUpperCase().replace("_", "-")}
+              {EXPORT_FORMATS.find((x) => x.id === f)?.label ?? f}
             </ChipButton>
           ))}
         </div>

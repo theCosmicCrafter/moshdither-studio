@@ -840,6 +840,116 @@ impl Drop for TempFileGuard {
     }
 }
 
+/// What a chosen output format needs from FFmpeg.
+///
+/// Split out from `encode_video` because the encoder is only half the story:
+/// GIF, APNG, animated WebP and image sequences all reject the H.264 defaults
+/// the encoder used to hardcode (`-crf`, `-pix_fmt yuv420p`, an AAC audio
+/// track). Previously `format` never reached the encoder at all -- "GIF" and
+/// "PNG sequence" were accepted by the UI and silently produced an H.264 MP4.
+pub(crate) struct OutputSpec {
+    pub encoder: &'static str,
+    /// `None` lets the encoder choose. The image and animation codecs reject
+    /// `yuv420p`, which is only meaningful for the video muxers.
+    pub pix_fmt: Option<&'static str>,
+    /// CRF is an x264/x265/VP9 concept; the image codecs use `-q:v` or nothing.
+    pub uses_crf: bool,
+    /// GIF, APNG, WebP and image sequences carry no audio track.
+    pub supports_audio: bool,
+    /// Filter chain applied before encoding. GIF needs a generated palette or
+    /// it quantises to a fixed 256-colour table and bands badly.
+    pub filter: Option<&'static str>,
+    /// Extra flag pairs (loop counts, quality knobs).
+    pub extra: &'static [&'static str],
+    /// True when the output is a numbered image sequence rather than one file.
+    pub is_sequence: bool,
+}
+
+/// Resolve the output format name (as sent by the UI) to concrete FFmpeg needs.
+///
+/// `codec` still selects between H.264/H.265/ProRes for the video containers;
+/// it is ignored for formats that admit exactly one encoder.
+pub(crate) fn output_spec(format: Option<&str>, codec: &str) -> OutputSpec {
+    let video = |encoder: &'static str| OutputSpec {
+        encoder,
+        pix_fmt: Some("yuv420p"),
+        uses_crf: true,
+        supports_audio: true,
+        filter: None,
+        extra: &[],
+        is_sequence: false,
+    };
+    let still = |encoder: &'static str, extra: &'static [&'static str]| OutputSpec {
+        encoder,
+        pix_fmt: None,
+        uses_crf: false,
+        supports_audio: false,
+        filter: None,
+        extra,
+        is_sequence: true,
+    };
+
+    match format.unwrap_or("mp4") {
+        // Animated single-file images.
+        "gif" => OutputSpec {
+            encoder: "gif",
+            pix_fmt: None,
+            uses_crf: false,
+            supports_audio: false,
+            // Two-stage palette: generate an optimal table for the clip, then
+            // map to it. Without this GIF falls back to a generic palette and
+            // gradients band severely -- which matters here, because the whole
+            // app is about gradients and dither.
+            filter: Some(
+                "split[s0][s1];[s0]palettegen=stats_mode=diff[p];\
+                 [s1][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
+            ),
+            extra: &["-loop", "0"],
+            is_sequence: false,
+        },
+        "apng" => OutputSpec {
+            encoder: "apng",
+            pix_fmt: Some("rgba"),
+            uses_crf: false,
+            supports_audio: false,
+            filter: None,
+            extra: &["-plays", "0"],
+            is_sequence: false,
+        },
+        "webp" => OutputSpec {
+            encoder: "libwebp_anim",
+            pix_fmt: Some("yuva420p"),
+            uses_crf: false,
+            supports_audio: false,
+            filter: None,
+            extra: &["-loop", "0", "-lossless", "0", "-q:v", "80"],
+            is_sequence: false,
+        },
+
+        // Numbered image sequences.
+        "png_seq" => still("png", &[]),
+        "jpg_seq" => still("mjpeg", &["-q:v", "2"]),
+        "webp_seq" => still("libwebp", &["-lossless", "0", "-q:v", "80"]),
+        "tiff_seq" => still("tiff", &[]),
+        "bmp_seq" => still("bmp", &[]),
+
+        // Video containers. `codec` chooses the encoder within these.
+        "webm" => video(match codec {
+            "av1" | "libaom-av1" => "libaom-av1",
+            _ => "libvpx-vp9",
+        }),
+        _ => video(match codec {
+            "h265" | "hevc" | "libx265" => "libx265",
+            "vp9" | "libvpx-vp9" => "libvpx-vp9",
+            "av1" | "libaom-av1" => "libaom-av1",
+            "prores" | "prores_ks" => "prores_ks",
+            "ffv1" => "ffv1",
+            "qtrle" => "qtrle",
+            _ => "libx264",
+        }),
+    }
+}
+
 pub fn encode_video(
     segment: &VideoSegment,
     path: &str,
@@ -855,6 +965,9 @@ pub fn encode_video(
     output_height: Option<u32>,
     cancel: Option<&std::sync::atomic::AtomicBool>,
     timeout: Option<std::time::Duration>,
+    // Output format name from the UI ("gif", "png_seq", "webm", ...). None
+    // keeps the historical behaviour of inferring everything from `codec`.
+    format: Option<&str>,
 ) -> Result<()> {
     if segment.frames.is_empty() {
         return Err(AppError::Ffmpeg("No frames to encode".to_string()));
@@ -885,13 +998,8 @@ pub fn encode_video(
     let h = first.height;
     let fps = fps_override.unwrap_or(segment.fps);
 
-    let encoder = match codec {
-        "h264" | "libx264" => "libx264",
-        "h265" | "hevc" | "libx265" => "libx265",
-        "vp9" | "libvpx-vp9" => "libvpx-vp9",
-        "prores" | "prores_ks" => "prores_ks",
-        _ => "libx264",
-    };
+    let spec = output_spec(format, codec);
+    let encoder = spec.encoder;
 
     let mut args: Vec<String> = vec![
         "-f".to_string(),
@@ -957,22 +1065,45 @@ pub fn encode_video(
             }
         } // "good" or default
     };
-    args.push("-crf".to_string());
-    args.push(crf.to_string());
+    if spec.uses_crf {
+        args.push("-crf".to_string());
+        args.push(crf.to_string());
 
-    // VP9 needs -b:v 0 for CRF mode to work properly
-    if encoder == "libvpx-vp9" {
-        args.push("-b:v".to_string());
-        args.push("0".to_string());
+        // VP9 needs -b:v 0 for CRF mode to work properly
+        if encoder == "libvpx-vp9" {
+            args.push("-b:v".to_string());
+            args.push("0".to_string());
+        }
+    }
+
+    // A GIF needs its palette built from the clip before encoding, or gradients
+    // band. Skipped when a watermark is present: that path rewrites the argument
+    // list into a -filter_complex chain further down, and the two cannot both
+    // own -vf.
+    if let Some(filter) = spec.filter {
+        if watermark.is_none() {
+            args.push("-vf".to_string());
+            args.push(filter.to_string());
+        }
+    }
+
+    for flag in spec.extra {
+        args.push((*flag).to_string());
     }
 
     args.push("-r".to_string());
     args.push(fps.to_string());
-    args.push("-fps_mode".to_string());
-    args.push("cfr".to_string());
+    // An image sequence has no timeline to conform, and -fps_mode cfr makes the
+    // muxer drop or duplicate stills to hit a rate nobody asked for.
+    if !spec.is_sequence {
+        args.push("-fps_mode".to_string());
+        args.push("cfr".to_string());
+    }
 
-    args.push("-pix_fmt".to_string());
-    args.push("yuv420p".to_string());
+    if let Some(pix) = spec.pix_fmt {
+        args.push("-pix_fmt".to_string());
+        args.push(pix.to_string());
+    }
 
     // ProRes needs profile argument
     if encoder == "prores_ks" {
@@ -980,8 +1111,10 @@ pub fn encode_video(
         args.push("3".to_string()); // ProRes 422 HQ
     }
 
-    // Audio: encode from second input if present
-    if audio_input_idx.is_some() {
+    // Audio: encode from second input if present. GIF, APNG, WebP and image
+    // sequences carry no audio track -- asking their muxers for an AAC stream
+    // fails the whole encode rather than being ignored.
+    if audio_input_idx.is_some() && spec.supports_audio {
         args.push("-c:a".to_string());
         args.push("aac".to_string());
         args.push("-shortest".to_string());
@@ -1611,6 +1744,92 @@ pub fn extract_audio_to_wav(
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod output_spec_tests {
+    use super::output_spec;
+
+    /// The regression this matrix exists for: "gif" and "png_seq" resolved to
+    /// libx264, so choosing them produced an H.264 MP4 under a misleading name.
+    #[test]
+    fn animated_and_sequence_formats_do_not_fall_back_to_h264() {
+        for f in [
+            "gif", "apng", "webp", "png_seq", "jpg_seq", "webp_seq", "tiff_seq", "bmp_seq",
+        ] {
+            let spec = output_spec(Some(f), "h264");
+            assert_ne!(spec.encoder, "libx264", "{f} must not encode as H.264");
+        }
+    }
+
+    #[test]
+    fn formats_without_an_audio_track_refuse_one() {
+        // Asking a GIF or image-sequence muxer for an AAC stream fails the
+        // whole encode rather than being quietly ignored.
+        for f in [
+            "gif", "apng", "webp", "png_seq", "jpg_seq", "tiff_seq", "bmp_seq",
+        ] {
+            assert!(
+                !output_spec(Some(f), "h264").supports_audio,
+                "{f} carries no audio"
+            );
+        }
+        for f in ["mp4", "mov", "mkv", "webm"] {
+            assert!(
+                output_spec(Some(f), "h264").supports_audio,
+                "{f} carries audio"
+            );
+        }
+    }
+
+    #[test]
+    fn crf_and_yuv420p_apply_only_to_the_video_containers() {
+        for f in ["gif", "apng", "png_seq", "jpg_seq"] {
+            let spec = output_spec(Some(f), "h264");
+            assert!(!spec.uses_crf, "{f} does not take -crf");
+            assert_ne!(spec.pix_fmt, Some("yuv420p"), "{f} does not take yuv420p");
+        }
+        let mp4 = output_spec(Some("mp4"), "h264");
+        assert!(mp4.uses_crf);
+        assert_eq!(mp4.pix_fmt, Some("yuv420p"));
+    }
+
+    #[test]
+    fn gif_builds_a_palette_from_the_clip() {
+        // Without this a GIF quantises to a generic table and gradients band --
+        // which matters in an app built around gradients and dither.
+        let spec = output_spec(Some("gif"), "h264");
+        let filter = spec.filter.expect("gif needs a palette filter");
+        assert!(filter.contains("palettegen"));
+        assert!(filter.contains("paletteuse"));
+    }
+
+    #[test]
+    fn image_sequences_are_flagged_as_sequences() {
+        for f in ["png_seq", "jpg_seq", "webp_seq", "tiff_seq", "bmp_seq"] {
+            assert!(
+                output_spec(Some(f), "h264").is_sequence,
+                "{f} is a sequence"
+            );
+        }
+        for f in ["mp4", "gif", "apng", "webp"] {
+            assert!(!output_spec(Some(f), "h264").is_sequence, "{f} is one file");
+        }
+    }
+
+    #[test]
+    fn codec_still_selects_within_the_video_containers() {
+        assert_eq!(output_spec(Some("mp4"), "h265").encoder, "libx265");
+        assert_eq!(output_spec(Some("mp4"), "prores").encoder, "prores_ks");
+        assert_eq!(output_spec(Some("webm"), "h264").encoder, "libvpx-vp9");
+        assert_eq!(output_spec(Some("webm"), "av1").encoder, "libaom-av1");
+    }
+
+    #[test]
+    fn an_absent_format_keeps_the_historical_h264_default() {
+        assert_eq!(output_spec(None, "h264").encoder, "libx264");
+        assert!(output_spec(None, "h264").supports_audio);
+    }
 }
 
 #[cfg(test)]

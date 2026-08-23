@@ -6,7 +6,10 @@ import { stackToRustPayload } from "../utils/effectConverter";
 export interface BatchJob {
   id: string;
   name: string;
-  format: "mp4" | "webm" | "gif" | "png_seq";
+  /** Any id from EXPORT_FORMATS in ExportPanel. Kept as a plain string so the
+   *  queue does not have to be edited every time a format is added -- the
+   *  backend's output_spec() is the single place that decides what each means. */
+  format: string;
   codec: string;
   resolutionW: number | undefined;
   resolutionH: number | undefined;

@@ -1028,7 +1028,8 @@ fn export_video_blocking(
     let codec_str = codec.as_deref().unwrap_or({
         match format.as_deref() {
             Some("webm") => "vp9",
-            Some("gif") | Some("png_seq") => "libx264", // container is still mp4 for gif/png_seq
+            // gif / apng / webp / *_seq pick their own encoder in output_spec();
+            // the value here is only a fallback for the video containers.
             _ => "libx264",
         }
     });
@@ -1061,6 +1062,7 @@ fn export_video_blocking(
         height,
         Some(cancel.as_ref()),
         Some(ENCODE_TIMEOUT),
+        format.as_deref(),
     )
     .map_err(|e| e.to_string())?;
     let _ = app_handle.emit(
