@@ -81,6 +81,38 @@ pub fn run() {
                 };
             }
         })
+        // Seven of these are registered but never invoked from the frontend.
+        // They are recorded here so a later audit does not mistake them for
+        // broken wiring, and so nobody adopts one expecting it to be the
+        // established path:
+        //
+        //   get_environment_status / install_local_environment
+        //       A Python-environment setup flow that was never built a UI. The
+        //       need is real -- SAM3 and the FFglitch export both require Python
+        //       and neither tells the user when it is missing -- but wiring it
+        //       means designing that flow, not just calling these.
+        //   get_monitor_info
+        //       Exists so edge-snapping can compute proximity locally instead of
+        //       an IPC round-trip per move event. useWindowEdgeSnap never
+        //       adopted it. A perf refinement, not a fault.
+        //   list_effects_by_category
+        //       Superseded: the UI fetches list_effects once and filters
+        //       client-side.
+        //   sam3_refine_mask
+        //       A genuine SAM3 capability (refine an existing mask with new
+        //       points) that MaskPanel does not expose yet.
+        //   save_media
+        //       Saves the CURRENT frame. The frontend wants the PROCESSED frame
+        //       and calls save_processed_image instead. Not a duplicate, just
+        //       rarely what anyone wants.
+        //   test_all_functions
+        //       Development diagnostic, driven from mosh-verify rather than the
+        //       app.
+        //
+        // Every registered command is callable from the webview, so unused ones
+        // are IPC surface for no benefit. They are kept rather than removed
+        // because each represents intended functionality; drop the registration
+        // (not the function) if that trade stops being worth it.
         .invoke_handler(tauri::generate_handler![
             presets::get_presets_path,
             presets::load_presets,

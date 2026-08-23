@@ -165,22 +165,23 @@ real protocol (handshake → `auth_ok`, `load_image` → 1600x1216,
 Hunting one specific class: **controls and messages that do not mean what they
 say.** Every bug found this session was that shape, never a crash.
 
-CONFIRMED, STILL OPEN (in priority order):
+ALL FIVE FINDINGS ARE NOW FIXED:
 
-1. **Pause does not pause.** `PreviewViewport.tsx:895` --
-   `animTime = isPlaying ? currentTime : performance.now() / 1000`. When paused,
-   time keeps advancing off the wall clock and the render loop keeps running, so
-   an animated effect (VHS, TV Glitch) looks identical playing or paused. The
-   transport reads as broken because play and pause are indistinguishable.
-2. **The app boots mid-playback.** `store/index.ts:480` sets `isPlaying: true`.
-3. **`composite.overlay` is identity** until an overlay is chosen -- correct, but
-   it lands the user on a control that appears dead.
-4. `datamoshing.beat_hold` / `beat_smear` have no WebGL mapping, so they force
-   the slow CPU preview path. Both need audio + video anyway.
-5. Seven Tauri commands are registered but never called from the frontend
-   (`get_environment_status`, `get_monitor_info`, `install_local_environment`,
-   `list_effects_by_category`, `sam3_refine_mask`, `save_media`,
-   `test_all_functions`). Dead surface, not a user-facing fault.
+1. **Pause now pauses.** Shader time is always the timeline's time; it used to
+   fall back to `performance.now()` while stopped, so animated effects ran
+   identically in both transport states. A paused preview now shows the frame
+   under the playhead -- the same frame export writes.
+2. **The app starts stopped.** `isPlaying` defaulted to true.
+3. **`composite.overlay` and `color.lut_grading`** show an inline banner while
+   waiting on a file selection, instead of silently behaving like a disabled
+   effect. Driven by REQUIRES_SELECTION so a third case is one table entry.
+4. **`datamoshing.beat_hold` / `beat_smear`** now have conversion-table entries.
+   A missing entry is not the same as pass_through: it pushed the whole stack
+   onto the slow CPU preview path. Every registered effect is now mapped.
+5. **The seven unused Tauri commands** are documented in place above
+   `invoke_handler` in lib.rs -- what each was for and why it is unwired -- so a
+   later audit does not read them as broken. They are IPC surface for no
+   benefit; drop the registration (not the function) if that trade sours.
 
 CHECKED AND CLEAN -- do not re-audit these without new evidence:
 
