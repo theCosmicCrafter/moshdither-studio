@@ -1,15 +1,37 @@
 import { chromium, expect, test } from "@playwright/test";
 
 /**
- * Browsers allow only a fixed number of live WebGL contexts (16 in Chrome) and
- * force-lose the OLDEST once that cap is passed. PreviewViewport creates one
- * context per mount and remounts whenever its dock panel moves, so a destroy()
- * that freed GL objects but not the context itself leaked one per remount --
- * eventually the browser killed the context the visible preview was drawing
- * with and the preview went black.
+ * A canvas has exactly ONE WebGL context for its whole lifetime, and losing it
+ * is permanent -- a later canvas.getContext("webgl2") returns the same dead
+ * object rather than a fresh one.
  *
- * These run against a browser launched with SwiftShader rather than the shared
- * `page` fixture so the result does not depend on the host having a usable GPU.
+ * PreviewViewport's init effect re-runs against the same canvas element
+ * (StrictMode double-invokes it in dev; it also re-runs when its dependencies
+ * change). A destroy() that called WEBGL_lose_context.loseContext() therefore
+ * dispatched `webglcontextlost` a tick later, by which point the re-initialised
+ * context had already registered its listeners on that canvas -- so the NEW
+ * context received the OLD one's loss event, marked itself dead, and skipped
+ * every subsequent render. That shipped briefly and blacked out the preview on
+ * every launch.
+ *
+ * NO AUTOMATED GUARD EXISTS FOR THAT REGRESSION. It reproduces only in the
+ * running app under WebView2. SwiftShader implements WEBGL_lose_context
+ * differently, and a synthetic construct/destroy/construct sequence passes here
+ * whether or not the bug is present -- verified in both directions, with the
+ * canvas both attached to and detached from the document. A test asserting
+ * otherwise would ratify the bug rather than catch it, so it was removed rather
+ * than left in place looking like cover.
+ *
+ * To recognise a recurrence, look for this in `npm run tauri:dev` output at
+ * startup:
+ *
+ *     [WebGLContext] WebGL context lost
+ *     [Preview] WebGL context lost
+ *     [EffectChain] render skipped: WebGL context lost   (repeating forever)
+ *
+ * The test below covers a narrower property that IS reproducible here. It runs
+ * against a browser launched with SwiftShader rather than the shared `page`
+ * fixture, so the result does not depend on the host having a usable GPU.
  */
 test.setTimeout(120000);
 
@@ -19,55 +41,17 @@ const SWIFTSHADER = [
   "--enable-unsafe-swiftshader",
 ];
 
-async function withPage<T>(fn: (page: import("@playwright/test").Page) => Promise<T>): Promise<T> {
+test("destroy() does not fire the caller's context-lost callback", async () => {
+  // Teardown must stay silent: if it reported a lost context, PreviewViewport
+  // would flip itself to the CPU fallback and post "WebGL context lost" on the
+  // way out of a perfectly healthy unmount.
   const browser = await chromium.launch({ args: SWIFTSHADER });
   try {
     const page = await browser.newPage();
     await page.goto("http://localhost:1420/", { waitUntil: "domcontentloaded" });
     await page.waitForSelector("header", { timeout: 20000 });
-    return await fn(page);
-  } finally {
-    await browser.close();
-  }
-}
 
-test("destroying a WebGLContext releases the context, not just its objects", async () => {
-  const result = await withPage((page) =>
-    page.evaluate(async () => {
-      const { WebGLContext } = (await import(
-        "/src/engine/webgl2/WebGLContext.ts"
-      )) as unknown as { WebGLContext: new (c: HTMLCanvasElement) => { destroy(): void } };
-
-      const canvases: HTMLCanvasElement[] = [];
-      // More cycles than the browser's context cap, so a leak is unambiguous.
-      for (let i = 0; i < 24; i++) {
-        const c = document.createElement("canvas");
-        c.width = c.height = 64;
-        canvases.push(c);
-        new WebGLContext(c).destroy();
-      }
-      await new Promise((r) => setTimeout(r, 500));
-
-      const stillLive = canvases.filter((c) => {
-        const gl = c.getContext("webgl2") as WebGL2RenderingContext | null;
-        return gl !== null && !gl.isContextLost();
-      }).length;
-      return { created: canvases.length, stillLive };
-    }),
-  );
-
-  expect(result.created).toBe(24);
-  // Before the fix this was 16 -- the cap -- with the browser having evicted
-  // the 8 oldest contexts to stay under it.
-  expect(result.stillLive).toBe(0);
-});
-
-test("destroy() does not fire the caller's context-lost callback", async () => {
-  // destroy() loses the context deliberately. If it did so before detaching the
-  // listeners, PreviewViewport would react to its own teardown by flipping to
-  // the CPU fallback and posting "WebGL context lost" on the way out.
-  const lostCalls = await withPage((page) =>
-    page.evaluate(async () => {
+    const lostCalls = await page.evaluate(async () => {
       const { WebGLContext } = (await import(
         "/src/engine/webgl2/WebGLContext.ts"
       )) as unknown as {
@@ -83,8 +67,10 @@ test("destroy() does not fire the caller's context-lost callback", async () => {
       new WebGLContext(c, { onContextLost: () => { calls++; } }).destroy();
       await new Promise((r) => setTimeout(r, 300));
       return calls;
-    }),
-  );
+    });
 
-  expect(lostCalls).toBe(0);
+    expect(lostCalls).toBe(0);
+  } finally {
+    await browser.close();
+  }
 });

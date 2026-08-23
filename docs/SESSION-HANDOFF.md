@@ -76,7 +76,22 @@ the 35 lands at 0.65x source, and all 35 are correctly 512x512 — so lowering t
 default strength would have weakened every look while leaving the real cause in
 place.
 
-*Cause 2 — leaked WebGL contexts.* `WebGLContext.destroy()` freed GL
+*Cause 2 — REGRESSION I INTRODUCED, now reverted.* A `loseContext()` call was
+added to `WebGLContext.destroy()` to fix a context leak. It made things strictly
+worse: a canvas has exactly ONE WebGL context for its lifetime, `loseContext()`
+is permanent, and PreviewViewport's init effect re-runs against the SAME canvas
+(StrictMode in dev, and on any dependency change). The loss event fires a tick
+LATER, by which time the re-initialised context has registered its listeners on
+that canvas -- so the new context receives the old one's loss event and marks
+itself dead. Result: a guaranteed black preview on every launch, confirmed in
+`tauri:dev` output. Reverted; the leak is documented in the source as unfixed.
+No automated guard exists -- SwiftShader implements WEBGL_lose_context
+differently and a synthetic repro passes either way (verified in both
+directions). Recognise a recurrence by this at startup:
+`[WebGLContext] WebGL context lost` / `[Preview] WebGL context lost` /
+`[EffectChain] render skipped` repeating.
+
+*Original cause 2 — leaked WebGL contexts (STILL PRESENT, unfixed).* `WebGLContext.destroy()` freed GL
 objects but never released the context; browsers cap live contexts at 16 and
 force-lose the oldest, so every preview panel remount leaked one until the
 browser killed the visible preview's context. Fixed with `loseContext()` in

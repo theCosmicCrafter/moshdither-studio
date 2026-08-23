@@ -173,15 +173,22 @@ export class WebGLContext {
     this.programs.clear();
     this.textures.clear();
     this.framebuffers.clear();
-    // Deleting the GL objects does not release the context itself -- the canvas
-    // holds it until garbage collection, and browsers cap how many WebGL
-    // contexts may be live at once (16 in Chrome), force-losing the OLDEST once
-    // that cap is passed. Every preview remount (docking or moving a panel,
-    // StrictMode's double mount in dev) leaked one context, so after enough
-    // remounts the browser killed the context the *visible* preview was drawing
-    // with: onContextLost fired and the preview went black. The listeners are
-    // removed at the top of destroy(), so this loses the context without
-    // invoking our own onContextLost callback.
-    this.gl.getExtension("WEBGL_lose_context")?.loseContext();
+    // Deliberately NOT calling WEBGL_lose_context.loseContext() here.
+    //
+    // A canvas has exactly one WebGL context for its whole lifetime, and losing
+    // it is PERMANENT: a later canvas.getContext("webgl2") returns the same
+    // dead object rather than a fresh one. PreviewViewport's init effect re-runs
+    // against the same canvas element -- StrictMode double-invokes it in dev,
+    // and it re-runs whenever its dependencies change -- so cleanup would kill
+    // the context that the very next initialisation then picks up. That shipped
+    // briefly and blacked out the preview on every launch, which is far worse
+    // than the leak it was meant to fix.
+    //
+    // The underlying leak is real: a genuine unmount/remount builds a NEW canvas
+    // with a NEW context, browsers cap live contexts (16 in Chrome), and the
+    // oldest is force-lost past that cap. Fixing it needs a release that can
+    // tell "this canvas is being discarded" from "this canvas is being
+    // re-initialised", which destroy() alone cannot see. Left leaking until
+    // that distinction is implemented and verified in the running app.
   }
 }
