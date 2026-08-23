@@ -477,7 +477,11 @@ function pushHistory(state: Pick<AppState, "pastStacks" | "effectStack">) {
 
 export const useAppStore = create<AppState>((set, get) => ({
   currentTime: 0,
-  isPlaying: true,
+  // Paused on launch. This defaulted to true, so the app opened mid-playback
+  // with the transport already showing Pause -- and because a paused preview
+  // used to keep animating off the wall clock, nothing about the screen made
+  // that visible.
+  isPlaying: false,
   loopMode: "off",
   duration: 10,
   mediaLoaded: false,

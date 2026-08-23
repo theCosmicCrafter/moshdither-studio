@@ -219,6 +219,10 @@ function PreviewViewport({ isDropTarget = false }: Props) {
   const cpuAnimRafRef = useRef<number>(0);
   const cpuRenderRevisionRef = useRef(0);
   const lastFrameTimeRef = useRef<number>(0);
+  // Playhead position of the last frame drawn, so a paused preview can skip
+  // redrawing an instant it has already rendered. NaN so the first pass always
+  // draws, whatever currentTime starts at.
+  const lastRenderedTimeRef = useRef<number>(Number.NaN);
   const sam3CanvasRef = useRef<HTMLCanvasElement>(null);
   const hoverTimeoutRef = useRef<number | null>(null);
   const hoverRequestRevisionRef = useRef(0);
@@ -887,12 +891,19 @@ function PreviewViewport({ isDropTarget = false }: Props) {
           u_beatMid: s.audioBeatFlags.mid ? 1 : 0,
           u_beatTreble: s.audioBeatFlags.treble ? 1 : 0,
         };
-        // Inject time uniforms so shaders can animate over time
-        // When playing, use the timeline currentTime for keyframe sync.
-        // When not playing, use performance.now() so time-based effects still animate.
-        const animTime = s.isPlaying
-          ? s.currentTime
-          : performance.now() / 1000;
+        // Shader time is ALWAYS the timeline's time, playing or not.
+        //
+        // This used to fall back to performance.now() while paused so that
+        // time-based effects "still animate" -- which meant pause did not
+        // pause: a VHS or TV Glitch effect ran identically whether playing or
+        // stopped, the transport's two states were indistinguishable, and the
+        // timeline read as disconnected from the preview. It also meant the
+        // paused frame was never the frame that would be exported, because
+        // export renders from timeline time.
+        //
+        // Now a paused preview shows exactly the frame at the playhead, and
+        // scrubbing moves through the animation.
+        const animTime = s.currentTime;
         const timeUniforms: Record<string, number> = {
           u_time: animTime,
           u_frame: Math.floor(animTime * 30),
@@ -971,7 +982,15 @@ function PreviewViewport({ isDropTarget = false }: Props) {
         } else {
           lastFrameTimeRef.current = performance.now();
         }
-        render();
+        // While paused, shader time is frozen at the playhead, so redrawing the
+        // same instant 60 times a second only burns GPU. Render when the
+        // playhead actually moves (scrubbing) and skip otherwise. Parameter
+        // edits do not rely on this loop -- they re-run the whole effect via
+        // cpuRenderSignature, which restarts it and draws.
+        if (s.isPlaying || lastRenderedTimeRef.current !== s.currentTime) {
+          lastRenderedTimeRef.current = s.currentTime;
+          render();
+        }
         rafRef.current = requestAnimationFrame(loop);
       };
       lastFrameTimeRef.current = performance.now();
