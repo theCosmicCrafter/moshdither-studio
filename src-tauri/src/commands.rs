@@ -2481,6 +2481,32 @@ fn validate_ffglitch_extra_paths(
     Ok(())
 }
 
+/// Marks the intermediate file written by a two-stage export (render the effect
+/// stack, then datamosh the result). The name is checked before deletion, so
+/// this command cannot be turned into an arbitrary file remover.
+pub const EXPORT_TEMP_MARKER: &str = ".moshdither-fx-tmp.";
+
+/// Delete an intermediate file produced by a two-stage export.
+///
+/// Deliberately narrow: it refuses any path whose file name does not carry
+/// `EXPORT_TEMP_MARKER`, so a bug or a compromised webview cannot use it to
+/// delete a user's media. Failure to clean up is not fatal to an export, so the
+/// caller is expected to ignore the error rather than fail the job over it.
+#[tauri::command]
+pub fn remove_export_temp(path: String) -> std::result::Result<(), String> {
+    let validated = validate_io_path(&path, true)?;
+    let name = validated
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    if !name.contains(EXPORT_TEMP_MARKER) {
+        return Err(format!(
+            "Refusing to remove {name}: not a MoshDither export intermediate"
+        ));
+    }
+    std::fs::remove_file(&validated).map_err(|e| e.to_string())
+}
+
 /// Apply an FFglitch datamoshing effect by delegating to the Python mosh_cli.py.
 #[tauri::command]
 pub async fn apply_ffglitch(

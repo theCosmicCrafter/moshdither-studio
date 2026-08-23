@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from "react";
 import { useAppStore } from "../../store";
-import { exportVideo, applyFfglitch, cancelExport } from "../../lib/tauri";
+import { exportVideo, applyFfglitch, cancelExport, removeExportTemp } from "../../lib/tauri";
 import { stackToRustPayload } from "../../utils/effectConverter";
 import { useBatchQueue } from "../../hooks/useBatchQueue";
 import type { WatermarkSettings } from "../../utils/watermark";
 import { listen } from "@tauri-apps/api/event";
+import { save } from "@tauri-apps/plugin-dialog";
 import ChipButton from "./ChipButton";
 import LabeledSlider from "../LabeledSlider";
 
@@ -249,16 +250,69 @@ export default function ExportPanel() {
       setStatusMessage("Load media before exporting");
       return;
     }
+    if (exportIsRunning) return;
+
+    // The effect stack is rendered FIRST, and the datamosh runs over that
+    // render. This used to pass `filePath` straight through, so the button
+    // silently discarded every effect, LUT and mask in the stack and moshed the
+    // untouched source -- the work was gone with no error to explain it.
+    //
+    // The two stages cannot be merged: the effects run on decoded RGBA frames,
+    // while a bitstream datamosh needs an ENCODED video to chew on. So the
+    // render has to be encoded to an intermediate file before FFglitch sees it.
+    const state = useAppStore.getState();
+    const stack = stackToRustPayload(activeEffects, state.activeMask, state.sam3Masks);
+    const willRenderEffects = activeEffects.length > 0;
+
+    const finalPath = await save({
+      filters: [
+        { name: "MP4", extensions: ["mp4"] },
+        { name: "AVI", extensions: ["avi"] },
+      ],
+    });
+    if (!finalPath || typeof finalPath !== "string") return;
+
+    // Sibling of the destination, so it lands on the same volume (a rename or a
+    // large write across drives is far slower) and inherits its writability.
+    const tempPath = finalPath.replace(/(\.[^.\\/]*)?$/, ".moshdither-fx-tmp.mp4");
+
     setExportIsRunning(true);
     setExportProgress(0);
-    setStatusMessage("FFglitch export started...");
+    let tempWritten = false;
     try {
-      const outputPath = await applyFfglitch(filePath, ffglitchMode, {});
+      let moshInput = filePath;
+      if (willRenderEffects) {
+        setStatusMessage(
+          `Rendering ${activeEffects.length} effect${activeEffects.length === 1 ? "" : "s"} before datamoshing...`
+        );
+        await exportVideo(filePath, stack, {
+          maskB64: state.activeMask ?? null,
+          codec,
+          fps,
+          audioBakeJson: audioBakeData ? JSON.stringify(audioBakeData) : null,
+          watermark: watermark.enabled ? watermark : null,
+          trimStart: inPoint ?? undefined,
+          trimEnd: typeof outPoint === "number" ? outPoint : state.duration,
+          includeAudio,
+          outputPath: tempPath,
+        });
+        tempWritten = true;
+        moshInput = tempPath;
+      }
+
+      setStatusMessage(`Datamoshing (${ffglitchMode})...`);
+      const outputPath = await applyFfglitch(moshInput, ffglitchMode, {}, finalPath);
       setExportProgress(100);
-      setStatusMessage(`FFglitch exported: ${outputPath}`);
+      setStatusMessage(
+        willRenderEffects
+          ? `Exported with effects + ${ffglitchMode} datamosh: ${outputPath}`
+          : `FFglitch exported: ${outputPath}`
+      );
     } catch (err) {
       setStatusMessage(`FFglitch export failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
+      // Best-effort: a stranded intermediate is untidy, not a failed export.
+      if (tempWritten) await removeExportTemp(tempPath).catch(() => {});
       setExportIsRunning(false);
     }
   };

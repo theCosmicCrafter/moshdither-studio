@@ -364,15 +364,19 @@ export async function exportVideo(
      * memory budget). `number` = explicit cap (e.g. 1080 for 1080p).
      * Final encode still scales to `width`/`height`. */
     processingScale?: number;
+    /** Skip the Save dialog and write here instead. Used by the two-stage
+     *  FFglitch export, which prompts once and then renders to an intermediate
+     *  file before datamoshing it. */
+    outputPath?: string;
   } = {}
 ): Promise<string> {
-  const path = await save({
+  const path = options.outputPath ?? (await save({
     filters: [
       { name: "MP4", extensions: ["mp4"] },
       { name: "MOV", extensions: ["mov"] },
       { name: "MKV", extensions: ["mkv"] },
     ],
-  });
+  }));
   if (!path || typeof path !== "string") {
     throw new Error("Export cancelled");
   }
@@ -396,17 +400,26 @@ export async function exportVideo(
   });
 }
 
+/**
+ * Run a bitstream datamosh over `inputPath`.
+ *
+ * `outputPath` may be supplied by callers that have already asked the user
+ * where the result should go -- the two-stage export (render the effect stack,
+ * then datamosh that render) prompts once and then drives both steps, and must
+ * not raise a second Save dialog part-way through.
+ */
 export async function applyFfglitch(
   inputPath: string,
   mode: string,
-  params: Record<string, unknown> = {}
+  params: Record<string, unknown> = {},
+  outputPath?: string
 ): Promise<string> {
-  const path = await save({
+  const path = outputPath ?? (await save({
     filters: [
       { name: "MP4", extensions: ["mp4"] },
       { name: "AVI", extensions: ["avi"] },
     ],
-  });
+  }));
   if (!path || typeof path !== "string") {
     throw new Error("Export cancelled");
   }
@@ -416,6 +429,16 @@ export async function applyFfglitch(
     mode,
     params,
   });
+}
+
+/**
+ * Delete an intermediate render left by a two-stage export. The backend refuses
+ * anything that is not one of its own `.moshdither-fx-tmp.` files, so this
+ * cannot remove a user's media. Cleanup failure is not worth failing an
+ * otherwise-finished export over, so callers should ignore the rejection.
+ */
+export async function removeExportTemp(path: string): Promise<void> {
+  return invoke("remove_export_temp", { path });
 }
 
 /** Request cancellation of an in-progress export (real export or FFglitch --

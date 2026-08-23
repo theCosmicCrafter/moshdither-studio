@@ -17,10 +17,10 @@ use commands::{
     animate_still_as_video, apply_effect_stack, apply_ffglitch, cancel_export, check_update,
     export_video, extract_audio_from_video, generate_proxy_command, get_frame_data, get_media_info,
     get_media_metadata, install_update, list_effects, list_effects_by_category, load_media,
-    load_media_from_base64, prepare_custom_lut, read_file, sam3_auto_mask, sam3_box_prompt,
-    sam3_clear, sam3_init, sam3_load_image, sam3_point_prompt, sam3_postprocess_mask,
-    sam3_refine_mask, sam3_shutdown, sam3_text_prompt, sam3_video_predictor, save_file, save_media,
-    save_processed_image, test_all_functions, verify_effects, AppState,
+    load_media_from_base64, prepare_custom_lut, read_file, remove_export_temp, sam3_auto_mask,
+    sam3_box_prompt, sam3_clear, sam3_init, sam3_load_image, sam3_point_prompt,
+    sam3_postprocess_mask, sam3_refine_mask, sam3_shutdown, sam3_text_prompt, sam3_video_predictor,
+    save_file, save_media, save_processed_image, test_all_functions, verify_effects, AppState,
 };
 use environment::{get_environment_status, install_local_environment};
 // Only used inside the macOS/Windows-gated window-vibrancy setup below; on
@@ -90,6 +90,7 @@ pub fn run() {
             list_effects_by_category,
             apply_effect_stack,
             apply_ffglitch,
+            remove_export_temp,
             cancel_export,
             check_update,
             install_update,
