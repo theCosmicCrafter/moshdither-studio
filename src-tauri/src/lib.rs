@@ -41,7 +41,12 @@ pub fn run() {
     tracing::info!("Initializing Tauri Builder...");
     tauri::Builder::default()
         .setup(|app| {
-            tracing::info!("Tauri setup complete.");
+            // Report which webviews actually exist. wry logs
+            // "failed to create webview: 0x80070002" on this machine at startup
+            // while the app goes on working, and the only way to tell a real
+            // missing webview from a spurious error is to ask what survived.
+            let labels: Vec<String> = app.webview_windows().keys().cloned().collect();
+            tracing::info!("Tauri setup complete. webviews: {:?}", labels);
             // `app` is only read inside the macOS/Windows-gated block below; on
             // every other target that block is stripped entirely, which would
             // otherwise leave the closure's `app` parameter unused under

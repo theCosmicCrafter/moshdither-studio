@@ -175,6 +175,30 @@ Run the real argument sets against the bundled binary after touching a format:
 Confirmed working this way on 2026-08-23: gif, apng, webp (single file), and
 png/jpeg sequences (30 frames in, 30 files out).
 
+## The `0x80070002` webview error is a restart race, not a defect
+
+`ERROR tauri_runtime_wry: failed to create webview: 0x80070002 (file not found)`
+appears at startup and the app then works normally. Investigated 2026-08-23 and
+CLOSED as benign. Do not re-chase it without new evidence.
+
+What was ruled out, each by experiment rather than reasoning:
+
+- `transparent: true` -- error still occurs with it set to false.
+- The window's `"url": "index.html"` -- error still occurs with it removed.
+- Orphaned WebView2 processes from a previous run -- none belonged to this app.
+- A missing WebView2 runtime -- v151.0.4129.101 is installed.
+
+What settled it: `setup()` now logs which webviews exist, and a run that emitted
+NO error reported `webviews: ["main"]` -- so the webview is created either way.
+Then a genuinely clean launch (no prior instance, ten seconds of quiet first)
+produced no error at all, while every single occurrence had followed a kill or a
+dev hot-restart.
+
+So the first creation attempt races a previous instance's WebView2 state and
+Tauri recovers. The precise internals -- which file the loader cannot find --
+remain unidentified; what is established is WHEN it happens and that nothing is
+lost when it does. It is unrelated to the 0xc0000005 crash.
+
 ## Adversarial audit, 2026-08-23
 
 Hunting one specific class: **controls and messages that do not mean what they
