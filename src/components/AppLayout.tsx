@@ -98,24 +98,35 @@ export default function AppLayout() {
     window.addEventListener("beforeunload", handleBeforeUnload);
 
     let unlisten: (() => void) | undefined;
-    if (isTauriAvailable()) {
-      void getCurrentWindow()
-        .onCloseRequested(async (event) => {
-          if (!hasWork()) return;
-          // The session is autosaved every few seconds and offered back on the
-          // next launch, so this asks rather than warns of loss.
-          const leave = await confirm(
-            "Close MoshDither Studio? Your session is autosaved and will be offered back next time you open it.",
-            { title: "Close", kind: "warning" }
-          );
-          if (!leave) event.preventDefault();
-        })
-        .then((fn) => {
-          unlisten = fn;
-        })
-        .catch(() => {
-          /* no window handle: fall back to beforeunload alone */
-        });
+    // try/catch, not just .catch(): getCurrentWindow() throws SYNCHRONOUSLY when
+    // __TAURI_INTERNALS__ is present but incomplete (it reads
+    // metadata.currentWindow). A synchronous throw inside useEffect is not
+    // caught by a promise handler -- React surfaces it to the ErrorBoundary and
+    // the whole UI goes down. That is exactly what happened under the E2E Tauri
+    // mock, which provides invoke() and no metadata, so this guard took the app
+    // out in every spec that used it.
+    try {
+      if (isTauriAvailable()) {
+        void getCurrentWindow()
+          .onCloseRequested(async (event) => {
+            if (!hasWork()) return;
+            // The session is autosaved every few seconds and offered back on
+            // the next launch, so this asks rather than warns of loss.
+            const leave = await confirm(
+              "Close MoshDither Studio? Your session is autosaved and will be offered back next time you open it.",
+              { title: "Close", kind: "warning" }
+            );
+            if (!leave) event.preventDefault();
+          })
+          .then((fn) => {
+            unlisten = fn;
+          })
+          .catch(() => {
+            /* no window handle: fall back to beforeunload alone */
+          });
+      }
+    } catch {
+      /* Tauri globals incomplete: beforeunload remains as the only guard */
     }
 
     return () => {

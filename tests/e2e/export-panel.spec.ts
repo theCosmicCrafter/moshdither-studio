@@ -33,7 +33,11 @@ async function openExportPanel(page: import("@playwright/test").Page) {
 test("export panel renders its format and quality controls", async ({ page }) => {
   const panel = await openExportPanel(page);
 
-  for (const format of ["MP4", "WEBM", "GIF", "PNG-SEQ"]) {
+  // One per output family, so a format silently disappearing from the panel is
+  // caught: a video container, an animated single file, and an image sequence.
+  // The label is "PNG SEQ" rather than the older "PNG-SEQ" since the list grew
+  // from four formats to thirteen and moved to explicit labels.
+  for (const format of ["MP4", "WEBM", "GIF", "APNG", "WEBP", "PNG SEQ", "TIFF SEQ"]) {
     await expect(panel.getByRole("button", { name: format, exact: true })).toBeVisible();
   }
   for (const quality of ["draft", "good", "best"]) {

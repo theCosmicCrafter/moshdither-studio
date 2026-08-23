@@ -994,6 +994,13 @@ function PreviewViewport({ isDropTarget = false }: Props) {
         rafRef.current = requestAnimationFrame(loop);
       };
       lastFrameTimeRef.current = performance.now();
+      // Force the first frame after any (re)start to draw. This effect re-runs
+      // on cpuRenderSignature, which is how a PARAMETER CHANGE reaches the
+      // preview -- and the ref survives that restart, so leaving it matching
+      // currentTime made the skip-if-unchanged test suppress exactly the redraw
+      // the parameter change was asking for. While paused, that meant edits
+      // simply did not appear.
+      lastRenderedTimeRef.current = Number.NaN;
       rafRef.current = requestAnimationFrame(loop);
     }
 
