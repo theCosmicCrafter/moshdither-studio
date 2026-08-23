@@ -14,6 +14,27 @@
 
 type Context = Record<string, unknown>;
 
+/**
+ * Mirror warnings and errors into the app's log file.
+ *
+ * Release builds detach the console and ship no devtools, so `console.error`
+ * goes nowhere a user or a later investigation can reach: a failure in the
+ * frontend left the log file showing nothing but a clean startup. Forwarding is
+ * fire-and-forget -- a logger that throws while reporting a problem replaces
+ * the original failure with its own.
+ */
+function forward(level: "warn" | "error", line: string): void {
+  try {
+    const g = globalThis as Record<string, unknown>;
+    if (!("__TAURI_INTERNALS__" in g)) return;
+    void (g.__TAURI_INTERNALS__ as { invoke: (c: string, a: unknown) => Promise<unknown> })
+      .invoke("log_frontend", { level, message: line })
+      .catch(() => {});
+  } catch {
+    /* never let logging break the thing it is reporting on */
+  }
+}
+
 function format(category: string, message: string, ctx?: Context): string {
   return ctx ? `[${category}] ${message} ${JSON.stringify(ctx)}` : `[${category}] ${message}`;
 }
@@ -33,11 +54,15 @@ export const logger = {
 
   /** Warning — always emitted. */
   warn(category: string, message: string, ctx?: Context): void {
-    console.warn(format(category, message, ctx));
+    const line = format(category, message, ctx);
+    console.warn(line);
+    forward("warn", line);
   },
 
   /** Error — always emitted. */
   error(category: string, message: string, ctx?: Context): void {
-    console.error(format(category, message, ctx));
+    const line = format(category, message, ctx);
+    console.error(line);
+    forward("error", line);
   },
 };

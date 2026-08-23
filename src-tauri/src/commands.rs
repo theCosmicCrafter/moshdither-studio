@@ -2483,6 +2483,28 @@ fn validate_ffglitch_extra_paths(
     Ok(())
 }
 
+/// Longest frontend log line accepted, so a runaway loop in the webview cannot
+/// fill the disk through this command.
+const MAX_FRONTEND_LOG_LEN: usize = 4096;
+
+/// Record a message from the frontend in the app's log file.
+///
+/// Release builds detach the console and ship no devtools, so anything the
+/// webview logged went nowhere: an export that failed in the frontend -- before
+/// it ever reached a Rust command -- left the log file showing only a clean
+/// startup, which is exactly the state that made one such failure impossible to
+/// investigate. Warnings and errors are forwarded here so both halves of the app
+/// leave evidence in the same place.
+#[tauri::command]
+pub fn log_frontend(level: String, message: String) {
+    let msg: String = message.chars().take(MAX_FRONTEND_LOG_LEN).collect();
+    match level.as_str() {
+        "error" => tracing::error!(target: "frontend", "{msg}"),
+        "warn" => tracing::warn!(target: "frontend", "{msg}"),
+        _ => tracing::info!(target: "frontend", "{msg}"),
+    }
+}
+
 /// Marks the intermediate file written by a two-stage export (render the effect
 /// stack, then datamosh the result). The name is checked before deletion, so
 /// this command cannot be turned into an arbitrary file remover.
