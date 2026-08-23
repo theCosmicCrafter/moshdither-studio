@@ -160,6 +160,40 @@ real protocol (handshake → `auth_ok`, `load_image` → 1600x1216,
 
 ---
 
+## Adversarial audit, 2026-08-23
+
+Hunting one specific class: **controls and messages that do not mean what they
+say.** Every bug found this session was that shape, never a crash.
+
+CONFIRMED, STILL OPEN (in priority order):
+
+1. **Pause does not pause.** `PreviewViewport.tsx:895` --
+   `animTime = isPlaying ? currentTime : performance.now() / 1000`. When paused,
+   time keeps advancing off the wall clock and the render loop keeps running, so
+   an animated effect (VHS, TV Glitch) looks identical playing or paused. The
+   transport reads as broken because play and pause are indistinguishable.
+2. **The app boots mid-playback.** `store/index.ts:480` sets `isPlaying: true`.
+3. **`composite.overlay` is identity** until an overlay is chosen -- correct, but
+   it lands the user on a control that appears dead.
+4. `datamoshing.beat_hold` / `beat_smear` have no WebGL mapping, so they force
+   the slow CPU preview path. Both need audio + video anyway.
+5. Seven Tauri commands are registered but never called from the frontend
+   (`get_environment_status`, `get_monitor_info`, `install_local_environment`,
+   `list_effects_by_category`, `sam3_refine_mask`, `save_media`,
+   `test_all_functions`). Dead surface, not a user-facing fault.
+
+CHECKED AND CLEAN -- do not re-audit these without new evidence:
+
+- Every frontend `invoke()` resolves to a registered command. No runtime-missing
+  commands.
+- Every effect parameter declared in Rust is actually read. (An early grep said
+  otherwise; it missed the `f32_param(params, "id", default)` helper
+  indirection. False positive.)
+- No `todo!()` / `unimplemented!()` in shipping code.
+- No empty click handlers.
+- All 169 store fields are read somewhere outside the store.
+- Every panel in the registry is reachable, via the layout or the rail.
+
 ## Open
 
 1. **Confirm the black preview is gone in a real build.** Both fixes are proven
