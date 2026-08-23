@@ -148,7 +148,24 @@ export default function AppLayout() {
     setProxyUrl,
   ]);
 
-  // Drag-and-drop file support via Tauri webview API
+  // Drag-and-drop file support via Tauri webview API.
+  //
+  // INERT while tauri.conf.json sets `dragDropEnabled: false`, which it does so
+  // that flexlayout's panel dragging works: with the native handler enabled,
+  // WebView2 swallows drag operations before the page sees them, so HTML5
+  // drag-and-drop -- which is how flexlayout moves tabs between regions -- did
+  // nothing inside the app while working perfectly in a browser.
+  //
+  // Dropping files still works: PreviewViewport's HTML5 dropzone reads them via
+  // FileReader and loadMediaFromBase64. That route was previously dead code in
+  // the desktop app for the same reason. It does mean a dropped file travels
+  // through the webview as base64 rather than as a path, which is heavy for
+  // large videos -- File > Open still passes a path directly and is the better
+  // route for those.
+  //
+  // This listener is kept rather than deleted: re-enabling dragDropEnabled is a
+  // one-line change if the trade-off ever needs revisiting, and the registration
+  // is harmless when the events never arrive.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
 
