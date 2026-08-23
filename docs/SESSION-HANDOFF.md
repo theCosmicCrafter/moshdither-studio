@@ -160,6 +160,21 @@ real protocol (handshake → `auth_ok`, `load_image` → 1600x1216,
 
 ---
 
+## Verifying export formats (read before trusting a format change)
+
+`output_spec()` has unit tests, and they are NOT enough on their own: they
+assert on the struct's fields, not that FFmpeg accepts the arguments those
+fields produce. Image-sequence export shipped broken underneath a fully green
+suite for exactly that reason -- the muxer rejects a fixed output filename, and
+nothing in the tests ever ran FFmpeg.
+
+Run the real argument sets against the bundled binary after touching a format:
+
+    ffmpeg -f rawvideo -pix_fmt rgba -s 64x64 -r 30 -i raw.rgba            <the args output_spec builds> -y out.<ext>
+
+Confirmed working this way on 2026-08-23: gif, apng, webp (single file), and
+png/jpeg sequences (30 frames in, 30 files out).
+
 ## Adversarial audit, 2026-08-23
 
 Hunting one specific class: **controls and messages that do not mean what they

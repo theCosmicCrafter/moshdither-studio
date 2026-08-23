@@ -994,10 +994,44 @@ pub fn encode_video(
     // has been ended"), with the real reason buried in FFmpeg's stderr.
     let final_path = path;
     let dest = std::path::Path::new(final_path);
+
+    // An image sequence writes MANY files, so neither the encode-to-temp dance
+    // nor a single output name applies to it: FFmpeg's image2 muxer refuses a
+    // fixed filename outright ("Cannot write more than one file with the same
+    // name. Are you missing ... a sequence pattern?"), which is what sequence
+    // export did before this. The chosen name seeds a numbered pattern instead,
+    // written directly to the destination.
+    let sequence_spec = output_spec(format, codec);
+    let sequence_path = if sequence_spec.is_sequence {
+        let stem = dest
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("frame")
+            .to_string();
+        let ext = dest
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("png")
+            .to_string();
+        Some(
+            dest.with_file_name(format!("{stem}_%05d.{ext}"))
+                .to_string_lossy()
+                .into_owned(),
+        )
+    } else {
+        None
+    };
+
     let temp_path_buf = encode_temp_path(dest);
     let temp_path = temp_path_buf.to_string_lossy().into_owned();
-    let path: &str = &temp_path;
-    let mut temp_guard = TempFileGuard::new(temp_path_buf.clone());
+    let path: &str = sequence_path.as_deref().unwrap_or(&temp_path);
+    // Nothing to clean up for a sequence: it writes its frames straight out, so
+    // there is no temp file standing in for the destination.
+    let mut temp_guard = TempFileGuard::new(if sequence_spec.is_sequence {
+        std::path::PathBuf::new()
+    } else {
+        temp_path_buf.clone()
+    });
 
     let ffmpeg = ffmpeg_binary()?;
     let first = &segment.frames[0];
@@ -1355,9 +1389,13 @@ pub fn encode_video(
     // partially-written file at `final_path`. Disarm the guard first so a
     // successful rename doesn't get immediately deleted by Drop.
     temp_guard.disarm();
-    if let Err(e) = std::fs::rename(&temp_path_buf, final_path) {
-        let _ = std::fs::remove_file(&temp_path_buf);
-        return Err(AppError::Io(e));
+    // A sequence wrote its numbered frames straight to the destination
+    // directory; there is no single temp file to move into place.
+    if !sequence_spec.is_sequence {
+        if let Err(e) = std::fs::rename(&temp_path_buf, final_path) {
+            let _ = std::fs::remove_file(&temp_path_buf);
+            return Err(AppError::Io(e));
+        }
     }
     tracing::info!("FFmpeg encode completed successfully");
     Ok(())
@@ -1830,6 +1868,32 @@ mod output_spec_tests {
         assert_eq!(output_spec(Some("mp4"), "prores").encoder, "prores_ks");
         assert_eq!(output_spec(Some("webm"), "h264").encoder, "libvpx-vp9");
         assert_eq!(output_spec(Some("webm"), "av1").encoder, "libaom-av1");
+    }
+
+    /// The path an image sequence is written to must be a NUMBERED PATTERN.
+    /// FFmpeg's image2 muxer rejects a fixed filename outright -- "Cannot write
+    /// more than one file with the same name" -- so sequence export failed at
+    /// runtime while every unit test passed, because the tests only checked the
+    /// spec's fields and never that FFmpeg would accept the result.
+    #[test]
+    fn sequence_output_paths_become_numbered_patterns() {
+        use std::path::Path;
+
+        fn pattern_for(dest: &str) -> String {
+            let d = Path::new(dest);
+            let stem = d.file_stem().and_then(|s| s.to_str()).unwrap_or("frame");
+            let ext = d.extension().and_then(|e| e.to_str()).unwrap_or("png");
+            d.with_file_name(format!("{stem}_%05d.{ext}"))
+                .to_string_lossy()
+                .into_owned()
+        }
+
+        let out = pattern_for("C:/out/render.png");
+        assert!(out.ends_with("render_%05d.png"), "got {out}");
+        assert!(out.contains("%05d"), "a fixed name is rejected by image2");
+
+        let jpg = pattern_for("C:/out/my clip.jpg");
+        assert!(jpg.ends_with("my clip_%05d.jpg"), "got {jpg}");
     }
 
     #[test]
