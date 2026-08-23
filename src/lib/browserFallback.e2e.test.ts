@@ -51,6 +51,20 @@ describe("Browser Fallback E2E", () => {
       expect(pixelate!.parameters.map((p) => p.id)).toContain("block_size");
     });
 
+    it("gives every effect a name unique to it, not its shader's name", () => {
+      // A shader is an implementation shared by many effects, so its name
+      // identifies none of them. Naming effects after their shader collapsed 29
+      // of the 96 mappings onto duplicates -- twelve datamoshing effects all
+      // read "Temporal Datamoshing" and were indistinguishable in the list.
+      const effects = getFallbackEffects();
+      const byName = new Map<string, string[]>();
+      for (const e of effects) {
+        byName.set(e.name, [...(byName.get(e.name) ?? []), e.id]);
+      }
+      const duplicated = [...byName.entries()].filter(([, ids]) => ids.length > 1);
+      expect(duplicated).toEqual([]);
+    });
+
     it("every fallback effect's shaderId exists in registry", () => {
       for (const [effectId, mapping] of Object.entries(rustToWebGL)) {
         if (shaderRegistry.has(mapping.shaderId)) {
