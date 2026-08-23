@@ -499,9 +499,16 @@ pub fn decode_video_with_options(
     let budget_frames = budget / frame_size;
     let max_frames = requested_max.min(budget_frames).max(1);
     if max_frames < requested_max {
-        tracing::warn!(
-            "Requested {} frames but only {} fit in memory budget \
-             ({}x{} @ {} bytes/frame, budget {} bytes). Clip will be truncated.",
+        // DEBUG, not WARN, and it no longer claims truncation. `requested_max`
+        // is a 10,000-frame SAFETY CEILING, not the clip length, so comparing it
+        // against the memory budget says nothing about whether this particular
+        // clip loses anything -- at any real resolution the budget sits below
+        // that ceiling, so a healthy 300-frame export announced "Clip will be
+        // truncated" on every single run. The accurate warning is the one after
+        // the decode loop, which fires only when the cap was actually reached.
+        tracing::debug!(
+            "Frame cap lowered from the {}-frame ceiling to {} by the memory budget \
+             ({}x{} @ {} bytes/frame, budget {} bytes).",
             requested_max,
             max_frames,
             width,
