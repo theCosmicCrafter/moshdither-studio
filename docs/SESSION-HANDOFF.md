@@ -61,10 +61,16 @@ from the internet.
    NOTE: `src-tauri/target/release/sam3-bridge.exe` is a STALE 297 MB CPU-only
    build from 2026-08-21 that cannot load the model. It is not bundled. Do not
    copy it into `src-tauri/bin/`.
-2. *A fresh clone cannot build.* The four FFmpeg binaries are gitignored and
-   there is no script that fetches them -- `verify-external-bins.mjs` only
-   checks. `packages/python-backend/sam3_repo` is likewise gitignored and needs a
-   PATCHED clone (`weights_only=False`); see `docs/SAM3_SETUP.md`.
+2. *A fresh clone cannot build -- HALF FIXED (2026-09-05).* The four FFmpeg /
+   FFglitch binaries are gitignored and were never committed, so losing
+   `src-tauri/bin/` made the project unbuildable. `npm run fetch:external` now
+   re-obtains them, pinned by `src-tauri/bin/SIDECARS.json` to the exact
+   known-good versions (FFmpeg 8.0-essentials, FFglitch 0.10.2) and verified by
+   SHA-256 before anything is installed. Proven by deleting a binary and
+   recovering it byte-identically.
+   STILL OPEN: `packages/python-backend/sam3_repo` is gitignored and needs a
+   PATCHED clone (`weights_only=False`); see `docs/SAM3_SETUP.md`. Nothing
+   automates that yet.
 3. *Not code-signed.* `bundle.windows.certificateThumbprint` is null, so
    SmartScreen warns on every install.
 4. *The updater is configured but dead.* A pubkey and a GitHub releases endpoint
