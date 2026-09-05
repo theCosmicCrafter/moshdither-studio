@@ -39,6 +39,29 @@ afterAll(() => {
   if (stubSidecar) rmSync(stubSidecar, { force: true });
 });
 
+describe("SAM3 interpreter discovery", () => {
+  // verify-external-bins.mjs must not be stricter than sam3_engine.rs. It used
+  // to look only at the project root while the Rust walked five ancestors, so
+  // from a git worktree -- where sam3_env lives back in the main checkout -- it
+  // announced "SAM3 features will not work" about an interpreter the app then
+  // used successfully. These pin the two behaviours the searches must share.
+  const verifyScript = readFileSync(join("scripts", "verify-external-bins.mjs"), "utf8");
+  const rustEngine = readFileSync(join("src-tauri", "src", "sam3_engine.rs"), "utf8");
+
+  it("both honour the MOSHDITHER_SAM3_PYTHON override", () => {
+    expect(verifyScript).toContain("MOSHDITHER_SAM3_PYTHON");
+    expect(rustEngine).toContain("MOSHDITHER_SAM3_PYTHON");
+  });
+
+  it("both walk ancestor directories rather than only the project root", () => {
+    // The Rust loops five levels; the JS must too, or a worktree checkout
+    // reports a problem that does not exist.
+    expect(rustEngine).toMatch(/for _ in 0\.\.5/);
+    expect(verifyScript).toMatch(/i < 5/);
+    expect(verifyScript).toContain("locateDevPython");
+  });
+});
+
 describe("SAM3 build infrastructure", () => {
   afterEach(() => {
     if (existsSync(releaseOverlay)) {

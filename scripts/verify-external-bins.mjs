@@ -81,6 +81,37 @@ function recoveryHint(base, entry) {
   );
 }
 
+/**
+ * Find a dev SAM3 interpreter the same way sam3_engine.rs does.
+ *
+ * MUST mirror `locate_dev_python` in src-tauri/src/sam3_engine.rs: the env
+ * override first, then walking ancestors. This checked only projectRoot, while
+ * the Rust walks up to five levels -- so from a git worktree, where sam3_env
+ * lives back in the main checkout, this reported "SAM3 features will not work"
+ * about an interpreter the application then found and used perfectly well. A
+ * check that is stricter than the code it describes is worse than no check: it
+ * sends someone off to fix something that was never broken.
+ */
+function locateDevPython(root) {
+  const override = process.env.MOSHDITHER_SAM3_PYTHON;
+  if (override && existsSync(override)) return override;
+
+  const rel =
+    process.platform === "win32"
+      ? ["sam3_env", "Scripts", "python.exe"]
+      : ["sam3_env", "bin", "python"];
+
+  let dir = root;
+  for (let i = 0; i < 5; i++) {
+    const candidate = join(dir, ...rel);
+    if (existsSync(candidate)) return candidate;
+    const parent = resolve(dir, "..");
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return undefined;
+}
+
 function main() {
   const target = detectTargetTriple();
   ok(`Host target triple: ${target}`);
@@ -145,11 +176,7 @@ function main() {
   const sam3BridgePath = join(binDir, sam3BridgeName);
   const sam3BridgeReady = existsSync(sam3BridgePath);
 
-  const pythonPaths = [
-    join(projectRoot, "sam3_env", "Scripts", "python.exe"),
-    join(projectRoot, "sam3_env", "bin", "python"),
-  ];
-  const python = pythonPaths.find((p) => existsSync(p));
+  const python = locateDevPython(projectRoot);
 
   if (sam3BridgeReady) {
     ok(`Found SAM3 sidecar: ${sam3BridgeName} (${fileSize(sam3BridgePath)})`);

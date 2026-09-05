@@ -65,11 +65,11 @@ function sha256(path) {
  *
  * Not bare "tar": under Git Bash or MSYS that resolves to GNU tar, which cannot
  * read a zip at all ("This does not look like a tar archive"). Windows 10 1803+
- * ships bsdtar at System32	ar.exe, and bsdtar does read zip. Being explicit
+ * ships bsdtar at System32\tar.exe, and bsdtar does read zip. Being explicit
  * means the script behaves the same from PowerShell, cmd and Git Bash instead
  * of depending on which shell happened to launch it.
  */
-const BSDTAR = join(process.env.SystemRoot || "C:\Windows", "System32", "tar.exe");
+const BSDTAR = join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe");
 
 /**
  * Extract `member` from a .zip sitting in `workDir`.
