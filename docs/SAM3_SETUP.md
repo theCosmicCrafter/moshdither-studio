@@ -129,6 +129,36 @@ compile functions at import time using `inspect.getsourcelines()` /
   including ones not yet discovered, falls back to the plain function
   instead of crashing. Verified directly against a function with no
   introspectable source (simulating the frozen condition) before rebuilding.
+- `torch.jit.script` hits the same wall from a different direction, and this
+  one survives past import into **model load**. `SAM2Transforms.__init__`
+  (`sam3/model/utils/sam1_utils.py`) scripts
+  `nn.Sequential(Resize(...), Normalize(...))`; torchvision's `Resize` holds an
+  `InterpolationMode`, an `Enum`. To script an `Enum` subclass TorchScript walks
+  `cls.__dict__` — which on Python 3.12+ contains `Enum._generate_next_value_`,
+  defined in the stdlib's `enum.py` — and calls `inspect.getsource` on it. The
+  bundle ships no stdlib source, so the model never loads:
+  `Failed to get source for <function Enum._generate_next_value_> using
+  inspect.getsource`. Patched in `sam3_bridge.py` the same way as `triton.jit`:
+  once, only under `sys.frozen`, at the mechanism rather than the call site.
+  `torch._jit_internal.get_type_hint_captures` builds a map from a function's
+  *literal annotation text* to the type it names, so a function with no
+  annotations has an empty map **by definition** — returning `{}` there is exact,
+  not a guess, and is what torch's own comment says to do ("If we can't get the
+  source, simply return an empty dict"); only its code disagrees and raises. A
+  function that *is* annotated still raises, because dropping those captures
+  would genuinely lose information. Verified by simulating the frozen condition
+  in the dev venv (force `inspect.getsource` to raise for `enum.py` only, then
+  script the same `Sequential`): reproduces the identical error, and with the
+  patch produces a correct scripted transform — proven before spending a
+  ~3 GB rebuild on it.
+
+  Two supporting changes came out of the same hunt. `cmd_load_image` and
+  `cmd_video_predictor` returned `Model load failed: {e}` with no traceback,
+  so the error named neither a file nor a call site; both now
+  `logging.exception` first, and Rust captures that stderr. And the probe that
+  drives the bridge printed captured stderr with `print()`, which raised
+  `UnicodeEncodeError` on a cp1252 console and swallowed the real output — it
+  now writes the bytes to a file.
 
 `packages/python-backend/sam3_repo` (the vendored SAM3 checkout, not
 git-tracked — see above) carries the `box_ops.py` patch; the root `sam3_repo/`

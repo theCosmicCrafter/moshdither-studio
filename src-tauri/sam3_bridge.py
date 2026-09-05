@@ -90,6 +90,54 @@ try:
         triton.jit = _safe_triton_jit
 except Exception:
     logging.warning("Triton unavailable — SageAttention CUDA kernels will be unavailable.")
+
+if getattr(sys, "frozen", False):
+    # Second, unrelated frozen-bundle source lookup: torch.jit.script.
+    #
+    # SAM2Transforms.__init__ scripts nn.Sequential(Resize(...), Normalize(...)),
+    # and torchvision's Resize holds an InterpolationMode, which is an Enum. To
+    # script an Enum class TorchScript walks cls.__dict__ -- which on Python 3.12+
+    # contains Enum._generate_next_value_ -- and calls inspect.getsource on each
+    # entry. A PyInstaller bundle ships no stdlib .py source, so that raises
+    # OSError and the model never loads: "Failed to get source for
+    # <function Enum._generate_next_value_> using inspect.getsource".
+    #
+    # get_type_hint_captures returns a map from the LITERAL annotation text to
+    # the type it names, built solely from the function's annotations. A function
+    # with no annotations therefore has an EMPTY map by definition, so returning
+    # {} for one is exact rather than a guess -- torch's own comment says to do
+    # this ("If we can't get the source, simply return an empty dict"); only the
+    # code disagrees. Anything that IS annotated still raises, because there we
+    # would genuinely be dropping information.
+    try:
+        import inspect
+
+        import torch._jit_internal as _jit_internal
+
+        _orig_type_hint_captures = _jit_internal.get_type_hint_captures
+
+        def _safe_type_hint_captures(fn):
+            try:
+                return _orig_type_hint_captures(fn)
+            except OSError:
+                try:
+                    sig = inspect.signature(fn)
+                except (TypeError, ValueError):
+                    raise
+                annotated = any(
+                    p.annotation is not inspect.Parameter.empty
+                    for p in sig.parameters.values()
+                ) or sig.return_annotation is not inspect.Signature.empty
+                if annotated:
+                    raise
+                return {}
+
+        _jit_internal.get_type_hint_captures = _safe_type_hint_captures
+    except Exception:
+        logging.warning(
+            "Could not patch torch._jit_internal for the frozen bundle; "
+            "torch.jit.script on stdlib-derived classes may fail."
+        )
 # Resolve the sam3_repo location. The Rust side sets SAM3_REPO for both dev
 # (pointing at packages/python-backend/sam3_repo) and production sidecars.
 # PyInstaller bundles extract to a temporary _MEIPASS directory.
@@ -346,6 +394,11 @@ def cmd_load_image(image_b64: str):
         if model_manager:
             model_manager.move_to_target()
     except Exception as e:
+        # The message alone is not enough to act on -- "Failed to get source for
+        # <function Enum._generate_next_value_>" named neither the file nor the
+        # call site, and cost a full sidecar rebuild to locate. Put the traceback
+        # on stderr, which Rust captures, so the next one names itself.
+        logging.exception("SAM3 model load failed")
         return {"status": "error", "message": f"Model load failed: {e}"}
 
     try:
@@ -682,6 +735,11 @@ def cmd_video_predictor(frames: list, prompt: str = None):
         if model_manager:
             model_manager.move_to_target()
     except Exception as e:
+        # The message alone is not enough to act on -- "Failed to get source for
+        # <function Enum._generate_next_value_>" named neither the file nor the
+        # call site, and cost a full sidecar rebuild to locate. Put the traceback
+        # on stderr, which Rust captures, so the next one names itself.
+        logging.exception("SAM3 model load failed")
         return {"status": "error", "message": f"Model load failed: {e}"}
 
     all_frame_masks = []
