@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { logger } from "../utils/logger";
 
 interface Props {
   children: ReactNode;
@@ -9,6 +10,8 @@ interface Props {
 interface State {
   hasError: boolean;
   error: Error | null;
+  /** Where this run's log file is, shown on the crash screen. */
+  logPath: string | null;
 }
 
 /**
@@ -21,20 +24,40 @@ interface State {
 export class ErrorBoundary extends Component<Props, State> {
   constructor(props: Props) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { hasError: false, error: null, logPath: null };
   }
 
-  static getDerivedStateFromError(error: Error): State {
+  static getDerivedStateFromError(error: Error): Partial<State> {
     return { hasError: true, error };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
-    console.error("[ErrorBoundary] Caught error:", error, info.componentStack);
+    // logger, not console.error: a release build has no console, so a UI crash
+    // -- the single most important thing to have a record of -- was the one
+    // failure guaranteed to leave none.
+    logger.error("ErrorBoundary", error.message, {
+      stack: error.stack?.slice(0, 2000),
+      componentStack: info.componentStack?.slice(0, 2000),
+    });
     this.props.onError?.(error, info);
+
+    // Surface where the log is. A crash screen that says "try resetting the
+    // view" and nothing else leaves the user with no way to report what
+    // happened, and the log they would need is in a directory nothing names.
+    const internals = (globalThis as Record<string, unknown>).__TAURI_INTERNALS__ as
+      | { invoke?: (cmd: string, args?: unknown) => Promise<unknown> }
+      | undefined;
+    internals?.invoke?.("get_log_path")
+      .then((p) => {
+        if (typeof p === "string") this.setState({ logPath: p });
+      })
+      .catch(() => {
+        /* no log path available: the crash screen simply omits it */
+      });
   }
 
   private reset = (): void => {
-    this.setState({ hasError: false, error: null });
+    this.setState({ hasError: false, error: null, logPath: null });
   };
 
   render(): ReactNode {
@@ -70,8 +93,25 @@ export class ErrorBoundary extends Component<Props, State> {
         </h2>
         <p style={{ maxWidth: "600px", margin: 0, color: "var(--muted, #a0a0a0)" }}>
           The UI hit an unexpected error. You can try resetting the view, or
-          reload the app if the problem persists.
+          reload the app if the problem persists. Details have been written to
+          the log file.
         </p>
+        {this.state.logPath && (
+          <p
+            style={{
+              maxWidth: "800px",
+              margin: 0,
+              fontSize: "0.8rem",
+              color: "var(--muted, #a0a0a0)",
+              wordBreak: "break-all",
+              // Selectable: the whole point is that this can be copied into a
+              // bug report. The app sets user-select: none globally.
+              userSelect: "text",
+            }}
+          >
+            Log: <code>{this.state.logPath}</code>
+          </p>
+        )}
         {this.state.error && (
           <pre
             style={{
