@@ -51,5 +51,44 @@
       "version": "ffglitch-0.10.2",
       "source": "FFglitch project (ffglitch.org)"
     }
+  },
+  "_downloads": [
+    "Pinned to the EXACT versions above, not to a 'latest' URL. gyan.dev's",
+    "permanent ffmpeg-release-essentials.7z now resolves to 9.0.1, so a 'latest'",
+    "fetch would silently install a different build than the one this project is",
+    "known to work with -- which is the failure this manifest exists to prevent.",
+    "",
+    "ZIP is chosen over the smaller 7z deliberately: Windows extracts .zip with",
+    "built-in tar.exe/Expand-Archive, while .7z needs 7-Zip installed. This",
+    "script runs when someone's build is ALREADY broken, so it must not add a",
+    "dependency to work.",
+    "",
+    "All three URLs HEAD-verified 2026-09-05 (200, byte counts as stated).",
+    "FFglitch publishes no checksums at all -- probed for .sha256, SHA256SUMS and",
+    ".asc, all 404 -- so the sha256 values above, computed from the binaries this",
+    "project already runs, ARE the trust anchor. The fetch script verifies against",
+    "them before installing anything."
+  ],
+  "archives": {
+    "ffmpeg": {
+      "url": "https://github.com/GyanD/codexffmpeg/releases/download/8.0/ffmpeg-8.0-essentials_build.zip",
+      "bytes": 105748282,
+      "members": {
+        "ffmpeg": "ffmpeg-8.0-essentials_build/bin/ffmpeg.exe",
+        "ffprobe": "ffmpeg-8.0-essentials_build/bin/ffprobe.exe"
+      },
+      "license": "GPLv3 (static build; archive ships its own LICENSE)",
+      "note": "Supplies BOTH ffmpeg and ffprobe. ffplay.exe is also present and is not used."
+    },
+    "ffglitch": {
+      "url": "https://ffglitch.org/pub/bin/win64/ffglitch-0.10.2-windows-x86_64.zip",
+      "bytes": 40311219,
+      "members": {
+        "ffgac": "ffglitch-0.10.2-windows-x86_64/ffgac.exe",
+        "ffedit": "ffglitch-0.10.2-windows-x86_64/ffedit.exe"
+      },
+      "license": "FFmpeg-derived (GPL); see the FFglitch project for terms",
+      "note": "Supplies BOTH ffgac and ffedit."
+    }
   }
 }

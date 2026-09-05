@@ -68,11 +68,14 @@ function recoveryHint(base, entry) {
     return `No manifest entry for ${base}. See docs/deployment.md section 3.`;
   }
   return (
-    `Obtain ${base} ${entry.version} from: ${entry.source}
+    `Run:  npm run fetch:external
+
 ` +
-    `  Place it at src-tauri/bin/${entry.file}
+    `  It downloads ${base} ${entry.version} from ${entry.source},
 ` +
-    `  Expected SHA-256: ${entry.sha256}` +
+    `  verifies SHA-256 ${entry.sha256},
+` +
+    `  and installs it at src-tauri/bin/${entry.file}.` +
     (entry.note ? `
   ${entry.note}` : "")
   );
