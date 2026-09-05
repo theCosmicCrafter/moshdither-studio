@@ -1,4 +1,5 @@
 import { execSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,6 +40,44 @@ function fileSize(path) {
   }
 }
 
+/**
+ * Known-good sidecar manifest, or null when it cannot be read.
+ *
+ * Recorded because the binaries are gitignored and were never committed: losing
+ * src-tauri/bin/ made the project unbuildable with nothing in the repository
+ * saying which version to go and get.
+ */
+function loadManifest(binDir) {
+  const path = join(binDir, "SIDECARS.json");
+  if (!existsSync(path)) return null;
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch (e) {
+    warn(`SIDECARS.json is unreadable (${e.message}); checksum checks skipped.`);
+    return null;
+  }
+}
+
+function sha256(path) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+/** What to tell someone whose binary is missing, so the message is actionable. */
+function recoveryHint(base, entry) {
+  if (!entry) {
+    return `No manifest entry for ${base}. See docs/deployment.md section 3.`;
+  }
+  return (
+    `Obtain ${base} ${entry.version} from: ${entry.source}
+` +
+    `  Place it at src-tauri/bin/${entry.file}
+` +
+    `  Expected SHA-256: ${entry.sha256}` +
+    (entry.note ? `
+  ${entry.note}` : "")
+  );
+}
+
 function main() {
   const target = detectTargetTriple();
   ok(`Host target triple: ${target}`);
@@ -46,14 +85,45 @@ function main() {
   const binDir = join(projectRoot, "src-tauri", "bin");
   const ext = process.platform === "win32" ? ".exe" : "";
   const requiredExternalBins = ["ffmpeg", "ffprobe", "ffgac", "ffedit"];
+  const manifest = loadManifest(binDir);
 
   for (const base of requiredExternalBins) {
     const name = `${base}-${target}${ext}`;
     const path = join(binDir, name);
     if (!existsSync(path)) {
-      fail(`Missing external binary: ${path}`);
+      // Name the version and the source. This used to print only the path,
+      // which told someone their build was broken without telling them what
+      // would fix it -- and nothing else in the repository knew either.
+      fail(
+        `Missing external binary: ${path}
+
+` +
+          recoveryHint(base, manifest?.binaries?.[base])
+      );
     }
     ok(`Found ${name} (${fileSize(path)})`);
+
+    // Checksum against the known-good build. A mismatch WARNS rather than
+    // fails: upgrading FFmpeg is legitimate. What is not legitimate is an
+    // unnoticed change, so it has to be a deliberate one -- update the hash in
+    // SIDECARS.json when you mean it.
+    const expected = manifest?.binaries?.[base]?.sha256;
+    if (expected) {
+      const actual = sha256(path);
+      if (actual === expected) {
+        ok(`${base} matches the pinned build (${manifest.binaries[base].version})`);
+      } else {
+        warn(
+          `${base} differs from the pinned build.
+` +
+            `  expected ${expected}  (${manifest.binaries[base].version})
+` +
+            `  actual   ${actual}
+` +
+            `  If this upgrade is intended, update src-tauri/bin/SIDECARS.json.`
+        );
+      }
+    }
 
     if (base === "ffmpeg" || base === "ffprobe") {
       try {

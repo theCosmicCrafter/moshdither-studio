@@ -1,0 +1,55 @@
+{
+  "_comment": [
+    "Known-good sidecar binaries for this project, pinned by SHA-256.",
+    "",
+    "The binaries themselves are gitignored (247 MB) and have never been",
+    "committed, so losing src-tauri/bin/ made the project UNBUILDABLE with no",
+    "recorded way back: prebuild failed on a missing file, and nothing said",
+    "which version to go and get. This manifest is that record. It answers two",
+    "questions the repository previously could not: exactly which build is",
+    "known to work, and whether the file on disk is that build.",
+    "",
+    "scripts/verify-external-bins.mjs checks disk against these hashes.",
+    "A MISMATCH IS NOT AUTOMATICALLY AN ERROR -- a newer FFmpeg is a legitimate",
+    "upgrade -- but it must be a deliberate one, so it warns rather than",
+    "passing in silence. Update the hash here when you intend the change.",
+    "",
+    "Licensing matters because these are redistributed inside the installer:",
+    "both are FFmpeg-derived and GPL/LGPL. Ship the licence text with any",
+    "public release."
+  ],
+  "target": "x86_64-pc-windows-msvc",
+  "recordedOn": "2026-09-05",
+  "binaries": {
+    "ffmpeg": {
+      "file": "ffmpeg-x86_64-pc-windows-msvc.exe",
+      "sha256": "d4de4dda46c8b06d415ced0173babdf5ea40223f9395461b2e195c41268a27d7",
+      "bytes": 98704896,
+      "version": "8.0-essentials_build-www.gyan.dev",
+      "source": "gyan.dev FFmpeg 'essentials' build for Windows",
+      "note": "ffmpeg and ffprobe come from the SAME archive; upgrade them together."
+    },
+    "ffprobe": {
+      "file": "ffprobe-x86_64-pc-windows-msvc.exe",
+      "sha256": "d1ae16546bd37e7e2336c23388658cdc05e3d93e6d0c97d79107239e6678e933",
+      "bytes": 98551808,
+      "version": "8.0-essentials_build-www.gyan.dev",
+      "source": "gyan.dev FFmpeg 'essentials' build for Windows"
+    },
+    "ffgac": {
+      "file": "ffgac-x86_64-pc-windows-msvc.exe",
+      "sha256": "323e50a32a6dbdf101bc4689acf1b178b94efb2b62b5fe4d5d126238ce7b7bc6",
+      "bytes": 31015936,
+      "version": "ffglitch-0.10.2",
+      "source": "FFglitch project (ffglitch.org)",
+      "note": "ffgac and ffedit ship in the SAME FFglitch release; upgrade them together."
+    },
+    "ffedit": {
+      "file": "ffedit-x86_64-pc-windows-msvc.exe",
+      "sha256": "a0d2cbf3e5bc08935d85eb83887f73458865f439ad4d403e348550525f23fd92",
+      "bytes": 30806016,
+      "version": "ffglitch-0.10.2",
+      "source": "FFglitch project (ffglitch.org)"
+    }
+  }
+}
