@@ -2907,7 +2907,8 @@ pub async fn apply_ffglitch(
         Some(exe) => (exe.to_string_lossy().into_owned(), None),
         None => {
             let python = find_python().ok_or(
-                "Datamoshing is unavailable: the bundled mosh-cli sidecar is missing and no                  Python interpreter was found. Reinstall the app, or build the sidecar with                  `npm run build:mosh-sidecar`.",
+                "Datamoshing is unavailable: the datamosh component (mosh-cli) is missing and no \
+                 compatible Python interpreter was found. Please reinstall the application.",
             )?;
             let cli = locate_mosh_cli().ok_or(
                 "mosh_cli.py not found. Expected at ./packages/python-backend/mosh_cli.py",

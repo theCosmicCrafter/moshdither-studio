@@ -2,18 +2,25 @@
 
 A unified desktop application for datamoshing, dithering, glitch art, and video effects. Combines the capabilities of 37+ existing tools into a single, modern, cross-platform creative suite.
 
-> **Status:** Early development. Not yet ready for production use.
+## System Requirements
+
+- **Operating System:** Windows 10/11 (64-bit)
+- **Memory (RAM):** 8 GB minimum, 16 GB+ recommended for long-form video exports
+- **Graphics (GPU):**
+  - WebGL2-compatible GPU for real-time interactive preview.
+  - **NVIDIA GPU with CUDA support (6 GB+ VRAM)** is required for AI Segmentation (SAM3 add-on). CPU-only/integrated graphics cannot run SAM3.
+- **Disk Space:** ~500 MB for core application; ~15 GB free disk space if installing the optional SAM3 add-on (download package and temporary model expansion).
 
 ## Features
 
-- **Datamoshing**: I-frame removal, frame reordering/repetition, motion transfer, cross-video mosh
+- **Datamoshing**: I-frame removal, frame reordering/repetition, motion transfer, cross-video mosh (25 verified FFglitch bitstream modes)
 - **Dithering**: 15+ algorithms (Bayer, Floyd-Steinberg, Atkinson, Blue Noise, and more)
 - **Glitch**: JPEG/PNG corruption, databending, byte-level manipulation
 - **Analog Effects**: VHS, scanlines, chromatic aberration, CRT simulation
 - **Pixel Geometry**: Pixel sorting, kaleidoscope, wave distortion
-- **Segmentation**: SAM3-powered mask generation (point, box, auto) for selective effects
+- **Segmentation**: SAM3-powered AI mask generation (point, box, auto) for selective effects
 - **Mask-Driven Pipeline**: Apply any effect inside, outside, or masked-to-alpha
-- **Linear Effect Stack**: Reorderable, previewable stack of effects
+- **Linear Effect Stack**: Reorderable, previewable stack of effects with keyframing and transport strip
 
 ## Tech Stack
 
@@ -25,7 +32,8 @@ A unified desktop application for datamoshing, dithering, glitch art, and video 
 | Styling       | Tailwind CSS                      |
 | State         | Zustand                           |
 | Video         | FFmpeg (sidecar)                  |
-| Segmentation  | ONNX Runtime (`ort` crate) + SAM3 |
+| Datamosh      | FFglitch + mosh-cli (sidecars)    |
+| Segmentation  | PyTorch / SAM3 (optional add-on)  |
 
 ## Development
 
@@ -33,7 +41,7 @@ A unified desktop application for datamoshing, dithering, glitch art, and video 
 
 - [Rust](https://rustup.rs/) (stable toolchain)
 - [Node.js](https://nodejs.org/) 18+ with npm or pnpm
-- FFmpeg binaries (downloaded automatically on first build)
+- External binaries (run `npm run fetch:external` to verify and download pinned sidecars)
 
 ### Setup
 

@@ -322,13 +322,22 @@ async fn install(app: AppHandle) -> Result<AddonStatus> {
         .await
         .map_err(|e| {
             AppError::Generic(format!(
-                "Could not reach the SAM3 asset list at {url}: {e}\n\n\
-                 If this release has not published the add-on yet, build the sidecar locally \
-                 with `npm run build:sam3-sidecar` instead."
+                "Could not reach the SAM3 download server ({e}). \
+                 Please check your network connection and try again."
             ))
         })?
         .error_for_status()
-        .map_err(|e| AppError::Generic(format!("SAM3 asset list unavailable: {e}")))?
+        .map_err(|e| {
+            if e.status() == Some(reqwest::StatusCode::NOT_FOUND) {
+                AppError::Generic(
+                    "The SAM3 AI segmentation add-on is currently unavailable for this release. \
+                     Please check back later or update to a newer app release."
+                        .to_string(),
+                )
+            } else {
+                AppError::Generic(format!("SAM3 asset download failed: {e}"))
+            }
+        })?
         .text()
         .await
         .map_err(|e| AppError::Generic(format!("Could not read the SAM3 asset list: {e}")))

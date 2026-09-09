@@ -4,7 +4,6 @@ import { useShallow } from "zustand/react/shallow";
 import {
   animateStillAsVideo,
   applyEffectStack,
-  applyFfglitch,
   convertFileSrc,
   generateProxy,
   getFrameData,
@@ -341,6 +340,12 @@ export default function Toolbar({ onFileLoaded }: Props) {
     const path = state.filePath;
     if (!path) return;
 
+    if (!dockedIds.has("export")) {
+      triggerLayoutAction("add", "export");
+      setStatusMessage("Export panel opened");
+      return;
+    }
+
     // Route both video and image sources to the ExportPanel for video export.
     // The backend duplicates single frames to fill the duration (commands.rs).
     state.triggerExport();
@@ -368,16 +373,11 @@ export default function Toolbar({ onFileLoaded }: Props) {
       setStatusMessage("FFglitch export: no file path for the loaded video (reopen it via File > Open first)");
       return;
     }
-    setStatusMessage("FFglitch export started...");
-    setIsProcessing(true);
-    try {
-      const outPath = await applyFfglitch(path, "classic", {});
-      setStatusMessage(`FFglitch exported: ${outPath}`);
-    } catch (err) {
-      setStatusMessage(`FFglitch export failed: ${err}`);
-    } finally {
-      setIsProcessing(false);
+
+    if (!dockedIds.has("export")) {
+      triggerLayoutAction("add", "export");
     }
+    setStatusMessage("Export panel opened for FFglitch datamoshing — select your mode and parameters.");
   };
 
   // Saves exactly one processed frame to disk, unlike Export Video (which
@@ -561,13 +561,22 @@ export default function Toolbar({ onFileLoaded }: Props) {
                     find is a save format they do not have. */}
                 <div className="border-t border-outline/10 my-1" />
                 <button
-                  onClick={() => { void saveProject(); setFileMenuOpen(false); }}
+                  onClick={() => { void saveProject(false); setFileMenuOpen(false); }}
                   className="w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors"
                   role="menuitem"
                 >
                   <span className="material-symbols-outlined menu-item-icon">save</span>
                   Save Project
                   <span className="ml-auto opacity-50 font-code-sm text-code-sm">Ctrl+S</span>
+                </button>
+                <button
+                  onClick={() => { void saveProject(true); setFileMenuOpen(false); }}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors"
+                  role="menuitem"
+                >
+                  <span className="material-symbols-outlined menu-item-icon">save_as</span>
+                  Save Project As…
+                  <span className="ml-auto opacity-50 font-code-sm text-code-sm">Ctrl+Shift+S</span>
                 </button>
                 <button
                   onClick={() => { void openProject(); setFileMenuOpen(false); }}
@@ -642,7 +651,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                 <div className="px-3 py-1 font-label-sm text-label-sm text-on-surface-variant uppercase">
                   Panels
                 </div>
-                {PANEL_REGISTRY.map((p) => {
+                {PANEL_REGISTRY.filter((p) => p.id !== "verify").map((p) => {
                   const isDocked = dockedIds.has(p.id);
                   return (
                     <button
@@ -671,7 +680,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                 <div className="border-t border-outline/10 mt-1 pt-1 flex gap-2 px-3">
                   <button
                     onClick={() => {
-                      PANEL_REGISTRY.forEach((p) => {
+                      PANEL_REGISTRY.filter((p) => p.id !== "verify").forEach((p) => {
                         if (!dockedIds.has(p.id)) {
                           useAppStore.getState().triggerLayoutAction("add", p.id);
                         }

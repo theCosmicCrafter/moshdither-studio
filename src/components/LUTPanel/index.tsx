@@ -7,6 +7,10 @@ import { isTauriAvailable } from "../../lib/browserFallback";
 export default function LUTPanel() {
   const addLUTEffect = useAppStore((s) => s.addLUTEffect);
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
+  const activeLUT = useAppStore((s) => {
+    const entry = s.effectStack.find((e) => e.effectId === "color.lut_grading" && e.enabled);
+    return (entry?.params?.tLUT as string) || null;
+  });
 
   const handleApply = (url: string, name: string) => {
     addLUTEffect(url);
@@ -90,31 +94,47 @@ export default function LUTPanel() {
           build if a LUT is added without one. */}
       <div className="flex-1 overflow-y-auto custom-scrollbar px-2 py-2">
         <div className="grid grid-cols-2 gap-2">
-          {LUT_PRESETS.map((preset) => (
-            <button
-              key={preset.url}
-              onClick={() => handleApply(preset.url, preset.name)}
-              className="group text-left rounded-lg overflow-hidden border border-outline-variant/10 hover:border-accent-teal/40 focus-visible:border-accent-teal transition-colors active:scale-[0.98] duration-100"
-              title={`Apply ${preset.name}`}
-            >
-              <img
-                src={preset.url.replace(/^\/lut\/(.+)\.png$/i, "/lut/thumbs/$1.jpg")}
-                alt=""
-                loading="lazy"
-                width={120}
-                height={120}
-                className="w-full aspect-square object-cover bg-surface/40"
-                onError={(e) => {
-                  // A missing thumbnail must not leave a broken-image icon in
-                  // the grid; fall back to the name-only row.
-                  e.currentTarget.style.display = "none";
-                }}
-              />
-              <span className="block px-2 py-1.5 font-label-md text-label-md text-on-surface group-hover:text-accent-teal truncate">
-                {preset.name}
-              </span>
-            </button>
-          ))}
+          {LUT_PRESETS.map((preset) => {
+            const isActive = activeLUT === preset.url;
+            return (
+              <button
+                key={preset.url}
+                onClick={() => handleApply(preset.url, preset.name)}
+                className={`group relative text-left rounded-lg overflow-hidden border transition-colors active:scale-[0.98] duration-100 ${
+                  isActive
+                    ? "border-accent-teal ring-1 ring-accent-teal bg-accent-teal/5"
+                    : "border-outline-variant/10 hover:border-accent-teal/40 focus-visible:border-accent-teal"
+                }`}
+                title={`Apply ${preset.name}`}
+              >
+                {isActive && (
+                  <div className="absolute top-1 right-1 z-10 bg-accent-teal text-surface rounded-full p-0.5 shadow flex items-center justify-center">
+                    <span className="material-symbols-outlined text-[12px] block">check</span>
+                  </div>
+                )}
+                <img
+                  src={preset.url.replace(/^\/lut\/(.+)\.png$/i, "/lut/thumbs/$1.jpg")}
+                  alt=""
+                  loading="lazy"
+                  width={120}
+                  height={120}
+                  className="w-full aspect-square object-cover bg-surface/40"
+                  onError={(e) => {
+                    // A missing thumbnail must not leave a broken-image icon in
+                    // the grid; fall back to the name-only row.
+                    e.currentTarget.style.display = "none";
+                  }}
+                />
+                <span
+                  className={`block px-2 py-1.5 font-label-md text-label-md truncate ${
+                    isActive ? "text-accent-teal font-semibold" : "text-on-surface group-hover:text-accent-teal"
+                  }`}
+                >
+                  {preset.name}
+                </span>
+              </button>
+            );
+          })}
         </div>
       </div>
     </div>

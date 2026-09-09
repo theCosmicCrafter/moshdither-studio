@@ -108,8 +108,12 @@ export interface AppState {
   duration: number;
   setDuration: (d: number) => void;
   inPoint: number | null;
+  /** In/out points restored from a project, waiting for the media's real
+   *  length before they can be clamped. See setDuration. */
+  pendingInOut: { inPoint: number | null; outPoint: number | null } | null;
   outPoint: number | null;
   setInPoint: (t: number | null) => void;
+  setPendingInOut: (v: { inPoint: number | null; outPoint: number | null } | null) => void;
   setOutPoint: (t: number | null) => void;
   clearInOut: () => void;
 
@@ -239,6 +243,9 @@ export interface AppState {
   // Keyframes
   keyframes: Record<string, KeyframeTrack>;
 
+  // Project
+  currentProjectPath: string | null;
+
   // UI
   isProcessing: boolean;
   showBeforeAfter: boolean;
@@ -323,6 +330,7 @@ export interface AppState {
   setPreviewDataUrl: (url: string | null) => void;
   setOriginalDataUrl: (url: string | null) => void;
   setFilePath: (path: string | null) => void;
+  setCurrentProjectPath: (path: string | null) => void;
   setProxyUrl: (url: string | null) => void;
   setIsVideo: (isVideo: boolean) => void;
   setMediaFps: (fps: number) => void;
@@ -642,6 +650,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeTrackId: null,
   inPoint: null,
   outPoint: null,
+  pendingInOut: null,
   activeMask: null,
   maskHistory: [],
   maskRevision: 0,
@@ -673,6 +682,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   exportCancelRequested: false,
   exportTriggerId: 0,
   watermark: DEFAULT_WATERMARK,
+  currentProjectPath: null,
 
   // Guarded like setDuration/setInPoint/setOutPoint, which this alone was
   // missing. currentTime reaches shader uniforms (PreviewViewport passes it as
@@ -689,13 +699,41 @@ export const useAppStore = create<AppState>((set, get) => ({
   togglePlay: () => set((state) => ({ isPlaying: !state.isPlaying })),
   stopPlayback: () => set({ isPlaying: false }),
   setLoopMode: (mode) => set({ loopMode: mode }),
-  setDuration: (d) => set({ duration: Math.max(0.1, d) }),
+  // Setting the duration also settles any in/out points that were waiting
+  // for it.
+  //
+  // Opening a project restores in/out synchronously, but the media -- and
+  // therefore the real duration -- loads afterwards, and setInPoint/
+  // setOutPoint clamp against whatever `duration` currently holds. So a 30 s
+  // out point saved against a 35 s clip came back clamped to the store
+  // default of 10, and the first export after reopening cut the clip at ten
+  // seconds. Clamping here, against the length we now actually know, is the
+  // only point at which the answer can be right.
+  setDuration: (d) =>
+    set((state) => {
+      const duration = Math.max(0.1, d);
+      const pending = state.pendingInOut;
+      if (!pending) return { duration };
+      const inPoint =
+        pending.inPoint === null ? null : clampFinite(pending.inPoint, 0, duration, 0);
+      const outPoint =
+        pending.outPoint === null ? null : clampFinite(pending.outPoint, 0, duration, 0);
+      return {
+        duration,
+        pendingInOut: null,
+        inPoint,
+        // A shorter clip can collapse the range; drop the out point rather
+        // than keep one at or before the in point.
+        outPoint: outPoint !== null && inPoint !== null && outPoint <= inPoint ? null : outPoint,
+      };
+    }),
   setMediaLoaded: (loaded) => set({ mediaLoaded: loaded }),
   setMediaInfo: (info) => set({ mediaInfo: info }),
   setMediaMetadata: (meta) => set({ mediaMetadata: meta }),
   setPreviewDataUrl: (url) => set({ previewDataUrl: url }),
   setOriginalDataUrl: (url) => set({ originalDataUrl: url }),
   setFilePath: (path) => set({ filePath: path }),
+  setCurrentProjectPath: (path) => set({ currentProjectPath: path }),
   setProxyUrl: (url) => set({ proxyUrl: url }),
   setIsVideo: (isVideo) => set({ isVideo }),
   setMediaFps: (fps) => set({ mediaFps: Number.isFinite(fps) && fps > 0 ? fps : 30 }),
@@ -1024,6 +1062,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setCustomUiModalOpen: (open) => set({ customUiModalOpen: open }),
   setAspectRatioLock: (v) => set({ aspectRatioLock: v }),
   setAspectRatio: (ratio) => set({ aspectRatio: ratio }),
+  setPendingInOut: (v) => set({ pendingInOut: v }),
   setInPoint: (t) =>
     set((state) => {
       const val = t === null ? null : clampFinite(t, 0, state.duration, 0);

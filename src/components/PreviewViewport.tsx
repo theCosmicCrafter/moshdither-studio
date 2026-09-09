@@ -1307,17 +1307,19 @@ function PreviewViewport({ isDropTarget = false }: Props) {
             )}
             <button
               className="material-symbols-outlined text-sm text-on-surface-variant neo-btn p-1.5 rounded-full hover:text-primary transition-colors"
-              title="Aspect ratio"
+              title="Reset zoom to 100% (1:1)"
+              aria-label="Reset zoom to 100% (1:1)"
               onClick={() => useAppStore.getState().setZoom(1)}
             >
               aspect_ratio
             </button>
             <button
               className="material-symbols-outlined text-sm text-on-surface-variant neo-btn p-1.5 rounded-full hover:text-primary transition-colors"
-              title="More options"
+              title={isFullscreen ? "Exit fullscreen" : "Fullscreen preview"}
+              aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen preview"}
               onClick={toggleFullscreen}
             >
-              more_vert
+              {isFullscreen ? "fullscreen_exit" : "fullscreen"}
             </button>
           </div>
         </div>

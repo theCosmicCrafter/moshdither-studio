@@ -117,6 +117,18 @@ export default function Sam3Setup({ onReady }: { onReady?: () => void }) {
             {status?.checkpoint_bytes ? ` (${gb(status.checkpoint_bytes)})` : ""}
           </li>
         </ul>
+
+        <div className="mt-2 p-2 rounded border border-[var(--outline-variant)] bg-[var(--surface-container-low)] text-xs text-[var(--text-secondary)] flex flex-col gap-1">
+          <div className="flex items-center gap-1.5 font-medium text-[var(--text-primary)]">
+            <span className="material-symbols-outlined text-sm text-[var(--cat-analog,#d4a017)]">
+              info
+            </span>
+            Hardware Requirement
+          </div>
+          <div>
+            AI segmentation requires an <strong>NVIDIA GPU with CUDA support</strong> (6&nbsp;GB+ VRAM recommended) and ~15&nbsp;GB of free disk space for download and temporary model expansion. CPU-only systems and integrated graphics are not supported.
+          </div>
+        </div>
       </div>
 
       <label className="flex items-start gap-2 font-body-sm text-body-sm text-[var(--text-muted)]">

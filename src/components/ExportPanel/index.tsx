@@ -7,7 +7,7 @@ import { stackToRustPayload } from "../../utils/effectConverter";
 import { useBatchQueue } from "../../hooks/useBatchQueue";
 import type { WatermarkSettings } from "../../utils/watermark";
 import { listen } from "@tauri-apps/api/event";
-import { save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import ChipButton from "./ChipButton";
 import LabeledSlider from "../LabeledSlider";
 import { exportDimensions } from "../../utils/exportDimensions";
@@ -153,7 +153,7 @@ export default function ExportPanel() {
   const progressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const exportTriggerId = useAppStore((s) => s.exportTriggerId);
-  const lastTriggerId = useRef(0);
+  const lastTriggerId = useRef(exportTriggerId);
   const handleExportRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   const activeEffects = effectStack.filter((e) => e.enabled);
@@ -168,6 +168,23 @@ export default function ExportPanel() {
       }
     };
   }, []);
+
+  const handleBrowseWatermarkImage = async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [
+          { name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] },
+          { name: "All Files", extensions: ["*"] },
+        ],
+      });
+      if (selected && typeof selected === "string") {
+        setWatermark({ imagePath: selected });
+      }
+    } catch {
+      // User cancelled dialog
+    }
+  };
 
   const handleExport = async () => {
     // Guards both call paths: the in-panel button (already unmounted while
@@ -933,21 +950,35 @@ export default function ExportPanel() {
               />
             )}
             {watermark.type === "image" && (
-              <input
-                type="text"
-                value={watermark.imagePath ?? ""}
-                onChange={(e) => setWatermark({ imagePath: e.target.value || null })}
-                placeholder="Image path"
-                style={{
-                  width: "100%",
-                  padding: "4px 6px",
-                  fontSize: 11,
-                  borderRadius: 3,
-                  border: "1px solid var(--outline-variant)",
-                  background: "var(--surface-container-low)",
-                  color: "var(--text-primary)",
-                }}
-              />
+              <div className="flex items-center gap-1">
+                <input
+                  type="text"
+                  value={watermark.imagePath ?? ""}
+                  onChange={(e) => setWatermark({ imagePath: e.target.value || null })}
+                  placeholder="Image path"
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    padding: "4px 6px",
+                    fontSize: 11,
+                    borderRadius: 3,
+                    border: "1px solid var(--outline-variant)",
+                    background: "var(--surface-container-low)",
+                    color: "var(--text-primary)",
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={handleBrowseWatermarkImage}
+                  title="Browse for watermark image"
+                  className="px-2 py-1 rounded bg-surface border border-outline-variant/30 hover:border-accent-teal hover:text-accent-teal transition-colors text-xs flex items-center justify-center shrink-0 neo-btn"
+                  style={{ height: 26 }}
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: 14 }}>
+                    folder_open
+                  </span>
+                </button>
+              </div>
             )}
             <span style={{ fontSize: 10, color: "var(--text-muted)", display: "block" }}>
               Position
@@ -1077,15 +1108,32 @@ export default function ExportPanel() {
       <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
         <button
           onClick={() => {
+            const state = useAppStore.getState();
             const res = RESOLUTIONS.find((r) => r.id === resolutionId)!;
+            const { width: exportW, height: exportH } = exportDimensions(
+              res,
+              aspectRatioLock ? aspectRatio : null,
+              mediaInfo
+            );
+            const procScale = PROCESSING_SCALES.find(
+              (s) => s.id === processingScaleId
+            )?.scale;
+            const trimEnd = typeof outPoint === "number" ? outPoint : state.duration;
+            const trimStart = typeof inPoint === "number" ? inPoint : undefined;
+
             addJob({
               name: `${format} ${codec} ${resolutionId}`,
               format,
               codec,
-              resolutionW: res.w === 0 ? undefined : res.w,
-              resolutionH: res.h === 0 ? undefined : res.h,
+              resolutionW: exportW,
+              resolutionH: exportH,
               fps,
               quality,
+              trimStart,
+              trimEnd,
+              includeAudio,
+              watermark: watermark.enabled ? watermark : undefined,
+              processingScale: procScale,
             });
           }}
           disabled={!mediaInfo || !filePath}

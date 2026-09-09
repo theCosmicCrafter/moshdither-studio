@@ -50,6 +50,14 @@ function saveAutoSave(session: ProjectSession) {
   }
 }
 
+export function clearAutoSave() {
+  try {
+    localStorage.removeItem(AUTO_SAVE_KEY);
+  } catch {
+    // Ignore storage errors
+  }
+}
+
 function loadRecentProjects(): RecentProject[] {
   try {
     const raw = localStorage.getItem(RECENT_PROJECTS_KEY);

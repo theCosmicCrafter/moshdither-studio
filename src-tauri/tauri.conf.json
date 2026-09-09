@@ -62,7 +62,9 @@
       "bin/mosh-cli"
     ],
     "resources": {
-      "../packages/python-backend": "packages/python-backend",
+      "../packages/python-backend/DatamoshLib": "packages/python-backend/DatamoshLib",
+      "../packages/python-backend/pymosh": "packages/python-backend/pymosh",
+      "../packages/python-backend/mosh_cli.py": "packages/python-backend/mosh_cli.py",
       "../public/lut": "lut",
       "../models": "models",
       "../licenses": "licenses"

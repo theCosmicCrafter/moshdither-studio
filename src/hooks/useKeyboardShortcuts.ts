@@ -191,9 +191,14 @@ export function useKeyboardShortcuts() {
           break;
 
         case "s":
+        case "S":
           if (isMeta) {
             e.preventDefault();
-            saveProject();
+            if (e.shiftKey) {
+              saveProject(true);
+            } else {
+              saveProject(false);
+            }
           }
           break;
 

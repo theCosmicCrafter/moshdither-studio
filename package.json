@@ -6,7 +6,7 @@
   "scripts": {
     "prepare": "node -e \"try{require('child_process').execSync('git config core.hooksPath .husky',{stdio:'ignore'})}catch(e){console.warn('[prepare] Could not set core.hooksPath, so the pre-commit secret scan will NOT run. If this is a git checkout, run: git config core.hooksPath .husky')}\"",
     "dev": "vite",
-    "prebuild": "node scripts/verify-external-bins.mjs && node scripts/subset-material-symbols.mjs --check && node scripts/generate-lut-thumbs.mjs --check && node scripts/check-no-console-windows.mjs",
+    "prebuild": "node scripts/clean-pycache.mjs && node scripts/verify-external-bins.mjs && node scripts/subset-material-symbols.mjs --check && node scripts/generate-lut-thumbs.mjs --check && node scripts/check-no-console-windows.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "verify:external": "node scripts/verify-external-bins.mjs",
