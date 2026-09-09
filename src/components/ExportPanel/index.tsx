@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useAppStore } from "../../store";
+import { formatTimecode } from "../../utils/timecode";
 import { exportVideo, applyFfglitch, previewFfglitch, cancelExport, removeExportTemp } from "../../lib/tauri";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { stackToRustPayload } from "../../utils/effectConverter";
@@ -914,9 +915,11 @@ export default function ExportPanel() {
         </div>
         {inPoint !== null || outPoint !== null ? (
           <div style={{ fontSize: 10, display: "flex", gap: 8, color: "var(--text-secondary)" }}>
-            <span style={{ color: "var(--success)" }}>IN {inPoint ?? 0}s</span>
+            <span style={{ color: "var(--success)" }}>IN {formatTimecode(inPoint ?? 0)}</span>
             <span>→</span>
-            <span style={{ color: "var(--danger)" }}>OUT {outPoint ?? "end"}s</span>
+            <span style={{ color: "var(--danger)" }}>
+              OUT {outPoint === null ? "end" : formatTimecode(outPoint)}
+            </span>
           </div>
         ) : null}
       </div>

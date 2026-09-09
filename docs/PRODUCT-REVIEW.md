@@ -76,20 +76,47 @@ duration and fps attached to the second. Same code path, named honestly.
 
 ## 3. What the Timeline is for
 
-Three genuinely different jobs, currently sharing one strip:
+Asked directly on 2026-09-09: *what does the timeline do, is it useful, and is
+this the best way to have it set up? It seems clunky and odd.*
 
-1. **Clip length / in-out points** for video trimming *and* for still-image
-   animation duration.
-2. **Keyframes** — any slider can be animated over time (`KeyframeButton` on
-   every numeric parameter).
-3. **Audio binding** — parameters driven by baked audio features (verified:
-   8/8 audio-reactive effects respond, 5 spiking on beats).
+Five jobs, all in one strip (`Timeline/index.tsx`): transport (play, step,
+jump, loop, speed); the playhead, which every animated shader, keyframe and
+audio binding reads; in/out points for export; the animation length for a
+still; and readouts (time, frame, BPM, audio file). It is useful -- it is the
+only place time lives -- but it is a **transport bar pretending to be a
+timeline**, which is why it reads as odd.
 
-That is a real and valuable feature set. The issue is that it is unlabelled and
-undifferentiated, so it reads as "a video scrubber" and its two more powerful
-uses are invisible.
+What made it clunky, verified in code and fixed the same day:
 
----
+| Felt like | Was |
+|---|---|
+| Big empty strip | The bottom dock zone is 30 % of the centre column for ~55 px of content |
+| Trimming is imprecise | In/out snapped to WHOLE SECONDS (`Math.round`), in the buttons and the I/O keys |
+| Frame counter wrong | `fps = 30` hardcoded; a 24 fps clip showed frames that did not exist |
+| Palette commands broken | "Set in point" set 0, "Set out point" set 300, "Play / pause" toggled *audio* |
+| Drag drops out | Scrubbing ended the moment the mouse left the 16 px bar |
+| Stills play at 2x | THREE loops advanced `currentTime` at once (the engine, the WebGL loop, the CPU loop). A 5 s animation previewed in 2.5 s |
+| In/out ignored while playing | The `<video>` only synced while paused, free-ran with `loop=true`, and was offset by the in point when it did seek |
+| Speed selector half-worked | Changed the clock, not the `<video>` |
+| Clip length lies on video | Editing it overwrote the probed duration |
+
+All fixed except the first: `usePlaybackEngine` is now the one clock at the
+media's real fps, in/out are frame-accurate, the palette does what it says,
+pointer capture holds the drag, the video follows the clock at the clock's
+speed, and the length box is stills-only and labelled *Animation length*.
+
+**Still invisible: keyframes.** Every slider has a keyframe button, and the
+timeline draws nothing for them -- no diamonds, no lanes. The only way to find
+one is to land the playhead within 10 ms of it. `updateKeyframe` and
+`clearKeyframes` exist in the store with no UI; easing is always linear.
+
+**Recommendation (the MoshPro shape): a transport strip, not a panel.** A
+~44 px bar pinned under the preview -- transport, time/frame, a scrubber with
+draggable in/out handles and keyframe diamonds, speed, loop. Right-click a
+diamond to delete it or change easing. The bottom dock zone returns to the
+preview. No feature lost, the empty strip gone, keyframes finally visible. A
+full lane-per-parameter timeline (the After Effects direction) is a later
+call, only if keyframing becomes a headline feature.
 
 ## 4. Redundancy and over-complication
 

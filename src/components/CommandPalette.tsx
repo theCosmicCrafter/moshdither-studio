@@ -17,8 +17,6 @@ export default function CommandPalette() {
   const inputRef = useRef<HTMLInputElement>(null);
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
   const setCurrentTime = useAppStore((s) => s.setCurrentTime);
-  const setAudioPlaying = useAppStore((s) => s.setAudioPlaying);
-  const audioPlaying = useAppStore((s) => s.audioPlaying);
   const undo = useAppStore((s) => s.undo);
   const redo = useAppStore((s) => s.redo);
   const canUndo = useAppStore((s) => s.canUndo);
@@ -86,13 +84,16 @@ export default function CommandPalette() {
     // is not the end of anything -- on a 5s clip "Go to end" jumped a minute
     // past it, and since setCurrentTime did not clamp, the playhead stuck there.
     registerCommand({ id: "go-to-end", label: "Go to end", category: "Timeline", shortcut: "End", action: () => setCurrentTime(useAppStore.getState().duration) });
-    registerCommand({ id: "play-pause", label: "Play / pause", category: "Timeline", shortcut: "Space", action: () => setAudioPlaying(!audioPlaying) });
+    // Space toggles the transport (useKeyboardShortcuts); this entry claims
+    // that shortcut, so it must do the same. It toggled AUDIO playback.
+    registerCommand({ id: "play-pause", label: "Play / pause", category: "Timeline", shortcut: "Space", action: () => useAppStore.getState().togglePlay() });
     registerCommand({ id: "undo", label: "Undo", category: "Edit", shortcut: "Ctrl+Z", action: () => { if (canUndo()) undo(); } });
     registerCommand({ id: "redo", label: "Redo", category: "Edit", shortcut: "Ctrl+Shift+Z", action: () => { if (canRedo()) redo(); } });
     registerCommand({ id: "clear-stack", label: "Clear effect stack", category: "Edit", action: () => { clearStack(); setStatusMessage("Effect stack cleared"); } });
     registerCommand({ id: "close-media", label: "Close media", category: "File", action: () => { setFilePath(null); setMediaLoaded(false); setMediaInfo(null); setPreviewDataUrl(null); setOriginalDataUrl(null); clearSam3FrameMasks(); setStatusMessage("Media closed"); } });
-    registerCommand({ id: "set-in-point", label: "Set in point", category: "Timeline", shortcut: "I", action: () => setInPoint(0) });
-    registerCommand({ id: "set-out-point", label: "Set out point", category: "Timeline", shortcut: "O", action: () => setOutPoint(300) });
+    // At the playhead, like the I / O keys. These set 0 and 300 regardless.
+    registerCommand({ id: "set-in-point", label: "Set in point", category: "Timeline", shortcut: "I", action: () => setInPoint(useAppStore.getState().currentTime) });
+    registerCommand({ id: "set-out-point", label: "Set out point", category: "Timeline", shortcut: "O", action: () => setOutPoint(useAppStore.getState().currentTime) });
     registerCommand({ id: "clear-in-out", label: "Clear in/out points", category: "Timeline", shortcut: "X", action: () => clearInOut() });
     registerCommand({ id: "toggle-scopes", label: "Toggle scopes", category: "View", action: () => setScopesVisible(!useAppStore.getState().scopesVisible) });
     
@@ -112,7 +113,7 @@ export default function CommandPalette() {
       s.setAppBarDocked(true, "right", 300);
     } });
   }, [
-    setCurrentTime, setAudioPlaying, audioPlaying, undo, redo, canUndo, canRedo,
+    setCurrentTime, undo, redo, canUndo, canRedo,
     clearStack, setFilePath, setMediaLoaded, setMediaInfo, setPreviewDataUrl,
     setOriginalDataUrl, clearSam3FrameMasks, setInPoint, setOutPoint, clearInOut,
     setScopesVisible, setStatusMessage,

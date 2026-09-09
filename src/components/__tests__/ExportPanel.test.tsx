@@ -243,8 +243,10 @@ describe("ExportPanel", () => {
     useAppStore.getState().setInPoint(2);
     useAppStore.getState().setOutPoint(8);
     render(<ExportPanel />);
-    expect(screen.getByText(/IN 2s/)).toBeInTheDocument();
-    expect(screen.getByText(/OUT 8s/)).toBeInTheDocument();
+    // Timecode, not bare seconds: in/out are frame-accurate now, and "2.4999s"
+    // is not a readout anyone wants.
+    expect(screen.getByText(/IN 00:02\.00/)).toBeInTheDocument();
+    expect(screen.getByText(/OUT 00:08\.00/)).toBeInTheDocument();
   });
 
   it("does not show export button when export is running", () => {

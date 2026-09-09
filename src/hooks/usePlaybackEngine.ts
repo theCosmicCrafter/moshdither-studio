@@ -1,12 +1,18 @@
 import { useEffect, useRef } from "react";
 import { useAppStore } from "../store";
 
-const DEFAULT_FPS = 30;
-
 /**
- * RAF-based playback engine.
- * When isPlaying is true, advances currentTime at the target FPS,
- * respecting playbackSpeed, in/out points, and loop mode.
+ * RAF-based playback engine -- THE clock for the whole app.
+ *
+ * When isPlaying is true, advances currentTime one frame at a time at the
+ * media's frame rate (the clip's own fps for video, the animation fps for a
+ * still), respecting playbackSpeed, in/out points, and loop mode.
+ *
+ * It must be the ONLY thing that advances currentTime. PreviewViewport used
+ * to advance it as well -- in both its WebGL loop and its CPU-preview loop --
+ * so a still image played at exactly twice real speed: this engine stepped
+ * 1/30 s every 33 ms and the preview added the same wall-clock delta on top.
+ * A 5 s animation previewed in 2.5 s and never matched its own export.
  *
  * This drives the entire animation pipeline:
  *   currentTime updates → useKeyframePlayback interpolates params
@@ -15,6 +21,12 @@ const DEFAULT_FPS = 30;
  * For a still image, the source texture stays the same but effect
  * parameters change each frame, producing an animated video preview.
  */
+/** Frame rate the transport steps at: the clip's own for video, the animation's for a still. */
+export function playbackFps(state: { isVideo: boolean; mediaFps: number; animateFps: number }): number {
+  const fps = state.isVideo ? state.mediaFps : state.animateFps;
+  return Number.isFinite(fps) && fps > 0 ? fps : 30;
+}
+
 export function usePlaybackEngine() {
   const isPlaying = useAppStore((s) => s.isPlaying);
   const rafRef = useRef<number>(0);
@@ -30,8 +42,6 @@ export function usePlaybackEngine() {
       return;
     }
 
-    const frameDuration = 1000 / DEFAULT_FPS;
-
     const tick = (now: number) => {
       if (lastTimeRef.current === 0) {
         lastTimeRef.current = now;
@@ -43,13 +53,16 @@ export function usePlaybackEngine() {
       lastTimeRef.current = now;
       accumulatedRef.current += deltaMs;
 
+      const fpsNow = playbackFps(useAppStore.getState());
+      const frameDuration = 1000 / fpsNow;
+
       // Advance in whole-frame increments to avoid jitter
       while (accumulatedRef.current >= frameDuration) {
         accumulatedRef.current -= frameDuration;
 
         const state = useAppStore.getState();
         const speed = state.playbackSpeed;
-        const frameTime = 1 / DEFAULT_FPS;
+        const frameTime = 1 / fpsNow;
         let nextTime = state.currentTime + frameTime * speed;
 
         const start = state.inPoint ?? 0;

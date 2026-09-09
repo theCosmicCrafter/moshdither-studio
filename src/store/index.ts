@@ -122,6 +122,8 @@ export interface AppState {
   filePath: string | null;
   proxyUrl: string | null;
   isVideo: boolean;
+  /** Native frame rate of the loaded video (from ffprobe). Stills use animateFps. */
+  mediaFps: number;
   /** When true, preview uses CPU (Rust backend) instead of WebGL shaders.
    *  Set when the stack contains effects without accurate WebGL implementations
    *  (e.g. error diffusion dithering algorithms). */
@@ -309,6 +311,7 @@ export interface AppState {
   setFilePath: (path: string | null) => void;
   setProxyUrl: (url: string | null) => void;
   setIsVideo: (isVideo: boolean) => void;
+  setMediaFps: (fps: number) => void;
   setUseCpuPreview: (v: boolean) => void;
   setPreviewAutoExact: (v: boolean) => void;
   requestMediaReload: () => void;
@@ -531,6 +534,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   filePath: null,
   proxyUrl: null,
   isVideo: false,
+  mediaFps: 30,
   useCpuPreview: false,
   previewAutoExact: true,
   mediaReloadToken: 0,
@@ -669,6 +673,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setFilePath: (path) => set({ filePath: path }),
   setProxyUrl: (url) => set({ proxyUrl: url }),
   setIsVideo: (isVideo) => set({ isVideo }),
+  setMediaFps: (fps) => set({ mediaFps: Number.isFinite(fps) && fps > 0 ? fps : 30 }),
   setUseCpuPreview: (v) => set({ useCpuPreview: v }),
   setPreviewAutoExact: (v) => set({ previewAutoExact: v }),
   requestMediaReload: () => set((st) => ({ mediaReloadToken: st.mediaReloadToken + 1 })),

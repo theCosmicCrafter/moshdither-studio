@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react";
 import { useAppStore } from "../store";
 import { eventToKeyString, getAllBindings } from "../utils/keyboardShortcuts";
 import { getCommands } from "../utils/commands";
+import { formatTimecode } from "../utils/timecode";
 import { useProject } from "./useProject";
 
 /**
@@ -199,8 +200,10 @@ export function useKeyboardShortcuts() {
         case "i":
           if (!isInput && !isMeta) {
             e.preventDefault();
-            setInPoint(Math.round(currentTimeRef.current));
-            setStatusMessage(`In point set at frame ${Math.round(currentTimeRef.current)}`);
+            // Frame-accurate. Rounding to whole seconds made a trim at 1.5 s
+            // impossible, and the message called that second a "frame".
+            setInPoint(currentTimeRef.current);
+            setStatusMessage(`In point set at ${formatTimecode(currentTimeRef.current)}`);
           }
           break;
 
@@ -218,8 +221,8 @@ export function useKeyboardShortcuts() {
             openProject();
           } else if (!isInput) {
             e.preventDefault();
-            setOutPoint(Math.round(currentTimeRef.current));
-            setStatusMessage(`Out point set at frame ${Math.round(currentTimeRef.current)}`);
+            setOutPoint(currentTimeRef.current);
+            setStatusMessage(`Out point set at ${formatTimecode(currentTimeRef.current)}`);
           }
           break;
 

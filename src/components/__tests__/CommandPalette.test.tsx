@@ -298,20 +298,31 @@ describe("CommandPalette", () => {
       expect(useAppStore.getState().effectStack.length).toBe(0);
     });
 
-    it("Set in point sets inPoint", () => {
+    // Both used to assert the literal values the commands hard-coded (0 and
+    // 300) -- pinning the bug. They set the point at the PLAYHEAD, like I / O.
+    it("Set in point marks the playhead", () => {
+      useAppStore.getState().setCurrentTime(3.25);
       render(<CommandPalette />);
       fireEvent.keyDown(window, { key: "p", ctrlKey: true, shiftKey: true });
       fireEvent.click(screen.getByText("Set in point").closest("button")!);
-      expect(useAppStore.getState().inPoint).toBe(0);
+      expect(useAppStore.getState().inPoint).toBeCloseTo(3.25, 6);
     });
 
-    it("Set out point sets outPoint", () => {
-      useAppStore.getState().setDuration(300);
+    it("Set out point marks the playhead", () => {
+      useAppStore.getState().setCurrentTime(7.5);
       render(<CommandPalette />);
       fireEvent.keyDown(window, { key: "p", ctrlKey: true, shiftKey: true });
       fireEvent.click(screen.getByText("Set out point").closest("button")!);
-      // setOutPoint clamps to a maximum of duration (300)
-      expect(useAppStore.getState().outPoint).toBe(300);
+      expect(useAppStore.getState().outPoint).toBeCloseTo(7.5, 6);
+    });
+
+    it("Play / pause toggles the transport, not the audio", () => {
+      useAppStore.setState({ isPlaying: true, audioPlaying: false });
+      render(<CommandPalette />);
+      fireEvent.keyDown(window, { key: "p", ctrlKey: true, shiftKey: true });
+      fireEvent.click(screen.getByText("Play / pause").closest("button")!);
+      expect(useAppStore.getState().isPlaying).toBe(false);
+      expect(useAppStore.getState().audioPlaying).toBe(false);
     });
 
     it("Clear in/out points clears both", () => {

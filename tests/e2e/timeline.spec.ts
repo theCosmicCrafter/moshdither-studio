@@ -24,7 +24,7 @@ test.beforeEach(async ({ page }) => {
 // load without any navigation. It IS draggable -- the zone's enableDrag/
 // enableDrop/enableDivide locks were removed so panels can be rearranged --
 // but nothing here moves it, so it stays where the default layout puts it.
-const DURATION_INPUT = "input[type='number'][title='Clip length (seconds)']";
+const DURATION_INPUT = "input[type='number'][title='Animation length (seconds)']";
 
 test("timeline panel renders its transport controls", async ({ page }) => {
   // Assert the timeline's own controls, not merely that the app survived —

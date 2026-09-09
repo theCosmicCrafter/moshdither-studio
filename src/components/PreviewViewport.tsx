@@ -92,6 +92,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     showBeforeAfter,
     zoom,
     isPlaying,
+    playbackSpeed,
     useCpuPreview,
     previewAutoExact,
     audioEnabled,
@@ -108,6 +109,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       showBeforeAfter: s.showBeforeAfter,
       zoom: s.zoom,
       isPlaying: s.isPlaying,
+      playbackSpeed: s.playbackSpeed,
       useCpuPreview: s.useCpuPreview,
       previewAutoExact: s.previewAutoExact,
       audioEnabled: s.audioEnabled,
@@ -220,7 +222,6 @@ function PreviewViewport({ isDropTarget = false }: Props) {
   const rafRef = useRef<number>(0);
   const cpuAnimRafRef = useRef<number>(0);
   const cpuRenderRevisionRef = useRef(0);
-  const lastFrameTimeRef = useRef<number>(0);
   // Playhead position of the last frame drawn, so a paused preview can skip
   // redrawing an instant it has already rendered. NaN so the first pass always
   // draws, whatever currentTime starts at.
@@ -789,29 +790,40 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     };
   }, [isVideo, proxyUrl, retireSourceTexture]);
 
-  // Sync video play/pause
+  // Sync video play/pause and speed. The speed selector changed the transport
+  // clock but not the <video>, so at 0.5x the readout crawled while the
+  // picture ran at full speed.
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !isVideo) return;
+    video.playbackRate = playbackSpeed;
     if (isPlaying) {
       video.play().catch(() => {});
     } else {
       video.pause();
     }
-  }, [isPlaying, isVideo]);
+  }, [isPlaying, isVideo, playbackSpeed]);
 
   // Sync video time when timeline is scrubbed (without re-rendering the whole viewport)
   useEffect(() => {
     return useAppStore.subscribe((state, prevState) => {
       if (state.currentTime === prevState.currentTime) return;
 
-      // Sync video element
-      if (isVideo && !isPlaying) {
+      // Keep the <video> on the transport clock. The proxy is the FULL clip,
+      // so its time IS the playhead time -- this used to subtract the in
+      // point, which showed the frame from (t - in) whenever an in point was
+      // set. It also only synced while paused, so during playback the element
+      // free-ran with loop=true and ignored the in/out range entirely: the
+      // readout looped 2s-4s while the picture played the whole clip. Now it
+      // follows while playing too, with a looser tolerance so ordinary drift
+      // between two clocks does not seek every frame -- a loop wrap or a
+      // scrub during playback is a big jump and is caught.
+      if (isVideo) {
         const video = videoRef.current;
         if (video) {
-          const start = state.inPoint ?? 0;
-          const target = Math.max(0, state.currentTime - start);
-          if (Number.isFinite(target) && Math.abs(video.currentTime - target) > 0.05) {
+          const target = Math.max(0, state.currentTime);
+          const tolerance = state.isPlaying ? 0.25 : 0.05;
+          if (Number.isFinite(target) && Math.abs(video.currentTime - target) > tolerance) {
             video.currentTime = target;
           }
         }
@@ -828,7 +840,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
         }
       }
     });
-  }, [isVideo, isPlaying]);
+  }, [isVideo]);
 
   // WebGL real-time preview: re-render when image or effect stack changes.
   // Skipped when useCpuPreview is true (effects without accurate WebGL shaders
@@ -968,22 +980,9 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     );
     if (hasAnimatedEffect || audioEnabled || isPlaying) {
       const loop = () => {
-        // Advance currentTime for image sources when playing so the time slider
-        // moves and keyframe-driven effects sync with export. Videos drive time
-        // via the <video> element instead.
+        // This loop only DRAWS. usePlaybackEngine is the one clock that moves
+        // currentTime; advancing it here as well made stills play at 2x.
         const s = useAppStore.getState();
-        if (s.isPlaying && !isVideo) {
-          const now = performance.now();
-          const last = lastFrameTimeRef.current || now;
-          const deltaT = (now - last) / 1000 * s.playbackSpeed;
-          lastFrameTimeRef.current = now;
-          let next = s.currentTime + deltaT;
-          const dur = s.duration || 10;
-          if (next > dur) next = 0; // loop
-          s.setCurrentTime(next);
-        } else {
-          lastFrameTimeRef.current = performance.now();
-        }
         // While paused, shader time is frozen at the playhead, so redrawing the
         // same instant 60 times a second only burns GPU. Render when the
         // playhead actually moves (scrubbing) and skip otherwise. Parameter
@@ -995,7 +994,6 @@ function PreviewViewport({ isDropTarget = false }: Props) {
         }
         rafRef.current = requestAnimationFrame(loop);
       };
-      lastFrameTimeRef.current = performance.now();
       // Force the first frame after any (re)start to draw. This effect re-runs
       // on cpuRenderSignature, which is how a PARAMETER CHANGE reaches the
       // preview -- and the ref survives that restart, so leaving it matching
@@ -1021,31 +1019,8 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     deleteRetiredSourceTextures,
   ]);
 
-  // CPU preview playback loop — advances currentTime when playing and useCpuPreview
-  // is true, so the CPU preview re-renders each frame during playback.
-  useEffect(() => {
-    if (!useCpuPreview || !mediaLoaded || !isPlaying) return;
-    let raf: number;
-    const loop = () => {
-      const s = useAppStore.getState();
-      if (s.isPlaying && !isVideo) {
-        const now = performance.now();
-        const last = lastFrameTimeRef.current || now;
-        const deltaT = ((now - last) / 1000) * s.playbackSpeed;
-        lastFrameTimeRef.current = now;
-        let next = s.currentTime + deltaT;
-        const dur = s.duration || 10;
-        if (next > dur) next = 0;
-        s.setCurrentTime(next);
-      } else {
-        lastFrameTimeRef.current = performance.now();
-      }
-      raf = requestAnimationFrame(loop);
-    };
-    lastFrameTimeRef.current = performance.now();
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, [useCpuPreview, mediaLoaded, isPlaying, isVideo]);
+  // (The CPU-preview loop that used to advance currentTime here is gone:
+  // usePlaybackEngine is the single clock. See the note on that hook.)
 
   // CPU preview render: when useCpuPreview is true, render via Rust backend for
   // accurate algorithm output (error diffusion, blue noise, etc.).

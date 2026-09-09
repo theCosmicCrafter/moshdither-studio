@@ -1,6 +1,8 @@
 import React, { useRef, useCallback } from "react";
 import { useAppStore } from "../../store";
 import { getFileName } from "../../utils/fileName";
+import { formatTimecode as formatTime } from "../../utils/timecode";
+import { playbackFps } from "../../hooks/usePlaybackEngine";
 
 export default function Timeline() {
   const currentTime = useAppStore((s) => s.currentTime);
@@ -20,50 +22,62 @@ export default function Timeline() {
   const setInPoint = useAppStore((s) => s.setInPoint);
   const setOutPoint = useAppStore((s) => s.setOutPoint);
   const clearInOut = useAppStore((s) => s.clearInOut);
+  const isVideo = useAppStore((s) => s.isVideo);
+  const mediaFps = useAppStore((s) => s.mediaFps);
+  const animateFps = useAppStore((s) => s.animateFps);
 
   const scrubberRef = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
 
-  const fps = 30;
-  const currentFrame = Math.floor(currentTime * fps);
+  // The clip's own rate for video, the animation's for a still. A hardcoded
+  // 30 here numbered frames that did not exist on a 24 fps clip.
+  const fps = playbackFps({ isVideo, mediaFps, animateFps });
+  const currentFrame = Math.floor(currentTime * fps + 1e-6);
 
   const handleScrub = useCallback(
     (clientX: number) => {
       const el = scrubberRef.current;
       if (!el) return;
       const rect = el.getBoundingClientRect();
+      if (rect.width <= 0) return;
       const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
       setCurrentTime(pct * duration);
     },
     [duration, setCurrentTime]
   );
 
-  const onMouseDown = useCallback(
-    (e: React.MouseEvent) => {
+  // Pointer capture keeps the drag alive when the pointer leaves the 16 px
+  // bar. With mouse events the scrub simply stopped the moment the cursor
+  // strayed above or below it, which on a strip this thin was constantly.
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
       isDragging.current = true;
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // jsdom has no pointer capture; the drag still works inside the bar
+      }
       handleScrub(e.clientX);
     },
     [handleScrub]
   );
 
-  const onMouseMove = useCallback(
-    (e: React.MouseEvent) => {
+  const onPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
       if (!isDragging.current) return;
       handleScrub(e.clientX);
     },
     [handleScrub]
   );
 
-  const onMouseUp = useCallback(() => {
+  const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     isDragging.current = false;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // see above
+    }
   }, []);
-
-  const formatTime = (t: number) => {
-    const m = Math.floor(t / 60);
-    const s = Math.floor(t % 60);
-    const ms = Math.floor((t % 1) * 100);
-    return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}.${ms.toString().padStart(2, "0")}`;
-  };
 
   return (
     <div
@@ -87,7 +101,7 @@ export default function Timeline() {
         {/* In/Out buttons */}
         <div className="flex gap-1 items-center">
           <button
-            onClick={() => setInPoint(Math.round(currentTime))}
+            onClick={() => setInPoint(currentTime)}
             title="Set in point (I)"
             className="font-data-micro text-data-micro rounded px-1 cursor-pointer transition"
             style={{
@@ -99,7 +113,7 @@ export default function Timeline() {
             IN
           </button>
           <button
-            onClick={() => setOutPoint(Math.round(currentTime))}
+            onClick={() => setOutPoint(currentTime)}
             title="Set out point (O)"
             className="font-data-micro text-data-micro rounded px-1 cursor-pointer transition"
             style={{
@@ -162,25 +176,29 @@ export default function Timeline() {
             </select>
           </div>
 
-          {/* Clip length input */}
-          <div className="flex items-center gap-1 ml-1">
-            <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: 12 }}>
-              timer
-            </span>
-            <input
-              type="number"
-              min={0.1}
-              step={0.5}
-              value={duration}
-              onChange={(e) => {
-                const val = parseFloat(e.target.value);
-                setDuration(isNaN(val) ? 1 : Math.max(0.1, val));
-              }}
-              className="themed-select font-data-micro text-data-micro w-[60px] text-center"
-              title="Clip length (seconds)"
-            />
-            <span className="font-data-micro text-data-micro text-on-surface-variant">s</span>
-          </div>
+          {/* Animation length -- stills only. A video's length is the video's;
+              offering to edit it here just overwrote the probed duration with
+              whatever was typed and lied to the export. */}
+          {!isVideo && (
+            <div className="flex items-center gap-1 ml-1">
+              <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: 12 }}>
+                timer
+              </span>
+              <input
+                type="number"
+                min={0.1}
+                step={0.5}
+                value={duration}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value);
+                  setDuration(isNaN(val) ? 1 : Math.max(0.1, val));
+                }}
+                className="themed-select font-data-micro text-data-micro w-[60px] text-center"
+                title="Animation length (seconds)"
+              />
+              <span className="font-data-micro text-data-micro text-on-surface-variant">s</span>
+            </div>
+          )}
         </div>
 
         {/* Audio file name */}
@@ -197,12 +215,13 @@ export default function Timeline() {
       {/* Scrubber */}
       <div
         ref={scrubberRef}
-        onMouseDown={onMouseDown}
-        onMouseMove={onMouseMove}
-        onMouseUp={onMouseUp}
-        onMouseLeave={onMouseUp}
+        data-testid="timeline-scrubber"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
         className="neo-flat rounded relative cursor-pointer"
-        style={{ height: 16 }}
+        style={{ height: 16, touchAction: "none" }}
       >
         {/* Progress fill */}
         <div

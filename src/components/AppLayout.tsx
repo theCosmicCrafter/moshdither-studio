@@ -48,6 +48,7 @@ export default function AppLayout() {
   const setFilePath = useAppStore((s) => s.setFilePath);
   const setIsVideo = useAppStore((s) => s.setIsVideo);
   const setDuration = useAppStore((s) => s.setDuration);
+  const setMediaFps = useAppStore((s) => s.setMediaFps);
   const setProxyUrl = useAppStore((s) => s.setProxyUrl);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const [isDropTarget, setIsDropTarget] = useState(false);
@@ -179,6 +180,10 @@ export default function AppLayout() {
             if (typeof meta.duration === "number" && meta.duration > 0) {
               setDuration(meta.duration);
             }
+            // The clip's real frame rate, so frame stepping and the frame
+            // counter land on actual frames. Everything assumed 30 before,
+            // so a 24 fps clip showed frame numbers that did not exist.
+            setMediaFps(typeof meta.fps === "number" && meta.fps > 0 ? meta.fps : 30);
           } catch (err) {
             // A probe failure must not block loading the media; the timeline
             // just keeps whatever length it had.
@@ -193,6 +198,7 @@ export default function AppLayout() {
           }
         } else {
           setProxyUrl(null);
+          setMediaFps(30);
         }
         return true;
       }
@@ -211,6 +217,7 @@ export default function AppLayout() {
     setStatusMessage,
     setIsVideo,
     setDuration,
+    setMediaFps,
     setProxyUrl,
   ]);
 
