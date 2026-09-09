@@ -70,6 +70,50 @@ to end against a real clip with no system Python involved.
 the icons are all bundled. Effects, dithering, glitch, datamoshing, LUTs and
 export need nothing from the internet.
 
+## Session 2026-09-09 (late): UX fallacy sweep -- what changed and what is left
+
+Driven by the owner's framing: "if there's a better, user-friendly,
+industry-standard way of doing something, let's do it that way." A 5-dimension
+audit ran with adversarial verification; every load-bearing claim was then
+re-verified by hand before acting, because several earlier "findings" had been
+my own tooling bugs.
+
+**Fixed (all gated 10/10, committed):**
+
+| What | Was |
+|---|---|
+| Every video treated as **10 seconds** | `getMediaMetadata` ran on open but only fed the metadata DISPLAY; `duration` sat at the store default, so playback stopped at 0:10 and an export with no out-point trimmed to 10s. Now set in `refreshPreview` |
+| Console windows on datamosh export | Rust spawns were guarded; `mosh_cli.py` / `basic_modes.py` spawn ffmpeg THEMSELVES. Both now pass `CREATE_NO_WINDOW`; `scripts/check-no-console-windows.mjs` runs in prebuild and catches both languages |
+| Preview mode choice | Gone. WebGL while interacting, exact CPU frame 450 ms after idle. Canvas now stays MOUNTED (the ternary unmounted it and a canvas gets one WebGL context for life -- black screen on play) |
+| FFglitch modes invisible until export | `preview_ffglitch` moshes a 2s segment (1-2s per mode, cached); section labelled "Bitstream datamosh -- applied after your effects" |
+| Mosh dropdown: 13 of 33, two of them broken | 25 verified-working modes, grouped |
+| `ffglitchMode` + 7 export settings were component-local `useState` | In the store; `ffglitchMode` rides in presets (optional field, old libraries still load) |
+| Recorded keyboard shortcuts did nothing | Editor writes palette ids (`undo`), handler switched on `edit:undo`; handler now falls through to the command registry |
+| Save/Open Project only as Ctrl+S/O | In the File menu. `openProject` also never LOADED the media -- `mediaReloadToken` in the store now lets any path ask AppLayout to |
+| Mask Clear/Invert destroyed work with no way back | One-step Undo |
+| Proxy panel's output went nowhere | `proxyPath` had no readers; panel now feeds `proxyUrl` |
+| Gate flaked on this machine | vitest pool capped at half the cores; app-smoke gate now sets `$LASTEXITCODE` explicitly instead of inheriting the previous gate's |
+
+**Still open -- verified real, not yet fixed:**
+
+- **7 of 8 tomato modes** (`bloom overlap jiggle void reverse invert random`)
+  produce 0 bytes on real footage: the corrupted AVI has no decodable frame.
+  Works on the 480x270 fixture, fails on every real clip at every size tried,
+  so content-dependent. Inside vendored Tomato Automosh. They now fail with a
+  sentence instead of a traceback, and are removed from the dropdown.
+- **FFglitch mode parameters** are hardcoded `{}` at the call site; no mode's
+  knobs are reachable. `combine`/`motion_transfer` need a second input with
+  no UI to supply it.
+- **Tracks panel** creates entries nothing renders or exports. Left in place;
+  removing it from the rail is a product call.
+- **Export crash (0xc0000374 heap corruption)** -- still not reproduced. NEW
+  LEAD: this machine sits at 107 GB of a 110 GB Windows COMMIT limit
+  (ComfyUI alone 12 GB) with 36 GB physical free; a gate run hit `rust_oom`.
+  Windows refuses allocations at the commit limit regardless of free RAM, and
+  export allocates hundreds of MB at once. Test: export with ComfyUI closed.
+  Fix: raise the pagefile (16 GB on a 94 GB box).
+- Undo still does not cover mask BRUSH STROKES, only Clear/Invert.
+
 ## Verification: what has actually been exercised (2026-09-09)
 
 Measured with `mosh-verify`, not read. Re-run any of these before a release.
