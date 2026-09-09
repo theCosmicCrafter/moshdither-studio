@@ -265,3 +265,121 @@ mod tests {
         assert_eq!(arr[2].as_f64(), Some(0.5));
     }
 }
+
+#[cfg(test)]
+mod slider_range_tests {
+    use crate::effects::types::ParamType;
+    use crate::effects::EffectRegistry;
+
+    /// Every slider must be usable: the default inside the range, and the
+    /// advertised maximum actually reachable.
+    ///
+    /// These are the invariants an audit of all 164 sliders turned up. They are
+    /// cheap to state and were not stated anywhere, so `optical_flow.alpha`
+    /// shipped with min 0.01 and step 0.05 -- landing on 1.96 and never
+    /// reaching its own declared max of 2.0.
+    #[test]
+    fn every_slider_has_a_usable_range() {
+        let registry = EffectRegistry::new();
+        let mut problems: Vec<String> = Vec::new();
+
+        for meta in registry.list() {
+            for p in &meta.parameters {
+                if !matches!(p.param_type, ParamType::Slider) {
+                    continue;
+                }
+                let (Some(min), Some(max)) = (p.min, p.max) else {
+                    problems.push(format!("{}.{}: slider with no min/max", meta.id, p.id));
+                    continue;
+                };
+                if max <= min {
+                    problems.push(format!("{}.{}: empty range [{min}..{max}]", meta.id, p.id));
+                    continue;
+                }
+                let Some(d) = p.default.as_f64() else {
+                    continue;
+                };
+                if d < min || d > max {
+                    problems.push(format!(
+                        "{}.{}: default {d} outside [{min}..{max}]",
+                        meta.id, p.id
+                    ));
+                }
+                if let Some(step) = p.step {
+                    if step <= 0.0 {
+                        problems.push(format!("{}.{}: step {step} is not positive", meta.id, p.id));
+                        continue;
+                    }
+                    // The max must land on a step boundary, or the top of the
+                    // range cannot be reached from the input's arrows.
+                    let steps = (max - min) / step;
+                    if (steps.round() - steps).abs() > 1e-6 {
+                        problems.push(format!(
+                            "{}.{}: step {step} does not divide [{min}..{max}] -- \
+                             max unreachable (stops at {:.4})",
+                            meta.id,
+                            p.id,
+                            min + steps.floor() * step
+                        ));
+                    }
+                    if steps < 2.0 {
+                        problems.push(format!(
+                            "{}.{}: step {step} gives only {steps:.0} positions across \
+                             [{min}..{max}]",
+                            meta.id, p.id
+                        ));
+                    }
+                }
+            }
+        }
+
+        assert!(
+            problems.is_empty(),
+            "sliders with unusable ranges:\n  {}",
+            problems.join("\n  ")
+        );
+    }
+
+    /// A default sitting at an end of its range is legitimate -- a wet/dry mix
+    /// belongs at 100%, an optional extra at 0 -- so this does not fail. It
+    /// records the list, so a NEW one shows up in a diff and gets a moment's
+    /// thought rather than passing unseen.
+    #[test]
+    fn defaults_at_range_ends_are_accounted_for() {
+        let registry = EffectRegistry::new();
+        let mut at_end = Vec::new();
+        for meta in registry.list() {
+            for p in &meta.parameters {
+                if !matches!(p.param_type, ParamType::Slider) {
+                    continue;
+                }
+                let (Some(min), Some(max), Some(d)) = (p.min, p.max, p.default.as_f64()) else {
+                    continue;
+                };
+                if d <= min || d >= max {
+                    at_end.push(format!("{}.{}", meta.id, p.id));
+                }
+            }
+        }
+        at_end.sort();
+        // All 26 reviewed individually, and every one is deliberate:
+        //   * 10x dithering `levels` = 2  -- 1-bit dithering, the classic look
+        //   * 5x wet/dry `amount`/`mix`/`intensity` = 1.0 -- apply fully, then
+        //     dial back, which is how a grade or LUT is normally presented
+        //   * 3x analog.vhs extras = 0 -- optional artefacts, off by default;
+        //     VHS at defaults already changes 87% of pixels without them
+        //   * 2x every_nth_beat = 1 -- "every beat" IS the minimum
+        //   * 2x iframe frame indices = 0 -- frame zero
+        //   * sorting_glitch.u_intensity = 10 -- saturating: 10 is "fully
+        //     sorted", so there is nothing above it to leave headroom for
+        //   * spectrum.bar_count = 7 -- there are exactly 7 frequency bands
+        //   * pixelate.min_block = 1, slice_shift repeat = 0 -- minimum/off
+        // Raise this only after checking what the new one actually is.
+        assert!(
+            at_end.len() <= 26,
+            "{} sliders now default to an end of their range; review the new ones:\n  {}",
+            at_end.len(),
+            at_end.join("\n  ")
+        );
+    }
+}

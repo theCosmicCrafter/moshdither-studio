@@ -137,7 +137,13 @@ function ParameterWheel({
           style={{ transform: `rotate(${angle}deg)`, boxShadow: "0 0 8px #ffade0" }}
         />
         <div className="w-6 h-6 rounded-full neo-pressed flex items-center justify-center">
-          <span className="font-data-micro text-data-micro text-accent-teal">{value.toFixed(0)}</span>
+          <span className="font-data-micro text-data-micro text-accent-teal">
+            {/* Precision follows the RANGE. A fixed 0 decimals read "0" for
+                every value below 0.5 on the 67 sliders whose whole range is
+                <= 2, so the face was blank of information exactly where fine
+                adjustment matters most. */}
+            {value.toFixed(max - min <= 2 ? 2 : max - min <= 20 ? 1 : 0)}
+          </span>
         </div>
       </div>
     </div>
@@ -318,7 +324,22 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                     aria-label={param.name}
                     title={param.name}
                     placeholder="0"
-                    onChange={(e) => updateStackParams(entry.id, { [param.id]: parseFloat(e.target.value) || 0 })}
+                    min={param.min ?? undefined}
+                    max={param.max ?? undefined}
+                    step={param.step ?? undefined}
+                    onChange={(e) => {
+                      // Clamp to the declared range. The backend clamps too
+                      // (effects::params::clamp_params), so an out-of-range
+                      // entry was never destructive -- but without this the box
+                      // displayed a number the render was not using, which is a
+                      // worse failure than refusing the input.
+                      const raw = parseFloat(e.target.value);
+                      if (Number.isNaN(raw)) return;
+                      const lo = param.min ?? Number.NEGATIVE_INFINITY;
+                      const hi = param.max ?? Number.POSITIVE_INFINITY;
+                      const clamped = Math.min(hi, Math.max(lo, raw));
+                      updateStackParams(entry.id, { [param.id]: clamped });
+                    }}
                     className="param-readout bg-transparent border-b border-[var(--border-secondary)] px-1 w-12 text-right outline-none focus:border-[var(--accent)]"
                     style={{ color: "var(--text-primary)" }}
                   />

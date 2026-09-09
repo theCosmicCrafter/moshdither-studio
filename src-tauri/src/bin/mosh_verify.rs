@@ -52,6 +52,8 @@ fn print_usage() {
     eprintln!("    --output <dir>         Output directory (default: ./outputs/render)");
     eprintln!("    --filter <substring>   Only render effects whose ID contains substring");
     eprintln!("    --duration <secs>      Clip duration in seconds (default: 5)");
+    eprintln!("    --set <name>=<value>   Override a parameter (repeatable), e.g.");
+    eprintln!("                           --set intensity=5 --set threshold=0.4");
     eprintln!();
     eprintln!("  animate-all              Animate a still image through every effect (time 0→1)");
     eprintln!("    --image <path>         Path to still image (required)");
@@ -440,6 +442,10 @@ fn cmd_render_all(args: &[String]) -> ExitCode {
     let mut output_dir = "./outputs/render".to_string();
     let mut filter: Option<&str> = None;
     let mut duration_secs = 5.0f64;
+    // `--set name=value`, repeatable. Without this there was no way to render an
+    // effect at anything but its default, so a parameter's RANGE could not be
+    // examined at all -- only the single point the author happened to pick.
+    let mut overrides: Vec<(String, f64)> = Vec::new();
 
     let mut i = 0;
     while i < args.len() {
@@ -466,6 +472,24 @@ fn cmd_render_all(args: &[String]) -> ExitCode {
                 i += 1;
                 if i < args.len() {
                     filter = Some(&args[i]);
+                }
+            }
+            "--set" => {
+                i += 1;
+                if i < args.len() {
+                    match args[i].split_once('=') {
+                        Some((k, v)) => match v.parse::<f64>() {
+                            Ok(v) => overrides.push((k.to_string(), v)),
+                            Err(_) => {
+                                eprintln!("--set expects name=<number>, got '{}'", args[i]);
+                                return ExitCode::from(2);
+                            }
+                        },
+                        None => {
+                            eprintln!("--set expects name=value, got '{}'", args[i]);
+                            return ExitCode::from(2);
+                        }
+                    }
                 }
             }
             "--duration" => {
@@ -566,7 +590,20 @@ fn cmd_render_all(args: &[String]) -> ExitCode {
         };
 
         let safe_name = sanitize_filename(&meta.id);
-        let params = clamp_params(&meta.id, &build_default_params(&meta.id, &meta.parameters));
+        let mut base = build_default_params(&meta.id, &meta.parameters);
+        for (k, v) in &overrides {
+            // Only override parameters the effect actually declares, so a typo
+            // fails loudly at the report rather than silently doing nothing.
+            if meta.parameters.iter().any(|p| &p.id == k) {
+                base.insert(
+                    k.clone(),
+                    serde_json::Number::from_f64(*v)
+                        .map(serde_json::Value::Number)
+                        .unwrap_or(serde_json::Value::Null),
+                );
+            }
+        }
+        let params = clamp_params(&meta.id, &base);
 
         // ── Render image output ──────────────────────────────
         let img_out_path = format!("{}/images/{}.png", output_dir, safe_name);

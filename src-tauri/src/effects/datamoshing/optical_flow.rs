@@ -41,7 +41,10 @@ impl Effect for OpticalFlow {
                     default: json!(0.5),
                     min: Some(0.01),
                     max: Some(2.0),
-                    step: Some(0.05),
+                    // 0.01 stepping by 0.05 lands on 1.96 and never reaches the
+                    // advertised 2.0, so the top of the range was unreachable
+                    // from the input's arrows. 0.01 divides the span exactly.
+                    step: Some(0.01),
                     options: None,
                 },
                 ParameterDef {
