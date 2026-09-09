@@ -218,6 +218,30 @@ function main() {
     }
     ok("tauri.conf.json FFmpeg/FFglitch externalBin configuration is present");
 
+    // The datamosh sidecar carries its own Python and numpy. Without it the app
+    // falls back to hunting a `python.exe` on PATH -- which exists on a
+    // developer's machine and on almost no user's, so datamoshing silently
+    // becomes developer-only. It is listed in externalBin for exactly that
+    // reason, and a listed-but-absent binary fails deep inside Tauri with a
+    // message that does not name the cause, so name it here instead.
+    if (externalBinConfig.includes("bin/mosh-cli")) {
+      const moshName = `mosh-cli-${target}${ext}`;
+      const moshPath = join(binDir, moshName);
+      if (!existsSync(moshPath)) {
+        fail(
+          `tauri.conf.json lists bin/mosh-cli but the binary is missing: ${moshPath}
+` +
+            `  Build it with:  npm run build:mosh-sidecar`
+        );
+      }
+      ok(`Found datamosh sidecar: ${moshName} (${fileSize(moshPath)})`);
+    } else {
+      warn(
+        "tauri.conf.json does not list bin/mosh-cli -- datamoshing will need a " +
+          "system Python with numpy, which most users do not have."
+      );
+    }
+
     // SAM3 sidecar is optional in dev; if it is listed in the config, the
     // corresponding binary must exist.
     if (externalBinConfig.includes("bin/sam3-bridge")) {

@@ -57,10 +57,18 @@ into GitHub-sized parts, hashes them, writes the manifest and uploads via `gh`.
 change the sidecar and you must update that constant and ship an app release,
 by design -- a remote manifest must never decide which executable runs.
 
-**What is self-contained.** The core app is: all four FFmpeg-family sidecars
-(`ffmpeg`, `ffprobe`, `ffgac`, `ffedit`), the 35 LUTs, the Python backend and the
-icons are all bundled. Effects, dithering, glitch, LUTs and export need nothing
-from the internet.
+**Datamoshing no longer needs system Python** (as of 2026-09-08). It used to
+shell out to `mosh_cli.py`, which needs an interpreter AND numpy; the installer
+shipped neither, so `find_python()` fell back to whatever `python.exe` was on
+PATH. That exists on a developer machine and on almost no user's, so the app's
+signature feature was developer-only and nobody noticed. There is now a 24 MB
+`mosh-cli` sidecar (`npm run build:mosh-sidecar`) in `externalBin`, verified end
+to end against a real clip with no system Python involved.
+
+**What is self-contained.** The core app is: all five sidecars (`ffmpeg`,
+`ffprobe`, `ffgac`, `ffedit`, `mosh-cli`), the 35 LUTs, the Python backend and
+the icons are all bundled. Effects, dithering, glitch, datamoshing, LUTs and
+export need nothing from the internet.
 
 **What is not.**
 

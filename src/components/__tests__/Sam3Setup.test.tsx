@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import Sam3Setup from "../Sam3Setup";
+import type { Sam3AddonStatus } from "../../lib/tauri";
 
 const listeners: Array<(e: { payload: unknown }) => void> = [];
 
@@ -19,7 +20,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   }),
 }));
 
-const notInstalled = {
+const notInstalled: Sam3AddonStatus = {
   ready: false,
   sidecar_installed: false,
   sidecar_path: null,

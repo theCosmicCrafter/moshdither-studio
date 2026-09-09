@@ -15,7 +15,7 @@ use image::ImageFormat;
 use rayon::prelude::*;
 use serde_json::json;
 use std::io::Cursor;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -2297,6 +2297,40 @@ fn locate_mosh_cli() -> Option<std::path::PathBuf> {
     None
 }
 
+/// Locate the bundled datamosh sidecar. Tauri strips the target-triple suffix
+/// from `externalBin` entries, so in a real install it sits next to the app as
+/// `mosh-cli.exe`; a dev checkout has the suffixed build in `src-tauri/bin`.
+///
+/// This exists because datamoshing used to need a Python interpreter AND numpy
+/// on the user's machine, and the installer shipped neither -- so the app's
+/// signature feature worked for developers and failed for everyone else.
+fn locate_mosh_sidecar() -> Option<PathBuf> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            for name in ["mosh-cli.exe", "mosh-cli"] {
+                let candidate = dir.join(name);
+                if candidate.exists() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    for name in [
+        "mosh-cli-x86_64-pc-windows-msvc.exe",
+        "mosh-cli-aarch64-apple-darwin",
+        "mosh-cli-x86_64-apple-darwin",
+        "mosh-cli-x86_64-unknown-linux-gnu",
+        "mosh-cli.exe",
+        "mosh-cli",
+    ] {
+        let candidate = Path::new("bin").join(name);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 /// Locate a Python interpreter for running the FFglitch bridge script.
 /// Prefers the bundled sam3_env venv, then system PATH.
 fn find_python() -> Option<String> {
@@ -2426,9 +2460,12 @@ fn run_cancellable(
 /// same "await that can never resolve" defect class as the mask-texture
 /// freeze already fixed, plus a Cancel button with no actual path to the
 /// subprocess it claimed to cancel.
+/// `program` is either the bundled `mosh-cli` sidecar (in which case `script` is
+/// None, because the entry point is compiled in) or a Python interpreter (in
+/// which case `script` is `mosh_cli.py`).
 fn run_ffglitch_subprocess(
-    python: &str,
-    mosh_cli: &Path,
+    program: &str,
+    script: Option<&Path>,
     temp_config_path: &str,
     ffgac: &str,
     ffedit: &str,
@@ -2442,9 +2479,12 @@ fn run_ffglitch_subprocess(
     const FFGLITCH_TIMEOUT: Duration = Duration::from_secs(3600);
     const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
+    let mut command = Command::new(program);
+    if let Some(script) = script {
+        command.arg(script);
+    }
     run_cancellable(
-        Command::new(python)
-            .arg(mosh_cli)
+        command
             .arg(temp_config_path)
             .env("MOSHDITHER_FFGAC_PATH", ffgac)
             .env("MOSHDITHER_FFEDIT_PATH", ffedit)
@@ -2556,8 +2596,23 @@ pub async fn apply_ffglitch(
 
     validate_ffglitch_extra_paths(&mode, &params)?;
 
-    let python = find_python()
-        .ok_or("Python interpreter not found. Install sam3_env or add python to PATH")?;
+    // Prefer the bundled sidecar: it carries its own interpreter and numpy, so
+    // datamoshing works on a machine with no Python at all. The interpreter
+    // path stays as the dev fallback (and as an escape hatch if someone wants
+    // to run a modified mosh_cli.py).
+    let sidecar = locate_mosh_sidecar();
+    let (program, script) = match &sidecar {
+        Some(exe) => (exe.to_string_lossy().into_owned(), None),
+        None => {
+            let python = find_python().ok_or(
+                "Datamoshing is unavailable: the bundled mosh-cli sidecar is missing and no                  Python interpreter was found. Reinstall the app, or build the sidecar with                  `npm run build:mosh-sidecar`.",
+            )?;
+            let cli = locate_mosh_cli().ok_or(
+                "mosh_cli.py not found. Expected at ./packages/python-backend/mosh_cli.py",
+            )?;
+            (python, Some(cli))
+        }
+    };
 
     let ffgac = ffgac_binary().map_err(|e| e.to_string())?;
     let ffedit = ffedit_binary().map_err(|e| e.to_string())?;
@@ -2566,9 +2621,6 @@ pub async fn apply_ffglitch(
     }
 
     let ffmpeg = ffmpeg_binary().map_err(|e| e.to_string())?;
-
-    let mosh_cli = locate_mosh_cli()
-        .ok_or("mosh_cli.py not found. Expected at ./packages/python-backend/mosh_cli.py")?;
 
     let config = serde_json::json!({
         "input": input_path,
@@ -2612,8 +2664,8 @@ pub async fn apply_ffglitch(
     let result = tauri::async_runtime::spawn_blocking(move || {
         let _permit = permit;
         run_ffglitch_subprocess(
-            &python,
-            &mosh_cli,
+            &program,
+            script.as_deref(),
             &temp_config_path,
             &ffgac,
             &ffedit,

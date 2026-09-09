@@ -76,6 +76,15 @@ Because FFglitch is GPL **v2 or later**, this project elects to convey all four
 binaries above under the terms of **GPL v3**, so one uniform set of obligations
 applies rather than two.
 
+### Datamosh sidecar — `mosh-cli.exe`
+
+A PyInstaller bundle of this project's own `mosh_cli.py` plus the vendored
+`DatamoshLib` and `pymosh`, and NumPy. NumPy is BSD-3-Clause; the embedded
+CPython runtime is under the PSF License. This project's own portion is MIT, as
+above.
+
+It exists so that datamoshing does not require the user to install Python.
+
 ---
 
 ## Downloaded after install (the SAM3 add-on)

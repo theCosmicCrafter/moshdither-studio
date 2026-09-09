@@ -58,7 +58,8 @@
       "bin/ffmpeg",
       "bin/ffprobe",
       "bin/ffgac",
-      "bin/ffedit"
+      "bin/ffedit",
+      "bin/mosh-cli"
     ],
     "resources": {
       "../packages/python-backend": "packages/python-backend",

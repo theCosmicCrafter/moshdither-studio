@@ -36,7 +36,8 @@
     "verify:lut-thumbs": "node scripts/generate-lut-thumbs.mjs --check",
     "archive:build": "node scripts/archive-build.mjs",
     "fetch:external": "node scripts/fetch-external-bins.mjs",
-    "sam3:publish": "node scripts/publish-sam3-addon.mjs"
+    "sam3:publish": "node scripts/publish-sam3-addon.mjs",
+    "build:mosh-sidecar": "python scripts/build-mosh-sidecar.py"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",
