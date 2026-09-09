@@ -210,3 +210,33 @@ describe("preset file schema", () => {
     expect(parsePresets(serialisePresets(original))).toEqual(original);
   });
 });
+
+describe("ffglitchMode round-trip", () => {
+  // A preset used to capture only the effect stack, so a saved look lost the
+  // datamosh mode entirely -- you could share a 28-effect stack and the thing
+  // that makes it a MOSH was not in it.
+  it("survives serialise -> parse", () => {
+    const preset = {
+      id: "p1",
+      name: "Vaporwave Mosh",
+      createdAt: new Date(0).toISOString(),
+      stack: [],
+      ffglitchMode: "pulse",
+    };
+    const back = parsePresets(serialisePresets([preset]));
+    expect(back).toHaveLength(1);
+    expect(back[0].ffglitchMode).toBe("pulse");
+  });
+
+  it("still accepts a preset saved before the field existed", () => {
+    // Every library already on disk lacks it; dropping those would read as
+    // data loss and the next write would make it real.
+    const legacy = JSON.stringify({
+      version: 2,
+      presets: [{ id: "old", name: "Old", createdAt: "x", stack: [] }],
+    });
+    const back = parsePresets(legacy);
+    expect(back).toHaveLength(1);
+    expect(back[0].ffglitchMode).toBeUndefined();
+  });
+});

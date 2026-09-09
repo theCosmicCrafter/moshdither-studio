@@ -131,6 +131,12 @@ export interface AppState {
    *  real thing when you pause is what every NLE and compositor does, and it
    *  removes a choice the user should never have had to make. */
   previewAutoExact: boolean;
+  /** The FFglitch bitstream-datamosh mode chosen for export.
+   *  Lived as component-local useState in ExportPanel, so it could not be
+   *  saved in a preset, did not survive the panel unmounting, and reset to
+   *  "classic" on every launch -- for what is arguably the app's signature
+   *  capability. */
+  ffglitchMode: string;
 
   // Effects
   allEffects: EffectMeta[];
@@ -290,6 +296,7 @@ export interface AppState {
   setIsVideo: (isVideo: boolean) => void;
   setUseCpuPreview: (v: boolean) => void;
   setPreviewAutoExact: (v: boolean) => void;
+  setFfglitchMode: (v: string) => void;
   setAllEffects: (effects: EffectMeta[]) => void;
   setActiveCategory: (cat: string) => void;
   setSearchQuery: (q: string) => void;
@@ -503,6 +510,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   isVideo: false,
   useCpuPreview: false,
   previewAutoExact: true,
+  ffglitchMode: "classic",
   allEffects: [],
   activeCategory: "dithering",
   searchQuery: "",
@@ -632,6 +640,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setIsVideo: (isVideo) => set({ isVideo }),
   setUseCpuPreview: (v) => set({ useCpuPreview: v }),
   setPreviewAutoExact: (v) => set({ previewAutoExact: v }),
+  setFfglitchMode: (v) => set({ ffglitchMode: v }),
   setAllEffects: (effects) => set({ allEffects: effects }),
   setActiveCategory: (cat) => set({ activeCategory: cat }),
   setSearchQuery: (q) => set({ searchQuery: q }),

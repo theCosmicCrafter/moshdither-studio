@@ -11,6 +11,13 @@ export interface Preset {
   createdAt: string;
   stack: StackEntry[];
   thumbnail?: string; // base64 PNG data URL
+  /** The FFglitch bitstream-datamosh mode this look was built with.
+   *
+   *  Optional so every preset saved before this still loads. Without it a
+   *  preset captured only half the look: you could save a 28-effect stack and
+   *  share it, but the datamosh mode -- the thing that makes it a MOSH -- was
+   *  picked once at export and forgotten. */
+  ffglitchMode?: string;
 }
 
 /**
@@ -264,6 +271,7 @@ export function usePresets() {
         createdAt: new Date().toISOString(),
         stack: JSON.parse(JSON.stringify(effectStack)), // deep clone
         thumbnail,
+        ffglitchMode: useAppStore.getState().ffglitchMode,
       };
       setPresets((prev) => [preset, ...prev]);
       setStatusMessage(`Preset "${preset.name}" saved`);
@@ -288,6 +296,11 @@ export function usePresets() {
         params: JSON.parse(JSON.stringify(entry.params)),
       }));
       replaceStack(newStack);
+      // Older presets have no mode; leave the current one alone rather than
+      // silently resetting it to "classic".
+      if (preset.ffglitchMode) {
+        useAppStore.getState().setFfglitchMode(preset.ffglitchMode);
+      }
       setStatusMessage(`Preset "${preset.name}" loaded`);
     },
     [replaceStack, setStatusMessage]

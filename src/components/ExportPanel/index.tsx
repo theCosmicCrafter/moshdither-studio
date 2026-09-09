@@ -110,7 +110,8 @@ export default function ExportPanel() {
   const [quality, setQuality] = useState<"draft" | "good" | "best">("good");
   const [fps, setFps] = useState(30);
   const [includeAudio, setIncludeAudio] = useState(true);
-  const [ffglitchMode, setFfglitchMode] = useState("classic");
+  const ffglitchMode = useAppStore((s) => s.ffglitchMode);
+  const setFfglitchMode = useAppStore((s) => s.setFfglitchMode);
 
   const progressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
