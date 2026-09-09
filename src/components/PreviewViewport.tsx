@@ -93,6 +93,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     zoom,
     isPlaying,
     useCpuPreview,
+    previewAutoExact,
     audioEnabled,
     proxyUrl,
     isVideo,
@@ -108,6 +109,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       zoom: s.zoom,
       isPlaying: s.isPlaying,
       useCpuPreview: s.useCpuPreview,
+      previewAutoExact: s.previewAutoExact,
       audioEnabled: s.audioEnabled,
       proxyUrl: s.proxyUrl,
       isVideo: s.isVideo,
@@ -1205,14 +1207,52 @@ function PreviewViewport({ isDropTarget = false }: Props) {
 
   const showDropOverlay = isDropTarget || isHtmlDropTarget;
 
+  // AUTOMATIC EXACT PREVIEW.
+  //
+  // Two preview methods existed and the user had to pick one -- a fast WebGL
+  // approximation, or the exact Rust render that matches the exported file.
+  // That is an implementation detail presented as a decision, and it is not how
+  // any NLE or compositor behaves: they show a fast preview while you work and
+  // the real thing when you stop.
+  //
+  // So: GPU while anything is changing or playing, and the exact frame swapped
+  // in once you have been still for a moment. Only the effects whose shader is
+  // an approximation actually need it, so a stack that previews exactly on the
+  // GPU is left alone rather than paying for a redundant CPU render.
+  useEffect(() => {
+    if (!previewAutoExact || !mediaLoaded) return;
+    // Playing, or nothing to correct: stay on the GPU.
+    if (isPlaying || !isApproximatePreview) {
+      if (useCpuPreview) setUseCpuPreview(false);
+      return;
+    }
+    // Something just changed -- drop to the fast path immediately so dragging a
+    // slider never waits on a CPU render.
+    if (useCpuPreview) setUseCpuPreview(false);
+    const t = setTimeout(() => setUseCpuPreview(true), 450);
+    return () => clearTimeout(t);
+    // useCpuPreview is deliberately NOT a dependency: this effect sets it, and
+    // depending on it would re-arm the timer from its own result.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    previewAutoExact,
+    mediaLoaded,
+    isPlaying,
+    isApproximatePreview,
+    cpuRenderSignature,
+    setUseCpuPreview,
+  ]);
+
   let statusDotBg = "solar-bg animate-pulse-glow";
   let statusText = "LIVE PREVIEW";
   if (useCpuPreview) {
     statusDotBg = "bg-accent-teal";
-    statusText = "EXACT OUTPUT (CPU)";
+    statusText = "EXACT";
   } else if (isApproximatePreview) {
+    // With auto-exact on, this state lasts about half a second after you stop
+    // moving, so it reports what is happening rather than asking for a click.
     statusDotBg = "bg-amber-400";
-    statusText = "APPROXIMATE (CLICK FOR EXACT)";
+    statusText = previewAutoExact ? "REFINING…" : "APPROXIMATE (CLICK FOR EXACT)";
   } else if (stackCount > 0) {
     statusDotBg = "bg-accent-pink animate-pulse-glow";
     statusText = "ANIMATING";

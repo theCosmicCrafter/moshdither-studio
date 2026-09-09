@@ -36,11 +36,13 @@ Every new effect must also be written twice, in two languages, and kept
 numerically in step. That is 100% duplicated surface area for a solo project,
 and it is the most likely source of future "the preview lied to me" bugs.
 
-**Recommendation — remove the choice, keep the capability.** Run WebGL always
-for interaction, and render the exact CPU frame automatically when the user
-stops touching things (a short idle debounce), swapping it in silently. Keep a
-small "exact" indicator so it is knowable, not a mode to pick. MoshPro does not
-ask this question and neither should this app.
+**DONE (2026-09-09).** The choice is gone. WebGL runs while anything is
+changing or playing; 450 ms after you stop, the exact CPU frame is rendered and
+swapped in. The header now *reports* state ("REFINING…" → "EXACT") instead of
+asking for a click. It only spends the CPU render on stacks whose shader is
+actually an approximation — a stack that previews exactly on the GPU is left
+alone. `previewAutoExact` in the store turns it off for anyone who wants the
+old manual behaviour.
 
 The heavier option — delete one renderer — is not worth it: the GPU path is what
 makes scrubbing usable, and the CPU path is what makes export honest.
@@ -49,8 +51,14 @@ makes scrubbing usable, and the CPU path is what makes export honest.
 
 ## 2. Where the "animate a still image" feature is
 
-**It works, and it is not labelled.** Load an image, set a duration, export as
-video: 98 of 99 effects animate a still (verified —
+**CORRECTION.** It *is* labelled: **File → Animate as Video**, with its own
+modal (`AnimateAsVideoModal.tsx`) taking duration and fps, backed by the
+`animate_still_as_video` command. My earlier claim that it was unlabelled was
+wrong — I had searched the Export panel and not the File menu.
+
+What remains true is that it is one menu item away from the app's headline
+capability, and the Export panel gives no hint it exists. 98 of 99 effects
+animate a still (verified —
 `evals/reports/quality-audit.md`; the one that does not is `frame_hold`, which
 holds a frame by definition).
 

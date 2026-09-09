@@ -1955,6 +1955,137 @@ mod export_matrix_tests {
         }
     }
 
+    /// Every SAVE path the app exposes, not just the video exporter.
+    ///
+    /// The export matrix below covers `export_video`. It does not cover saving a
+    /// still (`save_processed_image` -> `image_io::save_image`, 4 formats) or
+    /// turning a still into a clip (`animate_still_as_video` -> `image_to_video`),
+    /// and those are two of the three things a user actually does with this app.
+    #[test]
+    fn every_still_save_format_writes_a_readable_file() {
+        use crate::effects::types::Frame;
+        let (w, h) = (96u32, 72u32);
+        let mut data = vec![255u8; (w * h * 4) as usize];
+        for (i, px) in data.chunks_exact_mut(4).enumerate() {
+            px[0] = (i % 256) as u8;
+            px[1] = ((i / 96) % 256) as u8;
+            px[2] = ((i / 7) % 256) as u8;
+        }
+        let frame = Frame {
+            width: w,
+            height: h,
+            data,
+        };
+
+        let dir = std::env::temp_dir().join("moshdither-still-saves");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        let mut failures = Vec::new();
+        // Mirrors the dialog filters in src/lib/tauri.ts saveImage().
+        for (fmt, ext) in [
+            ("png", "png"),
+            ("jpg", "jpg"),
+            ("bmp", "bmp"),
+            ("tiff", "tiff"),
+        ] {
+            let dest = dir.join(format!("out.{ext}"));
+            if let Err(e) = crate::utils::image_io::save_image(&frame, &dest, Some(fmt), Some(90)) {
+                failures.push(format!("{fmt}: save failed: {e}"));
+                continue;
+            }
+            match crate::utils::image_io::load_image(&dest) {
+                Ok(back) => {
+                    if back.width != w || back.height != h {
+                        failures.push(format!(
+                            "{fmt}: saved {}x{} but read back {}x{}",
+                            w, h, back.width, back.height
+                        ));
+                    }
+                }
+                Err(e) => failures.push(format!("{fmt}: written but unreadable: {e}")),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            failures.is_empty(),
+            "still save formats failed:
+  {}",
+            failures.join(
+                "
+  "
+            )
+        );
+        eprintln!("still saves: 4 formats written and read back");
+    }
+
+    /// "Animate as Video" -- the still-photo path, which is the app's headline
+    /// capability and had no test of its own.
+    #[test]
+    fn animate_still_as_video_produces_a_playable_clip() {
+        if ffmpeg_binary().is_err() {
+            eprintln!("SKIP animate_still_as_video: no ffmpeg binary");
+            return;
+        }
+        use crate::effects::types::Frame;
+        let (w, h) = (128u32, 96u32);
+        let mut data = vec![255u8; (w * h * 4) as usize];
+        for (i, px) in data.chunks_exact_mut(4).enumerate() {
+            px[0] = (i % 256) as u8;
+            px[1] = 90;
+            px[2] = ((i / 128) % 256) as u8;
+        }
+        let dir = std::env::temp_dir().join("moshdither-animate-still");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let still = dir.join("still.png");
+        crate::utils::image_io::save_image(
+            &Frame {
+                width: w,
+                height: h,
+                data,
+            },
+            &still,
+            Some("png"),
+            None,
+        )
+        .expect("write the still");
+
+        let out = image_to_video(&still.to_string_lossy(), 2.0, 12.0).expect("animate");
+        let meta = std::fs::metadata(&out).expect("clip exists");
+        assert!(meta.len() > 0, "animate produced a 0-byte file");
+
+        // Probe it rather than trusting the byte count: a 2s clip at 12fps is
+        // 24 frames, and a muxer that wrote a header and nothing else would
+        // still pass a size check.
+        let probe = crate::proc::command(ffprobe_binary().expect("ffprobe"))
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=nb_read_frames",
+                "-count_frames",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(&out)
+            .output()
+            .expect("ffprobe runs");
+        let frames: i64 = String::from_utf8_lossy(&probe.stdout)
+            .trim()
+            .parse()
+            .unwrap_or(-1);
+        assert!(
+            frames >= 20,
+            "expected ~24 frames from 2s @ 12fps, probe read {frames}"
+        );
+        eprintln!("animate still: {frames} frames written and probed");
+        let _ = std::fs::remove_file(&out);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Every format the export dialog offers, encoded for real through the same
     /// `encode_video` the app calls.
     ///

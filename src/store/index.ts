@@ -126,6 +126,11 @@ export interface AppState {
    *  Set when the stack contains effects without accurate WebGL implementations
    *  (e.g. error diffusion dithering algorithms). */
   useCpuPreview: boolean;
+  /** Auto-upgrade the preview to the exact CPU render once the user stops
+   *  interacting. On by default: a fast approximation while you work and the
+   *  real thing when you pause is what every NLE and compositor does, and it
+   *  removes a choice the user should never have had to make. */
+  previewAutoExact: boolean;
 
   // Effects
   allEffects: EffectMeta[];
@@ -284,6 +289,7 @@ export interface AppState {
   setProxyUrl: (url: string | null) => void;
   setIsVideo: (isVideo: boolean) => void;
   setUseCpuPreview: (v: boolean) => void;
+  setPreviewAutoExact: (v: boolean) => void;
   setAllEffects: (effects: EffectMeta[]) => void;
   setActiveCategory: (cat: string) => void;
   setSearchQuery: (q: string) => void;
@@ -496,6 +502,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   proxyUrl: null,
   isVideo: false,
   useCpuPreview: false,
+  previewAutoExact: true,
   allEffects: [],
   activeCategory: "dithering",
   searchQuery: "",
@@ -624,6 +631,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setProxyUrl: (url) => set({ proxyUrl: url }),
   setIsVideo: (isVideo) => set({ isVideo }),
   setUseCpuPreview: (v) => set({ useCpuPreview: v }),
+  setPreviewAutoExact: (v) => set({ previewAutoExact: v }),
   setAllEffects: (effects) => set({ allEffects: effects }),
   setActiveCategory: (cat) => set({ activeCategory: cat }),
   setSearchQuery: (q) => set({ searchQuery: q }),
