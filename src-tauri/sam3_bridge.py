@@ -164,6 +164,71 @@ CHECKPOINT_PATH = os.environ.get("SAM3_CHECKPOINT", str(_DEFAULT_CHECKPOINT))
 DEVICE = os.environ.get("SAM3_DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
 USE_AMP = os.environ.get("SAM3_USE_AMP", "1") == "1"
 
+if not torch.cuda.is_available():
+    # The vendored SAM3 hard-codes CUDA in ~15 places that no config reaches --
+    # `torch.zeros(..., device="cuda")` in position_encoding.py and decoder.py,
+    # and bare `.cuda()` calls in io_utils.py and the tracker/predictor modules.
+    # On a machine without CUDA the model therefore dies during *construction*
+    # with "Torch not compiled with CUDA enabled", long before any device
+    # argument we pass is consulted.
+    #
+    # sam3_repo is a gitignored vendored clone, so editing it leaves no record
+    # and does not survive a re-clone. Patch here instead, where the change is
+    # tracked -- the same reasoning as the triton.jit and torch.jit patches
+    # above. Each override means exactly one thing: with no CUDA present,
+    # "cuda" denotes the CPU. That is only ever installed when CUDA is absent,
+    # so a GPU machine runs the stock, unmodified code paths.
+    def _cpu_device(kwargs):
+        dev = kwargs.get("device")
+        if dev is not None and str(dev).startswith("cuda"):
+            kwargs["device"] = "cpu"
+        return kwargs
+
+    for _name in ("zeros", "ones", "empty", "full", "arange", "tensor", "rand", "randn"):
+        _orig = getattr(torch, _name)
+
+        def _make(orig):
+            def _wrapper(*args, **kwargs):
+                return orig(*args, **_cpu_device(kwargs))
+
+            return _wrapper
+
+        setattr(torch, _name, _make(_orig))
+
+    # `.cuda()` on a tensor or module: stay put rather than raise.
+    torch.Tensor.cuda = lambda self, *a, **k: self
+    torch.nn.Module.cuda = lambda self, *a, **k: self
+
+    # sam3_multiplex_base.py and the tracking predictors build a
+    # `torch.autocast(device_type="cuda", dtype=torch.bfloat16)` and call
+    # __enter__ on it WITHOUT ever exiting -- "keep using for the entire model
+    # process". With no CUDA that leaves bf16 activations meeting fp32 weights
+    # ("mat1 and mat2 must have the same dtype, but got BFloat16 and Float").
+    # A CUDA autocast on a CPU-only machine describes a device that is not
+    # there, so make it inert; CPU autocast requests still behave normally.
+    _orig_autocast = torch.autocast
+
+    class _InertAutocast:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def __call__(self, fn):
+            return fn
+
+    def _autocast(device_type="cuda", *args, **kwargs):
+        if str(device_type).startswith("cuda"):
+            return _InertAutocast()
+        return _orig_autocast(device_type, *args, **kwargs)
+
+    torch.autocast = _autocast
+    logging.warning(
+        "No CUDA device — SAM3 will run on the CPU. Segmentation will be "
+        "considerably slower than on a GPU."
+    )
+
 MAX_SAM3_DIM = int(os.environ.get("SAM3_MAX_DIM", "1024"))
 scale_x = 1.0
 scale_y = 1.0
@@ -480,6 +545,10 @@ def cmd_load_image(image_b64: str):
                 except Exception:
                     pass
             return {"status": "error", "message": f"CUDA out of memory during image encoding: {e}"}
+        # Same reasoning as the model-load handlers: the bare message names
+        # neither a file nor a call site, which is precisely what made the
+        # CPU-only port expensive to debug. Rust captures this stderr.
+        logging.exception("SAM3 image encoding failed")
         return {"status": "error", "message": f"Image encoding failed: {e}"}
 
     # Every step succeeded -- publish all five values together.
