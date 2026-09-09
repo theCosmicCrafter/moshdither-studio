@@ -70,6 +70,34 @@ to end against a real clip with no system Python involved.
 the icons are all bundled. Effects, dithering, glitch, datamoshing, LUTs and
 export need nothing from the internet.
 
+## Verification: what has actually been exercised (2026-09-09)
+
+Measured with `mosh-verify`, not read. Re-run any of these before a release.
+
+| What | Result |
+|---|---|
+| `verify-all` | 99/99 effects, 0 failures |
+| `render-all` on a photographic image | 99/99 render, 0 errors |
+| Default calibration (measured) | 0 blacked out, 0 blown out, 0 flat |
+| `animate-all` (still photo -> video) | 98/99 animate; `frame_hold` static by design |
+| `audio-render` with a synthetic 120 BPM bake | 8/8 render; all 8 vary over time, 5 spike on beats |
+| `render-luts` | 35/35, none blowing out |
+| `test-all` | 49/49 |
+| Export formats | 13/13 encoded and verified on disk (Rust test) |
+| Video containers in | 8/8 decode (Rust test) |
+| Still formats in | 11/11 decode; avif and dds REMOVED, no decoder exists |
+
+**Use a photographic test image, not `tests/fixtures/test-image.png`.** That
+fixture is a saturated colour chart -- 46% of its channels are pinned at 255 --
+which makes `artistic.solarize` look like it blacks the frame out when it is
+behaving correctly. It also hid the bloom white-out, because the chart's
+aggregate is darker. The generator for a photographic image is in the session
+scratchpad; regenerate one rather than trusting the chart for calibration work.
+
+Still untested, honestly: individual parameter VALUES (only defaults were
+swept), SAM3 segmentation quality (the add-on is not published yet), and
+anything requiring real-world footage.
+
 ## Release checklist — what is left, and it is all human
 
 Nothing below is blocked on code. Each is an action on the maintainer's own
