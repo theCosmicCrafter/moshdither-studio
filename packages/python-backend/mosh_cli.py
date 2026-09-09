@@ -345,4 +345,36 @@ def main():
     print("Mosh pipeline completed successfully!")
 
 if __name__ == "__main__":
-    main()
+    # Fail with a SENTENCE, not a traceback.
+    #
+    # Every failure here reached the user as a raw Python traceback plus, in the
+    # frozen sidecar, "[PYI-nnnnn:ERROR] Failed to execute script 'mosh_cli' due
+    # to unhandled exception!". That is unreadable in a UI and says nothing
+    # about what to do. Some of these are ordinary, expected conditions --
+    # `combine` needs a second video, `motion_transfer` needs a motion source --
+    # and they should read as requirements, not as a crash.
+    try:
+        main()
+    except ValueError as exc:
+        # Caller error: a missing or wrong parameter.
+        print("Datamosh failed: " + str(exc), file=sys.stderr)
+        sys.exit(2)
+    except RuntimeError as exc:
+        # The pipeline ran and could not produce a file. The commonest cause is
+        # a mode whose corruption left nothing decodable -- the tomato family
+        # does this on some sources -- so say that rather than dumping FFmpeg's
+        # several hundred lines of banner.
+        msg = str(exc)
+        if "Could not open encoder" in msg or "Invalid data found" in msg:
+            print(
+                "Datamosh failed: this mode corrupted the clip so heavily that "
+                "nothing could be re-encoded from it. Try a different mode, a "
+                "longer clip, or a higher-bitrate source.",
+                file=sys.stderr,
+            )
+        else:
+            print("Datamosh failed: " + msg.splitlines()[0], file=sys.stderr)
+        sys.exit(3)
+    except Exception as exc:  # noqa: BLE001 - last resort, must not traceback
+        print(f"Datamosh failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        sys.exit(4)

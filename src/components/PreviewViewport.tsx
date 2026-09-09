@@ -1252,7 +1252,11 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     // With auto-exact on, this state lasts about half a second after you stop
     // moving, so it reports what is happening rather than asking for a click.
     statusDotBg = "bg-amber-400";
-    statusText = previewAutoExact ? "REFINING…" : "APPROXIMATE (CLICK FOR EXACT)";
+    statusText = !previewAutoExact
+      ? "APPROXIMATE (CLICK FOR EXACT)"
+      : isPlaying
+        ? "LIVE PREVIEW"
+        : "REFINING…";
   } else if (stackCount > 0) {
     statusDotBg = "bg-accent-pink animate-pulse-glow";
     statusText = "ANIMATING";
@@ -1406,33 +1410,32 @@ function PreviewViewport({ isDropTarget = false }: Props) {
                 ref={beforeClipRef}
                 className={showBeforeAfter && originalDataUrl ? "absolute top-0 left-0 w-full h-full" : "relative"}
               >
-                {useCpuPreview ? (
-                  /* CPU-processed preview image (accurate algorithms via Rust backend) */
-                  <img
-                    ref={previewImgRef}
-                    src={previewDataUrl || ""}
-                    alt="Preview"
-                    draggable={false}
-                    className="preview-img"
-                  />
-                ) : (
-                  /* WebGL Preview Canvas */
-                  <canvas
-                    ref={webglCanvasRef}
-                    className="preview-canvas"
-                  />
-                )}
-              </div>
-              {/* Hidden img for SAM3 coord reference and fallback */}
-              {!useCpuPreview && (
+                {/* BOTH surfaces stay mounted; only visibility changes.
+                    They used to be swapped with a ternary, which UNMOUNTED the
+                    canvas whenever the CPU preview showed. React then mounts a
+                    NEW canvas element on the way back -- and a canvas gets one
+                    WebGL context for its lifetime, so the replacement had none
+                    and the preview went black. That was survivable while the
+                    toggle was a rare manual click; automatic switching hits it
+                    every time.
+
+                    Keeping one <img> also fixes a ref collision: previewImgRef
+                    was attached to both the visible and the hidden copy, so
+                    whichever mounted last won. SAM3 reads that ref for click
+                    coordinates. */}
                 <img
                   ref={previewImgRef}
                   src={previewDataUrl || ""}
                   alt="Preview"
                   draggable={false}
-                  className="preview-hidden"
+                  className={useCpuPreview ? "preview-img" : "preview-hidden"}
                 />
-              )}
+                <canvas
+                  ref={webglCanvasRef}
+                  className="preview-canvas"
+                  style={useCpuPreview ? { display: "none" } : undefined}
+                />
+              </div>
               {/* Splitter handle and labels */}
               {showBeforeAfter && originalDataUrl && (
                 <>
