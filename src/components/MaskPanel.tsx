@@ -1,6 +1,7 @@
 import { useState, useEffect, memo, useCallback } from "react";
 import {
     getFrameData,
+    sam3AddonStatus,
     sam3AutoMask,
     sam3Clear,
     sam3Init,
@@ -13,10 +14,24 @@ import { useAppStore } from "../store";
 import MaskSelector from "./MaskSelector";
 import PostProcessControls from "./PostProcessControls";
 import ManualMaskEditor from "./ManualMaskEditor";
+import Sam3Setup from "./Sam3Setup";
 import FrameTimeline from "./FrameTimeline";
 import LabeledSlider from "./LabeledSlider";
 
 export default function MaskPanel() {
+  // Whether the ~6 GB SAM3 add-on is present. `null` while unknown, so the
+  // panel shows nothing rather than flashing a download prompt at a user who
+  // already has it installed.
+  const [addonReady, setAddonReady] = useState<boolean | null>(null);
+  const refreshAddon = useCallback(() => {
+    void sam3AddonStatus()
+      .then((st) => setAddonReady(st.ready))
+      // A failed probe must not render the setup panel: that would offer a 6 GB
+      // download on the strength of an unanswered question.
+      .catch(() => setAddonReady(true));
+  }, []);
+  useEffect(() => refreshAddon(), [refreshAddon]);
+
   const mediaLoaded = useAppStore((s) => s.mediaLoaded);
   const activeMask = useAppStore((s) => s.activeMask);
   const maskVisible = useAppStore((s) => s.maskVisible);
@@ -273,11 +288,13 @@ export default function MaskPanel() {
 
       {maskTab === "manual" ? (
         <ManualMaskEditor />
+      ) : addonReady === false ? (
+        <Sam3Setup onReady={refreshAddon} />
       ) : !sam3Ready ? (
         <div className="flex flex-col gap-2 py-2">
           <div className="flex items-center justify-center gap-2 font-body-sm text-body-sm text-[var(--text-muted)]">
             <span className="inline-block w-2 h-2 rounded-full bg-[var(--accent)]" aria-hidden="true" />
-            SAM3 idle — enter a prompt to restart
+            SAM3 idle — enter a prompt to start
           </div>
           {/* Mode selector */}
           <div className="flex gap-2">

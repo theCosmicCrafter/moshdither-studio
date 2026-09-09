@@ -159,7 +159,34 @@ pub struct Sam3Engine {
 /// when it bundles `externalBin` entries, so the production filename is just
 /// `sam3-bridge` (or `sam3-bridge.exe` on Windows). Dev builds can also pick up
 /// a target-prefixed binary from `src-tauri/bin`.
+/// Directory holding the downloadable SAM3 add-on: `~/.moshdither/sam3`.
+///
+/// The sidecar is ~2.9 GB, and neither Windows installer format will carry a
+/// file that large -- WiX rejects it outright (LGHT0263, 2 GiB limit) and NSIS
+/// fails to mmap it. Both were measured, not assumed. So the sidecar cannot
+/// ship inside the installer and is fetched after install instead, next to the
+/// checkpoint that already lives under `~/.moshdither/models`.
+pub fn sam3_addon_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)?;
+    Some(home.join(".moshdither").join("sam3"))
+}
+
 fn locate_sam3_binary() -> Option<PathBuf> {
+    // Installed add-on first. It wins over a bundled copy because it is the
+    // one the user explicitly chose to download, and because a future release
+    // that does manage to bundle a sidecar should not silently override a
+    // newer add-on the user already has.
+    if let Some(dir) = sam3_addon_dir() {
+        for name in ["sam3-bridge.exe", "sam3-bridge"] {
+            let candidate = dir.join(name);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(PathBuf::from))?;
@@ -313,6 +340,14 @@ impl Sam3Engine {
             .map(std::path::PathBuf::from)
             .filter(|p| p.exists());
 
+        // A frozen PyInstaller onefile sidecar unpacks ~2.9 GB into %TEMP% on
+        // EVERY launch before it runs a line of Python, so its handshake is slow
+        // in a way a dev interpreter's never is. Measured here across three cold
+        // starts: 29.7 s, 33.8 s and 44.3 s -- against the 10 s budget this code
+        // used to hard-code, which therefore failed every single sidecar launch.
+        // SAM3 could not have worked in an installed app even with a perfect
+        // sidecar, so this flag picks a budget that matches what was launched.
+        let mut launched_sidecar = false;
         let mut command = if let Some(python) = explicit_python {
             let root = dev_project_root();
             let bridge = root
@@ -339,6 +374,7 @@ impl Sam3Engine {
             }
             cmd
         } else if let Some(sidecar) = locate_sam3_binary() {
+            launched_sidecar = true;
             let mut cmd = Command::new(&sidecar);
             // Point the sidecar at the Tauri resources for the model and the sam3 package.
             if let Some(repo) = resolve_sam3_repo(app) {
@@ -475,11 +511,19 @@ impl Sam3Engine {
             stdin.write_all(&payload)?;
             stdin.flush()?;
 
-            const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
-            let auth_resp = rx.recv_timeout(AUTH_TIMEOUT).map_err(|e| {
+            // Deliberately generous. Waiting too long costs a slow failure that
+            // the log explains; waiting too little costs a feature that never
+            // works at all -- which is exactly what happened at 10 s.
+            let auth_timeout = Duration::from_secs(
+                std::env::var("MOSHDITHER_SAM3_AUTH_TIMEOUT_SECS")
+                    .ok()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(if launched_sidecar { 300 } else { 60 }),
+            );
+            let auth_resp = rx.recv_timeout(auth_timeout).map_err(|e| {
                 crate::error::AppError::Sam3Timeout(format!(
-                    "SAM3 auth handshake timed out after {:?}: {}",
-                    AUTH_TIMEOUT, e
+                    "SAM3 auth handshake timed out after {:?}: {}. A bundled sidecar                      unpacks several GB on first launch; set                      MOSHDITHER_SAM3_AUTH_TIMEOUT_SECS to raise this budget.",
+                    auth_timeout, e
                 ))
             })?;
             let resp: serde_json::Value = serde_json::from_str(&auth_resp)?;

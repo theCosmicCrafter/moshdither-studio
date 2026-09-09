@@ -11,6 +11,7 @@ pub mod environment;
 pub mod ffmpeg;
 pub mod path_guard;
 pub mod presets;
+pub mod sam3_addon;
 pub mod sam3_engine;
 pub mod utils;
 
@@ -142,6 +143,8 @@ pub fn run() {
             get_media_info,
             get_media_metadata,
             extract_audio_from_video,
+            sam3_addon::sam3_addon_status,
+            sam3_addon::sam3_addon_install,
             sam3_init,
             sam3_load_image,
             sam3_text_prompt,

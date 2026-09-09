@@ -35,7 +35,8 @@
     "verify:icons": "node scripts/subset-material-symbols.mjs --check",
     "verify:lut-thumbs": "node scripts/generate-lut-thumbs.mjs --check",
     "archive:build": "node scripts/archive-build.mjs",
-    "fetch:external": "node scripts/fetch-external-bins.mjs"
+    "fetch:external": "node scripts/fetch-external-bins.mjs",
+    "sam3:publish": "node scripts/publish-sam3-addon.mjs"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",

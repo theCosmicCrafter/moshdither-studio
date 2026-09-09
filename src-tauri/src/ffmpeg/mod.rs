@@ -679,8 +679,11 @@ fn apply_watermark_args(
 
     if wm.watermark_type == "text" && !wm.text.is_empty() {
         let (x, y) = text_position_coords(&wm.position);
-        let alpha = ((wm.opacity * 255.0).round() as u32).clamp(0, 255);
-        let alpha_hex = format!("{:02x}", alpha);
+        // FFmpeg's drawtext wants `color@<float 0..1>`; a bare two-digit hex is
+        // rejected outright with "Invalid alpha value specifier", which aborted
+        // EVERY text-watermark export. Verified against the bundled ffmpeg 8.0.
+        let alpha_f = wm.opacity.clamp(0.0, 1.0);
+        let alpha = format!("{alpha_f:.3}");
         let color = to_drawtext_color(&wm.color);
         let mut drawtext = format!(
             "drawtext=text='{}':x={}:y={}:fontsize={}:fontcolor={}@{}",
@@ -689,7 +692,7 @@ fn apply_watermark_args(
             y,
             wm.font_size.clamp(1, 999),
             color,
-            alpha_hex
+            alpha
         );
         if let Some(font_path) = &wm.font_path {
             drawtext.push_str(&format!(":fontfile={}", escape_path(font_path)));
@@ -1790,6 +1793,70 @@ pub fn extract_audio_to_wav(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod watermark_tests {
+    use super::apply_watermark_args;
+    use crate::commands::WatermarkSettings;
+
+    fn text_wm(opacity: f64) -> WatermarkSettings {
+        WatermarkSettings {
+            enabled: true,
+            watermark_type: "text".into(),
+            text: "hello".into(),
+            image_path: None,
+            position: "bottom-right".into(),
+            font_size: 24,
+            font_path: None,
+            color: "white".into(),
+            opacity,
+            scale: 100,
+            rotation: 0,
+        }
+    }
+
+    /// Regression: every text watermark export aborted, because the alpha was
+    /// emitted as bare hex. Confirmed against the bundled ffmpeg 8.0, which
+    /// answers `Invalid alpha value specifier 'ff' in 'white@ff'` and writes no
+    /// file at all. drawtext wants a float in 0..=1.
+    #[test]
+    fn text_watermark_alpha_is_a_float_ffmpeg_accepts() {
+        let args = apply_watermark_args(
+            vec!["-i".into(), "in.mp4".into(), "out.mp4".into()],
+            &text_wm(1.0),
+            "out.mp4",
+        );
+        let joined = args.join(" ");
+        assert!(joined.contains("fontcolor=white@1.000"), "{joined}");
+        assert!(
+            !joined.contains("@ff") && !joined.contains("@00"),
+            "alpha must never be bare hex: {joined}"
+        );
+
+        let joined = apply_watermark_args(
+            vec!["-i".into(), "in.mp4".into(), "out.mp4".into()],
+            &text_wm(0.5),
+            "out.mp4",
+        )
+        .join(" ");
+        assert!(joined.contains("fontcolor=white@0.500"), "{joined}");
+    }
+
+    /// Opacity arrives from the UI as an f64 and nothing upstream clamps it.
+    #[test]
+    fn out_of_range_opacity_is_clamped_not_emitted_raw() {
+        for (given, want) in [(5.0_f64, "@1.000"), (-2.0_f64, "@0.000")] {
+            let joined = apply_watermark_args(
+                vec!["-i".into(), "in.mp4".into(), "out.mp4".into()],
+                &text_wm(given),
+                "out.mp4",
+            )
+            .join(" ");
+            assert!(joined.contains(want), "opacity {given} -> {joined}");
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod output_spec_tests {

@@ -560,15 +560,14 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   <span className="material-symbols-outlined menu-item-icon">image</span>
                   Save Image
                 </button>
-                <div className="border-t border-outline/10 my-1" />
-                <button
-                  onClick={() => { setShowUpdateChecker(true); setFileMenuOpen(false); }}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors"
-                  role="menuitem"
-                >
-                  <span className="material-symbols-outlined menu-item-icon" aria-hidden="true">system_update</span>
-                  Check for Updates
-                </button>
+                {/* "Check for Updates" is deliberately not offered.
+                    The updater needs two things this project does not have: a
+                    published latest.json (nothing has ever published to the
+                    endpoint) and a TAURI_SIGNING_PRIVATE_KEY to sign releases
+                    with. Until both exist, the menu item could only ever show
+                    "Update check failed", so offering it is worse than not.
+                    UpdateChecker.tsx is kept intact: restore the updater block
+                    in tauri.conf.json and this button together. */}
               </div>
             )}
           </div>

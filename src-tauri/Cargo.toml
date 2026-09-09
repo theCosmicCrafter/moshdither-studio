@@ -32,6 +32,12 @@ sysinfo = "0.38"
 tokio = { version = "1", features = ["sync"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# SAM3 add-on downloader. rustls rather than native-tls so the build does not
+# depend on a system OpenSSL; stream so a multi-GB asset is written to disk as
+# it arrives instead of being buffered whole in memory.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "http2"] }
+futures-util = "0.3"
+sha2 = "0.10"
 
 [features]
 default = ["custom-protocol"]
@@ -61,3 +67,7 @@ windows-sys = { version = "0.59", features = [
     # EXCEPTION_POINTERS lives behind this one.
     "Win32_System_Kernel",
 ] }
+
+[dev-dependencies]
+# Drives the async downloader in tests; the app itself runs on Tauri's runtime.
+tokio = { version = "1", features = ["rt", "macros"] }

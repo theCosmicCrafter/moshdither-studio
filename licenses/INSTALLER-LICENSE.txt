@@ -1,0 +1,76 @@
+MoshDither Studio — licence summary
+===================================
+
+MoshDither Studio's own code is MIT licensed. This installer also contains
+software written by other people under other licences. Both are summarised
+below. The complete texts are installed with the application, in the
+"licenses" folder next to the program.
+
+
+1. MoshDither Studio itself — MIT License
+-----------------------------------------
+
+Copyright (c) MoshDither Studio Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+2. FFmpeg and ffprobe — GNU General Public License, version 3 or later
+----------------------------------------------------------------------
+
+  Version:  8.0-essentials_build-www.gyan.dev
+  Upstream: https://ffmpeg.org
+  Source:   https://ffmpeg.org/releases/ffmpeg-8.0.tar.xz
+  Text:     licenses/GPL-3.0.txt
+  Build:    licenses/ffmpeg-BUILD-INFO.txt (exact configure line)
+
+
+3. FFglitch (ffgac and ffedit) — GNU General Public License, version 2 or later
+-------------------------------------------------------------------------------
+
+  Version:  ffglitch-0.10.2
+  Upstream: https://ffglitch.org
+  Source:   https://ffglitch.org/pub/src/ffglitch-0.10.2.tar.xz
+  Text:     licenses/GPL-2.0.txt
+  Build:    licenses/ffglitch-BUILD-INFO.txt (exact configure line)
+
+These four programs are run as separate processes. They are aggregated with
+MoshDither Studio on this installation medium; under GPLv3 section 5 that
+aggregation does not place MoshDither Studio's own code under the GPL. You
+receive the full rights the GPL grants you over these four programs,
+including the right to obtain their source code at the addresses above.
+
+
+4. SAM 3 model weights — SAM License (Meta)
+--------------------------------------------
+
+  NOT included in this installer. If you choose to enable SAM3 segmentation,
+  the application will download the model and show you this licence first.
+
+  Licence: licenses/SAM-LICENSE.txt
+
+  Note in particular that the SAM License forbids use for military or warfare
+  purposes, nuclear applications, espionage, and the development or use of
+  guns or illegal weapons, and requires compliance with export-control and
+  privacy law.
+
+
+A complete component-by-component listing, including everything inside the
+optional SAM3 download, is in THIRD-PARTY-NOTICES.md in the project
+repository and in the installed "licenses" folder.

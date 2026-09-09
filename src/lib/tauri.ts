@@ -8,6 +8,43 @@ export { convertFileSrc };
 
 // ── SAM3 Segmentation ────────────────────────────────────────
 
+export interface Sam3AddonStatus {
+  ready: boolean;
+  sidecar_installed: boolean;
+  sidecar_path: string | null;
+  sidecar_bytes: number | null;
+  checkpoint_installed: boolean;
+  checkpoint_path: string | null;
+  checkpoint_bytes: number | null;
+  /** Set when a developer interpreter supersedes the add-on. */
+  dev_override: string | null;
+}
+
+const ADDON_UNAVAILABLE: Sam3AddonStatus = {
+  ready: false,
+  sidecar_installed: false,
+  sidecar_path: null,
+  sidecar_bytes: null,
+  checkpoint_installed: false,
+  checkpoint_path: null,
+  checkpoint_bytes: null,
+  dev_override: null,
+};
+
+export async function sam3AddonStatus(): Promise<Sam3AddonStatus> {
+  if (!isTauriAvailable()) return ADDON_UNAVAILABLE;
+  return invoke("sam3_addon_status");
+}
+
+export async function sam3AddonInstall(): Promise<Sam3AddonStatus> {
+  // No browser fallback: there is nothing meaningful to install into, and a
+  // silent no-op here would look like a successful install that did nothing.
+  if (!isTauriAvailable()) {
+    throw new Error("The SAM3 add-on can only be installed from the desktop app.");
+  }
+  return invoke("sam3_addon_install");
+}
+
 export async function sam3Init(): Promise<string> {
   if (!isTauriAvailable()) return "browser-fallback";
   return invoke("sam3_init");
