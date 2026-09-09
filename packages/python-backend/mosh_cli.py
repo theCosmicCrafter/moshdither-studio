@@ -28,6 +28,19 @@ ffmpeg_path = os.environ.get(
 )
 
 from DatamoshLib.FFG_effects import basic_modes, external_script
+
+# Windows: keep child processes from flashing a console window.
+#
+# The app is a GUI. ffmpeg, ffgac and ffedit are console-subsystem programs, so
+# Windows allocates a console for each one and a black command-prompt window
+# appears -- and for a long convert, SITS there. Suppressing it on the Rust side
+# (crate::proc::command) only covers the processes RUST starts; every ffmpeg
+# this script spawns is a child of THIS process and needs its own flag.
+# CREATE_NO_WINDOW is 0x08000000. Output still pipes normally.
+_NO_WINDOW = {}
+if sys.platform == "win32":
+    _NO_WINDOW["creationflags"] = 0x08000000
+
 from DatamoshLib.Original import classic, classic_new, pymodes, repeat
 from DatamoshLib.Tomato import tomato
 
@@ -113,7 +126,9 @@ def ffmpeg_convert(input_path, output_path, extra_args=None):
     try:
         # The marker must sit on the line immediately before the call.
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=1200, **_NO_WINDOW
+        )
     except subprocess.TimeoutExpired as e:
         raise RuntimeError(f"ffmpeg timed out after {e.timeout}s") from e
     if result.returncode != 0:

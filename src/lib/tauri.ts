@@ -285,6 +285,15 @@ export async function listEffects(): Promise<EffectMeta[]> {
   return [...rustEffects, ...webglOnly];
 }
 
+export interface MediaMetadata extends Record<string, unknown> {
+  width?: number | null;
+  height?: number | null;
+  duration?: number | null;
+  fps?: number | null;
+  codec?: string | null;
+  bitrate?: number | null;
+}
+
 export async function getMediaInfo(): Promise<{ width: number; height: number; loaded: boolean }> {
   if (!isTauriAvailable()) {
     if (!browserMedia) return { width: 0, height: 0, loaded: false };
@@ -293,7 +302,17 @@ export async function getMediaInfo(): Promise<{ width: number; height: number; l
   return invoke("get_media_info");
 }
 
-export async function getMediaMetadata(path: string): Promise<Record<string, unknown>> {
+/**
+ * Full metadata for a media file, including its real DURATION.
+ *
+ * The duration was fetched here all along and only ever used for the metadata
+ * DISPLAY -- nothing fed it back to the timeline. So `duration` sat at its
+ * store default of 10 and every video, however long, scrubbed and EXPORTED as
+ * ten seconds. AppLayout's refreshPreview now sets it; that is the single
+ * funnel every "open a file" path goes through.
+ */
+export async function getMediaMetadata(path: string): Promise<MediaMetadata> {
+  if (!isTauriAvailable()) return {};
   return invoke("get_media_metadata", { path });
 }
 

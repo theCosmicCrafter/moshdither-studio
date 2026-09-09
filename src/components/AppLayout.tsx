@@ -4,6 +4,7 @@ import {
   listEffects,
   getFrameData,
   getMediaInfo,
+  getMediaMetadata,
   loadMediaFromPath,
   convertFileSrc,
   generateProxy,
@@ -46,6 +47,7 @@ export default function AppLayout() {
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
   const setFilePath = useAppStore((s) => s.setFilePath);
   const setIsVideo = useAppStore((s) => s.setIsVideo);
+  const setDuration = useAppStore((s) => s.setDuration);
   const setProxyUrl = useAppStore((s) => s.setProxyUrl);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const [isDropTarget, setIsDropTarget] = useState(false);
@@ -168,6 +170,20 @@ export default function AppLayout() {
         setOriginalDataUrl(frame);
 
         if (isVideoFile && path) {
+          // The clip's real length. Without this `duration` stays at the store
+          // default of 10, so the timeline claims every video is ten seconds,
+          // playback stops there, and an export with no out-point set TRIMS
+          // there -- a 35-second clip exported as 10.
+          try {
+            const meta = await getMediaMetadata(path);
+            if (typeof meta.duration === "number" && meta.duration > 0) {
+              setDuration(meta.duration);
+            }
+          } catch (err) {
+            // A probe failure must not block loading the media; the timeline
+            // just keeps whatever length it had.
+            logger.warn("metadata", "Could not read media duration", { err: String(err) });
+          }
           try {
             const proxy = await generateProxy(path, 1280, 28);
             setProxyUrl(convertFileSrc(proxy));
@@ -194,6 +210,7 @@ export default function AppLayout() {
     setOriginalDataUrl,
     setStatusMessage,
     setIsVideo,
+    setDuration,
     setProxyUrl,
   ]);
 
