@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useAppStore } from "../../store";
-import { exportVideo, applyFfglitch, cancelExport, removeExportTemp } from "../../lib/tauri";
+import { exportVideo, applyFfglitch, previewFfglitch, cancelExport, removeExportTemp } from "../../lib/tauri";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { stackToRustPayload } from "../../utils/effectConverter";
 import { useBatchQueue } from "../../hooks/useBatchQueue";
 import type { WatermarkSettings } from "../../utils/watermark";
@@ -111,6 +112,9 @@ export default function ExportPanel() {
   const [fps, setFps] = useState(30);
   const [includeAudio, setIncludeAudio] = useState(true);
   const ffglitchMode = useAppStore((s) => s.ffglitchMode);
+  const [moshPreviewUrl, setMoshPreviewUrl] = useState<string | null>(null);
+  const [moshPreviewBusy, setMoshPreviewBusy] = useState(false);
+  const [moshPreviewError, setMoshPreviewError] = useState<string | null>(null);
   const setFfglitchMode = useAppStore((s) => s.setFfglitchMode);
 
   const progressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -278,6 +282,23 @@ export default function ExportPanel() {
     setExportIsRunning(false);
     setExportProgress(0);
     setStatusMessage("Export cancelled");
+  };
+
+  const handleMoshPreview = async () => {
+    if (!filePath) return;
+    setMoshPreviewBusy(true);
+    setMoshPreviewError(null);
+    try {
+      // Start a little way in: the opening keyframe of a clip has no preceding
+      // motion to smear, so a mosh sampled at 0s under-sells every mode.
+      const path = await previewFfglitch(filePath, ffglitchMode, 1.0, 2.0);
+      setMoshPreviewUrl(convertFileSrc(path));
+    } catch (e) {
+      setMoshPreviewUrl(null);
+      setMoshPreviewError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setMoshPreviewBusy(false);
+    }
   };
 
   const handleFfglitchExport = async () => {
@@ -626,12 +647,16 @@ export default function ExportPanel() {
           style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}
         >
           <span className="material-symbols-outlined" style={{ fontSize: 10 }}>bolt</span>
-          FFglitch Export
+          Bitstream datamosh — applied after your effects
         </label>
         <select
           id="ffglitch-mode"
           value={ffglitchMode}
-          onChange={(e) => setFfglitchMode(e.target.value)}
+          onChange={(e) => {
+            setFfglitchMode(e.target.value);
+            setMoshPreviewUrl(null);
+            setMoshPreviewError(null);
+          }}
           style={{
             width: "100%",
             padding: "4px 6px",
@@ -648,6 +673,42 @@ export default function ExportPanel() {
             </option>
           ))}
         </select>
+        <button
+          onClick={() => void handleMoshPreview()}
+          disabled={moshPreviewBusy || !filePath}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+            padding: "5px 0",
+            fontSize: 11,
+            borderRadius: 3,
+            border: "1px solid var(--outline-variant)",
+            cursor: "pointer",
+            background: "var(--surface-container-low)",
+            color: "var(--text-primary)",
+            opacity: moshPreviewBusy || !filePath ? 0.5 : 1,
+          }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 12 }}>play_circle</span>
+          {moshPreviewBusy ? "Rendering preview…" : "Preview this mode (2s)"}
+        </button>
+        {moshPreviewUrl && (
+          <video
+            src={moshPreviewUrl}
+            autoPlay
+            loop
+            muted
+            playsInline
+            style={{ width: "100%", borderRadius: 3, border: "1px solid var(--outline-variant)" }}
+          />
+        )}
+        {moshPreviewError && (
+          <div style={{ fontSize: 10, color: "var(--error, #ff6b6b)", whiteSpace: "pre-wrap" }}>
+            {moshPreviewError}
+          </div>
+        )}
         <button
           onClick={handleFfglitchExport}
           disabled={exportIsRunning || !mediaInfo || !filePath}

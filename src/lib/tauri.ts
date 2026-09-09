@@ -517,6 +517,24 @@ export function formatFromPath(path: string, fallback?: string | null): string |
   return AMBIGUOUS_EXTENSION_DEFAULT[ext] ?? candidates[0].format;
 }
 
+/**
+ * Mosh a couple of seconds of the source so a mode can be SEEN before committing.
+ *
+ * FFglitch corrupts the compressed bitstream, so unlike every other effect here
+ * it genuinely cannot render live -- there is nothing to show until the clip is
+ * re-encoded. That constraint is real; the modes being invisible until the user
+ * was already in the export dialog was not. Returns a path to a short clip.
+ */
+export async function previewFfglitch(
+  inputPath: string,
+  mode: string,
+  startSecs?: number,
+  durationSecs?: number
+): Promise<string> {
+  if (!isTauriAvailable()) throw new Error("Datamosh preview needs the desktop app.");
+  return invoke("preview_ffglitch", { inputPath, mode, startSecs, durationSecs });
+}
+
 export async function applyFfglitch(
   inputPath: string,
   mode: string,

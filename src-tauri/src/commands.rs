@@ -2581,6 +2581,104 @@ pub fn remove_export_temp(path: String) -> std::result::Result<(), String> {
 }
 
 /// Apply an FFglitch datamoshing effect by delegating to the Python mosh_cli.py.
+/// Render a SHORT moshed clip so a datamosh mode can be seen before committing.
+///
+/// FFglitch modes corrupt the compressed bitstream, so unlike every other effect
+/// in this app they genuinely cannot be shown live -- there is nothing to
+/// display until the file is re-encoded. That constraint is real. What did NOT
+/// follow from it, and was simply a bad choice, is that the 34 modes were
+/// therefore invisible until the user was already in the Export dialog: you met
+/// them at save time or never.
+///
+/// This trims a couple of seconds out of the source and moshes only that, which
+/// takes seconds instead of minutes and makes the modes browsable. The result
+/// is cached per (source, mode, seconds) so flicking back and forth through the
+/// list is instant after the first look.
+#[tauri::command]
+pub async fn preview_ffglitch(
+    state: State<'_, AppState>,
+    input_path: String,
+    mode: String,
+    start_secs: Option<f64>,
+    duration_secs: Option<f64>,
+) -> std::result::Result<String, String> {
+    let validated = validate_io_path(&input_path, true)?;
+    let source = validated.to_string_lossy().into_owned();
+    // Two seconds is enough to read a datamosh -- the smear needs a handful of
+    // P-frames, not a whole clip -- and short enough that browsing modes stays
+    // interactive.
+    let seconds = duration_secs.unwrap_or(2.0).clamp(0.5, 10.0);
+    let start = start_secs.unwrap_or(0.0).max(0.0);
+
+    let dir = std::env::temp_dir()
+        .join("moshdither-studio")
+        .join("mosh-preview");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create preview dir: {e}"))?;
+
+    // Keyed by everything that changes the result, so a cache hit is always the
+    // right clip. The source path is hashed rather than embedded: it can be long,
+    // and it can contain characters a filename cannot.
+    let key = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        source.hash(&mut h);
+        mode.hash(&mut h);
+        format!("{start:.2}").hash(&mut h);
+        format!("{seconds:.2}").hash(&mut h);
+        h.finish()
+    };
+    let out = dir.join(format!("mosh-preview-{key:016x}.mp4"));
+    if out.exists() {
+        if let Ok(m) = std::fs::metadata(&out) {
+            if m.len() > 0 {
+                return Ok(out.to_string_lossy().into_owned());
+            }
+        }
+    }
+
+    // Trim first. Moshing two seconds instead of the whole clip is the entire
+    // point; handing the full source to the datamosher would be as slow as a
+    // real export.
+    let ffmpeg = ffmpeg_binary().map_err(|e| e.to_string())?;
+    let trimmed = dir.join(format!("src-{key:016x}.mp4"));
+    let trim = crate::proc::command(&ffmpeg)
+        .args(["-v", "error", "-y", "-ss"])
+        .arg(start.to_string())
+        .arg("-i")
+        .arg(&source)
+        .args(["-t"])
+        .arg(seconds.to_string())
+        // Re-encode rather than stream-copy: a copy starts at the previous
+        // keyframe and can hand the datamosher a clip with no P-frames to work
+        // with, which is exactly the input that makes a mode produce nothing.
+        .args([
+            "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-an",
+        ])
+        .arg(&trimmed)
+        .output()
+        .map_err(|e| format!("Could not run ffmpeg for the preview trim: {e}"))?;
+    if !trim.status.success() {
+        return Err(format!(
+            "Could not trim a preview segment: {}",
+            String::from_utf8_lossy(&trim.stderr)
+                .lines()
+                .last()
+                .unwrap_or("unknown error")
+        ));
+    }
+
+    let result = apply_ffglitch(
+        state,
+        trimmed.to_string_lossy().into_owned(),
+        out.to_string_lossy().into_owned(),
+        mode,
+        serde_json::Value::Null,
+    )
+    .await;
+    let _ = std::fs::remove_file(&trimmed);
+    result
+}
+
 #[tauri::command]
 pub async fn apply_ffglitch(
     state: State<'_, AppState>,
