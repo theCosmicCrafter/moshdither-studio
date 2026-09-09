@@ -11,7 +11,6 @@ import { resolveExternalDrag } from "./externalDrag";
 
 // Import components that are hardcoded into the layout
 import PreviewViewport from "../PreviewViewport";
-import Timeline from "../Timeline";
 import { ErrorBoundary } from "../ErrorBoundary";
 
 /**
@@ -22,9 +21,13 @@ import { ErrorBoundary } from "../ErrorBoundary";
  * `enableDrop: false` and silently reinstate the bug that made panels
  * undraggable. Bump it whenever DEFAULT_LAYOUT changes in a way a stored layout
  * must not be allowed to override, and every saved layout is discarded.
+ *
+ * 3: the Timeline left the dock and became the transport strip under the
+ *    workspace. A version-2 layout would restore a bottom tabset asking for
+ *    a "timeline" component that no longer exists.
  */
 const LAYOUT_STORAGE_KEY = "moshdither.dockLayout";
-const LAYOUT_VERSION = 2;
+const LAYOUT_VERSION = 3;
 
 function loadSavedLayout(): Model | null {
   try {
@@ -94,14 +97,6 @@ export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) 
       );
     }
     
-    if (componentStr === "timeline") {
-      return (
-        <div className="w-full h-full flex flex-col">
-          <Timeline />
-        </div>
-      );
-    }
-
     const panelMeta = PANEL_REGISTRY.find((p) => p.id === componentStr);
     if (panelMeta) {
       const Component = panelMeta.component;

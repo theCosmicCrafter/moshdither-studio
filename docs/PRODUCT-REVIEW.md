@@ -100,23 +100,23 @@ What made it clunky, verified in code and fixed the same day:
 | Speed selector half-worked | Changed the clock, not the `<video>` |
 | Clip length lies on video | Editing it overwrote the probed duration |
 
-All fixed except the first: `usePlaybackEngine` is now the one clock at the
-media's real fps, in/out are frame-accurate, the palette does what it says,
-pointer capture holds the drag, the video follows the clock at the clock's
-speed, and the length box is stills-only and labelled *Animation length*.
+All fixed the same day. `usePlaybackEngine` is the one clock at the media's
+real fps, in/out are frame-accurate, the palette does what it says, pointer
+capture holds the drag, the video follows the clock at the clock's speed, and
+the length box is stills-only and labelled *Animation length*.
 
-**Still invisible: keyframes.** Every slider has a keyframe button, and the
-timeline draws nothing for them -- no diamonds, no lanes. The only way to find
-one is to land the playhead within 10 ms of it. `updateKeyframe` and
-`clearKeyframes` exist in the store with no UI; easing is always linear.
+**DONE (2026-09-09): the Timeline is a transport strip, not a panel.** It is
+pinned under the whole workspace (`AppLayout.tsx`), the bottom dock zone is
+gone and the preview has the entire centre column. The strip now draws what
+the app always knew and never showed: **every keyframe on every parameter** as
+a diamond on the bar (click to jump, right-click to delete; gold when the
+playhead is on it), **in/out handles you can drag** (they cannot cross), and
+the trimmed-out range dimmed. Saved dock layouts from before are discarded
+(`LAYOUT_VERSION` 3) because they would ask for a panel that no longer exists.
 
-**Recommendation (the MoshPro shape): a transport strip, not a panel.** A
-~44 px bar pinned under the preview -- transport, time/frame, a scrubber with
-draggable in/out handles and keyframe diamonds, speed, loop. Right-click a
-diamond to delete it or change easing. The bottom dock zone returns to the
-preview. No feature lost, the empty strip gone, keyframes finally visible. A
-full lane-per-parameter timeline (the After Effects direction) is a later
-call, only if keyframing becomes a headline feature.
+Still to decide, not blocking: easing is always linear (no UI to change it),
+and a lane-per-parameter timeline with curves is the After Effects direction --
+a later call, only if keyframing becomes a headline feature.
 
 ## 4. Redundancy and over-complication
 

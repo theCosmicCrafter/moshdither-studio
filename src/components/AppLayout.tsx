@@ -25,6 +25,7 @@ import { logger } from "../utils/logger";
 import DockLayout from "./DockSystem/DockLayout";
 import Toolbar from "./Toolbar";
 import StatusBar from "./StatusBar";
+import Timeline from "./Timeline";
 import CommandPalette from "./CommandPalette";
 import OnboardingModal from "./OnboardingModal";
 import CustomUiModal from "./CustomUiModal";
@@ -338,6 +339,10 @@ export default function AppLayout() {
       <div ref={workspaceRef} className="flex-1 relative min-h-0 overflow-hidden">
         <DockLayout isDropTarget={isDropTarget} />
       </div>
+
+      {/* Transport strip -- time lives here, under the whole workspace,
+          not in a dock panel. See Timeline/index.tsx. */}
+      <Timeline />
 
       {/* Bottom Status */}
       <StatusBar />

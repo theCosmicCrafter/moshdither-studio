@@ -69,13 +69,11 @@ test("duration input clamps zero to the 0.1 floor", async ({ page }) => {
 });
 
 test("play/pause button toggles between Play and Pause", async ({ page }) => {
-  // Scope to the Timeline's own panel: the Audio Reactive panel has its own
+  // Scope to the transport strip: the Audio Reactive panel has its own
   // Play/Pause pair and flexlayout keeps opened tabs mounted, so an unscoped
-  // getByTitle("Play") is ambiguous. The old version dodged this by matching
-  // [title*='play'] loosely and asserting only that the header survived.
-  const timeline = page
-    .locator(".flexlayout__tab")
-    .filter({ has: page.locator(DURATION_INPUT) });
+  // getByTitle("Play") is ambiguous. The strip is pinned under the dock, not
+  // inside a .flexlayout__tab, which is where this used to look.
+  const timeline = page.getByTestId("transport-strip");
   const transport = timeline.getByTitle(/^(Play|Pause)$/);
   await expect(transport).toBeVisible();
 

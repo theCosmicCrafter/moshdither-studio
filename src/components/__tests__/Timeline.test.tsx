@@ -44,6 +44,7 @@ function resetStore() {
     isVideo: false,
     mediaFps: 30,
     animateFps: 30,
+    keyframes: {},
   });
 }
 
@@ -209,6 +210,89 @@ describe("Timeline", () => {
       fireEvent.pointerUp(el, { clientX: 80, pointerId: 1 });
       fireEvent.pointerMove(el, { clientX: 20, pointerId: 1 });
       expect(useAppStore.getState().currentTime).toBeCloseTo(8, 6);
+    });
+  });
+
+  // ── Keyframes on the bar ───────────────────────────────────
+  describe("Keyframes", () => {
+    const kf = (id: string, time: number) => ({ id, time, value: 1, easing: "linear" as const });
+
+    it("draws one diamond per distinct time across every parameter", () => {
+      useAppStore.setState({
+        keyframes: {
+          s1: { amount: [kf("a", 2), kf("b", 5)], mix: [kf("c", 2)] },
+          s2: { size: [kf("d", 7.5)] },
+        },
+      });
+      render(<Timeline />);
+      expect(screen.getAllByRole("button", { name: /^Keyframe at/ })).toHaveLength(3);
+      expect(screen.getByText("◆ 3")).toBeInTheDocument();
+    });
+
+    it("clicking a diamond jumps the playhead to it", () => {
+      useAppStore.setState({ keyframes: { s1: { amount: [kf("a", 5)] } } });
+      render(<Timeline />);
+      fireEvent.click(screen.getByRole("button", { name: "Keyframe at 00:05.00" }));
+      expect(useAppStore.getState().currentTime).toBe(5);
+    });
+
+    it("right-clicking a diamond deletes every keyframe at that time", () => {
+      useAppStore.setState({
+        keyframes: { s1: { amount: [kf("a", 2), kf("b", 5)], mix: [kf("c", 2)] } },
+      });
+      render(<Timeline />);
+      fireEvent.contextMenu(screen.getByRole("button", { name: "Keyframe at 00:02.00" }));
+      const left = useAppStore.getState().keyframes;
+      expect(left.s1.amount.map((k) => k.id)).toEqual(["b"]);
+      expect(left.s1.mix).toBeUndefined();
+    });
+
+    it("shows no keyframe readout when there are none", () => {
+      render(<Timeline />);
+      expect(screen.queryByText(/◆/)).not.toBeInTheDocument();
+    });
+  });
+
+  // ── In/out handles ─────────────────────────────────────────
+  describe("In/out handles", () => {
+    function scrubber() {
+      const el = screen.getByTestId("timeline-scrubber");
+      el.getBoundingClientRect = () =>
+        ({ left: 0, top: 0, width: 100, height: 16, right: 100, bottom: 16, x: 0, y: 0, toJSON() {} }) as DOMRect;
+      return el;
+    }
+
+    it("dragging the in handle moves the in point without touching the playhead", () => {
+      useAppStore.setState({ inPoint: 2, outPoint: 8, currentTime: 5 });
+      render(<Timeline />);
+      const bar = scrubber();
+      fireEvent.pointerDown(screen.getByTestId("timeline-in-handle"), { clientX: 20, pointerId: 1 });
+      fireEvent.pointerMove(bar, { clientX: 40, pointerId: 1 });
+      expect(useAppStore.getState().inPoint).toBeCloseTo(4, 6);
+      expect(useAppStore.getState().currentTime).toBe(5);
+    });
+
+    it("the in handle cannot be dragged past the out point", () => {
+      useAppStore.setState({ inPoint: 2, outPoint: 8, currentTime: 5 });
+      render(<Timeline />);
+      const bar = scrubber();
+      fireEvent.pointerDown(screen.getByTestId("timeline-in-handle"), { clientX: 20, pointerId: 1 });
+      fireEvent.pointerMove(bar, { clientX: 95, pointerId: 1 });
+      const { inPoint, outPoint } = useAppStore.getState();
+      expect(outPoint).toBe(8);
+      expect(inPoint).not.toBeNull();
+      expect(inPoint!).toBeLessThan(8);
+    });
+
+    it("dragging the out handle moves the out point", () => {
+      useAppStore.setState({ inPoint: 2, outPoint: 8, currentTime: 5 });
+      render(<Timeline />);
+      const bar = scrubber();
+      fireEvent.pointerDown(screen.getByTestId("timeline-out-handle"), { clientX: 80, pointerId: 1 });
+      fireEvent.pointerMove(bar, { clientX: 60, pointerId: 1 });
+      fireEvent.pointerUp(bar, { clientX: 60, pointerId: 1 });
+      expect(useAppStore.getState().outPoint).toBeCloseTo(6, 6);
+      expect(useAppStore.getState().inPoint).toBe(2);
     });
   });
 

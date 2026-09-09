@@ -98,12 +98,11 @@ export const PANEL_REGISTRY: PanelMeta[] = [
     id: "verify",
     label: "Verify",
     icon: "verified",
-    // DockLayout's addPanel only routes to "right-zone" or "left-zone" --
-    // the layout's only bottom tabset is locked to Timeline
-    // (enableDrop/enableDrag/enableClose: false in defaultLayout.ts) and was
-    // never a real target. Declaring "bottom" here made PanelRail show a
-    // downward-arrow hint promising a dock direction this panel never
-    // actually took; the metadata now matches where it lands.
+    // DockLayout's addPanel only routes to "right-zone" or "left-zone"; the
+    // layout has no bottom tabset (the Timeline is a pinned strip, not a
+    // panel). Declaring "bottom" here made PanelRail show a downward-arrow
+    // hint promising a dock direction this panel never actually took; the
+    // metadata now matches where it lands.
     defaultZone: "left",
     minWidth: 400,
     minHeight: 200,

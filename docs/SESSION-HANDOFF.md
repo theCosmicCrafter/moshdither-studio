@@ -94,6 +94,7 @@ my own tooling bugs.
 | Proxy panel's output went nowhere | `proxyPath` had no readers; panel now feeds `proxyUrl` |
 | Gate flaked on this machine | vitest pool capped at half the cores; app-smoke gate now sets `$LASTEXITCODE` explicitly instead of inheriting the previous gate's |
 
+| **Timeline is a transport strip now**, not a dock panel | Pinned under the workspace; preview owns the centre column; keyframe diamonds (click = jump, right-click = delete), draggable in/out handles, dimmed trim. `LAYOUT_VERSION` 3 discards old saved layouts |
 | **Timeline** (asked "what is it for, it seems clunky") | Stills played at **2x** -- three loops advanced `currentTime`; now `usePlaybackEngine` is the only clock, at the clip's real fps (`mediaFps` from ffprobe). In/out snapped to whole seconds; palette "Set in/out point" set 0/300 and "Play / pause" toggled audio; scrub drag died off the 16 px bar; `<video>` ignored in/out while playing and was offset by the in point; speed selector never reached the `<video>`; clip-length box overwrote a video's probed duration. All fixed; `docs/PRODUCT-REVIEW.md` §3 has the table and the redesign recommendation |
 
 **Still open -- verified real, not yet fixed:**
@@ -115,10 +116,8 @@ my own tooling bugs.
   export allocates hundreds of MB at once. Test: export with ComfyUI closed.
   Fix: raise the pagefile (16 GB on a 94 GB box).
 - Undo still does not cover mask BRUSH STROKES, only Clear/Invert.
-- **Keyframes are invisible on the timeline** (no diamonds, no lanes, no
-  easing UI). Recommended fix is the transport-strip redesign in
-  `docs/PRODUCT-REVIEW.md` §3; the bottom dock zone is still 30 % of the
-  centre column for ~55 px of content until that lands.
+- Keyframe easing is always linear; no UI changes it. (Keyframes themselves
+  are now visible and editable on the transport strip.)
 
 ## Verification: what has actually been exercised (2026-09-09)
 

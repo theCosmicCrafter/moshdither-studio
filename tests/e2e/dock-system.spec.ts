@@ -40,8 +40,10 @@ test("dock tabs are clickable", async ({ page }) => {
   expect(await dockTabs.count()).toBeGreaterThan(0);
 
   // A handful of tabs from the default layout (defaultLayout.ts), each in a
-  // different tabset so this also exercises independent dock zones.
-  const knownTabs = ["Effects", "Preview", "Timeline", "Stack"];
+  // different tabset so this also exercises independent dock zones. The
+  // Timeline is not among them: it is the transport strip pinned under the
+  // workspace, not a panel (tests/e2e/timeline.spec.ts covers it).
+  const knownTabs = ["Effects", "Preview", "Stack"];
 
   for (const label of knownTabs) {
     const tab = page.getByRole("tab", { name: label }).first();
