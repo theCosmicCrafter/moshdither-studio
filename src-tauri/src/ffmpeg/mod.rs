@@ -218,7 +218,7 @@ pub fn generate_proxy(source_path: &str, max_width: u32, crf: u32) -> Result<Str
 
     const PROXY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
     let output = output_with_timeout(
-        Command::new(&ffmpeg).args([
+        crate::proc::command(&ffmpeg).args([
             "-i",
             source_path,
             "-vf",
@@ -387,7 +387,10 @@ pub fn image_to_video(image_path: &str, duration_secs: f64, fps: f64) -> Result<
     );
 
     const IMAGE_TO_VIDEO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
-    let output = output_with_timeout(Command::new(&ffmpeg).args(&args), IMAGE_TO_VIDEO_TIMEOUT)?;
+    let output = output_with_timeout(
+        crate::proc::command(&ffmpeg).args(&args),
+        IMAGE_TO_VIDEO_TIMEOUT,
+    )?;
 
     if !output.status.success() {
         return Err(AppError::Ffmpeg(format!(
@@ -519,7 +522,7 @@ pub fn decode_video_with_options(
     }
 
     let ffmpeg = ffmpeg_binary()?;
-    let mut cmd = Command::new(&ffmpeg);
+    let mut cmd = crate::proc::command(&ffmpeg);
     cmd.args(["-i", path]);
     // max_frames, not requested_max. ffmpeg buffers everything it decodes into
     // this process's stdout pipe, so asking for more frames than the memory
@@ -1038,6 +1041,9 @@ pub fn encode_video(
 
     let ffmpeg = ffmpeg_binary()?;
     let first = &segment.frames[0];
+    // Held separately: the write loop below moves `segment.frames`, and the
+    // declared size has to outlive that to validate each frame against it.
+    let (first_w, first_h) = (first.width, first.height);
     let w = first.width;
     let h = first.height;
     let fps = fps_override.unwrap_or(segment.fps);
@@ -1259,7 +1265,7 @@ pub fn encode_video(
     );
     tracing::debug!("FFmpeg args: {}", args.join(" "));
 
-    let mut child = Command::new(&ffmpeg)
+    let mut child = crate::proc::command(&ffmpeg)
         .args(&args)
         .stdin(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1311,6 +1317,30 @@ pub fn encode_video(
             }
             if i % 50 == 0 || i == total - 1 {
                 tracing::debug!("Writing frame {}/{} to FFmpeg stdin", i + 1, total);
+            }
+            // FFmpeg is told ONE frame size (`-s WxH`, taken from frame 0) and
+            // then fed a raw byte stream with no framing. A frame of a
+            // different size therefore does not produce an error -- it silently
+            // shifts every subsequent frame, and FFmpeg reinterprets whatever
+            // follows as pixel data. Several effects legitimately resize
+            // (kaleidoscope, pixelate), so this is reachable from a normal
+            // stack. Refuse with a message that names the frame instead.
+            let expected = (frame.width as usize) * (frame.height as usize) * 4;
+            if frame.width != first_w || frame.height != first_h || frame.data.len() != expected {
+                let _ = stdin.flush();
+                drop(stdin);
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(AppError::Ffmpeg(format!(
+                    "Frame {} is {}x{} with {} bytes, but the encode was opened for                      {}x{} ({} bytes per frame). An effect changed the frame size                      mid-stream; FFmpeg cannot be re-sized once started.",
+                    i + 1,
+                    frame.width,
+                    frame.height,
+                    frame.data.len(),
+                    first_w,
+                    first_h,
+                    (first_w as usize) * (first_h as usize) * 4
+                )));
             }
             if let Err(e) = stdin.write_all(&frame.data) {
                 // A write failure here almost always means FFmpeg already
@@ -1542,7 +1572,7 @@ pub fn probe_video(path: &str) -> Result<(u32, u32, f64)> {
 
     const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
     let output = output_with_timeout(
-        Command::new(&bin).args([
+        crate::proc::command(&bin).args([
             "-v",
             "error",
             "-select_streams",
@@ -1632,7 +1662,7 @@ pub fn probe_metadata(path: &str) -> Result<MediaMetadata> {
     let bin = ffprobe_binary()?;
     const PROBE_METADATA_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
     let output = output_with_timeout(
-        Command::new(&bin).args([
+        crate::proc::command(&bin).args([
             "-v",
             "error",
             "-show_entries",
@@ -1727,7 +1757,7 @@ pub fn has_audio_stream(path: &str) -> Result<bool> {
     let bin = ffprobe_binary()?;
     const HAS_AUDIO_STREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
     let output = output_with_timeout(
-        Command::new(&bin).args([
+        crate::proc::command(&bin).args([
             "-v",
             "error",
             "-select_streams",
@@ -1760,7 +1790,7 @@ pub fn extract_audio_to_wav(
     max_duration_secs: Option<f64>,
 ) -> Result<()> {
     let ffmpeg = ffmpeg_binary()?;
-    let mut cmd = Command::new(&ffmpeg);
+    let mut cmd = crate::proc::command(&ffmpeg);
     cmd.args(["-y", "-i", video_path, "-vn", "-ac", "1", "-ar", "44100"]);
     if let Some(secs) = max_duration_secs {
         if secs > 0.0 {
@@ -1835,7 +1865,7 @@ mod input_format_tests {
         let mut failures: Vec<String> = Vec::new();
         for (ext, encoder) in cases {
             let path = dir.join(format!("clip.{ext}"));
-            let out = std::process::Command::new(&ffmpeg)
+            let out = crate::proc::command(&ffmpeg)
                 .args([
                     "-v",
                     "error",
@@ -1932,6 +1962,65 @@ mod export_matrix_tests {
     /// spec that is internally consistent and still rejected by FFmpeg. Only
     /// running the encoder does that -- which is how the text-watermark bug
     /// (`Invalid alpha value specifier 'ff'`) survived a green suite.
+    /// Reproducer scaffold for the reported export crash: a full-resolution
+    /// vertical frame (1536x2752 = 16.9 MB of RGBA each) held for many frames,
+    /// which is what `export_video` does -- it buffers the whole VideoSegment.
+    #[test]
+    #[ignore = "memory-heavy; run explicitly with --ignored"]
+    fn large_frames_export_without_corrupting_the_heap() {
+        if ffmpeg_binary().is_err() {
+            eprintln!("SKIP: no ffmpeg binary");
+            return;
+        }
+        let (w, h) = (1536u32, 2752u32);
+        let per = (w as usize) * (h as usize) * 4;
+        let n = 48usize;
+        eprintln!(
+            "building {n} frames of {} MB each = {} MB",
+            per / 1_048_576,
+            n * per / 1_048_576
+        );
+        let mut frames = Vec::with_capacity(n);
+        for f in 0..n {
+            let mut data = vec![0u8; per];
+            for (i, px) in data.chunks_exact_mut(4).enumerate() {
+                px[0] = ((i + f * 7) % 256) as u8;
+                px[1] = ((i / 97 + f) % 256) as u8;
+                px[2] = ((i / 13) % 256) as u8;
+                px[3] = 255;
+            }
+            frames.push(Frame {
+                width: w,
+                height: h,
+                data,
+            });
+        }
+        let seg = VideoSegment { frames, fps: 24.0 };
+        let dir = std::env::temp_dir().join("moshdither-big-export");
+        let _ = std::fs::create_dir_all(&dir);
+        let dest = dir.join("big.mp4");
+        let r = encode_video(
+            &seg,
+            &dest.to_string_lossy(),
+            "h264",
+            Some(24.0),
+            None,
+            None,
+            Some("draft"),
+            Some(false),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(std::time::Duration::from_secs(600)),
+            Some("mp4"),
+        );
+        eprintln!("encode result: {r:?}");
+        assert!(r.is_ok(), "large export failed: {r:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn every_export_format_produces_a_real_file() {
         // The binaries are gitignored, so a fresh clone legitimately has none.
@@ -2224,13 +2313,13 @@ mod output_with_timeout_tests {
     fn hang_command(secs: u32) -> Command {
         #[cfg(target_os = "windows")]
         {
-            let mut cmd = Command::new("ping");
+            let mut cmd = crate::proc::command("ping");
             cmd.args(["-n", &(secs + 1).to_string(), "127.0.0.1"]);
             cmd
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let mut cmd = Command::new("sleep");
+            let mut cmd = crate::proc::command("sleep");
             cmd.arg(secs.to_string());
             cmd
         }
@@ -2240,13 +2329,13 @@ mod output_with_timeout_tests {
     fn returns_output_for_a_command_that_finishes_within_the_timeout() {
         #[cfg(target_os = "windows")]
         let mut cmd = {
-            let mut c = Command::new("cmd");
+            let mut c = crate::proc::command("cmd");
             c.args(["/C", "echo hello"]);
             c
         };
         #[cfg(not(target_os = "windows"))]
         let mut cmd = {
-            let mut c = Command::new("echo");
+            let mut c = crate::proc::command("echo");
             c.arg("hello");
             c
         };

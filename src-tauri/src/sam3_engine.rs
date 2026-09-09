@@ -5,7 +5,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{ChildStdin, Command, Stdio};
+use std::process::{ChildStdin, Stdio};
 use std::sync::mpsc::{channel, Receiver};
 use std::time::Duration;
 use sysinfo::{Pid, System};
@@ -354,7 +354,7 @@ impl Sam3Engine {
                 .as_ref()
                 .map(|r| r.join("src-tauri").join("sam3_bridge.py"))
                 .filter(|b| b.exists());
-            let mut cmd = Command::new(&python);
+            let mut cmd = crate::proc::command(&python);
             if let Some(bridge) = bridge {
                 cmd.arg(bridge);
             }
@@ -375,7 +375,7 @@ impl Sam3Engine {
             cmd
         } else if let Some(sidecar) = locate_sam3_binary() {
             launched_sidecar = true;
-            let mut cmd = Command::new(&sidecar);
+            let mut cmd = crate::proc::command(&sidecar);
             // Point the sidecar at the Tauri resources for the model and the sam3 package.
             if let Some(repo) = resolve_sam3_repo(app) {
                 cmd.env("SAM3_REPO", repo.as_os_str());
@@ -407,7 +407,7 @@ impl Sam3Engine {
                     bridge.display()
                 )));
             }
-            let mut cmd = Command::new(&python);
+            let mut cmd = crate::proc::command(&python);
             cmd.arg(&bridge);
             if let Some(repo) = resolve_sam3_repo(app) {
                 cmd.env("SAM3_REPO", repo.as_os_str());

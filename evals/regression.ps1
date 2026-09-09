@@ -51,6 +51,42 @@ if (-not $Quick) {
     # nothing here ever renders the app. It also let a real dock bug sit failing
     # in the suite unnoticed. Slow (~7 min), so it stays out of -Quick.
     $gates += @{ Name = "e2e"; Desc = "Playwright E2E suite"; Run = { & npx playwright test 2>&1 } }
+
+    # Launch the REAL binary and confirm it is still alive.
+    #
+    # Every other gate can pass while the shipped app cannot start. It happened:
+    # removing `plugins.updater` from tauri.conf.json without also unregistering
+    # the plugin made Tauri panic during init --
+    #   PluginInitialization("updater", "invalid type: null, expected struct Config")
+    # -- before a window ever opened. Nine gates were green and the installers
+    # were built and unusable. E2E cannot catch it because E2E drives the
+    # frontend against a MOCK, never this executable.
+    $gates += @{ Name = "app-smoke"; Desc = "Built app starts and stays up"; Run = {
+        $exe = Join-Path $PSScriptRoot '..' 'src-tauri' 'target' 'release' 'moshdither-studio.exe'
+        if (-not (Test-Path $exe)) {
+            & cargo build --release --manifest-path $manifest 2>&1 | Out-String | Write-Output
+        }
+        if (-not (Test-Path $exe)) { throw "app binary not found at $exe" }
+
+        Get-ChildItem (Join-Path $env:USERPROFILE ".moshdither" "logs") -Filter *.log -ErrorAction SilentlyContinue |
+                  Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        $proc = Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -PassThru
+        Start-Sleep -Seconds 20
+        $alive = $null -ne (Get-Process -Id $proc.Id -ErrorAction SilentlyContinue)
+        if ($alive) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+
+        Get-ChildItem (Join-Path $env:USERPROFILE ".moshdither" "logs") -Filter *.log -ErrorAction SilentlyContinue |
+               Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($log -and (-not $before -or $log.Name -ne $before.Name)) {
+            $panic = Select-String -Path $log.FullName -Pattern 'PANIC' -SimpleMatch -ErrorAction SilentlyContinue
+            if ($panic) {
+                Write-Output ($panic | Select-Object -First 3 | ForEach-Object { $_.Line })
+                throw "app panicked on startup (see $($log.FullName))"
+            }
+        }
+        if (-not $alive) { throw "app exited within 20s of launch (see $($log.FullName))" }
+        Write-Output "app stayed up for 20s with no panic"
+    } }
 }
 
 Write-Host ""

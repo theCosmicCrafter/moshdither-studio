@@ -61,22 +61,40 @@ export default function MaskPanel() {
 
   // Ensure SAM3 is running before executing a command. Restarts if idle-shutdown occurred.
   const ensureSam3Ready = useCallback(async (): Promise<boolean> => {
-    if (useAppStore.getState().sam3Ready) return true;
     setIsLoading(true);
-    setStatusMessage("Starting SAM3 engine...");
     try {
-      await sam3Init();
-      setSam3Ready(true);
-      // Image auto-load is handled by the useEffect below when sam3Ready flips.
+      if (!useAppStore.getState().sam3Ready) {
+        setStatusMessage("Starting SAM3 engine...");
+        await sam3Init();
+        setSam3Ready(true);
+      }
+      // The image has to be IN the bridge before any prompt, and it must be
+      // awaited here.
+      //
+      // This used to return as soon as sam3Init() resolved and leave the image
+      // to a useEffect that fires when sam3Ready flips. So every prompt raced
+      // that effect: clicking Auto straight after opening a photo called
+      // auto_mask against a bridge that had never been sent a frame, and the
+      // user got "Auto-mask failed: Model not loaded" -- the model is only
+      // loaded inside cmd_load_image. The effect below still exists for the
+      // case where the engine is started from somewhere else.
+      const state = useAppStore.getState();
+      if (state.mediaLoaded && !state.sam3ImageLoaded) {
+        setStatusMessage("Loading image into SAM3...");
+        const b64 = await getFrameData();
+        await sam3LoadImage(b64);
+        setSam3ImageLoaded(true);
+      }
       setStatusMessage("SAM3 ready");
       return true;
     } catch (e) {
-      setStatusMessage(`SAM3 start failed: ${e}`);
+      setSam3ImageLoaded(false);
+      setStatusMessage(`SAM3 start failed: ${e}`, "error");
       return false;
     } finally {
       setIsLoading(false);
     }
-  }, [setSam3Ready, setStatusMessage]);
+  }, [setSam3Ready, setSam3ImageLoaded, setStatusMessage]);
 
   // Post-processing params
   const [ppGrow, setPpGrow] = useState(0);

@@ -2345,7 +2345,7 @@ fn find_python() -> Option<String> {
         }
     }
     for name in ["python.exe", "python3.exe", "python"] {
-        if Command::new(name).arg("--version").output().is_ok() {
+        if crate::proc::command(name).arg("--version").output().is_ok() {
             return Some(name.to_string());
         }
     }
@@ -2479,7 +2479,7 @@ fn run_ffglitch_subprocess(
     const FFGLITCH_TIMEOUT: Duration = Duration::from_secs(3600);
     const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
-    let mut command = Command::new(program);
+    let mut command = crate::proc::command(program);
     if let Some(script) = script {
         command.arg(script);
     }
@@ -2867,13 +2867,13 @@ mod run_cancellable_tests {
     fn hang_command(secs: u32) -> Command {
         #[cfg(target_os = "windows")]
         {
-            let mut cmd = Command::new("ping");
+            let mut cmd = crate::proc::command("ping");
             cmd.args(["-n", &(secs + 1).to_string(), "127.0.0.1"]);
             cmd
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let mut cmd = Command::new("sleep");
+            let mut cmd = crate::proc::command("sleep");
             cmd.arg(secs.to_string());
             cmd
         }
@@ -2882,13 +2882,13 @@ mod run_cancellable_tests {
     fn fast_command() -> Command {
         #[cfg(target_os = "windows")]
         {
-            let mut c = Command::new("cmd");
+            let mut c = crate::proc::command("cmd");
             c.args(["/C", "echo hello"]);
             c
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let mut c = Command::new("echo");
+            let mut c = crate::proc::command("echo");
             c.arg("hello");
             c
         }

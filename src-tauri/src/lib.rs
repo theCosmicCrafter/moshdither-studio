@@ -11,6 +11,7 @@ pub mod environment;
 pub mod ffmpeg;
 pub mod path_guard;
 pub mod presets;
+pub mod proc;
 pub mod sam3_addon;
 pub mod sam3_engine;
 pub mod utils;
@@ -74,7 +75,12 @@ pub fn run() {
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        // The updater plugin is NOT registered, and must not be while
+        // `plugins.updater` is absent from tauri.conf.json: it deserialises its
+        // config at init and panics the whole app with
+        //   PluginInitialization("updater", "invalid type: null, expected struct Config")
+        // before a window ever opens. Restore this line and the config block
+        // together, never one alone.
         .manage(AppState::default())
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {

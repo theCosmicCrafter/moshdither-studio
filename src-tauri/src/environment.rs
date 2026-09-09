@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use tauri::{AppHandle, Manager};
 
 const VENV_DIR_NAME: &str = "moshdither-env";
@@ -75,7 +75,7 @@ fn save_config(app: &AppHandle, mode: &str) {
 
 fn python_on_path() -> Option<String> {
     for name in ["python.exe", "python3.exe", "python"] {
-        if Command::new(name).arg("--version").output().is_ok() {
+        if crate::proc::command(name).arg("--version").output().is_ok() {
             return Some(name.to_string());
         }
     }
@@ -237,7 +237,7 @@ fn copy_bundled_ffglitch(app: &AppHandle) -> Result<(), String> {
 }
 
 fn run_command(cmd: &str, args: &[&str]) -> Result<(), String> {
-    let output = Command::new(cmd)
+    let output = crate::proc::command(cmd)
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
