@@ -1,6 +1,6 @@
 import { shaderRegistry } from "../engine/shaders";
 import { EffectShader, RenderPass } from "../engine/webgl2/types";
-import { EffectMeta, StackEntry } from "../store";
+import { EffectMeta, StackEntry, type Keyframe } from "../store";
 
 /** Maps a Rust effect ID to its WebGL shader preview equivalent. */
 export interface WebGLMapping {
@@ -1124,20 +1124,42 @@ export function stackToRustPayload(
   stack: StackEntry[],
   activeMask: string | null,
   sam3Masks: string[],
-  time?: number
+  time?: number,
+  /** Animated parameters, keyed by stack-entry id then parameter id.
+   *  Pass the store's `keyframes` when EXPORTING: without them the render
+   *  freezes every animated parameter at the playhead's value, which is
+   *  what the file used to contain. */
+  keyframes?: Record<string, Record<string, Keyframe[]>>
 ): Array<{
   effect_id: string;
   params: Record<string, unknown>;
   mask_b64: string | null;
   mask_mode?: string;
+  keyframes?: Record<string, { time: number; value: number; easing: string }[]>;
 }> {
   return stack
     .filter((e) => e.enabled)
-    .map((e) => ({
-      effect_id: e.effectId,
-      params: { ...e.params, ...(time !== undefined ? { time } : {}) },
-      // Use snapshotted maskB64 if available; fall back to live resolution
-      mask_b64: e.maskB64 ?? resolveMaskId(e.maskId, activeMask, sam3Masks),
-      mask_mode: e.maskMode ?? "inside",
-    }));
+    .map((e) => {
+      const tracks = keyframes?.[e.id];
+      const animated = tracks
+        ? Object.fromEntries(
+            Object.entries(tracks)
+              .filter(([, ks]) => ks.length > 0)
+              .map(([paramId, ks]) => [
+                paramId,
+                [...ks]
+                  .sort((a, b) => a.time - b.time)
+                  .map((k) => ({ time: k.time, value: k.value, easing: k.easing })),
+              ])
+          )
+        : undefined;
+      return {
+        effect_id: e.effectId,
+        params: { ...e.params, ...(time !== undefined ? { time } : {}) },
+        // Use snapshotted maskB64 if available; fall back to live resolution
+        mask_b64: e.maskB64 ?? resolveMaskId(e.maskId, activeMask, sam3Masks),
+        mask_mode: e.maskMode ?? "inside",
+        ...(animated && Object.keys(animated).length > 0 ? { keyframes: animated } : {}),
+      };
+    });
 }

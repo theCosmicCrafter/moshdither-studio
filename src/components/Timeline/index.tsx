@@ -1,5 +1,5 @@
-import React, { useRef, useCallback, useMemo } from "react";
-import { useAppStore } from "../../store";
+import React, { useRef, useCallback, useMemo, useState, useEffect } from "react";
+import { useAppStore, type EasingType } from "../../store";
 import { getFileName } from "../../utils/fileName";
 import { formatTimecode as formatTime } from "../../utils/timecode";
 import { playbackFps } from "../../hooks/usePlaybackEngine";
@@ -15,16 +15,26 @@ import { playbackFps } from "../../hooks/usePlaybackEngine";
  * NLE's source monitor. Now it is that.
  *
  * It also draws what the app already knew about time and never showed:
- * every keyframe on every parameter (click to jump, right-click to delete),
- * and in/out handles you can DRAG instead of only stamping at the playhead.
+ * every keyframe on every parameter (click to jump, right-click for easing
+ * and delete), and in/out handles you can DRAG instead of only stamping at
+ * the playhead.
  */
 
 type DragTarget = "playhead" | "in" | "out";
 
 interface KeyframeMark {
   time: number;
-  refs: { stackId: string; paramId: string; id: string }[];
+  refs: { stackId: string; paramId: string; id: string; easing: EasingType }[];
 }
+
+/** Every easing a keyframe can have, in the order the menu lists them. */
+const EASINGS: { id: EasingType; label: string }[] = [
+  { id: "linear", label: "Linear" },
+  { id: "easeIn", label: "Ease in" },
+  { id: "easeOut", label: "Ease out" },
+  { id: "easeInOut", label: "Ease in-out" },
+  { id: "hold", label: "Hold" },
+];
 
 export default function Timeline() {
   const currentTime = useAppStore((s) => s.currentTime);
@@ -49,6 +59,26 @@ export default function Timeline() {
   const animateFps = useAppStore((s) => s.animateFps);
   const keyframes = useAppStore((s) => s.keyframes);
   const removeKeyframe = useAppStore((s) => s.removeKeyframe);
+  const updateKeyframe = useAppStore((s) => s.updateKeyframe);
+
+  // The keyframe menu: which mark it is for and where on the bar it sits.
+  // Right-click used to delete outright, with no way to choose an easing --
+  // the store has had five easings since keyframes existed and nothing set
+  // any but linear.
+  const [menu, setMenu] = useState<{ mark: KeyframeMark; leftPct: number } | null>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [menu]);
 
   const scrubberRef = useRef<HTMLDivElement>(null);
   const dragTarget = useRef<DragTarget | null>(null);
@@ -69,7 +99,7 @@ export default function Timeline() {
         for (const k of list) {
           const key = Math.round(k.time * 1000) / 1000;
           const refs = byTime.get(key) ?? [];
-          refs.push({ stackId, paramId, id: k.id });
+          refs.push({ stackId, paramId, id: k.id, easing: k.easing });
           byTime.set(key, refs);
         }
       }
@@ -343,7 +373,7 @@ export default function Timeline() {
               key={m.time}
               type="button"
               aria-label={`Keyframe at ${formatTime(m.time)}`}
-              title={`Keyframe at ${formatTime(m.time)} -- ${n} parameter${n === 1 ? "" : "s"}. Click to jump, right-click to delete`}
+              title={`Keyframe at ${formatTime(m.time)} -- ${n} parameter${n === 1 ? "" : "s"}. Click to jump, right-click for easing and delete`}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
@@ -352,7 +382,7 @@ export default function Timeline() {
               onContextMenu={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                for (const r of m.refs) removeKeyframe(r.stackId, r.paramId, r.id);
+                setMenu({ mark: m, leftPct: (m.time / duration) * 100 });
               }}
               className="absolute z-[4] p-0 cursor-pointer"
               style={{
@@ -407,6 +437,59 @@ export default function Timeline() {
               transform: "translateX(-50%)",
             }}
           />
+        )}
+
+        {/* Keyframe menu */}
+        {menu && (
+          <div
+            role="menu"
+            aria-label={`Keyframe at ${formatTime(menu.mark.time)}`}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="absolute z-[10] neo-flat rounded-md bg-surface shadow-lg flex flex-col"
+            style={{
+              left: `${Math.min(92, Math.max(0, menu.leftPct))}%`,
+              bottom: 22,
+              minWidth: 150,
+              padding: 4,
+              border: "1px solid var(--outline-variant)",
+            }}
+          >
+            <div className="font-data-micro text-data-micro text-on-surface-variant px-2 py-1">
+              {formatTime(menu.mark.time)} · {menu.mark.refs.length} parameter{menu.mark.refs.length === 1 ? "" : "s"}
+            </div>
+            {EASINGS.map((ez) => {
+              const all = menu.mark.refs.every((r) => r.easing === ez.id);
+              const some = !all && menu.mark.refs.some((r) => r.easing === ez.id);
+              return (
+                <button
+                  key={ez.id}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={all}
+                  onClick={() => {
+                    for (const r of menu.mark.refs) updateKeyframe(r.stackId, r.paramId, r.id, { easing: ez.id });
+                    setMenu(null);
+                  }}
+                  className={`text-left font-label-sm text-label-sm rounded px-2 py-1 hover:bg-surface-variant/40 ${all ? "text-accent-teal" : "text-on-surface"}`}
+                >
+                  {all ? "● " : some ? "◐ " : "○ "}
+                  {ez.label}
+                </button>
+              );
+            })}
+            <div style={{ height: 1, background: "var(--outline-variant)", margin: "3px 4px" }} />
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                for (const r of menu.mark.refs) removeKeyframe(r.stackId, r.paramId, r.id);
+                setMenu(null);
+              }}
+              className="text-left font-label-sm text-label-sm rounded px-2 py-1 text-accent-pink hover:bg-surface-variant/40"
+            >
+              Delete keyframe{menu.mark.refs.length === 1 ? "" : "s"}
+            </button>
+          </div>
         )}
 
         {/* Playhead */}

@@ -224,7 +224,10 @@ def main():
     input_path = config["input"]
     output_path = config["output"]
     mode = config["mode"] # e.g. classic, shuffle, tomato-bloom, zoom, delay, etc.
-    params = config.get("params", {})
+    # `or {}`: a caller that writes "params": null must not crash the very
+    # first params.get() below. The Rust host normalises this too; both
+    # sides guard it because this script is also run by hand.
+    params = config.get("params") or {}
 
     # 1. Automosh (Tomato) Modes: Bloom, Pulse, Overlap, Jiggle, Void, Reverse, Invert, Random
     tomato_modes = ["bloom", "pulse", "overlap", "jiggle", "void", "reverse", "invert", "random"]

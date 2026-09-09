@@ -25,8 +25,6 @@ export function useProject() {
   const audioBindings = useAppStore((s) => s.audioBindings);
   const filePath = useAppStore((s) => s.filePath);
   const activeMask = useAppStore((s) => s.activeMask);
-  const clearStack = useAppStore((s) => s.clearStack);
-  const addToStack = useAppStore((s) => s.addToStack);
   const setFilePath = useAppStore((s) => s.setFilePath);
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
   const allEffects = useAppStore((s) => s.allEffects);
@@ -75,75 +73,91 @@ export function useProject() {
       if (!path || typeof path !== "string") return false;
 
       const raw = await invoke<string>("read_file", { path });
-      const project = JSON.parse(raw) as ProjectFile;
+
+      // Validate BEFORE touching the user's work.
+      //
+      // This used to `clearStack()` first and rebuild inside a setTimeout with
+      // no shape check and no try/catch, then report "Project loaded". A file
+      // containing `{}` -- an older project, a truncated write, anything not a
+      // project at all -- wiped the open stack, claimed success, and threw
+      // "project.effectStack is not iterable" a tick later, with the autosave
+      // overwritten five seconds after that.
+      let project: ProjectFile;
+      try {
+        project = JSON.parse(raw) as ProjectFile;
+      } catch {
+        setStatusMessage(`Could not open that file: it is not valid project data`, "error");
+        return false;
+      }
+      if (!project || typeof project !== "object" || !Array.isArray(project.effectStack)) {
+        setStatusMessage(`Could not open that file: it is not a MoshDither project`, "error");
+        return false;
+      }
 
       if (project.version !== PROJECT_VERSION) {
         setStatusMessage(`Warning: project version ${project.version} may not be fully compatible`);
       }
 
-      // Restore effect stack
-      clearStack();
-      setTimeout(() => {
-        for (const entry of project.effectStack) {
-          const effect = allEffects.find((e) => e.id === entry.effectId);
-          if (!effect) continue;
-          addToStack(effect);
-          const store = useAppStore.getState();
-          const last = store.effectStack[store.effectStack.length - 1];
-          if (last && last.effectId === entry.effectId) {
-            store.updateStackParams(last.id, entry.params);
-            if (!entry.enabled) store.toggleStackItem(last.id);
-            // Restore this entry's mask assignment. Without this, a saved
-            // effect's maskId/maskMode/maskB64 were serialized correctly by
-            // saveProject but never applied back onto the restored
-            // StackEntry, so the effect silently lost its mask on reopen.
-            if (entry.maskId) {
-              store.setStackItemMask(last.id, entry.maskId);
-              if (entry.maskMode) store.setStackItemMaskMode(last.id, entry.maskMode);
-              // setStackItemMask recomputes maskB64 from the CURRENT
-              // activeMask/sam3Masks (by maskId convention), not from the
-              // saved snapshot — and SAM3 masks are session-local, so
-              // sam3Masks is normally empty right after a fresh project
-              // load. Overwrite maskB64 with the exact snapshot that was
-              // saved so a "sam3-N" mask assignment survives even though
-              // the SAM3 session itself isn't restored.
-              if (entry.maskB64 !== undefined) {
-                const savedMaskB64 = entry.maskB64;
-                useAppStore.setState((s) => ({
-                  effectStack: s.effectStack.map((e) =>
-                    e.id === last.id ? { ...e, maskB64: savedMaskB64 ?? null } : e
-                  ),
-                }));
-              }
-            }
-          }
+      // Build the whole stack first, then swap it in as ONE undoable step.
+      // Nothing is cleared unless the rebuild succeeds.
+      const store = useAppStore.getState();
+      const restored: StackEntry[] = [];
+      let skipped = 0;
+      for (const entry of project.effectStack) {
+        if (!entry || typeof entry !== "object" || typeof entry.effectId !== "string") {
+          skipped++;
+          continue;
         }
-        // Restore keyframes, audio bindings, and mask
-        const store = useAppStore.getState();
-        if (project.keyframes)
-          store.setKeyframes(project.keyframes as Record<string, import("../store").KeyframeTrack>);
-        if (project.audioBindings)
-          store.setAudioBindings(
-            project.audioBindings as Record<string, Record<string, import("../store").AudioBinding>>
-          );
-        if (project.activeMask !== undefined) store.setActiveMask(project.activeMask);
-      }, 0);
+        const effect = allEffects.find((e) => e.id === entry.effectId);
+        if (!effect) {
+          // An effect that no longer exists in this build. Skipping it is
+          // right, but the user has to be told the look is not what was saved.
+          skipped++;
+          continue;
+        }
+        restored.push({
+          id: `${entry.effectId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          effectId: entry.effectId,
+          effectName: effect.name ?? entry.effectName ?? entry.effectId,
+          params: entry.params ? JSON.parse(JSON.stringify(entry.params)) : {},
+          enabled: entry.enabled !== false,
+          maskId: entry.maskId ?? null,
+          // The saved snapshot, not a recomputed one: setStackItemMask resolves
+          // maskB64 from the CURRENT activeMask/sam3Masks, and SAM3 masks are
+          // session-local, so a "sam3-N" assignment would come back empty.
+          maskB64: entry.maskB64 ?? null,
+          maskMode: entry.maskMode ?? "inside",
+        });
+      }
+
+      store.replaceStack(restored);
+      if (project.keyframes)
+        store.setKeyframes(project.keyframes as Record<string, import("../store").KeyframeTrack>);
+      if (project.audioBindings)
+        store.setAudioBindings(
+          project.audioBindings as Record<string, Record<string, import("../store").AudioBinding>>
+        );
+      if (project.activeMask !== undefined) store.setActiveMask(project.activeMask);
 
       if (project.mediaFilePath) {
         setFilePath(project.mediaFilePath);
         // Actually load it. Setting the path alone left the app showing the
         // previously-open file while every operation targeted the new one --
         // and it still said "Project loaded".
-        useAppStore.getState().requestMediaReload();
+        store.requestMediaReload();
       }
 
-      setStatusMessage(`Project loaded: ${path}`);
+      setStatusMessage(
+        skipped > 0
+          ? `Project loaded: ${path} (${skipped} effect${skipped === 1 ? "" : "s"} from this file are not in this version and were left out)`
+          : `Project loaded: ${path}`
+      );
       return true;
     } catch (err) {
       setStatusMessage(`Open failed: ${err}`);
       return false;
     }
-  }, [allEffects, clearStack, addToStack, setFilePath, setStatusMessage]);
+  }, [allEffects, setFilePath, setStatusMessage]);
 
   return { saveProject, openProject };
 }

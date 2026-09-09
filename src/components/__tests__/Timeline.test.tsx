@@ -236,15 +236,43 @@ describe("Timeline", () => {
       expect(useAppStore.getState().currentTime).toBe(5);
     });
 
-    it("right-clicking a diamond deletes every keyframe at that time", () => {
+    it("right-click opens a menu; Delete removes every keyframe at that time", () => {
       useAppStore.setState({
         keyframes: { s1: { amount: [kf("a", 2), kf("b", 5)], mix: [kf("c", 2)] } },
       });
       render(<Timeline />);
       fireEvent.contextMenu(screen.getByRole("button", { name: "Keyframe at 00:02.00" }));
+      const menu = screen.getByRole("menu", { name: "Keyframe at 00:02.00" });
+      expect(menu).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("menuitem", { name: /Delete keyframes/ }));
       const left = useAppStore.getState().keyframes;
       expect(left.s1.amount.map((k) => k.id)).toEqual(["b"]);
       expect(left.s1.mix).toBeUndefined();
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
+
+    it("the menu sets an easing on every keyframe at that time and shows the current one", () => {
+      useAppStore.setState({
+        keyframes: { s1: { amount: [kf("a", 2)], mix: [kf("c", 2)] } },
+      });
+      render(<Timeline />);
+      fireEvent.contextMenu(screen.getByRole("button", { name: "Keyframe at 00:02.00" }));
+      expect(screen.getByRole("menuitemradio", { name: /Linear/ })).toHaveAttribute("aria-checked", "true");
+      fireEvent.click(screen.getByRole("menuitemradio", { name: /Hold/ }));
+      const kfs = useAppStore.getState().keyframes.s1;
+      expect(kfs.amount[0].easing).toBe("hold");
+      expect(kfs.mix[0].easing).toBe("hold");
+      fireEvent.contextMenu(screen.getByRole("button", { name: "Keyframe at 00:02.00" }));
+      expect(screen.getByRole("menuitemradio", { name: /Hold/ })).toHaveAttribute("aria-checked", "true");
+    });
+
+    it("Escape closes the menu", () => {
+      useAppStore.setState({ keyframes: { s1: { amount: [kf("a", 2)] } } });
+      render(<Timeline />);
+      fireEvent.contextMenu(screen.getByRole("button", { name: "Keyframe at 00:02.00" }));
+      expect(screen.getByRole("menu")).toBeInTheDocument();
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     });
 
     it("shows no keyframe readout when there are none", () => {

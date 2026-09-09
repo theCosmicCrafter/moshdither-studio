@@ -144,6 +144,10 @@ export interface AppState {
    *  leaving the app showing one file while every operation targeted another. */
   mediaReloadToken: number;
   ffglitchMode: string;
+  /** Per-mode knobs for the bitstream datamosh, keyed by mode so switching
+   *  away and back keeps what was set. Only modes the user touched have an
+   *  entry; everything else runs on the defaults in lib/ffglitchModes.ts. */
+  ffglitchParams: Record<string, Record<string, number | boolean | string>>;
   /** Export settings. These were component-local useState in ExportPanel, the
    *  same fallacy as ffglitchMode one line below them: undocking or closing the
    *  panel silently reset every one of a user's export choices. */
@@ -200,6 +204,10 @@ export interface AppState {
 
   // Mask / Segmentation
   activeMask: string | null; // base64 PNG of current mask
+  /** Previous masks, oldest first, so a brush stroke, shape, Clear or Invert
+   *  can be taken back. Capped at MASK_HISTORY_LIMIT. The main undo stack
+   *  covers the effect stack, not painting; this is the mask's own. */
+  maskHistory: { mask: string | null; label: string }[];
   maskRevision: number;
   maskVisible: boolean;
   maskTab: "sam3" | "manual";
@@ -291,7 +299,13 @@ export interface AppState {
   proxyCrf: number;
   proxyGenerating: boolean;
 
-  // Multi-Track Layering
+  // Multi-Track Layering.
+  //
+  // The Tracks PANEL is retired (recycling/2026-09-09_tracks-panel-wired-to-
+  // nothing): it created entries that no renderer, preview or export ever
+  // read, so to a user it was a list that did nothing. The state stays so
+  // project files that carry `tracks` still load, and so the feature can be
+  // brought back with a renderer behind it.
   tracks: Track[];
   activeTrackId: string | null;
 
@@ -316,6 +330,8 @@ export interface AppState {
   setPreviewAutoExact: (v: boolean) => void;
   requestMediaReload: () => void;
   setFfglitchMode: (v: string) => void;
+  setFfglitchParam: (mode: string, id: string, value: number | boolean | string) => void;
+  resetFfglitchParams: (mode: string) => void;
   setExportFormat: (v: string) => void;
   setExportCodec: (v: string) => void;
   setExportResolutionId: (v: string) => void;
@@ -413,6 +429,10 @@ export interface AppState {
 
   // Mask actions
   setActiveMask: (maskB64: string | null) => void;
+  /** Record the CURRENT mask before an action replaces it. */
+  pushMaskHistory: (label: string) => void;
+  /** Restore the previous mask; returns its label, or null if there was none. */
+  undoMask: () => string | null;
   setMaskVisible: (v: boolean) => void;
   toggleViewportGuide: (guide: keyof ViewportGuides) => void;
   setViewportGuides: (guides: Partial<ViewportGuides>) => void;
@@ -517,6 +537,9 @@ function pushHistory(state: Pick<AppState, "pastStacks" | "effectStack">) {
   };
 }
 
+/** Mask undo depth. Masks are full-size PNGs, so this is bounded on purpose. */
+const MASK_HISTORY_LIMIT = 30;
+
 export const useAppStore = create<AppState>((set, get) => ({
   currentTime: 0,
   // Paused on launch. This defaulted to true, so the app opened mid-playback
@@ -539,6 +562,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   previewAutoExact: true,
   mediaReloadToken: 0,
   ffglitchMode: "classic",
+  ffglitchParams: {},
   exportFormat: "mp4",
   exportCodec: "h264",
   exportResolutionId: "source",
@@ -619,6 +643,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   inPoint: null,
   outPoint: null,
   activeMask: null,
+  maskHistory: [],
   maskRevision: 0,
   maskVisible: true,
   viewportGuides: {
@@ -678,6 +703,19 @@ export const useAppStore = create<AppState>((set, get) => ({
   setPreviewAutoExact: (v) => set({ previewAutoExact: v }),
   requestMediaReload: () => set((st) => ({ mediaReloadToken: st.mediaReloadToken + 1 })),
   setFfglitchMode: (v) => set({ ffglitchMode: v }),
+  setFfglitchParam: (mode, id, value) =>
+    set((state) => ({
+      ffglitchParams: {
+        ...state.ffglitchParams,
+        [mode]: { ...(state.ffglitchParams[mode] ?? {}), [id]: value },
+      },
+    })),
+  resetFfglitchParams: (mode) =>
+    set((state) => {
+      const next = { ...state.ffglitchParams };
+      delete next[mode];
+      return { ffglitchParams: next };
+    }),
   setExportFormat: (v) => set({ exportFormat: v }),
   setExportCodec: (v) => set({ exportCodec: v }),
   setExportResolutionId: (v) => set({ exportResolutionId: v }),
@@ -1159,6 +1197,24 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Mask actions
   setActiveMask: (maskB64) =>
     set((state) => ({ activeMask: maskB64, maskRevision: state.maskRevision + 1 })),
+  pushMaskHistory: (label) =>
+    set((state) => ({
+      maskHistory: [
+        ...state.maskHistory.slice(-(MASK_HISTORY_LIMIT - 1)),
+        { mask: state.activeMask, label },
+      ],
+    })),
+  undoMask: () => {
+    const { maskHistory, maskRevision } = get();
+    const last = maskHistory[maskHistory.length - 1];
+    if (!last) return null;
+    set({
+      maskHistory: maskHistory.slice(0, -1),
+      activeMask: last.mask,
+      maskRevision: maskRevision + 1,
+    });
+    return last.label;
+  },
   setMaskVisible: (v) => set({ maskVisible: v }),
   toggleViewportGuide: (guide) =>
     set((state) => ({

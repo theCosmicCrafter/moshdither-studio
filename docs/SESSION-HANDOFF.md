@@ -70,6 +70,47 @@ to end against a real clip with no system Python involved.
 the icons are all bundled. Effects, dithering, glitch, datamoshing, LUTs and
 export need nothing from the internet.
 
+## Session 2026-09-09 (later): release-readiness audit, and the export crash found
+
+Asked directly: *"Is this production ready? Is this a finished product?"* A
+seven-dimension read-only audit ran with adversarial verification (113 agents;
+59 completed before the run hit usage credits, so 52 of the serious findings
+carry a verdict and the rest carry evidence only). **106 distinct findings**,
+11 of them blockers. Raw data: `evals/reports/audit-2026-09-09.md`.
+
+**The export crash is explained and fixed.** `export_video` duplicates a still
+image's one decoded frame `duration x fps` times to animate it -- and the
+memory plan never saw it, because `probe_frame_count` reports 0 for a still, so
+`plan_decode` planned for ONE frame, found it comfortably inside the budget and
+chose native resolution. A 4032x3024 phone photo is 48.8 MB per frame; the
+default 10 s at 30 fps is 300 of them = **14.6 GB**, and the per-effect rayon
+collect doubles it. A failed Rust allocation ABORTS rather than panicking,
+which is exactly why the log stopped after "Decoded 1 frames" with no panic
+recorded. Fixed on both sides: `plan_decode_for_frames` plans against the count
+the still becomes, and the clone itself is capped against half the budget
+whatever the plan said. Pinned by `still_memory_plan_tests`.
+
+**Also fixed in this batch (all verified in the source first):**
+
+| What | Was |
+|---|---|
+| **Exports of non-16:9 footage were distorted** | The encoder ran a bare `scale=W:H`, which ignores source aspect. A 640x1146 vertical clip exported at "1080p HD" was squashed **3.2x horizontally** -- measured, not inferred. Now `force_original_aspect_ratio=decrease` + `pad`, verified against real FFmpeg |
+| Long clips silently truncated / downscaled | The backend emitted `warning` and `downscaled_to` on `export-progress`; the UI destructured `{stage, progress, message}` and dropped both. Now surfaced, and kept on screen in a dismissible banner rather than a status line that scrolls away |
+| **Open Project wiped the stack before validating** | `clearStack()` ran, then a `setTimeout` rebuilt with no shape check and no try/catch, and "Project loaded" was reported regardless. A file containing `{}` destroyed the open stack and threw a tick later. Now validated first, rebuilt in memory, applied as ONE undoable `replaceStack` |
+| **"No mask" effects came out masked in exports** | Rust falls back to the global mask for any effect without its own; the Export panel was the ONLY caller that passed `activeMask` there (preview, Save Image and the batch queue all pass null), so an effect deliberately set to "No mask" was masked in the file and nowhere else |
+| Datamosh modes had no knobs | `applyFfglitch(..., {}, ...)` at both call sites. `mosh_cli.py` had been parsing 30+ parameters the whole time. Now one table (`src/lib/ffglitchModes.ts`) drives controls, defaults, clamping and presets |
+| Datamosh **preview** was broken for every mode | It passed `"params": null`, and `mosh_cli.py`'s first `params.get()` raised `'NoneType' object has no attribute 'get'`. Proven by running the sidecar directly; guarded now on both sides |
+| Keyframe easing unreachable | Right-click a diamond: five easings and Delete |
+| Mask undo covered only Clear/Invert | A store-level mask history; brush and eraser strokes, shapes, Clear and Invert all undo, capped at 30 |
+| "Lock Aspect Ratio" wrote to the store and nothing read it | Wired to the export box (`src/utils/exportDimensions.ts`); works correctly *because* the encoder now letterboxes |
+| "Use Proxy" checkbox wired to nothing | Recycled. It could not have worked: the video preview REQUIRES a proxy, so there was nothing to turn off |
+| Tracks panel created layers nothing rendered | Recycled; store state kept for project-file compatibility |
+| **The app-smoke gate's panic detection was dead code** | `$before` and `$log` were pipelines assigned to nothing, so `$log` was always null and the PANIC scan could never run -- the gate only checked "did it stay alive 20s". It also never rebuilt a stale exe, so it smoke-tested whatever binary was on disk. Both fixed |
+
+**Method note for next time:** `cargo check` passes code that `cargo clippy -D
+warnings` rejects. Run clippy before claiming a batch is clean; a gate run was
+burned on a redundant cast.
+
 ## Session 2026-09-09 (late): UX fallacy sweep -- what changed and what is left
 
 Driven by the owner's framing: "if there's a better, user-friendly,

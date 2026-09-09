@@ -548,10 +548,11 @@ export async function previewFfglitch(
   inputPath: string,
   mode: string,
   startSecs?: number,
-  durationSecs?: number
+  durationSecs?: number,
+  params: Record<string, unknown> = {}
 ): Promise<string> {
   if (!isTauriAvailable()) throw new Error("Datamosh preview needs the desktop app.");
-  return invoke("preview_ffglitch", { inputPath, mode, startSecs, durationSecs });
+  return invoke("preview_ffglitch", { inputPath, mode, startSecs, durationSecs, params });
 }
 
 export async function applyFfglitch(

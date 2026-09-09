@@ -327,6 +327,100 @@ pub struct EffectCall {
     pub mask_b64: Option<String>,
     #[serde(default)]
     pub mask_mode: Option<String>,
+    /// Animated parameters, keyed by parameter id.
+    ///
+    /// The UI has offered a keyframe diamond on every numeric parameter for
+    /// a long time, and the preview honoured them -- but the export payload
+    /// carried one static params map per effect, so the rendered file froze
+    /// every animated parameter at whatever the playhead happened to hold
+    /// when Export was clicked. The animation was visible and unexportable.
+    #[serde(default)]
+    pub keyframes: Option<std::collections::HashMap<String, Vec<KeyframePoint>>>,
+}
+
+/// One keyframe, as the frontend stores it (`src/store/index.ts`).
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct KeyframePoint {
+    pub time: f64,
+    pub value: f64,
+    #[serde(default)]
+    pub easing: Option<String>,
+}
+
+/// Mirror of `applyEasing` in `src/store/index.ts`. The two must agree or
+/// the exported file will not match the preview the user approved.
+fn apply_easing(t: f64, easing: &str) -> f64 {
+    if easing == "hold" {
+        return 0.0;
+    }
+    let tc = if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) };
+    match easing {
+        "easeIn" => tc * tc,
+        "easeOut" => 1.0 - (1.0 - tc) * (1.0 - tc),
+        "easeInOut" => {
+            if tc < 0.5 {
+                2.0 * tc * tc
+            } else {
+                1.0 - (-2.0 * tc + 2.0).powi(2) / 2.0
+            }
+        }
+        // "linear" and anything unrecognised
+        _ => tc,
+    }
+}
+
+/// Value of one animated parameter at `time`, or None if the track is empty.
+///
+/// Mirror of `getKeyframeValue` in the store: hold before the first key and
+/// after the last, interpolate between neighbours with the LEFT key's easing.
+fn keyframe_value_at(track: &[KeyframePoint], time: f64) -> Option<f64> {
+    if track.is_empty() {
+        return None;
+    }
+    // The frontend keeps tracks sorted by time; do not assume it.
+    let mut idx = 0usize;
+    while idx < track.len() && track[idx].time < time {
+        idx += 1;
+    }
+    if idx < track.len() && (track[idx].time - time).abs() < f64::EPSILON {
+        return Some(track[idx].value);
+    }
+    if idx == 0 {
+        return Some(track[0].value);
+    }
+    if idx >= track.len() {
+        return Some(track[track.len() - 1].value);
+    }
+    let k1 = &track[idx - 1];
+    let k2 = &track[idx];
+    let span = k2.time - k1.time;
+    if span <= 0.0 {
+        return Some(k2.value);
+    }
+    let eased = apply_easing(
+        (time - k1.time) / span,
+        k1.easing.as_deref().unwrap_or("linear"),
+    );
+    Some(k1.value + (k2.value - k1.value) * eased)
+}
+
+/// Overwrite animated parameters with their value at `time`.
+fn inject_keyframe_params(
+    keyframes: Option<&std::collections::HashMap<String, Vec<KeyframePoint>>>,
+    params: &mut serde_json::Map<String, serde_json::Value>,
+    time: f64,
+) -> bool {
+    let Some(tracks) = keyframes else {
+        return false;
+    };
+    let mut touched = false;
+    for (param_id, track) in tracks {
+        if let Some(v) = keyframe_value_at(track, time) {
+            params.insert(param_id.clone(), serde_json::Value::from(v));
+            touched = true;
+        }
+    }
+    touched
 }
 
 /// Compares two effect-call params maps for cache-hit purposes. Effects
@@ -645,6 +739,13 @@ pub fn save_processed_image(
 /// final encode is scaled to `width`/`height` (or source dimensions if
 /// unspecified) regardless of the processing scale, so a 4K export can
 /// still process at 1080p internally and upscale on output.
+/// Hard ceiling on frames in one export, whatever the duration box says.
+///
+/// 30 minutes at 60 fps. The animation-length control clamps to 120 s, but the
+/// transport's duration box does not, and it is what an export without an out
+/// point uses -- so a typo of 12000 in that box asked for 360 000 frames.
+const MAX_EXPORT_FRAMES: usize = 108_000;
+
 #[tauri::command]
 pub async fn export_video(
     state: State<'_, AppState>,
@@ -801,8 +902,20 @@ fn export_video_blocking(
         "export-progress",
         serde_json::json!({"stage": "planning", "progress": 0}),
     );
-    let (decode_scale, budget_bytes) =
-        crate::ffmpeg::plan_decode(&source_path, processing_scale).map_err(|e| e.to_string())?;
+    // A still image is decoded as ONE frame and then multiplied to fill the
+    // requested duration, so the memory plan has to be made against the count
+    // it will become. See plan_decode_for_frames.
+    let still_target_frames = if crate::ffmpeg::probe_frame_count(&source_path).unwrap_or(0) <= 1 {
+        let n = (trim_end.unwrap_or(10.0).max(0.0) * fps.unwrap_or(30.0)).round();
+        Some((n.max(1.0) as usize).min(MAX_EXPORT_FRAMES))
+    } else {
+        None
+    };
+    let (decode_scale, budget_bytes) = match still_target_frames {
+        Some(n) => crate::ffmpeg::plan_decode_for_frames(&source_path, processing_scale, n),
+        None => crate::ffmpeg::plan_decode(&source_path, processing_scale),
+    }
+    .map_err(|e| e.to_string())?;
     let budget_mb = budget_bytes as f64 / (1024.0 * 1024.0);
     tracing::info!(
         "Export decode plan: scale={:?}, memory budget={:.0} MB",
@@ -865,11 +978,71 @@ fn export_video_blocking(
         }
     }
 
-    // If the source is a still image (1 frame), duplicate it to fill the desired duration
+    // Say so when the clip came back short. The decode caps frames to fit the
+    // budget and logged a tracing::warn about it -- which no user ever sees, so
+    // a five-minute source silently exported as four and the file just ended.
+    if still_target_frames.is_none() {
+        let probed = crate::ffmpeg::probe_frame_count(&source_path).unwrap_or(0);
+        let decoded = segment.frames.len();
+        // 2% slack: the probe is duration x fps, which is an estimate.
+        if probed > 0 && decoded > 0 && (decoded as f64) < (probed as f64) * 0.98 {
+            let secs = decoded as f64 / (segment.fps as f64).max(1.0);
+            let message = format!(
+                "This clip is too long to process at this resolution: exporting the \
+                 first {:.0}s of it. Lower the processing resolution in Export \
+                 settings, or set an in/out range, to cover the whole clip.",
+                secs
+            );
+            tracing::warn!("{}", message);
+            let _ = app_handle.emit(
+                "export-progress",
+                serde_json::json!({
+                    "stage": "decoding",
+                    "progress": 0,
+                    "warning": message
+                }),
+            );
+        }
+    }
+
+    // If the source is a still image (1 frame), duplicate it to fill the desired
+    // duration.
+    //
+    // Bounded twice. The decode plan above already picked a resolution at which
+    // the whole duration fits, but a user who forces a processing scale bypasses
+    // that, and the duration box has no upper limit -- so the clone itself is
+    // capped against the same budget here. Unbounded, this was the export crash:
+    // `vec![single; 300]` of a 48 MB frame is 14.6 GB, and a failed Rust
+    // allocation ABORTS rather than panicking, so nothing reached the log.
     if segment.frames.len() == 1 {
         let effective_fps = fps.unwrap_or(30.0);
         let target_duration = trim_end.unwrap_or(10.0);
-        let target_frames = (target_duration * effective_fps).round() as usize;
+        let requested_frames =
+            ((target_duration * effective_fps).round().max(1.0) as usize).min(MAX_EXPORT_FRAMES);
+        let frame_bytes = segment.frames[0].data.len().max(1);
+        // Half the budget: the effects stage collects a second copy of the whole
+        // sequence per non-temporal effect (see the rayon collect below), so the
+        // decoded Vec must leave room for one more of itself.
+        let max_by_budget = (((budget_bytes / 2) as usize) / frame_bytes).max(1);
+        let target_frames = requested_frames.min(max_by_budget);
+        if target_frames < requested_frames {
+            let secs = target_frames as f64 / effective_fps.max(1.0);
+            let message = format!(
+                "This image is too large to animate for {:.1}s at its full size. \
+                 Exporting {:.1}s instead -- lower the processing resolution in \
+                 Export settings, or shorten the animation, to get the full length.",
+                target_duration, secs
+            );
+            tracing::warn!("{}", message);
+            let _ = app_handle.emit(
+                "export-progress",
+                serde_json::json!({
+                    "stage": "decoding",
+                    "progress": 0,
+                    "warning": message
+                }),
+            );
+        }
         if target_frames > 1 {
             let single = segment.frames[0].clone();
             segment.frames = vec![single; target_frames];
@@ -955,6 +1128,12 @@ fn export_video_blocking(
             // whole segment at once -- so hand it the beat timeline instead, which
             // is what lets a datamosh cut on the beat rather than on a clock.
             let mut temporal_params = params.clone();
+            // A temporal effect is handed the whole segment at once, so it has
+            // no per-frame parameter hook. Animated parameters take their value
+            // at the START of the clip rather than being ignored outright.
+            if inject_keyframe_params(call.keyframes.as_ref(), &mut temporal_params, 0.0) {
+                temporal_params = crate::effects::clamp_for_effect(effect, &temporal_params);
+            }
             if let Some(ref audio) = audio_data {
                 audio.inject_timeline_params(&mut temporal_params);
             }
@@ -965,17 +1144,21 @@ fn export_video_blocking(
             // Non-temporal, no audio: parallelize frame processing with rayon
             let mask_ref = active_mask;
             let params_ref = &params;
+            let keyframes_ref = call.keyframes.as_ref();
             let fps_val = segment.fps;
             let results: std::result::Result<Vec<_>, _> = segment
                 .frames
                 .par_iter()
                 .enumerate()
                 .map(|(idx, frame)| {
+                    let t = idx as f64 / fps_val;
                     let mut frame_params = params_ref.clone();
-                    frame_params.insert(
-                        "time".to_string(),
-                        serde_json::Value::from(idx as f64 / fps_val),
-                    );
+                    frame_params.insert("time".to_string(), serde_json::Value::from(t));
+                    // Re-clamp after injection: the clamp above ran on the static
+                    // map, and a keyframe can name any value the user dragged to.
+                    if inject_keyframe_params(keyframes_ref, &mut frame_params, t) {
+                        frame_params = crate::effects::clamp_for_effect(effect, &frame_params);
+                    }
                     effect.process_frame(frame, mask_ref, &frame_params)
                 })
                 .collect();
@@ -985,11 +1168,12 @@ fn export_video_blocking(
             let mut frames = Vec::with_capacity(segment.frames.len());
             let fps_val = segment.fps;
             for (frame_idx, frame) in segment.frames.iter().enumerate() {
+                let t = frame_idx as f64 / fps_val;
                 let mut frame_params = params.clone();
-                frame_params.insert(
-                    "time".to_string(),
-                    serde_json::Value::from(frame_idx as f64 / fps_val),
-                );
+                frame_params.insert("time".to_string(), serde_json::Value::from(t));
+                if inject_keyframe_params(call.keyframes.as_ref(), &mut frame_params, t) {
+                    frame_params = crate::effects::clamp_for_effect(effect, &frame_params);
+                }
                 if let Some(ref audio) = audio_data {
                     audio.inject_params(&mut frame_params, frame_idx);
                 }
@@ -1655,6 +1839,7 @@ mod integration_tests {
             params: serde_json::Map::new(),
             mask_b64: None,
             mask_mode: None,
+            keyframes: None,
         }];
 
         let result = apply_stack_to_frame(&reg, frame.clone(), &stack, None)
@@ -1686,6 +1871,7 @@ mod integration_tests {
             params: serde_json::Map::new(),
             mask_b64: None,
             mask_mode: None,
+            keyframes: None,
         }];
         let result = apply_stack_to_frame(&reg, frame, &stack, None);
         assert!(
@@ -2496,6 +2682,18 @@ fn run_ffglitch_subprocess(
     .map_err(|e| format!("FFglitch: {e}"))
 }
 
+/// `"params": null` reaches mosh_cli.py as `None`, and its very first
+/// `params.get(...)` raises `'NoneType' object has no attribute 'get'`. The
+/// preview command passed exactly that for every mode, so "Preview this
+/// mode" failed on all of them. An object -- empty or not -- is what the
+/// script expects, and an empty one means "every knob at its default".
+fn ffglitch_params_or_empty(params: serde_json::Value) -> serde_json::Value {
+    match params {
+        serde_json::Value::Object(_) => params,
+        _ => serde_json::json!({}),
+    }
+}
+
 /// Validates the extra file-path parameters that the motion_transfer/combine
 /// modes forward to mosh_cli.py (params.motionUrl / params.combineVideos).
 /// mosh_cli.py feeds these straight into FFglitch/ffmpeg as further input
@@ -2601,9 +2799,12 @@ pub async fn preview_ffglitch(
     mode: String,
     start_secs: Option<f64>,
     duration_secs: Option<f64>,
+    params: Option<serde_json::Value>,
 ) -> std::result::Result<String, String> {
     let validated = validate_io_path(&input_path, true)?;
     let source = validated.to_string_lossy().into_owned();
+    let params = ffglitch_params_or_empty(params.unwrap_or(serde_json::Value::Null));
+    let params_key = params.to_string();
     // Two seconds is enough to read a datamosh -- the smear needs a handful of
     // P-frames, not a whole clip -- and short enough that browsing modes stays
     // interactive.
@@ -2625,6 +2826,8 @@ pub async fn preview_ffglitch(
         mode.hash(&mut h);
         format!("{start:.2}").hash(&mut h);
         format!("{seconds:.2}").hash(&mut h);
+        // The knobs change the picture as much as the mode does.
+        params_key.hash(&mut h);
         h.finish()
     };
     let out = dir.join(format!("mosh-preview-{key:016x}.mp4"));
@@ -2672,7 +2875,7 @@ pub async fn preview_ffglitch(
         trimmed.to_string_lossy().into_owned(),
         out.to_string_lossy().into_owned(),
         mode,
-        serde_json::Value::Null,
+        params,
     )
     .await;
     let _ = std::fs::remove_file(&trimmed);
@@ -2691,6 +2894,7 @@ pub async fn apply_ffglitch(
     let validated_output = validate_io_path(&output_path, false)?;
     let input_path = validated_input.to_string_lossy().into_owned();
     let output_path = validated_output.to_string_lossy().into_owned();
+    let params = ffglitch_params_or_empty(params);
 
     validate_ffglitch_extra_paths(&mode, &params)?;
 
@@ -3145,5 +3349,152 @@ mod ffglitch_extra_path_tests {
             result.is_ok(),
             "modes without file-path params must not validate unrelated fields: {result:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod ffglitch_params_tests {
+    use super::ffglitch_params_or_empty;
+
+    /// Null is what the preview used to send; a bare number or string is what a
+    /// hand-edited preset could send. All of them must become an object,
+    /// because mosh_cli.py calls .get() on it before anything else.
+    #[test]
+    fn non_objects_become_an_empty_object() {
+        for bad in [
+            serde_json::Value::Null,
+            serde_json::json!(3),
+            serde_json::json!("zoom"),
+            serde_json::json!([1, 2]),
+        ] {
+            assert_eq!(ffglitch_params_or_empty(bad), serde_json::json!({}));
+        }
+    }
+
+    #[test]
+    fn objects_pass_through_untouched() {
+        let p = serde_json::json!({ "zoom": 80, "keepFirst": false });
+        assert_eq!(ffglitch_params_or_empty(p.clone()), p);
+    }
+}
+
+#[cfg(test)]
+mod keyframe_export_tests {
+    use super::*;
+
+    fn kf(time: f64, value: f64, easing: &str) -> KeyframePoint {
+        KeyframePoint {
+            time,
+            value,
+            easing: Some(easing.to_string()),
+        }
+    }
+
+    /// These numbers come from the TypeScript the preview uses
+    /// (`applyEasing` / `getKeyframeValue` in src/store/index.ts). If the two
+    /// implementations drift, the exported file stops matching the preview the
+    /// user approved -- which is the whole point of exporting keyframes at all.
+    #[test]
+    fn easing_curves_match_the_frontend() {
+        for (name, t, expected) in [
+            ("linear", 0.25, 0.25),
+            ("easeIn", 0.5, 0.25),
+            ("easeOut", 0.5, 0.75),
+            ("easeInOut", 0.25, 0.125),
+            ("easeInOut", 0.75, 0.875),
+            ("hold", 0.99, 0.0),
+        ] {
+            assert!(
+                (apply_easing(t, name) - expected).abs() < 1e-9,
+                "{name} at {t}: expected {expected}, got {}",
+                apply_easing(t, name)
+            );
+        }
+    }
+
+    #[test]
+    fn easing_clamps_out_of_range_and_nan_like_the_frontend() {
+        assert_eq!(apply_easing(-5.0, "linear"), 0.0);
+        assert_eq!(apply_easing(5.0, "linear"), 1.0);
+        assert_eq!(apply_easing(f64::NAN, "linear"), 0.0);
+        // An easing name this build does not know must behave as linear, not panic.
+        assert!((apply_easing(0.4, "bounce-out-elastic") - 0.4).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_value_is_held_before_the_first_key_and_after_the_last() {
+        let track = [kf(1.0, 10.0, "linear"), kf(3.0, 30.0, "linear")];
+        assert_eq!(keyframe_value_at(&track, 0.0), Some(10.0));
+        assert_eq!(keyframe_value_at(&track, 99.0), Some(30.0));
+        assert_eq!(keyframe_value_at(&track, 1.0), Some(10.0));
+        assert_eq!(keyframe_value_at(&track, 3.0), Some(30.0));
+    }
+
+    #[test]
+    fn a_value_interpolates_between_neighbours_with_the_left_keys_easing() {
+        let track = [kf(0.0, 0.0, "linear"), kf(2.0, 100.0, "linear")];
+        assert_eq!(keyframe_value_at(&track, 1.0), Some(50.0));
+
+        // "hold" on the LEFT key freezes it until the right key is reached.
+        let held = [kf(0.0, 0.0, "hold"), kf(2.0, 100.0, "linear")];
+        assert_eq!(keyframe_value_at(&held, 1.9), Some(0.0));
+        assert_eq!(keyframe_value_at(&held, 2.0), Some(100.0));
+    }
+
+    #[test]
+    fn an_empty_or_degenerate_track_is_survivable() {
+        assert_eq!(keyframe_value_at(&[], 1.0), None);
+        // Two keys at the same instant must not divide by zero.
+        let same = [kf(1.0, 5.0, "linear"), kf(1.0, 9.0, "linear")];
+        assert!(keyframe_value_at(&same, 1.0).is_some());
+    }
+
+    #[test]
+    fn injection_overwrites_only_the_animated_parameters() {
+        let mut tracks = std::collections::HashMap::new();
+        tracks.insert(
+            "amount".to_string(),
+            vec![kf(0.0, 0.0, "linear"), kf(2.0, 100.0, "linear")],
+        );
+        let mut params = serde_json::Map::new();
+        params.insert("amount".to_string(), serde_json::Value::from(7.0));
+        params.insert("other".to_string(), serde_json::Value::from(3.0));
+
+        assert!(inject_keyframe_params(Some(&tracks), &mut params, 1.0));
+        assert_eq!(params["amount"], serde_json::Value::from(50.0));
+        assert_eq!(
+            params["other"],
+            serde_json::Value::from(3.0),
+            "an un-keyframed parameter must be left alone"
+        );
+
+        // No keyframes at all: nothing touched, and the caller can skip re-clamping.
+        let mut untouched = serde_json::Map::new();
+        untouched.insert("amount".to_string(), serde_json::Value::from(7.0));
+        assert!(!inject_keyframe_params(None, &mut untouched, 1.0));
+        assert_eq!(untouched["amount"], serde_json::Value::from(7.0));
+    }
+
+    /// The payload must survive a frontend that sends no `keyframes` key at all
+    /// -- every preview call still does.
+    #[test]
+    fn an_effect_call_without_keyframes_still_deserializes() {
+        let call: EffectCall =
+            serde_json::from_str(r#"{"effect_id":"dithering.bayer","params":{},"mask_b64":null}"#)
+                .expect("payloads without keyframes must still parse");
+        assert!(call.keyframes.is_none());
+    }
+
+    #[test]
+    fn an_effect_call_with_keyframes_deserializes() {
+        let call: EffectCall = serde_json::from_str(
+            r#"{"effect_id":"dithering.bayer","params":{},"mask_b64":null,
+                "keyframes":{"amount":[{"time":0,"value":1,"easing":"linear"},
+                                       {"time":2,"value":9,"easing":"easeIn"}]}}"#,
+        )
+        .expect("parses");
+        let tracks = call.keyframes.expect("present");
+        assert_eq!(tracks["amount"].len(), 2);
+        assert_eq!(keyframe_value_at(&tracks["amount"], 0.0), Some(1.0));
     }
 }

@@ -174,7 +174,6 @@ import OnboardingModal from "../OnboardingModal";
 import WindowControls from "../WindowControls";
 import PlaybackOverlay from "../PlaybackOverlay";
 import PostProcessControls from "../PostProcessControls";
-import TrackPanel from "../TrackPanel";
 import MaskSelector from "../MaskSelector";
 import EffectStack from "../EffectStack";
 import ParameterPanel from "../EffectStack/ParameterPanel";
@@ -489,69 +488,6 @@ describe("Component Test Suite", () => {
         />
       );
       expect(screen.getByText("Processing...")).toBeInTheDocument();
-    });
-  });
-
-  // ── TrackPanel ─────────────────────────────────────────────
-  describe("TrackPanel", () => {
-    it("renders with track count 0 initially", () => {
-      render(<TrackPanel />);
-      expect(screen.getByText("Tracks (0)")).toBeInTheDocument();
-    });
-
-    it("shows empty state message", () => {
-      render(<TrackPanel />);
-      expect(screen.getByText(/No tracks/)).toBeInTheDocument();
-    });
-
-    it("adds a track on Add button click", () => {
-      render(<TrackPanel />);
-      fireEvent.click(screen.getByText("+ Add"));
-      expect(useAppStore.getState().tracks.length).toBe(1);
-      expect(screen.getByText("Tracks (1)")).toBeInTheDocument();
-    });
-
-    it("removes a track on remove button click", () => {
-      render(<TrackPanel />);
-      fireEvent.click(screen.getByText("+ Add"));
-      expect(useAppStore.getState().tracks.length).toBe(1);
-      fireEvent.click(screen.getByText("✕"));
-      expect(useAppStore.getState().tracks.length).toBe(0);
-    });
-
-    it("sets active track on click", () => {
-      render(<TrackPanel />);
-      fireEvent.click(screen.getByText("+ Add"));
-      const track = useAppStore.getState().tracks[0];
-      // Click on the track container (not a button/input)
-      fireEvent.click(screen.getByDisplayValue(track.name));
-      expect(useAppStore.getState().activeTrackId).toBe(track.id);
-    });
-
-    it("toggles track visibility via checkbox", () => {
-      render(<TrackPanel />);
-      fireEvent.click(screen.getByText("+ Add"));
-      const checkbox = screen.getByRole("checkbox");
-      expect(checkbox).toBeChecked();
-      fireEvent.click(checkbox);
-      expect(useAppStore.getState().tracks[0].visible).toBe(false);
-    });
-
-    it("renames track via text input", () => {
-      render(<TrackPanel />);
-      fireEvent.click(screen.getByText("+ Add"));
-      const input = screen.getByDisplayValue(useAppStore.getState().tracks[0].name);
-      fireEvent.change(input, { target: { value: "My Track" } });
-      expect(useAppStore.getState().tracks[0].name).toBe("My Track");
-    });
-
-    // LabeledSlider's onChange previously used Number.parseInt, which
-    // truncates a float-stepped value like this slider's 0.05 step to 0.
-    it("sets a float opacity value via the slider, not truncated to an integer", () => {
-      render(<TrackPanel />);
-      fireEvent.click(screen.getByText("+ Add"));
-      fireEvent.change(screen.getByLabelText("Opacity"), { target: { value: "0.65" } });
-      expect(useAppStore.getState().tracks[0].opacity).toBe(0.65);
     });
   });
 

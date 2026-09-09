@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useAppStore } from "../store";
 import LabeledSlider from "./LabeledSlider";
 
@@ -22,8 +22,14 @@ export default function ManualMaskEditor() {
   // mask could be destroyed by one misclick with nothing to do about it. Undo
   // is the right answer rather than a confirm dialog: creative tools let you
   // take the action and take it back, they do not interrogate you first.
-  const [undoableMask, setUndoableMask] = useState<string | null>(null);
-  const [undoLabel, setUndoLabel] = useState<string>("");
+  //
+  // The history lives in the store so the overlay's brush strokes -- the
+  // thing you do a hundred times -- go on the same stack as Clear and Invert.
+  // A single component-local snapshot covered only those two.
+  const maskHistory = useAppStore((s) => s.maskHistory);
+  const pushMaskHistory = useAppStore((s) => s.pushMaskHistory);
+  const undoMask = useAppStore((s) => s.undoMask);
+  const undoLabel = maskHistory.length > 0 ? maskHistory[maskHistory.length - 1].label : "";
 
   const invertGenerationRef = useRef(0);
   const invertImageRef = useRef<HTMLImageElement | null>(null);
@@ -53,8 +59,7 @@ export default function ManualMaskEditor() {
 
   const clearMask = useCallback(() => {
     // Snapshot BEFORE destroying, so Undo has something to restore.
-    setUndoableMask(useAppStore.getState().activeMask ?? null);
-    setUndoLabel("Clear");
+    pushMaskHistory("Clear");
     const blank = createBlankMask();
     if (blank) {
       setActiveMask(blank);
@@ -63,19 +68,16 @@ export default function ManualMaskEditor() {
       setActiveMask(null);
       setStatusMessage("Mask cleared");
     }
-  }, [createBlankMask, setActiveMask, setStatusMessage]);
+  }, [createBlankMask, pushMaskHistory, setActiveMask, setStatusMessage]);
 
   const undoMaskOp = useCallback(() => {
-    setActiveMask(undoableMask);
-    setStatusMessage(`${undoLabel} undone`);
-    setUndoableMask(null);
-    setUndoLabel("");
-  }, [undoableMask, undoLabel, setActiveMask, setStatusMessage]);
+    const label = undoMask();
+    if (label) setStatusMessage(`${label} undone`);
+  }, [undoMask, setStatusMessage]);
 
   const invertMask = useCallback(() => {
     if (width === 0 || height === 0) return;
-    setUndoableMask(useAppStore.getState().activeMask ?? null);
-    setUndoLabel("Invert");
+    pushMaskHistory("Invert");
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
@@ -112,7 +114,7 @@ export default function ManualMaskEditor() {
       setStatusMessage("Mask inverted");
     };
     img.src = source;
-  }, [activeMask, createBlankMask, setActiveMask, setStatusMessage, width, height]);
+  }, [activeMask, createBlankMask, pushMaskHistory, setActiveMask, setStatusMessage, width, height]);
 
   if (width === 0 || height === 0) {
     return (

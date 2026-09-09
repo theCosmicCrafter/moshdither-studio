@@ -51,6 +51,7 @@ vi.mock("../../hooks/useBatchQueue", () => ({
 }));
 
 import ExportPanel from "../ExportPanel";
+import { exportDimensions } from "../../utils/exportDimensions";
 
 function mockEffectMeta(id: string, name: string, category: string): EffectMeta {
   return {
@@ -239,6 +240,33 @@ describe("ExportPanel", () => {
     expect(screen.getByText("1:1")).toBeInTheDocument();
   });
 
+  // The mode dropdown used to be the whole UI: every mode ran on its script's
+  // baked-in constants and applyFfglitch was called with `{}`.
+  describe("datamosh mode knobs", () => {
+    it("renders the selected mode's knobs and sends changes to the store", () => {
+      useAppStore.setState({ ffglitchMode: "zoom", ffglitchParams: {} });
+      render(<ExportPanel />);
+      const slider = screen.getByLabelText("Zoom");
+      fireEvent.change(slider, { target: { value: "55" } });
+      expect(useAppStore.getState().ffglitchParams.zoom).toEqual({ zoom: 55 });
+    });
+
+    it("switching mode shows that mode's knobs", () => {
+      useAppStore.setState({ ffglitchMode: "zoom", ffglitchParams: {} });
+      render(<ExportPanel />);
+      fireEvent.change(screen.getByLabelText(/Bitstream datamosh/), { target: { value: "sort" } });
+      expect(screen.getByLabelText("Keep the first frame")).toBeInTheDocument();
+      expect(screen.queryByLabelText("Zoom")).not.toBeInTheDocument();
+    });
+
+    it("Reset returns a mode to its defaults", () => {
+      useAppStore.setState({ ffglitchMode: "zoom", ffglitchParams: { zoom: { zoom: 5 } } });
+      render(<ExportPanel />);
+      fireEvent.click(screen.getByTitle("Back to this mode's defaults"));
+      expect(useAppStore.getState().ffglitchParams.zoom).toBeUndefined();
+    });
+  });
+
   it("shows in/out range when set", () => {
     useAppStore.getState().setInPoint(2);
     useAppStore.getState().setOutPoint(8);
@@ -281,5 +309,51 @@ describe("ExportPanel", () => {
     render(<ExportPanel />);
     fireEvent.click(screen.getByText("Cancel"));
     expect(cancelExport).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * "Lock Aspect Ratio" and its six ratio chips wrote to the store and nothing
+ * read them; the control had no effect on any export.
+ */
+describe("exportDimensions", () => {
+  const src = { width: 640, height: 1146 }; // the vertical test clip
+  const p1080 = { w: 1920, h: 1080 };
+  const source = { w: 0, h: 0 };
+
+  it("passes the preset through untouched when nothing is locked", () => {
+    expect(exportDimensions(p1080, null, src)).toEqual({ width: 1920, height: 1080 });
+  });
+
+  it("lets 'Source' mean source when nothing is locked", () => {
+    expect(exportDimensions(source, null, src)).toEqual({ width: undefined, height: undefined });
+  });
+
+  it("reshapes a preset to the locked ratio without growing it", () => {
+    // 1920x1080 locked to 1:1 -> the 1080 side is kept.
+    expect(exportDimensions(p1080, 1, src)).toEqual({ width: 1080, height: 1080 });
+    // ...and to 9:16 -> still bounded by 1080 tall.
+    const portrait = exportDimensions(p1080, 9 / 16, src);
+    expect(portrait.height).toBe(1080);
+    expect(portrait.width).toBe(608);
+  });
+
+  it("derives the box from the media when the resolution is 'Source'", () => {
+    const r = exportDimensions(source, 16 / 9, src);
+    expect(r.width).toBe(640);
+    expect(r.height).toBe(360);
+  });
+
+  it("always returns even dimensions, which yuv420p requires", () => {
+    for (const ratio of [16 / 9, 4 / 3, 1, 9 / 16, 21 / 9, 3 / 2]) {
+      const r = exportDimensions(p1080, ratio, src);
+      expect(r.width! % 2, `width for ${ratio}`).toBe(0);
+      expect(r.height! % 2, `height for ${ratio}`).toBe(0);
+    }
+  });
+
+  it("falls back to no override when a lock has nothing to work from", () => {
+    expect(exportDimensions(source, 16 / 9, null)).toEqual({ width: undefined, height: undefined });
+    expect(exportDimensions(p1080, Number.NaN, src)).toEqual({ width: 1920, height: 1080 });
   });
 });

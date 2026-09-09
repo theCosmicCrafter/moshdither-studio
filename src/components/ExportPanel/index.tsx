@@ -10,6 +10,14 @@ import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
 import ChipButton from "./ChipButton";
 import LabeledSlider from "../LabeledSlider";
+import { exportDimensions } from "../../utils/exportDimensions";
+import {
+  FFGLITCH_MODES,
+  FFGLITCH_GROUPS,
+  getFfglitchMode,
+  defaultFfglitchParams,
+  sanitizeFfglitchParams,
+} from "../../lib/ffglitchModes";
 
 const CODECS = [
   { id: "h264", label: "H.264", desc: "Best compatibility" },
@@ -83,38 +91,6 @@ const EXPORT_FORMATS = [
  *   * combine, motion_transfer -- these need a second video / a motion source,
  *     and there is no UI to supply one. They belong here once there is.
  */
-const FFGITCH_MODES = [
-  { id: "classic", label: "Classic", group: "Frame stutter" },
-  { id: "classic2", label: "Classic 2", group: "Frame stutter" },
-  { id: "repeat", label: "Repeat", group: "Frame stutter" },
-  { id: "glide", label: "Glide", group: "Frame stutter" },
-  { id: "sort", label: "Sort", group: "Frame stutter" },
-  { id: "echo", label: "Echo", group: "Frame stutter" },
-  { id: "pulse", label: "Pulse", group: "Frame stutter" },
-
-  { id: "fluid", label: "Fluid", group: "Motion vector" },
-  { id: "stretch", label: "Stretch", group: "Motion vector" },
-  { id: "shuffle_basic", label: "Shuffle", group: "Motion vector" },
-  { id: "rise", label: "Rise", group: "Motion vector" },
-  { id: "water_bloom", label: "Water Bloom", group: "Motion vector" },
-
-  { id: "zoom", label: "Zoom", group: "Movement" },
-  { id: "slam zoom", label: "Slam Zoom", group: "Movement" },
-  { id: "shift", label: "Shift", group: "Movement" },
-  { id: "sink", label: "Sink", group: "Movement" },
-  { id: "slice", label: "Slice", group: "Movement" },
-  { id: "mirror", label: "Mirror", group: "Movement" },
-  { id: "shear", label: "Shear", group: "Movement" },
-  { id: "vibrate", label: "Vibrate", group: "Movement" },
-
-  { id: "delay", label: "Delay", group: "Time" },
-  { id: "buffer", label: "Buffer", group: "Time" },
-  { id: "stop", label: "Stop", group: "Time" },
-  { id: "invert-reverse", label: "Invert / Reverse", group: "Time" },
-  { id: "noise", label: "Noise", group: "Time" },
-];
-
-const FFGLITCH_GROUPS = Array.from(new Set(FFGITCH_MODES.map((m) => m.group)));
 
 export default function ExportPanel() {
   const effectStack = useAppStore((s) => s.effectStack);
@@ -156,10 +132,23 @@ export default function ExportPanel() {
   const includeAudio = useAppStore((s) => s.exportIncludeAudio);
   const setIncludeAudio = useAppStore((s) => s.setExportIncludeAudio);
   const ffglitchMode = useAppStore((s) => s.ffglitchMode);
+  // Kept on screen after the run: a status line that scrolls past is not a
+  // warning about the file you just made.
+  const [exportWarning, setExportWarning] = useState<string | null>(null);
   const [moshPreviewUrl, setMoshPreviewUrl] = useState<string | null>(null);
   const [moshPreviewBusy, setMoshPreviewBusy] = useState(false);
   const [moshPreviewError, setMoshPreviewError] = useState<string | null>(null);
   const setFfglitchMode = useAppStore((s) => s.setFfglitchMode);
+  const ffglitchParams = useAppStore((s) => s.ffglitchParams);
+  const setFfglitchParam = useAppStore((s) => s.setFfglitchParam);
+  const resetFfglitchParams = useAppStore((s) => s.resetFfglitchParams);
+  const modeDef = getFfglitchMode(ffglitchMode);
+  // What actually gets sent: this mode's defaults with the user's changes on
+  // top, clamped. Before this the call site passed `{}` and no knob existed.
+  const activeFfglitchParams = sanitizeFfglitchParams(ffglitchMode, {
+    ...defaultFfglitchParams(ffglitchMode),
+    ...(ffglitchParams[ffglitchMode] ?? {}),
+  });
 
   const progressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -210,13 +199,27 @@ export default function ExportPanel() {
 
     setExportIsRunning(true);
     setExportProgress(0);
+    setExportWarning(null);
     setStatusMessage("Export started...");
 
     // Listen for real progress events from backend
-    const unlistenPromise = listen<{ stage: string; progress: number; message?: string }>(
+    // `warning` was emitted by the backend from the start and destructured by
+    // nobody: the export downscaled a clip to 480p, or cut it short, and told
+    // the user nothing. It is the only signal either of those happened.
+    const unlistenPromise = listen<{
+      stage: string;
+      progress: number;
+      message?: string;
+      warning?: string;
+      downscaled_to?: number;
+    }>(
       "export-progress",
       (event) => {
-        const { stage, progress, message } = event.payload;
+        const { stage, progress, message, warning } = event.payload;
+        if (warning) {
+          setExportWarning(warning);
+          setStatusMessage(warning);
+        }
         if (stage === "error") {
           if (progressTimerRef.current) {
             clearInterval(progressTimerRef.current);
@@ -239,11 +242,16 @@ export default function ExportPanel() {
     const stack = stackToRustPayload(
       activeEffects,
       state.activeMask,
-      state.sam3Masks
+      state.sam3Masks,
+      undefined,
+      state.keyframes
     );
 
-    const width = resolution.w === 0 ? undefined : resolution.w;
-    const height = resolution.h === 0 ? undefined : resolution.h;
+    const { width, height } = exportDimensions(
+      resolution,
+      aspectRatioLock ? aspectRatio : null,
+      mediaInfo
+    );
     const processingScale = PROCESSING_SCALES.find(
       (s) => s.id === processingScaleId
     )?.scale;
@@ -255,7 +263,13 @@ export default function ExportPanel() {
 
     try {
       const outputPath = await exportVideo(filePath, stack, {
-        maskB64: state.activeMask ?? null,
+        // null, like the preview and Save Image (PreviewViewport.tsx,
+        // Toolbar.tsx) and like the batch queue. Rust falls back to this
+        // global mask for any effect that has none of its own, so passing the
+        // active mask here made every effect the user had deliberately set to
+        // "No mask" come out masked in the exported file and nowhere else.
+        // Per-effect masks are unaffected: they travel in each entry's mask_b64.
+        maskB64: null,
         codec,
         fps,
         width,
@@ -335,7 +349,7 @@ export default function ExportPanel() {
     try {
       // Start a little way in: the opening keyframe of a clip has no preceding
       // motion to smear, so a mosh sampled at 0s under-sells every mode.
-      const path = await previewFfglitch(filePath, ffglitchMode, 1.0, 2.0);
+      const path = await previewFfglitch(filePath, ffglitchMode, 1.0, 2.0, activeFfglitchParams);
       setMoshPreviewUrl(convertFileSrc(path));
     } catch (e) {
       setMoshPreviewUrl(null);
@@ -386,7 +400,8 @@ export default function ExportPanel() {
           `Rendering ${activeEffects.length} effect${activeEffects.length === 1 ? "" : "s"} before datamoshing...`
         );
         await exportVideo(filePath, stack, {
-          maskB64: state.activeMask ?? null,
+          // See the note on the other export call: null, to match the preview.
+          maskB64: null,
           codec,
           fps,
           audioBakeJson: audioBakeData ? JSON.stringify(audioBakeData) : null,
@@ -401,7 +416,7 @@ export default function ExportPanel() {
       }
 
       setStatusMessage(`Datamoshing (${ffglitchMode})...`);
-      const outputPath = await applyFfglitch(moshInput, ffglitchMode, {}, finalPath);
+      const outputPath = await applyFfglitch(moshInput, ffglitchMode, activeFfglitchParams, finalPath);
       setExportProgress(100);
       setStatusMessage(
         willRenderEffects
@@ -713,7 +728,7 @@ export default function ExportPanel() {
         >
           {FFGLITCH_GROUPS.map((g) => (
             <optgroup key={g} label={g}>
-              {FFGITCH_MODES.filter((m) => m.group === g).map((m) => (
+              {FFGLITCH_MODES.filter((m) => m.group === g).map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.label}
                 </option>
@@ -721,6 +736,73 @@ export default function ExportPanel() {
             </optgroup>
           ))}
         </select>
+        {modeDef && (
+          <div data-testid="ffglitch-params" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <div style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", justifyContent: "space-between", gap: 8 }}>
+              <span>{modeDef.blurb}</span>
+              {modeDef.params.length > 0 && ffglitchParams[ffglitchMode] && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetFfglitchParams(ffglitchMode);
+                    setMoshPreviewUrl(null);
+                  }}
+                  title="Back to this mode's defaults"
+                  style={{ background: "none", border: "none", color: "var(--accent-teal)", cursor: "pointer", fontSize: 10, padding: 0, flexShrink: 0 }}
+                >
+                  Reset
+                </button>
+              )}
+            </div>
+            {modeDef.params.map((p) => {
+              const value = activeFfglitchParams[p.id];
+              const set = (v: number | boolean | string) => {
+                setFfglitchParam(ffglitchMode, p.id, v);
+                setMoshPreviewUrl(null);
+              };
+              if (p.type === "number") {
+                return (
+                  <LabeledSlider
+                    key={p.id}
+                    label={p.label}
+                    ariaLabel={p.label}
+                    title={p.hint}
+                    value={Number(value)}
+                    min={p.min ?? 0}
+                    max={p.max ?? 100}
+                    step={p.step ?? 1}
+                    onChange={set}
+                  />
+                );
+              }
+              if (p.type === "boolean") {
+                return (
+                  <label key={p.id} title={p.hint} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: "var(--text-secondary)", cursor: "pointer" }}>
+                    <input type="checkbox" checked={Boolean(value)} onChange={(e) => set(e.target.checked)} />
+                    {p.label}
+                  </label>
+                );
+              }
+              return (
+                <label key={p.id} title={p.hint} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, fontSize: 10, color: "var(--text-secondary)" }}>
+                  {p.label}
+                  <select
+                    aria-label={p.label}
+                    value={String(value)}
+                    onChange={(e) => set(e.target.value)}
+                    style={{ fontSize: 10, padding: "2px 4px", borderRadius: 3, border: "1px solid var(--outline-variant)", background: "var(--surface-container-low)", color: "var(--text-primary)" }}
+                  >
+                    {(p.options ?? []).map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              );
+            })}
+          </div>
+        )}
         <button
           onClick={() => void handleMoshPreview()}
           disabled={moshPreviewBusy || !filePath}
@@ -923,6 +1005,48 @@ export default function ExportPanel() {
           </div>
         ) : null}
       </div>
+
+      {/* A warning about the file you just made has to outlive the status line,
+          which the next message scrolls away. */}
+      {exportWarning && (
+        <div
+          data-testid="export-warning"
+          style={{
+            display: "flex",
+            gap: 6,
+            alignItems: "flex-start",
+            fontSize: 10,
+            lineHeight: 1.4,
+            padding: "6px 8px",
+            borderRadius: 3,
+            border: "1px solid var(--cat-analog, #d4a017)",
+            background: "rgba(212, 160, 23, 0.10)",
+            color: "var(--text-primary)",
+          }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 12, flexShrink: 0 }}>
+            warning
+          </span>
+          <span style={{ flex: 1 }}>{exportWarning}</span>
+          <button
+            type="button"
+            onClick={() => setExportWarning(null)}
+            title="Dismiss"
+            aria-label="Dismiss warning"
+            style={{
+              background: "none",
+              border: "none",
+              color: "var(--text-muted)",
+              cursor: "pointer",
+              fontSize: 12,
+              lineHeight: 1,
+              padding: 0,
+            }}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* Export button */}
       {!exportIsRunning && (

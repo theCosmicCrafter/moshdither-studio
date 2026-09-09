@@ -57,23 +57,3 @@ test("proxy panel has quality slider", async ({ page }) => {
     timeout: 10000,
   });
 });
-
-test("tracks panel is visible", async ({ page }) => {
-  const tracksPanel = page.locator("text=Tracks").first();
-  await expect(tracksPanel).toBeVisible({ timeout: 10000 });
-});
-
-test("tracks panel add button creates a track", async ({ page }) => {
-  await openPanelTab(page, "Tracks");
-  const addBtn = page.locator("text=+ Add").first();
-  await expect(addBtn).toBeVisible({ timeout: 10000 });
-  await addBtn.click();
-  // After clicking add, a track with default name should appear
-  await expect(page.locator("input[value='Track 1']").first()).toBeVisible({ timeout: 5000 });
-});
-
-test("tracks panel shows empty state when no tracks", async ({ page }) => {
-  await openPanelTab(page, "Tracks");
-  const emptyState = page.locator("text=No tracks").first();
-  await expect(emptyState).toBeVisible({ timeout: 10000 });
-});

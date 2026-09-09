@@ -4,13 +4,11 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import LabeledSlider from "./LabeledSlider";
 
 export default function ProxyPanel() {
-  const proxyEnabled = useAppStore((s) => s.proxyEnabled);
   const proxyPath = useAppStore((s) => s.proxyPath);
   const proxyMaxWidth = useAppStore((s) => s.proxyMaxWidth);
   const proxyCrf = useAppStore((s) => s.proxyCrf);
   const proxyGenerating = useAppStore((s) => s.proxyGenerating);
   const filePath = useAppStore((s) => s.filePath);
-  const setProxyEnabled = useAppStore((s) => s.setProxyEnabled);
   const setProxyUrl = useAppStore((s) => s.setProxyUrl);
   const setProxyPath = useAppStore((s) => s.setProxyPath);
   const setProxyMaxWidth = useAppStore((s) => s.setProxyMaxWidth);
@@ -28,7 +26,11 @@ export default function ProxyPanel() {
     try {
       const result = await generateProxy(filePath, proxyMaxWidth, proxyCrf);
       setProxyPath(result);
-      setProxyEnabled(true);
+      // Bookkeeping only -- no component subscribes to this any more. The
+      // "Use Proxy" checkbox that did is recycled: it could not turn anything
+      // off, because the video preview samples the proxy element and has
+      // nothing else to sample.
+      useAppStore.getState().setProxyEnabled(true);
       // Actually USE it. The panel spawned ffmpeg, waited, wrote a file and
       // stored the path in `proxyPath` -- which nothing reads. The preview
       // renders from `proxyUrl`, set by AppLayout when media loads, so this
@@ -45,16 +47,6 @@ export default function ProxyPanel() {
 
   return (
     <div className="flex flex-col gap-2 p-2">
-      <label className="flex items-center gap-2 font-label-md text-label-md text-on-surface-variant">
-        <input
-          type="checkbox"
-          checked={proxyEnabled}
-          onChange={(e) => setProxyEnabled(e.target.checked)}
-          disabled={!proxyPath}
-        />
-        Use Proxy
-      </label>
-
       <LabeledSlider
         layout="stacked"
         label="Max Width"

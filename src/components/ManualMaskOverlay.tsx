@@ -2,6 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore } from "../store";
 import { getThemeColor } from "../utils/themeColor";
 
+const STROKE_LABEL: Record<string, string> = {
+  brush: "Brush stroke",
+  eraser: "Eraser stroke",
+  rect: "Rectangle",
+  ellipse: "Ellipse",
+  polygon: "Polygon",
+};
+
 export default function ManualMaskOverlay() {
   const mediaInfo = useAppStore((s) => s.mediaInfo);
   const activeMask = useAppStore((s) => s.activeMask);
@@ -26,8 +34,11 @@ export default function ManualMaskOverlay() {
     if (!canvas) return;
     const dataUrl = canvas.toDataURL("image/png");
     maskLoadedRef.current = dataUrl;
+    // One undo step per stroke or shape. Clear and Invert had one; a brush
+    // stroke -- the thing you actually do a hundred times -- did not.
+    useAppStore.getState().pushMaskHistory(STROKE_LABEL[maskTool] ?? "Stroke");
     setActiveMask(dataUrl);
-  }, [setActiveMask]);
+  }, [setActiveMask, maskTool]);
 
   const getCoords = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {

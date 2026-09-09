@@ -18,6 +18,7 @@ vi.mock("../lib/browserFallback", () => ({
 
 vi.mock("./defaultPresets", () => ({ DEFAULT_PRESETS: [] }));
 
+import { useAppStore } from "../store";
 import {
   PRESET_SCHEMA_VERSION,
   parsePresets,
@@ -238,5 +239,64 @@ describe("ffglitchMode round-trip", () => {
     const back = parsePresets(legacy);
     expect(back).toHaveLength(1);
     expect(back[0].ffglitchMode).toBeUndefined();
+  });
+});
+
+describe("preset datamosh knobs", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    loadPresetsFile.mockReset().mockResolvedValue("");
+    savePresetsFile.mockReset().mockResolvedValue(undefined);
+    getPresetsPath.mockReset().mockResolvedValue("C:/Users/x/Documents/MoshDither Studio/presets.json");
+    isTauriAvailable.mockReset().mockReturnValue(true);
+  });
+
+  it("saves the current mode's knobs with the preset", async () => {
+    useAppStore.setState({
+      ffglitchMode: "noise",
+      ffglitchParams: { noise: { multiple: 33 }, zoom: { zoom: 7 } },
+      effectStack: [],
+    });
+    const { result } = renderHook(() => usePresets());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    act(() => result.current.savePreset("knobs"));
+    const saved = result.current.presets.find((p) => p.name === "knobs");
+    expect(saved?.ffglitchMode).toBe("noise");
+    expect(saved?.ffglitchParams).toEqual({ multiple: 33 });
+  });
+
+  it("restores a preset's knobs, replacing what was there and sanitising the file's values", async () => {
+    useAppStore.setState({
+      ffglitchMode: "classic",
+      ffglitchParams: { noise: { multiple: 1, somePercentage: 0.9 } },
+    });
+    const { result } = renderHook(() => usePresets());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    const preset = {
+      id: "p1",
+      name: "n",
+      createdAt: "2026-01-01",
+      stack: [],
+      ffglitchMode: "noise",
+      ffglitchParams: { multiple: 33, tailLength: 999, bogus: 1 },
+    };
+    act(() => result.current.loadPreset(preset as never));
+    expect(useAppStore.getState().ffglitchMode).toBe("noise");
+    // The preset's value is kept, tailLength is clamped to its max, `bogus` is
+    // dropped, and every knob the preset did not carry comes back at its
+    // DEFAULT -- so the stale somePercentage: 0.9 from before the load is gone
+    // rather than surviving underneath. A preset is the whole look.
+    expect(useAppStore.getState().ffglitchParams.noise).toEqual({
+      somePercentage: 0.5,
+      multiple: 33,
+      tailLength: 100,
+    });
+  });
+});
+
+describe("parsePresets", () => {
+  it("treats a non-string (a mocked or failed read) as an empty library instead of throwing", () => {
+    expect(parsePresets(undefined as never)).toEqual([]);
+    expect(parsePresets({} as never)).toEqual([]);
   });
 });

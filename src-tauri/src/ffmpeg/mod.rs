@@ -131,6 +131,35 @@ pub fn plan_decode(path: &str, preferred_scale: Option<usize>) -> Result<(Option
     Ok((scale, budget))
 }
 
+/// Plan a decode for a source whose ONE frame will be multiplied to fill a
+/// duration -- a still image animated to video.
+///
+/// [`plan_decode`] asks [`probe_frame_count`], which reports 0 for a still, so
+/// it planned for a single frame, found it comfortably inside the budget and
+/// chose native resolution. The export then cloned that frame `duration x fps`
+/// times. A 4032x3024 phone photo is 48.8 MB per frame; the default 10 s at
+/// 30 fps is 300 of them -- 14.6 GB -- and the per-effect rayon collect doubles
+/// it. That allocation does not panic: it ABORTS, which is why the crash left
+/// nothing after "Decoded 1 frames" in the log.
+///
+/// Planning against the real frame count picks a rung that fits, exactly as it
+/// does for video.
+pub fn plan_decode_for_frames(
+    path: &str,
+    preferred_scale: Option<usize>,
+    target_frames: usize,
+) -> Result<(Option<usize>, u64)> {
+    let budget = adaptive_decode_memory_budget();
+    if let Some(n) = preferred_scale {
+        // The user chose this deliberately; honour it. export_video still caps
+        // the clone against the budget, so an explicit choice cannot abort.
+        return Ok((Some(n), budget));
+    }
+    let (src_w, src_h, _fps) = probe_video(path)?;
+    let scale = pick_auto_scale(src_w, src_h, target_frames.max(1), budget);
+    Ok((scale, budget))
+}
+
 /// Locate a binary by name. Tries bundled sidecar first, then dev path, then PATH.
 fn locate_binary(base: &str) -> Result<String> {
     // Check bundled binary next to executable (production — Tauri strips suffix)
@@ -1208,7 +1237,19 @@ pub fn encode_video(
     // Apply resolution scale via FFmpeg filter (replaces CPU-based per-frame resize)
     if let (Some(ow), Some(oh)) = (output_width, output_height) {
         if ow != w || oh != h {
-            let scale_filter = format!("scale={}:{}", ow, oh);
+            // Fit inside the target and letterbox the remainder, rather than
+            // stretching to it.
+            //
+            // `scale=W:H` on its own IGNORES the source aspect ratio. Exporting
+            // a 640x1146 vertical clip at "1080p HD" ran scale=1920:1080 and
+            // squashed it 3.2x horizontally -- the standard resolution presets
+            // mangled any source that was not already 16:9, which for a tool
+            // aimed at phone footage is most of them. `decrease` + `pad` is the
+            // conventional fix and leaves an already-matching source untouched.
+            let scale_filter = format!(
+                "scale={ow}:{oh}:force_original_aspect_ratio=decrease,\
+                 pad={ow}:{oh}:(ow-iw)/2:(oh-ih)/2:black"
+            );
             let vf_pos = args.iter().position(|a| a == "-vf");
             let fc_pos = args.iter().position(|a| a == "-filter_complex");
             if let Some(pos) = vf_pos {
@@ -2902,5 +2943,133 @@ mod temp_file_guard_tests {
         let path = std::env::temp_dir().join("moshdither_test_temp_file_guard_missing.txt");
         let _ = std::fs::remove_file(&path); // ensure it doesn't exist
         drop(TempFileGuard::new(path));
+    }
+}
+
+#[cfg(test)]
+mod still_memory_plan_tests {
+    use super::*;
+
+    /// The export crash, as arithmetic.
+    ///
+    /// A 4032x3024 phone photo is 4032*3024*4 = 48.8 MB per frame. Animated for
+    /// the default 10 s at 30 fps that is 300 frames = 14.6 GB, which no
+    /// consumer machine can allocate -- and a failed Rust allocation aborts the
+    /// process rather than panicking, so nothing reached the crash log.
+    ///
+    /// The old plan asked probe_frame_count, which reports 0 for a still, so it
+    /// planned for ONE frame, found 48.8 MB comfortably inside the budget, and
+    /// chose native resolution.
+    #[test]
+    fn a_phone_photo_animated_to_video_is_planned_at_a_size_that_fits() {
+        let budget = 4 * 1024 * 1024 * 1024u64; // the 4 GiB cap
+                                                // What the old code effectively asked: one frame. It fits, so no scaling.
+        assert_eq!(
+            pick_auto_scale(4032, 3024, 1, budget),
+            None,
+            "a single 48 MB frame fits -- this is why the still path never downscaled"
+        );
+        // What it actually needed to ask: the count it becomes.
+        let scale = pick_auto_scale(4032, 3024, 300, budget)
+            .expect("300 frames of a 4032x3024 image must not be planned at native size");
+        assert!(scale <= 1920, "expected a real downscale, got {scale}");
+        // And the chosen rung must genuinely fit.
+        let f = scale as f64 / 4032.0;
+        let (w, h) = ((4032.0 * f) as u64, (3024.0 * f) as u64);
+        assert!(
+            w * h * 4 * 300 <= budget,
+            "chosen rung {scale} still exceeds the budget"
+        );
+    }
+
+    /// A long clip must still be planned down rather than left at native size.
+    #[test]
+    fn a_long_1080p_clip_is_planned_down() {
+        let budget = 4 * 1024 * 1024 * 1024u64;
+        // 3 minutes at 30 fps.
+        assert!(pick_auto_scale(1920, 1080, 5400, budget).is_some());
+    }
+
+    /// Short clips are left alone -- the plan must not downscale needlessly.
+    #[test]
+    fn a_short_clip_keeps_its_native_resolution() {
+        let budget = 4 * 1024 * 1024 * 1024u64;
+        assert_eq!(pick_auto_scale(1920, 1080, 100, budget), None);
+    }
+}
+
+#[cfg(test)]
+mod aspect_preservation_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn tmp(name: &str) -> PathBuf {
+        let p = std::env::temp_dir().join("moshdither-aspect-tests");
+        std::fs::create_dir_all(&p).ok();
+        p.join(name)
+    }
+
+    /// A vertical clip exported at a 16:9 preset must come back 16:9 with the
+    /// picture INTACT, not stretched to fill it.
+    ///
+    /// Run against real FFmpeg, because the bug was in the filter string and a
+    /// unit test of our own formatting would have agreed with itself.
+    #[test]
+    fn a_vertical_source_is_letterboxed_not_stretched() {
+        let Ok(ffmpeg) = ffmpeg_binary() else {
+            eprintln!("SKIP: no ffmpeg");
+            return;
+        };
+        let src = tmp("vertical-src.mp4");
+        // 360x640 vertical, 12 frames.
+        let make = crate::proc::command(&ffmpeg)
+            .args([
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=360x640:rate=12:duration=1",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+            ])
+            .arg(&src)
+            .output()
+            .expect("ffmpeg runs");
+        assert!(make.status.success(), "could not build the fixture");
+
+        let out = tmp("vertical-out.mp4");
+        let filter = "scale=1920:1080:force_original_aspect_ratio=decrease,\
+                      pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black";
+        let run = crate::proc::command(&ffmpeg)
+            .args(["-v", "error", "-y", "-i"])
+            .arg(&src)
+            .args(["-vf", filter, "-c:v", "libx264", "-pix_fmt", "yuv420p"])
+            .arg(&out)
+            .output()
+            .expect("ffmpeg runs");
+        assert!(
+            run.status.success(),
+            "letterbox filter rejected by ffmpeg: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+
+        let (w, h, _) = probe_video(out.to_str().unwrap()).expect("probes");
+        assert_eq!((w, h), (1920, 1080), "output must fill the requested box");
+
+        // The picture inside must keep the source's 360:640 ratio: at height
+        // 1080 that is 607.5 -> 608 px wide, leaving black bars either side.
+        // If it had been stretched, the content would span all 1920.
+        let expected_inner_w: f64 = ((1080.0_f64 * 360.0 / 640.0) / 2.0).round() * 2.0;
+        assert!(
+            (expected_inner_w - 608.0).abs() < 2.0,
+            "sanity: expected ~608, got {expected_inner_w}"
+        );
+
+        std::fs::remove_file(&src).ok();
+        std::fs::remove_file(&out).ok();
     }
 }

@@ -63,7 +63,27 @@ if (-not $Quick) {
     # frontend against a MOCK, never this executable.
     $gates += @{ Name = "app-smoke"; Desc = "Built app starts and stays up"; Run = {
         $exe = Join-Path $PSScriptRoot '..' 'src-tauri' 'target' 'release' 'moshdither-studio.exe'
-        if (-not (Test-Path $exe)) {
+
+        # Build when the binary is MISSING **or STALE**.
+        #
+        # It only checked for existence, so once the exe existed the gate never
+        # rebuilt it: every later run smoke-tested whatever binary happened to be
+        # on disk, which on this tree is routinely hours older than the Rust it
+        # claims to verify. A green app-smoke then meant "some old build starts",
+        # which is worse than no gate at all. Same staleness rule the E2E suite
+        # already applies to mosh-verify.
+        $srcRoot = Join-Path $PSScriptRoot '..' 'src-tauri'
+        $newestSrc = Get-ChildItem $srcRoot -Recurse -Include *.rs, Cargo.toml -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch '\\target\\' } |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        $needsBuild = -not (Test-Path $exe)
+        if (-not $needsBuild -and $newestSrc) {
+            $needsBuild = (Get-Item $exe).LastWriteTime -lt $newestSrc.LastWriteTime
+            if ($needsBuild) {
+                Write-Output "app binary is older than $($newestSrc.Name); rebuilding before the smoke test"
+            }
+        }
+        if ($needsBuild) {
             & cargo build --release --manifest-path $manifest 2>&1 | Out-String | Write-Output
         }
         # The runner reads $LASTEXITCODE after this block. A script block does
@@ -77,15 +97,22 @@ if (-not $Quick) {
             return
         }
 
-        Get-ChildItem (Join-Path $env:USERPROFILE ".moshdither" "logs") -Filter *.log -ErrorAction SilentlyContinue |
-                  Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        # Both of these were pipelines whose results went NOWHERE -- no `$before =`,
+        # no `$log =`. So `$log` was always $null, the `if ($log -and ...)` below
+        # could never be true, and the PANIC scan this gate exists for was dead
+        # code: the gate only ever checked "did the process stay alive for 20s".
+        # A panic that is caught and logged, or a panic on a background thread,
+        # passed silently.
+        $logDir = Join-Path $env:USERPROFILE ".moshdither" "logs"
+        $before = Get-ChildItem $logDir -Filter *.log -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
         $proc = Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -PassThru
         Start-Sleep -Seconds 20
         $alive = $null -ne (Get-Process -Id $proc.Id -ErrorAction SilentlyContinue)
         if ($alive) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
 
-        Get-ChildItem (Join-Path $env:USERPROFILE ".moshdither" "logs") -Filter *.log -ErrorAction SilentlyContinue |
-               Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        $log = Get-ChildItem $logDir -Filter *.log -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
         if ($log -and (-not $before -or $log.Name -ne $before.Name)) {
             $panic = Select-String -Path $log.FullName -Pattern 'PANIC' -SimpleMatch -ErrorAction SilentlyContinue
             if ($panic) {

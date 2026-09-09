@@ -37,7 +37,7 @@ export default defineConfig({
           // Handles both directory-style panels (e.g. components/AudioPanel/...)
           // and flat file panels (e.g. components/MaskPanel.tsx).
           const panelMatch = normalizedId.match(
-            /\/components\/(EffectBrowser|EffectStack|AudioPanel|ExportPanel|PresetPanel|MaskPanel|LUTPanel|ProxyPanel|TrackPanel|VerificationPanel)(\/|\.(?:tsx?|jsx?)|$)/
+            /\/components\/(EffectBrowser|EffectStack|AudioPanel|ExportPanel|PresetPanel|MaskPanel|LUTPanel|ProxyPanel|VerificationPanel)(\/|\.(?:tsx?|jsx?)|$)/
           );
           if (panelMatch) {
             return `panel-${panelMatch[1].toLowerCase()}`;

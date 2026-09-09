@@ -86,15 +86,6 @@ export const PANEL_REGISTRY: PanelMeta[] = [
     component: lazy(() => import("../ProxyPanel")),
   },
   {
-    id: "tracks",
-    label: "Tracks",
-    icon: "view_timeline",
-    defaultZone: "left",
-    minWidth: 240,
-    minHeight: 160,
-    component: lazy(() => import("../TrackPanel")),
-  },
-  {
     id: "verify",
     label: "Verify",
     icon: "verified",

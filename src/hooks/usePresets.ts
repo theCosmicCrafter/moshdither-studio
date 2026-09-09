@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { sanitizeFfglitchParams } from "../lib/ffglitchModes";
 import { useAppStore, type StackEntry } from "../store";
 import { migrateOverlayGuides } from "../utils/migrateOverlayGuides";
 import { getPresetsPath, loadPresetsFile, savePresetsFile } from "../lib/tauri";
@@ -18,6 +19,8 @@ export interface Preset {
    *  share it, but the datamosh mode -- the thing that makes it a MOSH -- was
    *  picked once at export and forgotten. */
   ffglitchMode?: string;
+  /** The knobs for that mode, if the user changed any. Same optionality. */
+  ffglitchParams?: Record<string, number | boolean | string>;
 }
 
 /**
@@ -92,7 +95,9 @@ function isValidPreset(p: unknown): p is Preset {
  * array written before versioning existed.
  */
 export function parsePresets(json: string): Preset[] {
-  if (!json.trim()) return [];
+  // A non-string means the read itself failed or was mocked; the E2E mock's
+  // default `{}` reply for unknown commands crashed this on every load.
+  if (typeof json !== "string" || !json.trim()) return [];
   try {
     const parsed = JSON.parse(json) as PresetFile | Preset[];
 
@@ -272,6 +277,7 @@ export function usePresets() {
         stack: JSON.parse(JSON.stringify(effectStack)), // deep clone
         thumbnail,
         ffglitchMode: useAppStore.getState().ffglitchMode,
+        ffglitchParams: useAppStore.getState().ffglitchParams[useAppStore.getState().ffglitchMode],
       };
       setPresets((prev) => [preset, ...prev]);
       setStatusMessage(`Preset "${preset.name}" saved`);
@@ -299,7 +305,15 @@ export function usePresets() {
       // Older presets have no mode; leave the current one alone rather than
       // silently resetting it to "classic".
       if (preset.ffglitchMode) {
-        useAppStore.getState().setFfglitchMode(preset.ffglitchMode);
+        const { setFfglitchMode, setFfglitchParam, resetFfglitchParams } = useAppStore.getState();
+        setFfglitchMode(preset.ffglitchMode);
+        // Replace, do not merge: a preset is the whole look. Unknown or
+        // out-of-range knobs from a hand-edited file are dropped or clamped.
+        resetFfglitchParams(preset.ffglitchMode);
+        if (preset.ffglitchParams) {
+          const clean = sanitizeFfglitchParams(preset.ffglitchMode, preset.ffglitchParams);
+          for (const [id, v] of Object.entries(clean)) setFfglitchParam(preset.ffglitchMode, id, v);
+        }
       }
       setStatusMessage(`Preset "${preset.name}" loaded`);
     },
