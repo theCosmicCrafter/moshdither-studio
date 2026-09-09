@@ -16,6 +16,7 @@ import {
 } from "../lib/tauri";
 import { useClickOutside } from "../hooks/useClickOutside";
 import { useAppStore } from "../store";
+import { useProject } from "../hooks/useProject";
 import { stackToRustPayload, stackRequiresCpuPreview } from "../utils/effectConverter";
 import WindowControls from "./WindowControls";
 import KeyboardShortcutsEditor from "./KeyboardShortcutsEditor";
@@ -43,6 +44,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
   const isProcessing = useAppStore((s) => s.isProcessing);
   const setIsVideo = useAppStore((s) => s.setIsVideo);
   const setDuration = useAppStore((s) => s.setDuration);
+  const { saveProject, openProject } = useProject();
   const setAnimateDialogOpen = useAppStore((s) => s.setAnimateDialogOpen);
   const setAnimateSourceStillPath = useAppStore((s) => s.setAnimateSourceStillPath);
   const animateSourceStillPath = useAppStore((s) => s.animateSourceStillPath);
@@ -550,6 +552,33 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   <span className="material-symbols-outlined menu-item-icon">bug_report</span>
                   Export FFglitch
                 </button>
+                {/* Save/Open Project existed ONLY as Ctrl+S and Ctrl+O.
+                    The .moshdither format is fully implemented -- versioned,
+                    carrying the stack, keyframes, audio bindings and mask -- and
+                    was reachable from nowhere in the UI, not the File menu, not
+                    the command palette, not even the shortcuts editor that is
+                    supposed to document keystrokes. A save format a user cannot
+                    find is a save format they do not have. */}
+                <div className="border-t border-outline/10 my-1" />
+                <button
+                  onClick={() => { void saveProject(); setFileMenuOpen(false); }}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors"
+                  role="menuitem"
+                >
+                  <span className="material-symbols-outlined menu-item-icon">save</span>
+                  Save Project
+                  <span className="ml-auto opacity-50 font-code-sm text-code-sm">Ctrl+S</span>
+                </button>
+                <button
+                  onClick={() => { void openProject(); setFileMenuOpen(false); }}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors"
+                  role="menuitem"
+                >
+                  <span className="material-symbols-outlined menu-item-icon">folder_open</span>
+                  Open Project
+                  <span className="ml-auto opacity-50 font-code-sm text-code-sm">Ctrl+O</span>
+                </button>
+                <div className="border-t border-outline/10 my-1" />
                 <button
                   onClick={() => { handleSaveImage(); setFileMenuOpen(false); }}
                   disabled={!mediaLoaded || stackCount === 0}

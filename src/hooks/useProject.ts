@@ -131,6 +131,10 @@ export function useProject() {
 
       if (project.mediaFilePath) {
         setFilePath(project.mediaFilePath);
+        // Actually load it. Setting the path alone left the app showing the
+        // previously-open file while every operation targeted the new one --
+        // and it still said "Project loaded".
+        useAppStore.getState().requestMediaReload();
       }
 
       setStatusMessage(`Project loaded: ${path}`);

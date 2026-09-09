@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore } from "../store";
 import LabeledSlider from "./LabeledSlider";
 
@@ -14,6 +14,16 @@ export default function ManualMaskEditor() {
 
   const width = mediaInfo?.width ?? 0;
   const height = mediaInfo?.height ?? 0;
+
+  // One-step undo for the whole-mask operations.
+  //
+  // Clear wiped a hand-painted mask instantly -- no confirmation, no undo, and
+  // the app's undo stack covers the effect stack, not mask painting. A detailed
+  // mask could be destroyed by one misclick with nothing to do about it. Undo
+  // is the right answer rather than a confirm dialog: creative tools let you
+  // take the action and take it back, they do not interrogate you first.
+  const [undoableMask, setUndoableMask] = useState<string | null>(null);
+  const [undoLabel, setUndoLabel] = useState<string>("");
 
   const invertGenerationRef = useRef(0);
   const invertImageRef = useRef<HTMLImageElement | null>(null);
@@ -42,6 +52,9 @@ export default function ManualMaskEditor() {
   }, [width, height]);
 
   const clearMask = useCallback(() => {
+    // Snapshot BEFORE destroying, so Undo has something to restore.
+    setUndoableMask(useAppStore.getState().activeMask ?? null);
+    setUndoLabel("Clear");
     const blank = createBlankMask();
     if (blank) {
       setActiveMask(blank);
@@ -52,8 +65,17 @@ export default function ManualMaskEditor() {
     }
   }, [createBlankMask, setActiveMask, setStatusMessage]);
 
+  const undoMaskOp = useCallback(() => {
+    setActiveMask(undoableMask);
+    setStatusMessage(`${undoLabel} undone`);
+    setUndoableMask(null);
+    setUndoLabel("");
+  }, [undoableMask, undoLabel, setActiveMask, setStatusMessage]);
+
   const invertMask = useCallback(() => {
     if (width === 0 || height === 0) return;
+    setUndoableMask(useAppStore.getState().activeMask ?? null);
+    setUndoLabel("Invert");
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
@@ -147,6 +169,14 @@ export default function ManualMaskEditor() {
           active={false}
           onClick={clearMask}
         />
+        {undoLabel && (
+          <ToolButton
+            icon="undo"
+            label={`Undo ${undoLabel}`}
+            active={false}
+            onClick={undoMaskOp}
+          />
+        )}
       </div>
 
       {/* Brush size */}

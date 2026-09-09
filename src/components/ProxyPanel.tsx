@@ -1,5 +1,6 @@
 import { useAppStore } from "../store";
 import { generateProxy } from "../lib/tauri";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import LabeledSlider from "./LabeledSlider";
 
 export default function ProxyPanel() {
@@ -10,6 +11,7 @@ export default function ProxyPanel() {
   const proxyGenerating = useAppStore((s) => s.proxyGenerating);
   const filePath = useAppStore((s) => s.filePath);
   const setProxyEnabled = useAppStore((s) => s.setProxyEnabled);
+  const setProxyUrl = useAppStore((s) => s.setProxyUrl);
   const setProxyPath = useAppStore((s) => s.setProxyPath);
   const setProxyMaxWidth = useAppStore((s) => s.setProxyMaxWidth);
   const setProxyCrf = useAppStore((s) => s.setProxyCrf);
@@ -27,7 +29,13 @@ export default function ProxyPanel() {
       const result = await generateProxy(filePath, proxyMaxWidth, proxyCrf);
       setProxyPath(result);
       setProxyEnabled(true);
-      setStatusMessage("Proxy ready");
+      // Actually USE it. The panel spawned ffmpeg, waited, wrote a file and
+      // stored the path in `proxyPath` -- which nothing reads. The preview
+      // renders from `proxyUrl`, set by AppLayout when media loads, so this
+      // panel's whole job (generate a lighter clip to scrub against, at the
+      // width and quality the user chose) was thrown away every time.
+      setProxyUrl(convertFileSrc(result));
+      setStatusMessage("Proxy ready — the preview is now using it");
     } catch (e) {
       setStatusMessage(`Proxy failed: ${e}`);
     } finally {

@@ -136,6 +136,11 @@ export interface AppState {
    *  saved in a preset, did not survive the panel unmounting, and reset to
    *  "classic" on every launch -- for what is arguably the app's signature
    *  capability. */
+  /** Bumped to ask AppLayout to (re)load the media at the current filePath.
+   *  `refreshPreview` lives in AppLayout, so code elsewhere -- openProject, for
+   *  one -- had no way to ask for it and simply set filePath and moved on,
+   *  leaving the app showing one file while every operation targeted another. */
+  mediaReloadToken: number;
   ffglitchMode: string;
   /** Export settings. These were component-local useState in ExportPanel, the
    *  same fallacy as ffglitchMode one line below them: undocking or closing the
@@ -306,6 +311,7 @@ export interface AppState {
   setIsVideo: (isVideo: boolean) => void;
   setUseCpuPreview: (v: boolean) => void;
   setPreviewAutoExact: (v: boolean) => void;
+  requestMediaReload: () => void;
   setFfglitchMode: (v: string) => void;
   setExportFormat: (v: string) => void;
   setExportCodec: (v: string) => void;
@@ -527,6 +533,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   isVideo: false,
   useCpuPreview: false,
   previewAutoExact: true,
+  mediaReloadToken: 0,
   ffglitchMode: "classic",
   exportFormat: "mp4",
   exportCodec: "h264",
@@ -664,6 +671,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setIsVideo: (isVideo) => set({ isVideo }),
   setUseCpuPreview: (v) => set({ useCpuPreview: v }),
   setPreviewAutoExact: (v) => set({ previewAutoExact: v }),
+  requestMediaReload: () => set((st) => ({ mediaReloadToken: st.mediaReloadToken + 1 })),
   setFfglitchMode: (v) => set({ ffglitchMode: v }),
   setExportFormat: (v) => set({ exportFormat: v }),
   setExportCodec: (v) => set({ exportCodec: v }),

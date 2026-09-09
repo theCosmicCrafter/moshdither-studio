@@ -66,7 +66,16 @@ if (-not $Quick) {
         if (-not (Test-Path $exe)) {
             & cargo build --release --manifest-path $manifest 2>&1 | Out-String | Write-Output
         }
-        if (-not (Test-Path $exe)) { throw "app binary not found at $exe" }
+        # The runner reads $LASTEXITCODE after this block. A script block does
+        # not set it, so on success this gate INHERITED the previous gate's code
+        # -- and reported FAIL after printing "app stayed up for 20s with no
+        # panic" whenever E2E had failed just before it. Set it explicitly on
+        # every path instead of throwing.
+        if (-not (Test-Path $exe)) {
+            Write-Output "app binary not found at $exe"
+            $global:LASTEXITCODE = 1
+            return
+        }
 
         Get-ChildItem (Join-Path $env:USERPROFILE ".moshdither" "logs") -Filter *.log -ErrorAction SilentlyContinue |
                   Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -81,11 +90,18 @@ if (-not $Quick) {
             $panic = Select-String -Path $log.FullName -Pattern 'PANIC' -SimpleMatch -ErrorAction SilentlyContinue
             if ($panic) {
                 Write-Output ($panic | Select-Object -First 3 | ForEach-Object { $_.Line })
-                throw "app panicked on startup (see $($log.FullName))"
+                Write-Output "app panicked on startup (see $($log.FullName))"
+                $global:LASTEXITCODE = 1
+                return
             }
         }
-        if (-not $alive) { throw "app exited within 20s of launch (see $($log.FullName))" }
+        if (-not $alive) {
+            Write-Output "app exited within 20s of launch (see $($log.FullName))"
+            $global:LASTEXITCODE = 1
+            return
+        }
         Write-Output "app stayed up for 20s with no panic"
+        $global:LASTEXITCODE = 0
     } }
 }
 

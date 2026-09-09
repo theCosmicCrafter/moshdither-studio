@@ -214,6 +214,33 @@ export default function AppLayout() {
     setProxyUrl,
   ]);
 
+  // Honour a reload request raised from anywhere in the app.
+  //
+  // openProject used to call setFilePath and report "Project loaded" without
+  // ever loading the media behind it, so the app kept showing the PREVIOUS
+  // file while filePath -- and therefore every export, effect render and SAM3
+  // call -- pointed somewhere else.
+  const mediaReloadToken = useAppStore((s) => s.mediaReloadToken);
+  useEffect(() => {
+    if (mediaReloadToken === 0) return;
+    const path = useAppStore.getState().filePath;
+    if (!path) return;
+    void (async () => {
+      try {
+        setStatusMessage(`Loading ${path}...`);
+        await loadMediaFromPath(path);
+        const synced = await refreshPreview();
+        setStatusMessage(
+          synced ? `Loaded: ${path}` : `Loaded ${path}, but the preview did not refresh`,
+          synced ? undefined : "error"
+        );
+      } catch (err) {
+        setStatusMessage(`Load error: ${err instanceof Error ? err.message : String(err)}`, "error");
+      }
+    })();
+  }, [mediaReloadToken, refreshPreview, setStatusMessage]);
+
+
   // Drag-and-drop file support via Tauri webview API.
   //
   // INERT while tauri.conf.json sets `dragDropEnabled: false`, which it does so
