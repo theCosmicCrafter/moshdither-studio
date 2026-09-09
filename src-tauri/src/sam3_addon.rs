@@ -219,8 +219,7 @@ async fn download_part(
     let mut stream = resp.bytes_stream();
 
     while let Some(chunk) = stream.next().await {
-        let chunk =
-            chunk.map_err(|e| AppError::Generic(format!("Transfer interrupted: {e}")))?;
+        let chunk = chunk.map_err(|e| AppError::Generic(format!("Transfer interrupted: {e}")))?;
         file.write_all(&chunk)?;
         hasher.update(&chunk);
         written += chunk.len() as u64;
@@ -334,9 +333,8 @@ async fn install(app: AppHandle) -> Result<AddonStatus> {
         .await
         .map_err(|e| AppError::Generic(format!("Could not read the SAM3 asset list: {e}")))
         .and_then(|body| {
-            serde_json::from_str(&body).map_err(|e| {
-                AppError::Generic(format!("SAM3 asset list is not valid JSON: {e}"))
-            })
+            serde_json::from_str(&body)
+                .map_err(|e| AppError::Generic(format!("SAM3 asset list is not valid JSON: {e}")))
         })?;
 
     if manifest.schema_version != 1 {
@@ -376,7 +374,14 @@ async fn install(app: AppHandle) -> Result<AddonStatus> {
                 i + 1,
                 manifest.sidecar.parts.len()
             );
-            emit(&app, "sidecar", &label, pct(done, grand_total), done, grand_total);
+            emit(
+                &app,
+                "sidecar",
+                &label,
+                pct(done, grand_total),
+                done,
+                grand_total,
+            );
             done += download_part(&client, part, &dest, done, grand_total, &|d, t| {
                 emit(&app, "sidecar", &label, pct(d, t), d, t)
             })
@@ -384,7 +389,14 @@ async fn install(app: AppHandle) -> Result<AddonStatus> {
             parts.push(dest);
         }
 
-        emit(&app, "sidecar", "Verifying", pct(done, grand_total), done, grand_total);
+        emit(
+            &app,
+            "sidecar",
+            "Verifying",
+            pct(done, grand_total),
+            done,
+            grand_total,
+        );
         // Assemble beside the final name, then rename, so an interrupted run
         // never leaves a half-written executable where the engine will find it.
         let assembled = staging.join(SIDECAR_FILENAME);
@@ -404,14 +416,28 @@ async fn install(app: AppHandle) -> Result<AddonStatus> {
         for (i, part) in ckpt.parts.iter().enumerate() {
             let dest = staging.join(format!("ckpt.part{i}"));
             let label = format!("Model weights — part {} of {}", i + 1, ckpt.parts.len());
-            emit(&app, "checkpoint", &label, pct(done, grand_total), done, grand_total);
+            emit(
+                &app,
+                "checkpoint",
+                &label,
+                pct(done, grand_total),
+                done,
+                grand_total,
+            );
             done += download_part(&client, part, &dest, done, grand_total, &|d, t| {
                 emit(&app, "checkpoint", &label, pct(d, t), d, t)
             })
             .await?;
             parts.push(dest);
         }
-        emit(&app, "checkpoint", "Verifying", pct(done, grand_total), done, grand_total);
+        emit(
+            &app,
+            "checkpoint",
+            "Verifying",
+            pct(done, grand_total),
+            done,
+            grand_total,
+        );
         let assembled = staging.join("sam3.pt.partial");
         join_and_verify(&parts, &assembled, &ckpt.sha256)?;
         std::fs::rename(&assembled, &ckpt_path)?;
@@ -574,7 +600,10 @@ Connection: close
                 .await
                 .expect_err("must reject a hash mismatch");
             assert!(err.to_string().contains("Checksum mismatch"), "{err}");
-            assert!(!dest_bad.exists(), "a rejected download must not be left behind");
+            assert!(
+                !dest_bad.exists(),
+                "a rejected download must not be left behind"
+            );
         });
 
         let _ = std::fs::remove_dir_all(&tmp);
@@ -589,9 +618,11 @@ Connection: close
         let err = check_offered_sidecar(&"f".repeat(64)).expect_err("must refuse");
         let msg = err.to_string();
         assert!(msg.contains("not the one this build expects"), "{msg}");
-        assert!(msg.contains(EXPECTED_SIDECAR_SHA256), "error must name what it wanted");
+        assert!(
+            msg.contains(EXPECTED_SIDECAR_SHA256),
+            "error must name what it wanted"
+        );
     }
-
 
     #[test]
     fn pct_never_reports_complete_before_the_final_emit() {

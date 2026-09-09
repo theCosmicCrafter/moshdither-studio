@@ -81,17 +81,51 @@ npm run tauri:build
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-## Production Release & Code Signing
-
-Before distributing MoshDither Studio, ensure you configure code signing for Windows (Authenticode) and macOS (Developer ID) in your environment variables before running the build command.
-
-1. **macOS**: Export `APPLE_SIGNING_IDENTITY` and `APPLE_CERTIFICATE_PASSWORD`
-2. **Windows**: Export `TAURI_SIGN_PFX_PATH` and `TAURI_SIGN_PFX_PASSWORD`
+## Production Release
 
 ```bash
-# Build the production release installers
+# Installers, with the SAM3 sidecar if one has been built
 npm run tauri:build
+
+# Installers without SAM3 (what public releases currently ship)
+npm run tauri:build:no-sam3
 ```
+
+Both produce an MSI and an NSIS installer under
+`src-tauri/target/release/bundle/`.
+
+### Code signing — not currently configured
+
+Releases are **unsigned**, so Windows SmartScreen will warn on first run until
+the download builds reputation. That is a real, user-visible cost and it is
+stated here rather than papered over.
+
+Earlier revisions of this file told you to export `TAURI_SIGN_PFX_PATH`,
+`TAURI_SIGN_PFX_PASSWORD`, `APPLE_SIGNING_IDENTITY` and
+`APPLE_CERTIFICATE_PASSWORD`. **Tauri v2 reads none of those** — they are
+electron-builder variables. Following those instructions produced a silently
+unsigned installer with no warning, which is worse than not trying.
+
+To actually sign on Windows, obtain an Authenticode certificate and set
+`bundle.windows.certificateThumbprint` (plus `digestAlgorithm` and
+`timestampUrl`) in `src-tauri/tauri.conf.json`, or provide
+`bundle.windows.signCommand`. Both are currently `null`.
+
+### Auto-updates — deliberately disabled
+
+The updater is switched off. It needs a published `latest.json` and a
+`TAURI_SIGNING_PRIVATE_KEY` to sign releases with, and neither exists; with the
+endpoint configured but nothing behind it, "Check for Updates" could only ever
+report a failure. `src/components/UpdateChecker.tsx` is intact — restore the
+`plugins.updater` block in `tauri.conf.json` and the menu entry in
+`src/components/Toolbar.tsx` together when there is something to update to.
+
+### Third-party licences
+
+The installer redistributes GPL binaries (FFmpeg, FFglitch). Before publishing,
+work through the release checklist in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) — it covers the licence texts
+and the corresponding-source obligation.
 
 ## License
 

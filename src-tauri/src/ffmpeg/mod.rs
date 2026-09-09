@@ -1857,7 +1857,6 @@ mod watermark_tests {
     }
 }
 
-
 #[cfg(test)]
 mod output_spec_tests {
     use super::output_spec;

@@ -4,7 +4,7 @@ Living pass-down note. Update it at the end of every session and commit it.
 It lives in `docs/` on purpose: the previous handoff sat in `outputs/`, which is
 gitignored, so it never travelled with the branch.
 
-**Last updated:** 2026-08-22 · branch `Cosmic/upbeat-golick-68081b` · PR #49
+**Last updated:** 2026-09-08 · branch `Cosmic/upbeat-golick-68081b` · PR #49
 
 ---
 
@@ -39,10 +39,23 @@ gitignored, so it never travelled with the branch.
 
 ---
 
-## State: builds and runs; not yet distributable
+## State: builds, runs, and is ready to publish
 
-`npm run gate` passes 8/8 and `npm run tauri:build:no-sam3` exits 0
-(both verified 2026-08-22), producing NSIS 156 MB + MSI 185 MB.
+`npm run gate` passes all 9 gates and `npm run tauri:build:no-sam3` exits 0,
+producing NSIS ~156 MB + MSI ~185 MB. Version is **0.2.0**.
+
+**SAM3 now works in an installed app** (as of 2026-09-08). It is a
+*downloadable add-on* rather than part of the installer, because the sidecar is
+2.9 GB and no Windows installer format takes a file over 2 GiB -- WiX answers
+`LGHT0263`, NSIS fails to mmap it. Both measured. See
+`src-tauri/src/sam3_addon.rs`.
+
+To publish the add-on: `npm run build:sam3-sidecar`, then
+`node scripts/publish-sam3-addon.mjs --upload`. The script splits both assets
+into GitHub-sized parts, hashes them, writes the manifest and uploads via `gh`.
+**The sidecar's SHA-256 is compiled into the app** (`EXPECTED_SIDECAR_SHA256`);
+change the sidecar and you must update that constant and ship an app release,
+by design -- a remote manifest must never decide which executable runs.
 
 **What is self-contained.** The core app is: all four FFmpeg-family sidecars
 (`ffmpeg`, `ffprobe`, `ffgac`, `ffedit`), the 35 LUTs, the Python backend and the
@@ -51,13 +64,10 @@ from the internet.
 
 **What is not.**
 
-1. *SAM3 needs two large pieces neither of which ships.* `npm run tauri:build`
-   REFUSES in a clean worktree because no `sam3-bridge-*` binary exists in
-   `src-tauri/bin/` -- deliberate, so a broken sidecar cannot ship silently. Build
-   it with `setup:sam3-env` then `build:sam3-sidecar` (~2.9 GB, needs the CUDA
-   torch env). Separately, `models/` is empty: the 3.21 GB checkpoint downloads on
-   first use from a GATED HuggingFace repo, so an end user needs their own HF
-   account and access approval. Not a shippable first-run for strangers.
+1. *The SAM3 add-on has to be published once.* The mechanism is done and
+   tested; the ~6 GB upload is a human step (see above). Until it is uploaded,
+   the in-app installer reports that the asset list is unreachable and tells the
+   user to build the sidecar locally instead.
    NOTE: `src-tauri/target/release/sam3-bridge.exe` is a STALE 297 MB CPU-only
    build from 2026-08-21 that cannot load the model. It is not bundled. Do not
    copy it into `src-tauri/bin/`.

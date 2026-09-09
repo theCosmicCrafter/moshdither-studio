@@ -1,7 +1,7 @@
 {
   "name": "moshdither-studio",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "prepare": "node -e \"try{require('child_process').execSync('git config core.hooksPath .husky',{stdio:'ignore'})}catch(e){console.warn('[prepare] Could not set core.hooksPath, so the pre-commit secret scan will NOT run. If this is a git checkout, run: git config core.hooksPath .husky')}\"",

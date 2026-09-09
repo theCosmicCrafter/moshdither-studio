@@ -24,6 +24,19 @@ vi.mock("../../lib/tauri", () => ({
         setTimeout(() => resolve("data:image/png;base64,abc"), 50)
       )
   ),
+  sam3AddonStatus: vi.fn(() =>
+    Promise.resolve({
+      ready: true,
+      sidecar_installed: true,
+      sidecar_path: null,
+      sidecar_bytes: null,
+      checkpoint_installed: true,
+      checkpoint_path: null,
+      checkpoint_bytes: null,
+      dev_override: null,
+    })
+  ),
+  sam3AddonInstall: vi.fn(() => Promise.reject(new Error("not used in tests"))),
   sam3Init: vi.fn(() => Promise.resolve({})),
   sam3LoadImage: vi.fn(() => Promise.resolve({ width: 100, height: 100 })),
   sam3TextPrompt: vi.fn(() => Promise.resolve({ count: 1, masks: ["mask1"], scores: [0.95] })),
