@@ -210,21 +210,19 @@ impl Effect for BloomProfile {
             .unwrap_or(8) as usize;
         let mut out = input.data.clone();
 
-        // Bloom: amplify and smear colors
-        for _pass in 0..3 {
-            for i in (0..out.len()).step_by(4) {
-                for c in 0..3 {
-                    let v = (out[i + c] as f32 * 1.4).min(280.0) as u8;
-                    out[i + c] = v;
-                }
-            }
-        }
-        for i in (0..out.len()).step_by(4) {
-            for c in 0..3 {
-                let v = (out[i + c] as f32 * 1.4).min(255.0) as u8;
-                out[i + c] = v;
-            }
-        }
+        // Bloom. Shares its fix with datamoshing.bloom, which carried the same
+        // copy of this code: four chained *1.4 passes are a flat x3.84 gain, so
+        // every pixel above luma 67 clamped to white and a photographic frame
+        // came out PURE WHITE (measured mean 255.0, std 0.3). Row smearing
+        // below is unchanged and still keys off bloom_size.
+        crate::effects::datamoshing::bloom::apply_bloom(
+            &mut out,
+            input.width as usize,
+            input.height as usize,
+            bloom_size,
+            160,
+            1.2,
+        );
 
         // Row smearing based on bloom_size
         let w = input.width as usize;

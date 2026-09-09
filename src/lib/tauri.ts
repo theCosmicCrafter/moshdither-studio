@@ -162,6 +162,11 @@ export async function loadMediaFile(): Promise<string | null> {
     filters: [
       {
         name: "All Media",
+        // NOTE: avif and dds are deliberately absent. The `image` crate in
+        // this build has no DDS decoder at all, and its AVIF decoder needs
+        // the `avif-native` feature (dav1d, a C dependency). Offering an
+        // extension we cannot open only fails after the user picks a file.
+        // Pinned by every_offered_still_format_actually_decodes.
         extensions: [
           "png",
           "jpg",
@@ -170,10 +175,8 @@ export async function loadMediaFile(): Promise<string | null> {
           "bmp",
           "tiff",
           "webp",
-          "avif",
           "ico",
           "tga",
-          "dds",
           "qoi",
           "pnm",
           "mp4",
@@ -196,10 +199,8 @@ export async function loadMediaFile(): Promise<string | null> {
           "bmp",
           "tiff",
           "webp",
-          "avif",
           "ico",
           "tga",
-          "dds",
           "qoi",
           "pnm",
         ],

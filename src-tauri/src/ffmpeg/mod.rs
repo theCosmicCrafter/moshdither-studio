@@ -1795,6 +1795,249 @@ pub fn extract_audio_to_wav(
 }
 
 #[cfg(test)]
+mod input_format_tests {
+    use super::*;
+
+    /// Every video container the open dialog offers must actually decode.
+    ///
+    /// `src/lib/tauri.ts` lists mp4, avi, mov, mkv, webm, m4v, flv and wmv as
+    /// selectable. Offering a format the decoder cannot open is a broken promise
+    /// the user only discovers after picking a file, so each one is generated
+    /// with the bundled FFmpeg and then read back through `decode_video` -- the
+    /// same path the app uses.
+    #[test]
+    fn every_offered_video_container_decodes() {
+        let Ok(ffmpeg) = ffmpeg_binary() else {
+            eprintln!(
+                "SKIP every_offered_video_container_decodes: no ffmpeg binary.                  Run `npm run fetch:external` to obtain it."
+            );
+            return;
+        };
+
+        let dir = std::env::temp_dir().join("moshdither-input-formats");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+
+        // Each container paired with an encoder it can legally carry. wmv and
+        // flv cannot hold H.264 from this build, which is exactly the sort of
+        // mismatch this test exists to keep honest.
+        let cases: &[(&str, &str)] = &[
+            ("mp4", "libx264"),
+            ("avi", "mpeg4"),
+            ("mov", "libx264"),
+            ("mkv", "libx264"),
+            ("webm", "libvpx-vp9"),
+            ("m4v", "libx264"),
+            ("flv", "flv"),
+            ("wmv", "wmv2"),
+        ];
+
+        let mut failures: Vec<String> = Vec::new();
+        for (ext, encoder) in cases {
+            let path = dir.join(format!("clip.{ext}"));
+            let out = std::process::Command::new(&ffmpeg)
+                .args([
+                    "-v",
+                    "error",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc=size=64x48:rate=10:duration=1",
+                    "-c:v",
+                    encoder,
+                    "-pix_fmt",
+                    "yuv420p",
+                ])
+                .arg(&path)
+                .output();
+            match out {
+                Ok(o) if o.status.success() => {}
+                Ok(o) => {
+                    failures.push(format!(
+                        "{ext}: could not be CREATED with {encoder}: {}",
+                        String::from_utf8_lossy(&o.stderr).trim()
+                    ));
+                    continue;
+                }
+                Err(e) => {
+                    failures.push(format!("{ext}: ffmpeg failed to run: {e}"));
+                    continue;
+                }
+            }
+
+            match decode_video(&path.to_string_lossy(), Some(4)) {
+                Ok(seg) if !seg.frames.is_empty() => {
+                    let f = &seg.frames[0];
+                    if f.width == 0 || f.height == 0 || f.data.is_empty() {
+                        failures.push(format!("{ext}: decoded an empty frame"));
+                    }
+                }
+                Ok(_) => failures.push(format!("{ext}: decoded zero frames")),
+                Err(e) => failures.push(format!("{ext}: decode_video failed: {e}")),
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            failures.is_empty(),
+            "input containers failed:
+  {}",
+            failures.join(
+                "
+  "
+            )
+        );
+        eprintln!("input formats: {} containers decoded", cases.len());
+    }
+}
+
+#[cfg(test)]
+mod export_matrix_tests {
+    use super::*;
+    use crate::effects::types::{Frame, VideoSegment};
+
+    /// Build a small moving clip. Movement matters: a static clip can hide
+    /// muxer problems that only appear once there is more than one distinct
+    /// frame to write.
+    fn clip(frames: usize) -> VideoSegment {
+        let (w, h) = (64u32, 48u32);
+        let mut out = Vec::with_capacity(frames);
+        for f in 0..frames {
+            let mut data = vec![255u8; (w * h * 4) as usize];
+            for y in 0..h as usize {
+                for x in 0..w as usize {
+                    let i = (y * w as usize + x) * 4;
+                    data[i] = ((x * 4 + f * 20) % 256) as u8;
+                    data[i + 1] = ((y * 5 + f * 9) % 256) as u8;
+                    data[i + 2] = ((x + y + f * 3) % 256) as u8;
+                }
+            }
+            out.push(Frame {
+                width: w,
+                height: h,
+                data,
+            });
+        }
+        VideoSegment {
+            frames: out,
+            fps: 12.0,
+        }
+    }
+
+    /// Every format the export dialog offers, encoded for real through the same
+    /// `encode_video` the app calls.
+    ///
+    /// The unit tests above pin what `output_spec` RETURNS; they cannot catch a
+    /// spec that is internally consistent and still rejected by FFmpeg. Only
+    /// running the encoder does that -- which is how the text-watermark bug
+    /// (`Invalid alpha value specifier 'ff'`) survived a green suite.
+    #[test]
+    fn every_export_format_produces_a_real_file() {
+        // The binaries are gitignored, so a fresh clone legitimately has none.
+        // Say so loudly rather than passing in silence.
+        if ffmpeg_binary().is_err() {
+            eprintln!(
+                "SKIP every_export_format_produces_a_real_file: no ffmpeg binary.                  Run `npm run fetch:external` to obtain it."
+            );
+            return;
+        }
+
+        let dir = std::env::temp_dir().join("moshdither-export-matrix");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let seg = clip(6);
+
+        // (format, extension). Mirrors EXPORT_FILTERS in src/lib/tauri.ts.
+        let cases: &[(&str, &str)] = &[
+            ("mp4", "mp4"),
+            ("mov", "mov"),
+            ("mkv", "mkv"),
+            ("webm", "webm"),
+            ("avi", "avi"),
+            ("gif", "gif"),
+            ("apng", "apng"),
+            ("webp", "webp"),
+            ("png_seq", "png"),
+            ("jpg_seq", "jpg"),
+            ("webp_seq", "webp"),
+            ("tiff_seq", "tif"),
+            ("bmp_seq", "bmp"),
+        ];
+
+        let mut failures: Vec<String> = Vec::new();
+        for (format, ext) in cases {
+            let dest = dir.join(format!("out_{format}.{ext}"));
+            let path = dest.to_string_lossy().into_owned();
+            let result = encode_video(
+                &seg,
+                &path,
+                "h264",
+                Some(12.0),
+                None,
+                None,
+                Some("draft"),
+                Some(false),
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(std::time::Duration::from_secs(120)),
+                Some(format),
+            );
+            if let Err(e) = result {
+                failures.push(format!("{format}: encode failed: {e}"));
+                continue;
+            }
+
+            let spec = output_spec(Some(format), "h264");
+            if spec.is_sequence {
+                // A sequence writes <stem>_00001.<ext> rather than the name given.
+                let stem = dest.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                let found = std::fs::read_dir(&dir)
+                    .expect("read dir")
+                    .filter_map(|e| e.ok())
+                    .filter(|e| {
+                        let n = e.file_name();
+                        let n = n.to_string_lossy();
+                        n.starts_with(stem) && n.ends_with(ext) && n.contains('_')
+                    })
+                    .count();
+                if found < 2 {
+                    failures.push(format!(
+                        "{format}: expected a numbered sequence, found {found} files"
+                    ));
+                }
+            } else {
+                match std::fs::metadata(&dest) {
+                    Ok(m) if m.len() > 0 => {}
+                    Ok(_) => failures.push(format!("{format}: wrote a 0-byte file")),
+                    Err(e) => failures.push(format!("{format}: no output file: {e}")),
+                }
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            failures.is_empty(),
+            "export formats failed:
+  {}",
+            failures.join(
+                "
+  "
+            )
+        );
+        // Self-evidencing: with --nocapture this proves the encodes ran rather
+        // than the whole test silently skipping.
+        eprintln!(
+            "export matrix: {} formats encoded and verified",
+            cases.len()
+        );
+    }
+}
+
+#[cfg(test)]
 mod watermark_tests {
     use super::apply_watermark_args;
     use crate::commands::WatermarkSettings;
