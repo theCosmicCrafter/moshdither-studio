@@ -70,6 +70,29 @@ to end against a real clip with no system Python involved.
 the icons are all bundled. Effects, dithering, glitch, datamoshing, LUTs and
 export need nothing from the internet.
 
+## Release checklist — what is left, and it is all human
+
+Nothing below is blocked on code. Each is an action on the maintainer's own
+accounts or hardware, which is why it is not done.
+
+1. **Push the branch and open/merge the PR.** Outward-facing; never done
+   without an explicit ask.
+2. **Publish the SAM3 add-on** (~6 GB, one time):
+   `npm run build:sam3-sidecar` then `node scripts/publish-sam3-addon.mjs --upload`.
+   Then confirm `EXPECTED_SIDECAR_SHA256` in `src-tauri/src/sam3_addon.rs`
+   matches what the script prints, and ship an app release if it changed.
+3. **GPL corresponding source.** Attach the two tarballs named in
+   `THIRD-PARTY-NOTICES.md` to the same GitHub release as the installer. This is
+   a real obligation, not a nicety.
+4. **Code signing.** Needs a purchased Authenticode certificate. Until then
+   SmartScreen warns on first run; README says so plainly rather than hiding it.
+5. **Optional: re-enable the updater.** Needs a published `latest.json` and a
+   `TAURI_SIGNING_PRIVATE_KEY`. Restore the `plugins.updater` block in
+   `tauri.conf.json` and the menu entry in `Toolbar.tsx` together.
+
+Known, accepted: `src-tauri/Cargo.lock` is gitignored, so release builds are not
+byte-reproducible. Pre-existing choice, left alone.
+
 **What is not.**
 
 1. *The SAM3 add-on has to be published once.* The mechanism is done and
