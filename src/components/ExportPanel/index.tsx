@@ -261,7 +261,8 @@ export default function ExportPanel() {
       state.activeMask,
       state.sam3Masks,
       undefined,
-      state.keyframes
+      state.keyframes,
+      state.audioBindings
     );
 
     const { width, height } = exportDimensions(

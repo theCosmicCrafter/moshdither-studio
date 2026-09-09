@@ -1,4 +1,5 @@
 import { useAppStore, type AudioBinding } from "../../store";
+import { audioChannelName } from "../../engine/audio/channelName";
 import { PALETTE_PRESETS, fillPaletteParams } from "../../engine/palettePresets";
 
 import { isVideoOnlyEffect, VIDEO_ONLY_ON_IMAGE_WARNING, unsetSelectionWarning } from "../../utils/effectConverter";
@@ -528,7 +529,10 @@ function AudioBindingControl({
   currentValue: Record<string, number>;
 }) {
   const isBound = !!binding;
-  const live = binding ? (currentValue[binding.source] ?? 0) : 0;
+  // Channels are keyed by `${stackId}.${paramId}`, not by the feature name,
+  // so this read `currentValue["bass"]`, found nothing, and displayed a
+  // confident 0.000 no matter what the audio was doing.
+  const live = binding ? (currentValue[audioChannelName(stackId, paramId)] ?? 0) : 0;
 
   const toggle = () => {
     if (isBound) {

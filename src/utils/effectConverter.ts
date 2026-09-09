@@ -1,6 +1,6 @@
 import { shaderRegistry } from "../engine/shaders";
 import { EffectShader, RenderPass } from "../engine/webgl2/types";
-import { EffectMeta, StackEntry, type Keyframe } from "../store";
+import { EffectMeta, StackEntry, type Keyframe, type AudioBinding } from "../store";
 
 /** Maps a Rust effect ID to its WebGL shader preview equivalent. */
 export interface WebGLMapping {
@@ -1129,17 +1129,23 @@ export function stackToRustPayload(
    *  Pass the store's `keyframes` when EXPORTING: without them the render
    *  freezes every animated parameter at the playhead's value, which is
    *  what the file used to contain. */
-  keyframes?: Record<string, Record<string, Keyframe[]>>
+  keyframes?: Record<string, Record<string, Keyframe[]>>,
+  /** Parameters driven by an audio feature, keyed by stack-entry id then
+   *  parameter id. Pass the store's `audioBindings` when EXPORTING; the
+   *  backend needs the baked audio too, which exportVideo already sends. */
+  audioBindings?: Record<string, Record<string, AudioBinding>>
 ): Array<{
   effect_id: string;
   params: Record<string, unknown>;
   mask_b64: string | null;
   mask_mode?: string;
   keyframes?: Record<string, { time: number; value: number; easing: string }[]>;
+  audio_bindings?: Record<string, AudioBinding>;
 }> {
   return stack
     .filter((e) => e.enabled)
     .map((e) => {
+      const bound = audioBindings?.[e.id];
       const tracks = keyframes?.[e.id];
       const animated = tracks
         ? Object.fromEntries(
@@ -1160,6 +1166,7 @@ export function stackToRustPayload(
         mask_b64: e.maskB64 ?? resolveMaskId(e.maskId, activeMask, sam3Masks),
         mask_mode: e.maskMode ?? "inside",
         ...(animated && Object.keys(animated).length > 0 ? { keyframes: animated } : {}),
+        ...(bound && Object.keys(bound).length > 0 ? { audio_bindings: bound } : {}),
       };
     });
 }

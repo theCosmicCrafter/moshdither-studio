@@ -37,6 +37,39 @@ pub struct AudioBakeData {
     pub frames: Vec<FrameAudioFeatures>,
 }
 
+impl FrameAudioFeatures {
+    /// One feature, by the name an AudioBinding stores.
+    ///
+    /// The UI names these in camelCase (`subBass`, `beatBass`) because they
+    /// come from the browser-side analyser; the struct is snake_case. Both
+    /// spellings are accepted so a binding written by either side resolves.
+    pub fn by_binding_source(&self, source: &str) -> Option<f64> {
+        let b = |v: bool| if v { 1.0 } else { 0.0 };
+        Some(match source {
+            "rms" => self.rms,
+            "energy" => self.energy,
+            "spectralCentroid" | "spectral_centroid" | "centroid" => self.spectral_centroid,
+            "spectralFlatness" | "spectral_flatness" | "flatness" => self.spectral_flatness,
+            "spectralRolloff" | "spectral_rolloff" | "rolloff" => self.spectral_rolloff,
+            "spectralFlux" | "spectral_flux" | "flux" => self.spectral_flux,
+            "zcr" => self.zcr,
+            "volume" => self.volume,
+            "subBass" | "sub_bass" => self.sub_bass,
+            "bass" => self.bass,
+            "lowMid" | "low_mid" => self.low_mid,
+            "mid" => self.mid,
+            "highMid" | "high_mid" => self.high_mid,
+            "presence" => self.presence,
+            "brilliance" => self.brilliance,
+            "beatBass" | "beat_bass" => b(self.beat_bass),
+            "beatMid" | "beat_mid" => b(self.beat_mid),
+            "beatTreble" | "beat_treble" => b(self.beat_treble),
+            "beatEnergy" | "beat_energy" => self.beat_energy,
+            _ => return None,
+        })
+    }
+}
+
 impl AudioBakeData {
     /// Get audio features for a specific frame index.
     pub fn get_frame(&self, idx: usize) -> Option<&FrameAudioFeatures> {

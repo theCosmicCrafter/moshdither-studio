@@ -336,6 +336,110 @@ pub struct EffectCall {
     /// when Export was clicked. The animation was visible and unexportable.
     #[serde(default)]
     pub keyframes: Option<std::collections::HashMap<String, Vec<KeyframePoint>>>,
+    /// Parameters driven by an audio feature, keyed by parameter id.
+    ///
+    /// "Bind Audio" wrote one of these for any parameter and nothing ever
+    /// applied it -- not in the preview, not here. The control said "Audio
+    /// Bound", offered source/range/attack/decay editors, and the parameter
+    /// never moved.
+    #[serde(default)]
+    pub audio_bindings: Option<std::collections::HashMap<String, AudioBindingSpec>>,
+}
+
+/// One audio binding, as the frontend stores it (`AudioBinding` in
+/// src/store/index.ts).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioBindingSpec {
+    pub source: String,
+    pub input_min: f64,
+    pub input_max: f64,
+    pub output_min: f64,
+    pub output_max: f64,
+    pub attack: f64,
+    pub decay: f64,
+    #[serde(default)]
+    pub gate_enabled: bool,
+    #[serde(default)]
+    pub gate_threshold: f64,
+    #[serde(default)]
+    pub invert: bool,
+}
+
+/// Smooths audio-driven parameters across an export, one channel per
+/// parameter.
+///
+/// Attack/decay are stateful -- the value chases its target frame by frame --
+/// so this has to walk the clip in order and carry state, exactly as
+/// AudioParameterMapper does for the preview. The arithmetic below is a
+/// deliberate mirror of `processChannel` in
+/// src/engine/audio/AudioParameterMapper.ts; if they drift, an export stops
+/// matching the preview it was approved from.
+#[derive(Default)]
+struct AudioBindingSmoother {
+    state: std::collections::HashMap<String, f64>,
+}
+
+impl AudioBindingSmoother {
+    fn value(
+        &mut self,
+        param_id: &str,
+        binding: &AudioBindingSpec,
+        features: &crate::audio::FrameAudioFeatures,
+        dt: f64,
+    ) -> f64 {
+        let raw = features.by_binding_source(&binding.source).unwrap_or(0.0);
+        let range = binding.input_max - binding.input_min;
+        let normalized = if range > 0.0 {
+            (raw - binding.input_min) / range
+        } else {
+            0.0
+        };
+        let clamped = normalized.clamp(0.0, 1.0);
+        let gated = if binding.gate_enabled && clamped < binding.gate_threshold {
+            0.0
+        } else {
+            clamped
+        };
+        let target = gated * (binding.output_max - binding.output_min) + binding.output_min;
+
+        let current = *self.state.get(param_id).unwrap_or(&0.0);
+        let attack_factor = 1.0 - (-dt * (binding.attack * 20.0 + 1.0)).exp();
+        let decay_factor = 1.0 - (-dt * (binding.decay * 10.0 + 0.5)).exp();
+        let factor = if target > current {
+            attack_factor
+        } else {
+            decay_factor
+        };
+        let next = current + (target - current) * factor;
+        self.state.insert(param_id.to_string(), next);
+
+        if binding.invert {
+            binding.output_max - (next - binding.output_min)
+        } else {
+            next
+        }
+    }
+
+    /// Apply every binding for one frame. Returns true if anything changed.
+    fn inject(
+        &mut self,
+        bindings: Option<&std::collections::HashMap<String, AudioBindingSpec>>,
+        params: &mut serde_json::Map<String, serde_json::Value>,
+        features: Option<&crate::audio::FrameAudioFeatures>,
+        dt: f64,
+    ) -> bool {
+        let (Some(bindings), Some(features)) = (bindings, features) else {
+            return false;
+        };
+        let mut touched = false;
+        for (param_id, binding) in bindings {
+            let v = self.value(param_id, binding, features, dt);
+            params.insert(param_id.clone(), serde_json::Value::from(v));
+            touched = true;
+        }
+        touched
+    }
 }
 
 /// One keyframe, as the frontend stores it (`src/store/index.ts`).
@@ -1167,6 +1271,8 @@ fn export_video_blocking(
             // Non-temporal with audio: process frame-by-frame with per-frame audio params
             let mut frames = Vec::with_capacity(segment.frames.len());
             let fps_val = segment.fps;
+            let mut smoother = AudioBindingSmoother::default();
+            let dt = 1.0 / (fps_val as f64).max(1.0);
             for (frame_idx, frame) in segment.frames.iter().enumerate() {
                 let t = frame_idx as f64 / fps_val;
                 let mut frame_params = params.clone();
@@ -1176,6 +1282,17 @@ fn export_video_blocking(
                 }
                 if let Some(ref audio) = audio_data {
                     audio.inject_params(&mut frame_params, frame_idx);
+                    // After the keyframes above: binding a parameter to audio is
+                    // the more explicit instruction, so it wins when both name
+                    // the same parameter.
+                    if smoother.inject(
+                        call.audio_bindings.as_ref(),
+                        &mut frame_params,
+                        audio.get_frame(frame_idx),
+                        dt,
+                    ) {
+                        frame_params = crate::effects::clamp_for_effect(effect, &frame_params);
+                    }
                 }
                 frames.push(
                     effect
@@ -1840,6 +1957,7 @@ mod integration_tests {
             mask_b64: None,
             mask_mode: None,
             keyframes: None,
+            audio_bindings: None,
         }];
 
         let result = apply_stack_to_frame(&reg, frame.clone(), &stack, None)
@@ -1872,6 +1990,7 @@ mod integration_tests {
             mask_b64: None,
             mask_mode: None,
             keyframes: None,
+            audio_bindings: None,
         }];
         let result = apply_stack_to_frame(&reg, frame, &stack, None);
         assert!(
@@ -3497,5 +3616,186 @@ mod keyframe_export_tests {
         let tracks = call.keyframes.expect("present");
         assert_eq!(tracks["amount"].len(), 2);
         assert_eq!(keyframe_value_at(&tracks["amount"], 0.0), Some(1.0));
+    }
+}
+
+#[cfg(test)]
+mod audio_binding_tests {
+    use super::*;
+    use crate::audio::FrameAudioFeatures;
+
+    fn features(bass: f64) -> FrameAudioFeatures {
+        FrameAudioFeatures {
+            frame: 0,
+            time: 0.0,
+            rms: 0.0,
+            energy: 0.0,
+            spectral_centroid: 0.0,
+            spectral_flatness: 0.0,
+            spectral_rolloff: 0.0,
+            spectral_flux: 0.0,
+            zcr: 0.0,
+            volume: 0.0,
+            sub_bass: 0.0,
+            bass,
+            low_mid: 0.0,
+            mid: 0.0,
+            high_mid: 0.0,
+            presence: 0.0,
+            brilliance: 0.0,
+            beat_bass: true,
+            beat_mid: false,
+            beat_treble: false,
+            beat_energy: 0.25,
+        }
+    }
+
+    fn binding(source: &str) -> AudioBindingSpec {
+        AudioBindingSpec {
+            source: source.to_string(),
+            input_min: 0.0,
+            input_max: 1.0,
+            output_min: 0.0,
+            output_max: 10.0,
+            attack: 1.0,
+            decay: 1.0,
+            gate_enabled: false,
+            gate_threshold: 0.0,
+            invert: false,
+        }
+    }
+
+    /// The UI writes camelCase feature names; the struct is snake_case. A name
+    /// that resolves to nothing would silently pin the parameter at its
+    /// output_min forever, which is indistinguishable from "audio does nothing".
+    #[test]
+    fn every_source_the_ui_offers_resolves() {
+        let f = features(0.5);
+        for name in [
+            "rms",
+            "energy",
+            "spectralCentroid",
+            "spectralFlatness",
+            "spectralRolloff",
+            "spectralFlux",
+            "zcr",
+            "volume",
+            "subBass",
+            "bass",
+            "lowMid",
+            "mid",
+            "highMid",
+            "presence",
+            "brilliance",
+            "beatBass",
+            "beatMid",
+            "beatTreble",
+            "beatEnergy",
+        ] {
+            assert!(
+                f.by_binding_source(name).is_some(),
+                "binding source {name} does not resolve"
+            );
+        }
+        assert_eq!(f.by_binding_source("bass"), Some(0.5));
+        // Booleans come through as 1.0 / 0.0 so they can drive a numeric param.
+        assert_eq!(f.by_binding_source("beatBass"), Some(1.0));
+        assert_eq!(f.by_binding_source("beatMid"), Some(0.0));
+        assert_eq!(f.by_binding_source("nonsense"), None);
+    }
+
+    /// The same arithmetic as processChannel in AudioParameterMapper.ts. With
+    /// dt large enough that the smoothing factor is ~1, one step should land
+    /// essentially on the mapped target.
+    #[test]
+    fn a_binding_maps_its_range_onto_the_output_range() {
+        let mut s = AudioBindingSmoother::default();
+        let b = binding("bass");
+        // dt = 1s, attack = 1 -> factor = 1 - e^-21, i.e. ~1.0
+        let v = s.value("amount", &b, &features(0.5), 1.0);
+        assert!((v - 5.0).abs() < 1e-6, "expected ~5.0, got {v}");
+    }
+
+    #[test]
+    fn smoothing_carries_state_between_frames() {
+        let mut s = AudioBindingSmoother::default();
+        let mut b = binding("bass");
+        b.attack = 0.0; // slowest rise
+        let dt = 1.0 / 30.0;
+        let first = s.value("amount", &b, &features(1.0), dt);
+        let second = s.value("amount", &b, &features(1.0), dt);
+        assert!(
+            first > 0.0 && first < 10.0,
+            "first step should be partial: {first}"
+        );
+        assert!(second > first, "the value must keep chasing its target");
+        assert!(second < 10.0);
+    }
+
+    #[test]
+    fn a_gate_below_threshold_pulls_the_output_to_its_floor() {
+        let mut s = AudioBindingSmoother::default();
+        let mut b = binding("bass");
+        b.gate_enabled = true;
+        b.gate_threshold = 0.8;
+        let v = s.value("amount", &b, &features(0.2), 1.0);
+        assert!(
+            v.abs() < 1e-6,
+            "gated below threshold should map to output_min: {v}"
+        );
+    }
+
+    #[test]
+    fn invert_mirrors_within_the_output_range() {
+        let mut s = AudioBindingSmoother::default();
+        let mut b = binding("bass");
+        b.invert = true;
+        let v = s.value("amount", &b, &features(1.0), 1.0);
+        // Un-inverted this is ~10; inverted it must be ~0.
+        assert!(v.abs() < 1e-3, "expected ~0 after inversion, got {v}");
+    }
+
+    #[test]
+    fn injection_writes_only_bound_parameters_and_needs_both_halves() {
+        let mut s = AudioBindingSmoother::default();
+        let mut bindings = std::collections::HashMap::new();
+        bindings.insert("amount".to_string(), binding("bass"));
+
+        let mut params = serde_json::Map::new();
+        params.insert("amount".to_string(), serde_json::Value::from(1.0));
+        params.insert("other".to_string(), serde_json::Value::from(2.0));
+
+        let f = features(1.0);
+        assert!(s.inject(Some(&bindings), &mut params, Some(&f), 1.0));
+        assert!(params["amount"].as_f64().unwrap() > 9.0);
+        assert_eq!(params["other"], serde_json::Value::from(2.0));
+
+        // No bake data -> nothing to drive them with, so nothing is touched.
+        let mut untouched = serde_json::Map::new();
+        untouched.insert("amount".to_string(), serde_json::Value::from(1.0));
+        assert!(!s.inject(Some(&bindings), &mut untouched, None, 1.0));
+        assert_eq!(untouched["amount"], serde_json::Value::from(1.0));
+    }
+
+    #[test]
+    fn an_effect_call_without_audio_bindings_still_deserializes() {
+        let call: EffectCall =
+            serde_json::from_str(r#"{"effect_id":"x","params":{},"mask_b64":null}"#).unwrap();
+        assert!(call.audio_bindings.is_none());
+    }
+
+    /// The frontend serialises AudioBinding in camelCase.
+    #[test]
+    fn a_frontend_binding_deserializes() {
+        let call: EffectCall = serde_json::from_str(
+            r#"{"effect_id":"x","params":{},"mask_b64":null,
+                "audio_bindings":{"amount":{"source":"bass","inputMin":0,"inputMax":1,
+                "outputMin":2,"outputMax":8,"attack":0.05,"decay":0.2,
+                "gateEnabled":false,"gateThreshold":0,"invert":false}}}"#,
+        )
+        .expect("camelCase bindings must parse");
+        let b = &call.audio_bindings.unwrap()["amount"];
+        assert_eq!(b.source, "bass");
+        assert_eq!(b.output_max, 8.0);
     }
 }

@@ -70,6 +70,44 @@ to end against a real clip with no system Python involved.
 the icons are all bundled. Effects, dithering, glitch, datamoshing, LUTs and
 export need nothing from the internet.
 
+## Session 2026-09-09 (latest): keyframes and audio bindings actually render
+
+Two controls the UI advertised prominently and the exported file ignored. Both
+are now evaluated per frame in Rust, from tracks/bindings carried in the export
+payload, with tests asserting the Rust arithmetic matches the TypeScript the
+preview uses -- because if they drift, the file stops matching what the user
+approved on screen.
+
+**Keyframes.** `EffectCall` carries the animated tracks; the export loop
+evaluates them per frame in both the rayon and audio branches. Temporal effects
+(datamosh) are handed the whole segment at once and have no per-frame parameter
+hook, so they take the value at the START of the clip -- documented rather than
+silently dropped. Params are re-clamped after injection, since the earlier clamp
+ran on the static map.
+
+**Audio bindings.** Dead in three separate ways:
+  * the mapper computed a value every frame and wrote it only to
+    `audioMappedValues`, read by a readout label and nothing else -- the
+    parameter never moved, in preview OR export;
+  * the readout looked up `currentValue[binding.source]` (i.e. `["bass"]`) but
+    channels are keyed `${stackId}.${paramId}`, so it printed 0.000 always;
+  * nothing was sent to the exporter.
+Now driven through `updateStackParamsSilent` in the preview (same door keyframe
+playback uses, so no undo pollution) and evaluated in Rust for the export.
+Attack/decay is STATEFUL, so `AudioBindingSmoother` walks the clip in order and
+carries per-channel state, mirroring `processChannel`.
+
+Latent bug found on the way: channel names are `${stackId}.${paramId}` and
+stack ids CONTAIN dots (`dither.bayer-1757...`), so any first-dot split tears
+the id in half. `src/engine/audio/channelName.ts` splits on the last dot, with
+tests.
+
+**Precedence, decided deliberately:** when a parameter has both a keyframe and
+an audio binding, the BINDING wins -- it is the more explicit instruction.
+Applied consistently in preview and export.
+
+Verified: all 10 gates.
+
 ## Session 2026-09-09 (later): release-readiness audit, and the export crash found
 
 Asked directly: *"Is this production ready? Is this a finished product?"* A
