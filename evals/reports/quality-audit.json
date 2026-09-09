@@ -1,0 +1,2822 @@
+{
+ "generated": "2026-09-09T07:34:08+00:00",
+ "image": "photo-test.png",
+ "counts": {
+  "effects_rendered_still": 99,
+  "effects_rendered_video": 69,
+  "audio_effects": 8,
+  "still_flagged": 0,
+  "video_flagged": 0,
+  "adherence_violations": 0,
+  "audio_not_reacting": 0
+ },
+ "images": [
+  {
+   "effect_id": "glitch.edge_stretch",
+   "mean": 146.7884303140432,
+   "std": 36.07599009363136,
+   "black_frac": 0.0,
+   "white_frac": 0.0013425925925925925,
+   "palette_ratio": 0.9947314192239466,
+   "hf_ratio": 0.9927081148422562,
+   "luma_diff": 0.5615628028549382,
+   "chroma_diff": 0.1439276840277778,
+   "pixels_changed": 0.05044945987654321,
+   "corr": 0.9883526907940484,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.cross_video",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.0,
+   "luma_diff": 0.0,
+   "chroma_diff": 0.0,
+   "pixels_changed": 0.0,
+   "corr": 1.0,
+   "flags": []
+  },
+  {
+   "effect_id": "audio_reactive.audio_dither",
+   "mean": 113.20216049382717,
+   "std": 53.07225529028985,
+   "black_frac": 0.07301890432098765,
+   "white_frac": 0.01105324074074074,
+   "palette_ratio": 4.2488554645592343e-05,
+   "hf_ratio": 48.862461265396156,
+   "luma_diff": 41.98134145794752,
+   "chroma_diff": 3.806504164737654,
+   "pixels_changed": 0.9942862654320987,
+   "corr": 0.6844827290387078,
+   "flags": []
+  },
+  {
+   "effect_id": "pixel_geo.slice_shift_advanced",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.0084362947217822,
+   "luma_diff": 7.1195474297839505,
+   "chroma_diff": 2.25695806404321,
+   "pixels_changed": 0.8909529320987655,
+   "corr": 0.9560888028293213,
+   "flags": []
+  },
+  {
+   "effect_id": "dithering.random_noise",
+   "mean": 147.22659143518516,
+   "std": 125.96472359493858,
+   "black_frac": 0.4226408179012346,
+   "white_frac": 0.5773591820987655,
+   "palette_ratio": 2.1244277322796172e-05,
+   "hf_ratio": 135.94629539143094,
+   "luma_diff": 114.2475783931327,
+   "chroma_diff": 3.806504164737655,
+   "pixels_changed": 0.9984548611111111,
+   "corr": 0.28710640830321815,
+   "flags": []
+  },
+  {
+   "effect_id": "dithering.bayer",
+   "mean": 155.32274305555552,
+   "std": 124.42726778670554,
+   "black_frac": 0.3908912037037037,
+   "white_frac": 0.6091087962962963,
+   "palette_ratio": 2.1244277322796172e-05,
+   "hf_ratio": 153.0689244000074,
+   "luma_diff": 112.92260206288579,
+   "chroma_diff": 3.806504164737655,
+   "pixels_changed": 0.998443287037037,
+   "corr": 0.2933423535145245,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.beat_hold",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.0,
+   "luma_diff": 0.0,
+   "chroma_diff": 0.0,
+   "pixels_changed": 0.0,
+   "corr": 1.0,
+   "flags": []
+  },
+  {
+   "effect_id": "analog.scanlines",
+   "mean": 124.63091416435184,
+   "std": 38.38086752204126,
+   "black_frac": 0.0,
+   "white_frac": 0.0009066358024691358,
+   "palette_ratio": 0.9101260847859108,
+   "hf_ratio": 18.73071556086104,
+   "luma_diff": 22.24131726967593,
+   "chroma_diff": 0.5774617843364199,
+   "pixels_changed": 0.5,
+   "corr": 0.8023506019738222,
+   "flags": []
+  },
+  {
+   "effect_id": "dithering.atkinson",
+   "mean": 152.0043981481481,
+   "std": 125.12307729350741,
+   "black_frac": 0.40390432098765433,
+   "white_frac": 0.5960956790123457,
+   "palette_ratio": 2.1244277322796172e-05,
+   "hf_ratio": 106.8307093359038,
+   "luma_diff": 110.96565200270061,
+   "chroma_diff": 3.806504164737655,
+   "pixels_changed": 0.998443287037037,
+   "corr": 0.36107708677781764,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.classic",
+   "mean": 146.8869666049383,
+   "std": 36.1266200573878,
+   "black_frac": 0.0,
+   "white_frac": 0.0017746913580246914,
+   "palette_ratio": 0.5313087537044708,
+   "hf_ratio": 0.8558022663556383,
+   "luma_diff": 2.4633352202932097,
+   "chroma_diff": 1.3410771500771606,
+   "pixels_changed": 0.4992476851851852,
+   "corr": 0.989399417647081,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.frame_reverse",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.0,
+   "luma_diff": 0.0,
+   "chroma_diff": 0.0,
+   "pixels_changed": 0.0,
+   "corr": 1.0,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.mirror",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.007991589075346,
+   "luma_diff": 4.371096269290123,
+   "chroma_diff": 1.823651118569959,
+   "pixels_changed": 0.7715952932098765,
+   "corr": 0.9782423404032641,
+   "flags": []
+  },
+  {
+   "effect_id": "dithering.palette",
+   "mean": 141.25517662962963,
+   "std": 61.445391076304254,
+   "black_frac": 0.011410108024691359,
+   "white_frac": 0.19478587962962962,
+   "palette_ratio": 4.2488554645592343e-05,
+   "hf_ratio": 16.716616540324928,
+   "luma_diff": 40.24975340007716,
+   "chroma_diff": 47.994264641846705,
+   "pixels_changed": 0.9991319444444444,
+   "corr": 0.6486564301670952,
+   "flags": []
+  },
+  {
+   "effect_id": "color.rgb_shift",
+   "mean": 146.87890985223765,
+   "std": 36.03253943874426,
+   "black_frac": 0.0,
+   "white_frac": 0.0004378858024691358,
+   "palette_ratio": 1.364573043136505,
+   "hf_ratio": 0.9735647430185168,
+   "luma_diff": 0.7879254359567902,
+   "chroma_diff": 2.5576481057098763,
+   "pixels_changed": 0.6482368827160494,
+   "corr": 0.999194225299036,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.zoom",
+   "mean": 146.63423784220677,
+   "std": 37.53422976932375,
+   "black_frac": 0.0,
+   "white_frac": 0.0018672839506172839,
+   "palette_ratio": 0.9726586150855613,
+   "hf_ratio": 1.1927232400344092,
+   "luma_diff": 14.536124471450615,
+   "chroma_diff": 2.9643928150720167,
+   "pixels_changed": 0.9255574845679012,
+   "corr": 0.7219744767840005,
+   "flags": []
+  },
+  {
+   "effect_id": "glitch.crc_mismatch",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.8483664464383143,
+   "luma_diff": 1.3767469583333334,
+   "chroma_diff": 0.3804424176954732,
+   "pixels_changed": 0.12021604938271604,
+   "corr": 0.989273122853902,
+   "flags": []
+  },
+  {
+   "effect_id": "mask_isolate",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.0,
+   "luma_diff": 0.0,
+   "chroma_diff": 0.0,
+   "pixels_changed": 0.0,
+   "corr": 1.0,
+   "flags": []
+  },
+  {
+   "effect_id": "audio_reactive.beat_glitch",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.0,
+   "luma_diff": 0.0,
+   "chroma_diff": 0.0,
+   "pixels_changed": 0.0,
+   "corr": 1.0,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.profile_rainbow",
+   "mean": 160.0841762110339,
+   "std": 53.84812396656882,
+   "black_frac": 0.0,
+   "white_frac": 0.0024363425925925924,
+   "palette_ratio": 5.311069330699043e-05,
+   "hf_ratio": 1.8402536580650541,
+   "luma_diff": 70.1723819382716,
+   "chroma_diff": 100.67106611316872,
+   "pixels_changed": 0.9984490740740741,
+   "corr": -0.8753745437269269,
+   "flags": []
+  },
+  {
+   "effect_id": "audio_reactive.spectrum",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.0,
+   "luma_diff": 0.0,
+   "chroma_diff": 0.0,
+   "pixels_changed": 0.0,
+   "corr": 1.0,
+   "flags": []
+  },
+  {
+   "effect_id": "analog.color_bleed",
+   "mean": 146.8721928294753,
+   "std": 36.06349520070306,
+   "black_frac": 0.0,
+   "white_frac": 0.0007716049382716049,
+   "palette_ratio": 1.3018174479249651,
+   "hf_ratio": 0.9890284548160396,
+   "luma_diff": 0.6330435999228395,
+   "chroma_diff": 2.032132856095679,
+   "pixels_changed": 0.492608024691358,
+   "corr": 0.9993733066386368,
+   "flags": []
+  },
+  {
+   "effect_id": "glitch.byte_insert",
+   "mean": 144.15089172415122,
+   "std": 38.874002075325144,
+   "black_frac": 0.0,
+   "white_frac": 0.0011805555555555556,
+   "palette_ratio": 2.655555909626844,
+   "hf_ratio": 12.921320565012868,
+   "luma_diff": 9.520424907407406,
+   "chroma_diff": 12.255643140432099,
+   "pixels_changed": 0.3545023148148148,
+   "corr": 0.8014526725783228,
+   "flags": []
+  },
+  {
+   "effect_id": "dithering.floyd_steinberg",
+   "mean": 147.33972800925923,
+   "std": 125.94695388344496,
+   "black_frac": 0.4221971450617284,
+   "white_frac": 0.5778028549382717,
+   "palette_ratio": 2.1244277322796172e-05,
+   "hf_ratio": 139.857069396981,
+   "luma_diff": 114.13637298186727,
+   "chroma_diff": 3.806504164737655,
+   "pixels_changed": 0.998443287037037,
+   "corr": 0.2897793678626548,
+   "flags": []
+  },
+  {
+   "effect_id": "dithering.error_diffusion_variants",
+   "mean": 147.31119791666663,
+   "std": 125.95144475990207,
+   "black_frac": 0.4223090277777778,
+   "white_frac": 0.5776909722222222,
+   "palette_ratio": 2.1244277322796172e-05,
+   "hf_ratio": 118.46054612107858,
+   "luma_diff": 114.03015632677469,
+   "chroma_diff": 3.806504164737655,
+   "pixels_changed": 0.998443287037037,
+   "corr": 0.29286438669702525,
+   "flags": []
+  },
+  {
+   "effect_id": "analog.tv_glitch",
+   "mean": 157.20179804398146,
+   "std": 42.04603043015609,
+   "black_frac": 0.0,
+   "white_frac": 0.00408179012345679,
+   "palette_ratio": 3.031144110555219,
+   "hf_ratio": 5.195121997509247,
+   "luma_diff": 14.138759092978395,
+   "chroma_diff": 16.138669466692384,
+   "pixels_changed": 0.9983526234567901,
+   "corr": 0.9428987838449965,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.profile_extreme",
+   "mean": 210.98574119907408,
+   "std": 39.95782855349789,
+   "black_frac": 0.0,
+   "white_frac": 0.25870949074074073,
+   "palette_ratio": 0.29887511551575796,
+   "hf_ratio": 5.009973721306341,
+   "luma_diff": 64.44822613541666,
+   "chroma_diff": 9.77272882651749,
+   "pixels_changed": 0.9989467592592592,
+   "corr": 0.8703458271204212,
+   "flags": []
+  },
+  {
+   "effect_id": "dithering.sierra",
+   "mean": 147.30923032407404,
+   "std": 125.95175423140316,
+   "black_frac": 0.4223167438271605,
+   "white_frac": 0.5776832561728396,
+   "palette_ratio": 2.1244277322796172e-05,
+   "hf_ratio": 118.40800293133735,
+   "luma_diff": 114.04522417708331,
+   "chroma_diff": 3.806504164737655,
+   "pixels_changed": 0.998443287037037,
+   "corr": 0.2924501511449792,
+   "flags": []
+  },
+  {
+   "effect_id": "audio_reactive.waveform",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.0,
+   "luma_diff": 0.0,
+   "chroma_diff": 0.0,
+   "pixels_changed": 0.0,
+   "corr": 1.0,
+   "flags": []
+  },
+  {
+   "effect_id": "dithering.halftone",
+   "mean": 215.24085648148144,
+   "std": 92.50833532118101,
+   "black_frac": 0.1559182098765432,
+   "white_frac": 0.8440817901234567,
+   "palette_ratio": 2.1244277322796172e-05,
+   "hf_ratio": 22.2031912958303,
+   "luma_diff": 107.53263321720678,
+   "chroma_diff": 3.806504164737655,
+   "pixels_changed": 0.9984683641975308,
+   "corr": 0.2529768005312393,
+   "flags": []
+  },
+  {
+   "effect_id": "audio_reactive.chromatic",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.0,
+   "luma_diff": 0.0,
+   "chroma_diff": 0.0,
+   "pixels_changed": 0.0,
+   "corr": 1.0,
+   "flags": []
+  },
+  {
+   "effect_id": "audio_reactive.spectral_shift",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.0,
+   "luma_diff": 0.0,
+   "chroma_diff": 0.0,
+   "pixels_changed": 0.0,
+   "corr": 1.0,
+   "flags": []
+  },
+  {
+   "effect_id": "analog.ghosting",
+   "mean": 146.43891129012346,
+   "std": 35.988547633893205,
+   "black_frac": 0.0,
+   "white_frac": 0.0007465277777777778,
+   "palette_ratio": 0.9245828155040736,
+   "hf_ratio": 0.7945686372876569,
+   "luma_diff": 1.3152873375771605,
+   "chroma_diff": 0.5580493252314823,
+   "pixels_changed": 0.062287808641975306,
+   "corr": 0.9981248057868005,
+   "flags": []
+  },
+  {
+   "effect_id": "artistic.grayscale",
+   "mean": 146.84840084876544,
+   "std": 36.34019926882573,
+   "black_frac": 0.0,
+   "white_frac": 0.0017554012345679013,
+   "palette_ratio": 0.002113805593618219,
+   "hf_ratio": 0.9343164512055314,
+   "luma_diff": 0.5698249448302466,
+   "chroma_diff": 3.806504164737654,
+   "pixels_changed": 0.819375,
+   "corr": 0.9998182083149308,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.beat_smear",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.0,
+   "luma_diff": 0.0,
+   "chroma_diff": 0.0,
+   "pixels_changed": 0.0,
+   "corr": 1.0,
+   "flags": []
+  },
+  {
+   "effect_id": "color.lift_gamma_gain",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.0,
+   "luma_diff": 0.0,
+   "chroma_diff": 0.0,
+   "pixels_changed": 0.0,
+   "corr": 1.0,
+   "flags": []
+  },
+  {
+   "effect_id": "pixel_geo.wave_distort",
+   "mean": 146.90103924421294,
+   "std": 36.14806967813463,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 0.9970895340067769,
+   "hf_ratio": 1.0278607616552136,
+   "luma_diff": 5.698944067901234,
+   "chroma_diff": 2.02636685622428,
+   "pixels_changed": 0.7869135802469136,
+   "corr": 0.9675812180765535,
+   "flags": []
+  },
+  {
+   "effect_id": "dithering.custom_matrix",
+   "mean": 145.50396412037034,
+   "std": 126.2224515526157,
+   "black_frac": 0.42939621913580245,
+   "white_frac": 0.5706037808641975,
+   "palette_ratio": 2.1244277322796172e-05,
+   "hf_ratio": 178.773677096928,
+   "luma_diff": 117.26023899112654,
+   "chroma_diff": 3.806504164737655,
+   "pixels_changed": 0.9987962962962963,
+   "corr": 0.20966187470415376,
+   "flags": []
+  },
+  {
+   "effect_id": "dithering.ordered_variants",
+   "mean": 139.3921296296296,
+   "std": 126.94418951993067,
+   "black_frac": 0.4533641975308642,
+   "white_frac": 0.5466358024691358,
+   "palette_ratio": 2.1244277322796172e-05,
+   "hf_ratio": 73.94273034879848,
+   "luma_diff": 115.4031944679784,
+   "chroma_diff": 3.806504164737655,
+   "pixels_changed": 0.9985185185185185,
+   "corr": 0.28585639257663087,
+   "flags": []
+  },
+  {
+   "effect_id": "artistic.posterize",
+   "mean": 131.45467190123458,
+   "std": 36.94832828536049,
+   "black_frac": 0.0,
+   "white_frac": 0.0,
+   "palette_ratio": 0.0004673741011015158,
+   "hf_ratio": 1.6464727986770238,
+   "luma_diff": 15.41755953279321,
+   "chroma_diff": 5.339413738811729,
+   "pixels_changed": 0.9952604166666666,
+   "corr": 0.9800905754877971,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.shuffle",
+   "mean": 146.87223143402778,
+   "std": 36.1544465623889,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 15.179582973031186,
+   "luma_diff": 31.465570780864194,
+   "chroma_diff": 4.159733870627572,
+   "pixels_changed": 0.9891975308641975,
+   "corr": 0.3520953263526159,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.iframe_removal",
+   "mean": 130.7866175949074,
+   "std": 40.27371442568029,
+   "black_frac": 0.0,
+   "white_frac": 0.0005709876543209877,
+   "palette_ratio": 3.7895329445630583,
+   "hf_ratio": 13.385010907614065,
+   "luma_diff": 21.238895603009258,
+   "chroma_diff": 8.754299662680042,
+   "pixels_changed": 0.9984413580246914,
+   "corr": 0.8972577637102047,
+   "flags": []
+  },
+  {
+   "effect_id": "dithering.auto_palette",
+   "mean": 146.43668603858023,
+   "std": 35.21590097992269,
+   "black_frac": 0.0,
+   "white_frac": 0.0,
+   "palette_ratio": 8.497710929118469e-05,
+   "hf_ratio": 6.7744748196917435,
+   "luma_diff": 6.995751546682097,
+   "chroma_diff": 2.8748554535751034,
+   "pixels_changed": 0.9287191358024691,
+   "corr": 0.9692003059454642,
+   "flags": []
+  },
+  {
+   "effect_id": "glitch.png_chunk",
+   "mean": 142.24181171450618,
+   "std": 41.607818620329084,
+   "black_frac": 3.472222222222222e-05,
+   "white_frac": 0.0012094907407407408,
+   "palette_ratio": 2.5103831405415167,
+   "hf_ratio": 13.425895155702813,
+   "luma_diff": 15.748866275077159,
+   "chroma_diff": 14.16871202019033,
+   "pixels_changed": 0.29952932098765433,
+   "corr": 0.5899517121190474,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.combine",
+   "mean": 147.0798480486111,
+   "std": 36.174097604409006,
+   "black_frac": 0.0,
+   "white_frac": 0.001851851851851852,
+   "palette_ratio": 0.6780748435890082,
+   "hf_ratio": 0.8803594908038652,
+   "luma_diff": 1.4695145335648148,
+   "chroma_diff": 1.0584754044495885,
+   "pixels_changed": 0.3365258487654321,
+   "corr": 0.9950816449041675,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.optical_flow",
+   "mean": 146.77869228858023,
+   "std": 36.13024471266502,
+   "black_frac": 0.0,
+   "white_frac": 0.0016087962962962963,
+   "palette_ratio": 0.9007148699319121,
+   "hf_ratio": 1.1990197888688776,
+   "luma_diff": 1.5813957357253088,
+   "chroma_diff": 1.1936948072273663,
+   "pixels_changed": 0.36507523148148147,
+   "corr": 0.9930339156718873,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.stop",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.0,
+   "luma_diff": 0.0,
+   "chroma_diff": 0.0,
+   "pixels_changed": 0.0,
+   "corr": 1.0,
+   "flags": []
+  },
+  {
+   "effect_id": "glitch.byte_reverse",
+   "mean": 168.41122298032408,
+   "std": 29.783934915766086,
+   "black_frac": 0.0,
+   "white_frac": 0.001859567901234568,
+   "palette_ratio": 0.06954314181617327,
+   "hf_ratio": 1.1684165796242363,
+   "luma_diff": 21.628922812499997,
+   "chroma_diff": 41.79388883384774,
+   "pixels_changed": 0.9987249228395062,
+   "corr": 0.9879384882020134,
+   "flags": []
+  },
+  {
+   "effect_id": "dithering.line_screen",
+   "mean": 207.34589120370367,
+   "std": 99.40263405909478,
+   "black_frac": 0.18687885802469137,
+   "white_frac": 0.8131211419753086,
+   "palette_ratio": 2.1244277322796172e-05,
+   "hf_ratio": 27.231834668864607,
+   "luma_diff": 99.97635757137343,
+   "chroma_diff": 3.806504164737655,
+   "pixels_changed": 0.998443287037037,
+   "corr": 0.5460642051202222,
+   "flags": []
+  },
+  {
+   "effect_id": "dithering.burkes",
+   "mean": 147.33284143518514,
+   "std": 125.94803849447915,
+   "black_frac": 0.4222241512345679,
+   "white_frac": 0.5777758487654321,
+   "palette_ratio": 2.1244277322796172e-05,
+   "hf_ratio": 137.98361855642614,
+   "luma_diff": 114.09684864158949,
+   "chroma_diff": 3.806504164737655,
+   "pixels_changed": 0.998443287037037,
+   "corr": 0.2909128488997573,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.rise",
+   "mean": 98.95962188618827,
+   "std": 60.723695972309095,
+   "black_frac": 0.0,
+   "white_frac": 0.0020968364197530864,
+   "palette_ratio": 0.1976780004886184,
+   "hf_ratio": 3.979967054816568,
+   "luma_diff": 49.845387378086414,
+   "chroma_diff": 96.37349291615226,
+   "pixels_changed": 0.8249170524691358,
+   "corr": 0.6507026141449033,
+   "flags": []
+  },
+  {
+   "effect_id": "dithering.riemersma",
+   "mean": 147.27971643518515,
+   "std": 125.95639252433224,
+   "black_frac": 0.4224324845679012,
+   "white_frac": 0.5775675154320987,
+   "palette_ratio": 2.1244277322796172e-05,
+   "hf_ratio": 133.2395407753566,
+   "luma_diff": 114.39295767708332,
+   "chroma_diff": 3.806504164737655,
+   "pixels_changed": 0.9984452160493827,
+   "corr": 0.2828290635169463,
+   "flags": []
+  },
+  {
+   "effect_id": "noise.gaussian",
+   "mean": 146.3572732152778,
+   "std": 37.91941833926682,
+   "black_frac": 0.0,
+   "white_frac": 0.000939429012345679,
+   "palette_ratio": 2.6839063977141158,
+   "hf_ratio": 14.465186886809926,
+   "luma_diff": 9.217412317515432,
+   "chroma_diff": 9.666323175797325,
+   "pixels_changed": 0.9655401234567901,
+   "corr": 0.9525244699083726,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.bloom",
+   "mean": 156.76773838387345,
+   "std": 45.701680792013,
+   "black_frac": 0.0,
+   "white_frac": 0.0018287037037037037,
+   "palette_ratio": 1.2625474012937765,
+   "hf_ratio": 0.8567740794060243,
+   "luma_diff": 9.895506949845679,
+   "chroma_diff": 0.8266105866769551,
+   "pixels_changed": 0.5521527777777778,
+   "corr": 0.9947827172595402,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.delay",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.0805324727525691,
+   "luma_diff": 4.021807266203703,
+   "chroma_diff": 1.7173027926954731,
+   "pixels_changed": 0.6963811728395062,
+   "corr": 0.959565434579159,
+   "flags": []
+  },
+  {
+   "effect_id": "audio_reactive.pixelate",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.0,
+   "luma_diff": 0.0,
+   "chroma_diff": 0.0,
+   "pixels_changed": 0.0,
+   "corr": 1.0,
+   "flags": []
+  },
+  {
+   "effect_id": "pixel_geo.anaglyph",
+   "mean": 146.88614398958333,
+   "std": 35.89950692196274,
+   "black_frac": 0.0,
+   "white_frac": 4.436728395061728e-05,
+   "palette_ratio": 1.8339441063063637,
+   "hf_ratio": 0.9763315633851708,
+   "luma_diff": 1.2801868827160496,
+   "chroma_diff": 4.02115830787037,
+   "pixels_changed": 0.8405266203703704,
+   "corr": 0.998339428817878,
+   "flags": []
+  },
+  {
+   "effect_id": "audio_reactive.bass_pulse",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.0,
+   "luma_diff": 0.0,
+   "chroma_diff": 0.0,
+   "pixels_changed": 0.0,
+   "corr": 1.0,
+   "flags": []
+  },
+  {
+   "effect_id": "color.channel_swap",
+   "mean": 146.41156609066357,
+   "std": 37.59950261011144,
+   "black_frac": 0.0,
+   "white_frac": 0.0018248456790123458,
+   "palette_ratio": 1.0,
+   "hf_ratio": 0.9992674227126823,
+   "luma_diff": 3.326302010030864,
+   "chroma_diff": 4.557499332561728,
+   "pixels_changed": 0.5889197530864198,
+   "corr": 0.994399138541159,
+   "flags": []
+  },
+  {
+   "effect_id": "dithering.stucki",
+   "mean": 147.3200520833333,
+   "std": 125.95005174835758,
+   "black_frac": 0.42227430555555556,
+   "white_frac": 0.5777256944444444,
+   "palette_ratio": 2.1244277322796172e-05,
+   "hf_ratio": 140.4900847759622,
+   "luma_diff": 114.06084633912035,
+   "chroma_diff": 3.806504164737655,
+   "pixels_changed": 0.998443287037037,
+   "corr": 0.29197065355985063,
+   "flags": []
+  },
+  {
+   "effect_id": "color.invert",
+   "mean": 108.12776856597223,
+   "std": 36.154446562388905,
+   "black_frac": 0.0017824074074074075,
+   "white_frac": 0.0,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.0,
+   "luma_diff": 67.12599858564815,
+   "chroma_diff": 7.613008329475308,
+   "pixels_changed": 0.9987461419753086,
+   "corr": -0.9999999999999998,
+   "flags": []
+  },
+  {
+   "effect_id": "glitch.macroblock_glitch",
+   "mean": 146.67855194868827,
+   "std": 35.96920728634069,
+   "black_frac": 0.0,
+   "white_frac": 0.0013483796296296297,
+   "palette_ratio": 0.9526146394315032,
+   "hf_ratio": 1.0853506793756176,
+   "luma_diff": 2.2348473827160493,
+   "chroma_diff": 0.6769279369855967,
+   "pixels_changed": 0.23776813271604938,
+   "corr": 0.9851747809484587,
+   "flags": []
+  },
+  {
+   "effect_id": "glitch.byte_zero",
+   "mean": 126.35771226041668,
+   "std": 49.97092704533484,
+   "black_frac": 0.0027160493827160493,
+   "white_frac": 0.001099537037037037,
+   "palette_ratio": 1.029508301201364,
+   "hf_ratio": 25.075025583245424,
+   "luma_diff": 20.51451917361111,
+   "chroma_diff": 23.584030586676956,
+   "pixels_changed": 0.3627430555555556,
+   "corr": 0.6220127266938971,
+   "flags": []
+  },
+  {
+   "effect_id": "color.historical_palettes",
+   "mean": 142.2852958935185,
+   "std": 43.717450010414936,
+   "black_frac": 0.0,
+   "white_frac": 0.0,
+   "palette_ratio": 6.373283196838852e-05,
+   "hf_ratio": 1.346587154177045,
+   "luma_diff": 15.20106651273148,
+   "chroma_diff": 8.455627938143007,
+   "pixels_changed": 0.9952623456790124,
+   "corr": 0.9189940879379792,
+   "flags": []
+  },
+  {
+   "effect_id": "noise.fractal",
+   "mean": 146.32491304552468,
+   "std": 44.18925070799483,
+   "black_frac": 0.0,
+   "white_frac": 0.0052102623456790126,
+   "palette_ratio": 1.25284938869592,
+   "hf_ratio": 21.168781657173383,
+   "luma_diff": 20.908406641589508,
+   "chroma_diff": 0.023407319573055387,
+   "pixels_changed": 0.8884876543209876,
+   "corr": 0.8155840864545921,
+   "flags": []
+  },
+  {
+   "effect_id": "dithering.blue_noise",
+   "mean": 147.26741898148146,
+   "std": 125.9583230549318,
+   "black_frac": 0.42248070987654324,
+   "white_frac": 0.5775192901234568,
+   "palette_ratio": 2.1244277322796172e-05,
+   "hf_ratio": 113.11945284944458,
+   "luma_diff": 114.24189534220677,
+   "chroma_diff": 3.806504164737655,
+   "pixels_changed": 0.9984510030864198,
+   "corr": 0.2871064318062667,
+   "flags": []
+  },
+  {
+   "effect_id": "glitch.jpeg_quantize",
+   "mean": 146.56930819560188,
+   "std": 36.28858599626225,
+   "black_frac": 0.0,
+   "white_frac": 0.0008333333333333334,
+   "palette_ratio": 0.011525020447616923,
+   "hf_ratio": 0.5961501445625172,
+   "luma_diff": 3.6706820347222227,
+   "chroma_diff": 3.5135582001028807,
+   "pixels_changed": 0.9280111882716049,
+   "corr": 0.991188639177604,
+   "flags": []
+  },
+  {
+   "effect_id": "analog.chromatic_aberration",
+   "mean": 147.35335424344134,
+   "std": 35.92909586941376,
+   "black_frac": 0.0,
+   "white_frac": 0.00026041666666666666,
+   "palette_ratio": 1.4629871578343583,
+   "hf_ratio": 0.9755835231604023,
+   "luma_diff": 1.0615508179012345,
+   "chroma_diff": 4.422181843621399,
+   "pixels_changed": 0.8801581790123457,
+   "corr": 0.9988997858356494,
+   "flags": []
+  },
+  {
+   "effect_id": "color.lut_grading",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.0,
+   "luma_diff": 0.0,
+   "chroma_diff": 0.0,
+   "pixels_changed": 0.0,
+   "corr": 1.0,
+   "flags": []
+  },
+  {
+   "effect_id": "pixel_geo.kaleidoscope",
+   "mean": 118.02030022337962,
+   "std": 20.60816233312035,
+   "black_frac": 0.0,
+   "white_frac": 3.8580246913580246e-05,
+   "palette_ratio": 0.3413318037453661,
+   "hf_ratio": 1.0642382362256564,
+   "luma_diff": 36.401541545524694,
+   "chroma_diff": 3.3566857461419755,
+   "pixels_changed": 0.7848302469135803,
+   "corr": 0.06311888115294181,
+   "flags": []
+  },
+  {
+   "effect_id": "noise.salt_pepper",
+   "mean": 146.2204396114969,
+   "std": 42.709413215762446,
+   "black_frac": 0.016875,
+   "white_frac": 0.018607253086419754,
+   "palette_ratio": 0.9905462965913557,
+   "hf_ratio": 8.08456306212289,
+   "luma_diff": 4.308290424382716,
+   "chroma_diff": 0.12855815920781893,
+   "pixels_changed": 0.033742283950617284,
+   "corr": 0.8176648783443838,
+   "flags": []
+  },
+  {
+   "effect_id": "glitch.slice_shift",
+   "mean": 146.87580000385802,
+   "std": 36.16273877765389,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 0.9945083543120572,
+   "hf_ratio": 1.891217121862839,
+   "luma_diff": 7.7391907758487655,
+   "chroma_diff": 2.4259070585133746,
+   "pixels_changed": 0.8437191358024692,
+   "corr": 0.9459819885292662,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.buffer",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.008434266193558,
+   "luma_diff": 4.371096269290123,
+   "chroma_diff": 1.823651118569959,
+   "pixels_changed": 0.7715952932098765,
+   "corr": 0.9782423404032633,
+   "flags": []
+  },
+  {
+   "effect_id": "artistic.solarize",
+   "mean": 93.85042015007714,
+   "std": 23.468286201026892,
+   "black_frac": 0.0017824074074074075,
+   "white_frac": 0.0,
+   "palette_ratio": 0.818393295306077,
+   "hf_ratio": 0.9842746549841791,
+   "luma_diff": 53.02181128395062,
+   "chroma_diff": 5.273302717335391,
+   "pixels_changed": 0.6738078703703704,
+   "corr": -0.7253485397696604,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.profile_smear",
+   "mean": 157.94809704668208,
+   "std": 33.926428882918955,
+   "black_frac": 0.0,
+   "white_frac": 0.0,
+   "palette_ratio": 0.5847699775872874,
+   "hf_ratio": 0.30392257487750735,
+   "luma_diff": 11.300212584876542,
+   "chroma_diff": 29.405427769032922,
+   "pixels_changed": 1.0,
+   "corr": 0.9911279562498752,
+   "flags": []
+  },
+  {
+   "effect_id": "glitch.sorting_glitch",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 0.962549956676507,
+   "luma_diff": 6.137649656635801,
+   "chroma_diff": 2.0182669691358024,
+   "pixels_changed": 0.4575578703703704,
+   "corr": 0.9432195789584651,
+   "flags": []
+  },
+  {
+   "effect_id": "pixel_geo.pixelate",
+   "mean": 146.78785333333332,
+   "std": 36.226243366460515,
+   "black_frac": 0.0,
+   "white_frac": 0.002345679012345679,
+   "palette_ratio": 0.08009092550694157,
+   "hf_ratio": 0.7172071136185284,
+   "luma_diff": 3.4365825250771604,
+   "chroma_diff": 1.6873008332047326,
+   "pixels_changed": 0.669278549382716,
+   "corr": 0.98459151271427,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.profile_glitch",
+   "mean": 153.0298693117284,
+   "std": 37.70857066566062,
+   "black_frac": 0.0,
+   "white_frac": 0.0034895833333333333,
+   "palette_ratio": 2.3502012895276336,
+   "hf_ratio": 10.312013944643239,
+   "luma_diff": 7.946203090663579,
+   "chroma_diff": 5.131636569573045,
+   "pixels_changed": 0.31914158950617283,
+   "corr": 0.9074022602871367,
+   "flags": []
+  },
+  {
+   "effect_id": "analog.vhs",
+   "mean": 146.36068461766976,
+   "std": 36.86152352267009,
+   "black_frac": 0.0,
+   "white_frac": 0.001095679012345679,
+   "palette_ratio": 1.0054597792719586,
+   "hf_ratio": 5.837871050393945,
+   "luma_diff": 9.16885774537037,
+   "chroma_diff": 2.0168883924897125,
+   "pixels_changed": 0.9031944444444444,
+   "corr": 0.9403895674168553,
+   "flags": []
+  },
+  {
+   "effect_id": "pixel_geo.mirror_slices",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 2.247975633183829,
+   "luma_diff": 7.812591022376543,
+   "chroma_diff": 1.964128908693416,
+   "pixels_changed": 0.48531635802469136,
+   "corr": 0.9212285917533154,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.shear",
+   "mean": 146.9049484421296,
+   "std": 36.2029651944422,
+   "black_frac": 0.0,
+   "white_frac": 0.0017901234567901235,
+   "palette_ratio": 0.9969833126201629,
+   "hf_ratio": 1.098353120869281,
+   "luma_diff": 12.0380623128858,
+   "chroma_diff": 2.8416042498714,
+   "pixels_changed": 0.9240335648148148,
+   "corr": 0.823648414589437,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.profile_bloom",
+   "mean": 150.22088595370371,
+   "std": 39.25765631368699,
+   "black_frac": 0.0,
+   "white_frac": 0.001743827160493827,
+   "palette_ratio": 0.4341161849526784,
+   "hf_ratio": 0.7973070764570027,
+   "luma_diff": 5.415238017361111,
+   "chroma_diff": 1.6497001616512348,
+   "pixels_changed": 0.7453221450617284,
+   "corr": 0.98322340206526,
+   "flags": []
+  },
+  {
+   "effect_id": "pixel_geo.block_shift",
+   "mean": 146.95184396141974,
+   "std": 36.16969740953837,
+   "black_frac": 0.0,
+   "white_frac": 0.001990740740740741,
+   "palette_ratio": 0.8998013660070319,
+   "hf_ratio": 1.1296487659955678,
+   "luma_diff": 5.769700386959876,
+   "chroma_diff": 2.0404184178240743,
+   "pixels_changed": 0.8248668981481482,
+   "corr": 0.9684376530363668,
+   "flags": []
+  },
+  {
+   "effect_id": "dithering.threshold",
+   "mean": 164.93984374999997,
+   "std": 121.87907162419472,
+   "black_frac": 0.3531770833333333,
+   "white_frac": 0.6468229166666667,
+   "palette_ratio": 2.1244277322796172e-05,
+   "hf_ratio": 3.0344992649551172,
+   "luma_diff": 93.93981444483022,
+   "chroma_diff": 3.806504164737655,
+   "pixels_changed": 0.998443287037037,
+   "corr": 0.8064573302778568,
+   "flags": []
+  },
+  {
+   "effect_id": "composite.overlay",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.0,
+   "luma_diff": 0.0,
+   "chroma_diff": 0.0,
+   "pixels_changed": 0.0,
+   "corr": 1.0,
+   "flags": []
+  },
+  {
+   "effect_id": "artistic.vaporwave",
+   "mean": 123.69374024691356,
+   "std": 27.417240757120524,
+   "black_frac": 0.0,
+   "white_frac": 0.0,
+   "palette_ratio": 0.00028679774385774833,
+   "hf_ratio": 1.127831586616098,
+   "luma_diff": 23.191547385416673,
+   "chroma_diff": 68.87790498418211,
+   "pixels_changed": 1.0,
+   "corr": 0.9628722439644928,
+   "flags": []
+  },
+  {
+   "effect_id": "noise.uniform",
+   "mean": 146.7855029660494,
+   "std": 37.080223808083915,
+   "black_frac": 0.0,
+   "white_frac": 0.0010050154320987654,
+   "palette_ratio": 3.45798413052484,
+   "hf_ratio": 7.018726058163123,
+   "luma_diff": 7.074817181712962,
+   "chroma_diff": 7.949214320344651,
+   "pixels_changed": 0.9917380401234568,
+   "corr": 0.9743787962036706,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.vibrate",
+   "mean": 146.90652511612652,
+   "std": 36.11148102691436,
+   "black_frac": 0.0,
+   "white_frac": 0.002013888888888889,
+   "palette_ratio": 0.9397937180671957,
+   "hf_ratio": 1.2263560602626593,
+   "luma_diff": 4.683607829475308,
+   "chroma_diff": 1.805559379115227,
+   "pixels_changed": 0.7307137345679012,
+   "corr": 0.9551274110437634,
+   "flags": []
+  },
+  {
+   "effect_id": "analog.hue_shift",
+   "mean": 149.61663126118827,
+   "std": 36.96911845665092,
+   "black_frac": 0.0,
+   "white_frac": 0.001888503086419753,
+   "palette_ratio": 0.9395812752939677,
+   "hf_ratio": 1.1561186748383638,
+   "luma_diff": 3.2115782067901235,
+   "chroma_diff": 5.873018880401235,
+   "pixels_changed": 0.895167824074074,
+   "corr": 0.995840566502626,
+   "flags": []
+  },
+  {
+   "effect_id": "dithering.kmeans",
+   "mean": 146.93302267322525,
+   "std": 36.66588863230721,
+   "black_frac": 0.0,
+   "white_frac": 0.0,
+   "palette_ratio": 8.497710929118469e-05,
+   "hf_ratio": 7.276254726191167,
+   "luma_diff": 7.070530904320988,
+   "chroma_diff": 2.8827929758230453,
+   "pixels_changed": 0.9287172067901235,
+   "corr": 0.9669431881450817,
+   "flags": []
+  },
+  {
+   "effect_id": "dithering.jarvis_judice_ninke",
+   "mean": 147.31119791666663,
+   "std": 125.95144475990207,
+   "black_frac": 0.4223090277777778,
+   "white_frac": 0.5776909722222222,
+   "palette_ratio": 2.1244277322796172e-05,
+   "hf_ratio": 118.46054612107858,
+   "luma_diff": 114.03015632677469,
+   "chroma_diff": 3.806504164737655,
+   "pixels_changed": 0.998443287037037,
+   "corr": 0.29286438669702525,
+   "flags": []
+  },
+  {
+   "effect_id": "analog.scan_drift",
+   "mean": 146.89001180169754,
+   "std": 36.153474698112184,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 0.9980030379316571,
+   "hf_ratio": 1.0317929781784565,
+   "luma_diff": 3.474639754243827,
+   "chroma_diff": 1.6389765093878603,
+   "pixels_changed": 0.6497993827160494,
+   "corr": 0.9851745913058947,
+   "flags": []
+  },
+  {
+   "effect_id": "color.brightness_contrast",
+   "mean": 146.72155449344135,
+   "std": 36.15894635342237,
+   "black_frac": 0.0,
+   "white_frac": 0.0017804783950617284,
+   "palette_ratio": 0.7845936500855082,
+   "hf_ratio": 1.02461142037681,
+   "luma_diff": 0.1506769405864198,
+   "chroma_diff": 0.15114860365226337,
+   "pixels_changed": 0.0,
+   "corr": 0.9999702416565119,
+   "flags": []
+  },
+  {
+   "effect_id": "glitch.databend",
+   "mean": 142.73668036805554,
+   "std": 37.820738042124866,
+   "black_frac": 0.0,
+   "white_frac": 0.0013271604938271606,
+   "palette_ratio": 2.8321489648725873,
+   "hf_ratio": 15.253540424449621,
+   "luma_diff": 12.000354572916665,
+   "chroma_diff": 14.883723241126543,
+   "pixels_changed": 0.4121778549382716,
+   "corr": 0.7391889866991747,
+   "flags": []
+  },
+  {
+   "effect_id": "pixel_geo.pixel_sort",
+   "mean": 146.87223143402778,
+   "std": 36.1544465623889,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 0.9690557547501911,
+   "luma_diff": 6.18816605941358,
+   "chroma_diff": 2.023810816615226,
+   "pixels_changed": 0.45906057098765435,
+   "corr": 0.9426034363587242,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.frame_sort_by_size",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.0,
+   "luma_diff": 0.0,
+   "chroma_diff": 0.0,
+   "pixels_changed": 0.0,
+   "corr": 1.0,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.frame_hold",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.0,
+   "luma_diff": 0.0,
+   "chroma_diff": 0.0,
+   "pixels_changed": 0.0,
+   "corr": 1.0,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.iframe_removal_advanced",
+   "mean": 146.87223143402778,
+   "std": 36.154446562388905,
+   "black_frac": 0.0,
+   "white_frac": 0.0017824074074074075,
+   "palette_ratio": 1.0,
+   "hf_ratio": 1.0,
+   "luma_diff": 0.0,
+   "chroma_diff": 0.0,
+   "pixels_changed": 0.0,
+   "corr": 1.0,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.motion_transfer",
+   "mean": 146.43186571527778,
+   "std": 36.07318181473961,
+   "black_frac": 0.0,
+   "white_frac": 0.0012133487654320987,
+   "palette_ratio": 0.9380516873267264,
+   "hf_ratio": 0.8084418053854225,
+   "luma_diff": 1.9330678337191356,
+   "chroma_diff": 1.1602893028549386,
+   "pixels_changed": 0.32664158950617284,
+   "corr": 0.9946607349221702,
+   "flags": []
+  },
+  {
+   "effect_id": "glitch.byte_flip",
+   "mean": 144.10187176350308,
+   "std": 38.82329998911645,
+   "black_frac": 0.0,
+   "white_frac": 0.0011786265432098765,
+   "palette_ratio": 2.655247867605664,
+   "hf_ratio": 12.935144074318616,
+   "luma_diff": 9.540320650462961,
+   "chroma_diff": 12.247834677983539,
+   "pixels_changed": 0.35413387345679015,
+   "corr": 0.799947004210685,
+   "flags": []
+  }
+ ],
+ "videos": [
+  {
+   "effect_id": "glitch.edge_stretch",
+   "frames": 12,
+   "mean_min": 124.91883680555556,
+   "mean_max": 125.62065972222223,
+   "std_min": 63.473675784517155,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.890842013888889,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.cross_video",
+   "frames": 12,
+   "mean_min": 125.21495225694444,
+   "mean_max": 125.89529079861111,
+   "std_min": 63.609569676364856,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.711046006944445,
+   "flags": []
+  },
+  {
+   "effect_id": "audio_reactive.audio_dither",
+   "frames": 12,
+   "mean_min": 90.67534722222223,
+   "mean_max": 91.54709201388889,
+   "std_min": 68.76355495109401,
+   "black_max": 0.15592447916666666,
+   "white_max": 0.0,
+   "delta_max": 8.185546875,
+   "flags": []
+  },
+  {
+   "effect_id": "pixel_geo.slice_shift_advanced",
+   "frames": 12,
+   "mean_min": 125.24359809027777,
+   "mean_max": 125.92903645833333,
+   "std_min": 63.53249142550291,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.742078993055555,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.beat_hold",
+   "frames": 12,
+   "mean_min": 125.21506076388889,
+   "mean_max": 125.89431423611111,
+   "std_min": 63.60510053959182,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.719292534722222,
+   "flags": []
+  },
+  {
+   "effect_id": "analog.scanlines",
+   "frames": 12,
+   "mean_min": 106.50575086805556,
+   "mean_max": 107.06043836805556,
+   "std_min": 54.261491752778696,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 6.729166666666667,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.classic",
+   "frames": 12,
+   "mean_min": 125.20616319444444,
+   "mean_max": 125.9091796875,
+   "std_min": 63.61777474678315,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.742404513888889,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.frame_reverse",
+   "frames": 12,
+   "mean_min": 125.56174045138889,
+   "mean_max": 125.84982638888889,
+   "std_min": 63.66647057413376,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.787109375,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.mirror",
+   "frames": 12,
+   "mean_min": 125.21516927083333,
+   "mean_max": 126.1484375,
+   "std_min": 63.570776914245116,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 8.051432291666666,
+   "flags": []
+  },
+  {
+   "effect_id": "color.rgb_shift",
+   "frames": 12,
+   "mean_min": 125.80034722222223,
+   "mean_max": 126.52745225694444,
+   "std_min": 63.94738355704372,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 8.115559895833334,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.zoom",
+   "frames": 12,
+   "mean_min": 124.97580295138889,
+   "mean_max": 125.87065972222223,
+   "std_min": 63.34744533640874,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.428276909722222,
+   "flags": []
+  },
+  {
+   "effect_id": "mask_isolate",
+   "frames": 12,
+   "mean_min": 125.21506076388889,
+   "mean_max": 125.89431423611111,
+   "std_min": 63.60510053959182,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.719292534722222,
+   "flags": []
+  },
+  {
+   "effect_id": "audio_reactive.beat_glitch",
+   "frames": 12,
+   "mean_min": 125.21506076388889,
+   "mean_max": 125.89420572916667,
+   "std_min": 63.60510053959182,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.719292534722222,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.profile_rainbow",
+   "frames": 12,
+   "mean_min": 180.58224826388889,
+   "mean_max": 181.48947482638889,
+   "std_min": 23.98863494971869,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 3.0055338541666665,
+   "flags": []
+  },
+  {
+   "effect_id": "audio_reactive.spectrum",
+   "frames": 12,
+   "mean_min": 125.21506076388889,
+   "mean_max": 125.89431423611111,
+   "std_min": 63.60510053959182,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.719292534722222,
+   "flags": []
+  },
+  {
+   "effect_id": "analog.color_bleed",
+   "frames": 12,
+   "mean_min": 125.23643663194444,
+   "mean_max": 125.94032118055556,
+   "std_min": 63.67317823235916,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.959092881944445,
+   "flags": []
+  },
+  {
+   "effect_id": "dithering.error_diffusion_variants",
+   "frames": 12,
+   "mean_min": 124.09320746527777,
+   "mean_max": 124.89518229166667,
+   "std_min": 64.81981689979675,
+   "black_max": 0.004014756944444444,
+   "white_max": 0.0003255208333333333,
+   "delta_max": 11.6298828125,
+   "flags": []
+  },
+  {
+   "effect_id": "analog.tv_glitch",
+   "frames": 12,
+   "mean_min": 136.96451822916666,
+   "mean_max": 137.93858506944446,
+   "std_min": 62.89030401032838,
+   "black_max": 0.0,
+   "white_max": 0.0016276041666666667,
+   "delta_max": 9.716905381944445,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.profile_extreme",
+   "frames": 12,
+   "mean_min": 127.74880642361111,
+   "mean_max": 129.43359375,
+   "std_min": 58.07411105542175,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 23.3876953125,
+   "flags": []
+  },
+  {
+   "effect_id": "audio_reactive.waveform",
+   "frames": 12,
+   "mean_min": 125.21506076388889,
+   "mean_max": 125.89420572916667,
+   "std_min": 63.60510053959182,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.719292534722222,
+   "flags": []
+  },
+  {
+   "effect_id": "dithering.halftone",
+   "frames": 12,
+   "mean_min": 187.67936197916666,
+   "mean_max": 188.30143229166666,
+   "std_min": 71.25612593687778,
+   "black_max": 0.017578125,
+   "white_max": 0.2248263888888889,
+   "delta_max": 5.733832465277778,
+   "flags": []
+  },
+  {
+   "effect_id": "audio_reactive.chromatic",
+   "frames": 12,
+   "mean_min": 125.21506076388889,
+   "mean_max": 125.89908854166667,
+   "std_min": 63.605544903230694,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.715494791666667,
+   "flags": []
+  },
+  {
+   "effect_id": "audio_reactive.spectral_shift",
+   "frames": 12,
+   "mean_min": 125.20920138888889,
+   "mean_max": 125.89822048611111,
+   "std_min": 63.60773502073293,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.72265625,
+   "flags": []
+  },
+  {
+   "effect_id": "analog.ghosting",
+   "frames": 12,
+   "mean_min": 124.88997395833333,
+   "mean_max": 125.5703125,
+   "std_min": 63.06397602389096,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.640299479166667,
+   "flags": []
+  },
+  {
+   "effect_id": "artistic.grayscale",
+   "frames": 12,
+   "mean_min": 123.27864583333333,
+   "mean_max": 123.96929253472223,
+   "std_min": 64.27373957388642,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.897677951388889,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.beat_smear",
+   "frames": 12,
+   "mean_min": 125.21506076388889,
+   "mean_max": 125.89431423611111,
+   "std_min": 63.60510053959182,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.719292534722222,
+   "flags": []
+  },
+  {
+   "effect_id": "dithering.custom_matrix",
+   "frames": 12,
+   "mean_min": 124.76519097222223,
+   "mean_max": 125.80447048611111,
+   "std_min": 50.671301646347125,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.605685763888889,
+   "flags": []
+  },
+  {
+   "effect_id": "artistic.posterize",
+   "frames": 12,
+   "mean_min": 110.58973524305556,
+   "mean_max": 111.25596788194444,
+   "std_min": 56.32008931075225,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 6.861111111111111,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.shuffle",
+   "frames": 12,
+   "mean_min": 125.22992621527777,
+   "mean_max": 125.91688368055556,
+   "std_min": 63.61810477206672,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.873480902777778,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.iframe_removal",
+   "frames": 12,
+   "mean_min": 125.25314670138889,
+   "mean_max": 125.86414930555556,
+   "std_min": 63.66260982314697,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.612630208333333,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.combine",
+   "frames": 12,
+   "mean_min": 125.22157118055556,
+   "mean_max": 125.89984809027777,
+   "std_min": 63.6141122035093,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.716254340277778,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.optical_flow",
+   "frames": 12,
+   "mean_min": 125.20941840277777,
+   "mean_max": 125.88487413194444,
+   "std_min": 63.31960088105245,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 8.00412326388889,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.stop",
+   "frames": 12,
+   "mean_min": 125.20865885416667,
+   "mean_max": 125.8984375,
+   "std_min": 63.61637423201802,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.73046875,
+   "flags": []
+  },
+  {
+   "effect_id": "dithering.line_screen",
+   "frames": 12,
+   "mean_min": 164.65570746527777,
+   "mean_max": 166.07107204861111,
+   "std_min": 91.12357731121553,
+   "black_max": 0.026801215277777776,
+   "white_max": 0.4717881944444444,
+   "delta_max": 10.115668402777779,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.rise",
+   "frames": 12,
+   "mean_min": 125.24609375,
+   "mean_max": 125.85492621527777,
+   "std_min": 63.6603978339212,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.443793402777778,
+   "flags": []
+  },
+  {
+   "effect_id": "noise.gaussian",
+   "frames": 12,
+   "mean_min": 124.49370659722223,
+   "mean_max": 125.19487847222223,
+   "std_min": 60.982342367499875,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.508463541666667,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.bloom",
+   "frames": 12,
+   "mean_min": 125.21809895833333,
+   "mean_max": 125.88802083333333,
+   "std_min": 63.618679991168044,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.714735243055555,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.delay",
+   "frames": 12,
+   "mean_min": 125.20377604166667,
+   "mean_max": 125.91937934027777,
+   "std_min": 63.71587206552679,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.053927951388889,
+   "flags": []
+  },
+  {
+   "effect_id": "audio_reactive.pixelate",
+   "frames": 12,
+   "mean_min": 125.21506076388889,
+   "mean_max": 125.89887152777777,
+   "std_min": 63.608377488436545,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.713107638888889,
+   "flags": []
+  },
+  {
+   "effect_id": "pixel_geo.anaglyph",
+   "frames": 12,
+   "mean_min": 126.13856336805556,
+   "mean_max": 126.87586805555556,
+   "std_min": 64.5029110370705,
+   "black_max": 0.00010850694444444444,
+   "white_max": 0.0,
+   "delta_max": 8.45627170138889,
+   "flags": []
+  },
+  {
+   "effect_id": "audio_reactive.bass_pulse",
+   "frames": 12,
+   "mean_min": 125.21506076388889,
+   "mean_max": 125.89431423611111,
+   "std_min": 63.60510053959182,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.719292534722222,
+   "flags": []
+  },
+  {
+   "effect_id": "color.channel_swap",
+   "frames": 12,
+   "mean_min": 123.76204427083333,
+   "mean_max": 125.29969618055556,
+   "std_min": 61.8193354403191,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 6.482855902777778,
+   "flags": []
+  },
+  {
+   "effect_id": "color.invert",
+   "frames": 12,
+   "mean_min": 127.31781684027777,
+   "mean_max": 128.02267795138889,
+   "std_min": 63.78044901113383,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.765625,
+   "flags": []
+  },
+  {
+   "effect_id": "color.historical_palettes",
+   "frames": 12,
+   "mean_min": 143.29937065972223,
+   "mean_max": 144.61371527777777,
+   "std_min": 43.45490112384128,
+   "black_max": 0.013129340277777778,
+   "white_max": 0.0,
+   "delta_max": 7.23046875,
+   "flags": []
+  },
+  {
+   "effect_id": "noise.fractal",
+   "frames": 12,
+   "mean_min": 124.47309027777777,
+   "mean_max": 125.14670138888889,
+   "std_min": 58.98951885191348,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.273871527777778,
+   "flags": []
+  },
+  {
+   "effect_id": "analog.chromatic_aberration",
+   "frames": 12,
+   "mean_min": 124.97146267361111,
+   "mean_max": 125.78342013888889,
+   "std_min": 72.1679322735648,
+   "black_max": 0.126953125,
+   "white_max": 0.022352430555555556,
+   "delta_max": 8.420572916666666,
+   "flags": []
+  },
+  {
+   "effect_id": "color.lut_grading",
+   "frames": 12,
+   "mean_min": 125.21506076388889,
+   "mean_max": 125.89431423611111,
+   "std_min": 63.60510053959182,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.719292534722222,
+   "flags": []
+  },
+  {
+   "effect_id": "noise.salt_pepper",
+   "frames": 12,
+   "mean_min": 125.19064670138889,
+   "mean_max": 125.81119791666667,
+   "std_min": 61.388365377089784,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.445963541666667,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.buffer",
+   "frames": 12,
+   "mean_min": 125.22265625,
+   "mean_max": 125.92003038194444,
+   "std_min": 63.67063308226959,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 6.999348958333333,
+   "flags": []
+  },
+  {
+   "effect_id": "artistic.solarize",
+   "frames": 12,
+   "mean_min": 4.638129340277778,
+   "mean_max": 7.221896701388889,
+   "std_min": 15.201211807755437,
+   "black_max": 0.8706597222222222,
+   "white_max": 0.0,
+   "delta_max": 3.953884548611111,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.profile_smear",
+   "frames": 12,
+   "mean_min": 125.68001302083333,
+   "mean_max": 126.62000868055556,
+   "std_min": 57.367235426055935,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 6.229166666666667,
+   "flags": []
+  },
+  {
+   "effect_id": "pixel_geo.pixelate",
+   "frames": 12,
+   "mean_min": 125.06195746527777,
+   "mean_max": 125.86349826388889,
+   "std_min": 63.89691841042464,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 8.234483506944445,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.profile_glitch",
+   "frames": 12,
+   "mean_min": 128.00477430555554,
+   "mean_max": 128.57161458333334,
+   "std_min": 59.47208235497192,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 12.423394097222221,
+   "flags": []
+  },
+  {
+   "effect_id": "analog.vhs",
+   "frames": 12,
+   "mean_min": 124.95768229166667,
+   "mean_max": 125.65451388888889,
+   "std_min": 62.160817643194285,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.611002604166667,
+   "flags": []
+  },
+  {
+   "effect_id": "pixel_geo.mirror_slices",
+   "frames": 12,
+   "mean_min": 124.64724392361111,
+   "mean_max": 125.25520833333333,
+   "std_min": 35.54112352737418,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.873155381944445,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.shear",
+   "frames": 12,
+   "mean_min": 125.26161024305556,
+   "mean_max": 125.95562065972223,
+   "std_min": 63.46117873146441,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.7626953125,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.profile_bloom",
+   "frames": 12,
+   "mean_min": 127.94118923611111,
+   "mean_max": 128.68131510416666,
+   "std_min": 62.92179901507943,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.548394097222222,
+   "flags": []
+  },
+  {
+   "effect_id": "pixel_geo.block_shift",
+   "frames": 12,
+   "mean_min": 124.07063802083333,
+   "mean_max": 125.61729600694444,
+   "std_min": 63.76790582433613,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 8.051649305555555,
+   "flags": []
+  },
+  {
+   "effect_id": "composite.overlay",
+   "frames": 12,
+   "mean_min": 125.20789930555556,
+   "mean_max": 125.90147569444444,
+   "std_min": 63.6100292988369,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.707139756944445,
+   "flags": []
+  },
+  {
+   "effect_id": "noise.uniform",
+   "frames": 12,
+   "mean_min": 124.84852430555556,
+   "mean_max": 125.55859375,
+   "std_min": 61.71144610693978,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.599609375,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.vibrate",
+   "frames": 12,
+   "mean_min": 125.39040798611111,
+   "mean_max": 126.07779947916667,
+   "std_min": 62.95517228457166,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 12.399848090277779,
+   "flags": []
+  },
+  {
+   "effect_id": "analog.hue_shift",
+   "frames": 12,
+   "mean_min": 122.15939670138889,
+   "mean_max": 122.61838107638889,
+   "std_min": 42.36732671652979,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.915907118055555,
+   "flags": []
+  },
+  {
+   "effect_id": "dithering.kmeans",
+   "frames": 12,
+   "mean_min": 124.90125868055556,
+   "mean_max": 125.46647135416667,
+   "std_min": 61.866490821749096,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 6.158637152777778,
+   "flags": []
+  },
+  {
+   "effect_id": "analog.scan_drift",
+   "frames": 12,
+   "mean_min": 125.26909722222223,
+   "mean_max": 125.98697916666667,
+   "std_min": 63.60931884289674,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.722439236111111,
+   "flags": []
+  },
+  {
+   "effect_id": "color.brightness_contrast",
+   "frames": 12,
+   "mean_min": 125.06651475694444,
+   "mean_max": 125.76291232638889,
+   "std_min": 63.48686163322416,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.7138671875,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.frame_sort_by_size",
+   "frames": 12,
+   "mean_min": 125.24978298611111,
+   "mean_max": 125.912109375,
+   "std_min": 63.72543525189281,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.454318576388889,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.frame_hold",
+   "frames": 12,
+   "mean_min": 125.20670572916667,
+   "mean_max": 125.21310763888889,
+   "std_min": 63.714545778925576,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 0.007161458333333333,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.iframe_removal_advanced",
+   "frames": 12,
+   "mean_min": 125.21506076388889,
+   "mean_max": 125.89431423611111,
+   "std_min": 63.60510053959182,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.719292534722222,
+   "flags": []
+  },
+  {
+   "effect_id": "datamoshing.motion_transfer",
+   "frames": 12,
+   "mean_min": 125.1982421875,
+   "mean_max": 125.90266927083333,
+   "std_min": 63.46756269740795,
+   "black_max": 0.0,
+   "white_max": 0.0,
+   "delta_max": 7.540798611111111,
+   "flags": []
+  }
+ ],
+ "adherence": [
+  {
+   "effect_id": "glitch.edge_stretch",
+   "category": "Glitch",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "datamoshing.cross_video",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "audio_reactive.audio_dither",
+   "category": "AudioReactive",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "pixel_geo.slice_shift_advanced",
+   "category": "PixelGeometry",
+   "metric": "luma_diff",
+   "value": 7.1195474297839505,
+   "claim": "must rearrange pixels",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "dithering.random_noise",
+   "category": "Dithering",
+   "metric": "palette_ratio",
+   "value": 2.1244277322796172e-05,
+   "claim": "must quantise the palette",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "dithering.bayer",
+   "category": "Dithering",
+   "metric": "palette_ratio",
+   "value": 2.1244277322796172e-05,
+   "claim": "must quantise the palette",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "datamoshing.beat_hold",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "analog.scanlines",
+   "category": "Analog",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "dithering.atkinson",
+   "category": "Dithering",
+   "metric": "palette_ratio",
+   "value": 2.1244277322796172e-05,
+   "claim": "must quantise the palette",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "datamoshing.classic",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "datamoshing.frame_reverse",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "datamoshing.mirror",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "dithering.palette",
+   "category": "Dithering",
+   "metric": "palette_ratio",
+   "value": 4.2488554645592343e-05,
+   "claim": "must quantise the palette",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "color.rgb_shift",
+   "category": "Color",
+   "metric": "luma_diff",
+   "value": 0.7879254359567902,
+   "claim": "must alter colour",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "datamoshing.zoom",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "glitch.crc_mismatch",
+   "category": "Glitch",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "mask_isolate",
+   "category": "Segmentation",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "audio_reactive.beat_glitch",
+   "category": "AudioReactive",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "datamoshing.profile_rainbow",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "audio_reactive.spectrum",
+   "category": "AudioReactive",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "analog.color_bleed",
+   "category": "Analog",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "glitch.byte_insert",
+   "category": "Glitch",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "dithering.floyd_steinberg",
+   "category": "Dithering",
+   "metric": "palette_ratio",
+   "value": 2.1244277322796172e-05,
+   "claim": "must quantise the palette",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "dithering.error_diffusion_variants",
+   "category": "Dithering",
+   "metric": "palette_ratio",
+   "value": 2.1244277322796172e-05,
+   "claim": "must quantise the palette",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "analog.tv_glitch",
+   "category": "Analog",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "datamoshing.profile_extreme",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "dithering.sierra",
+   "category": "Dithering",
+   "metric": "palette_ratio",
+   "value": 2.1244277322796172e-05,
+   "claim": "must quantise the palette",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "audio_reactive.waveform",
+   "category": "AudioReactive",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "dithering.halftone",
+   "category": "Dithering",
+   "metric": "palette_ratio",
+   "value": 2.1244277322796172e-05,
+   "claim": "must quantise the palette",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "audio_reactive.chromatic",
+   "category": "AudioReactive",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "audio_reactive.spectral_shift",
+   "category": "AudioReactive",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "analog.ghosting",
+   "category": "Analog",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "artistic.grayscale",
+   "category": "Artistic",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "datamoshing.beat_smear",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "color.lift_gamma_gain",
+   "category": "Color",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "pixel_geo.wave_distort",
+   "category": "PixelGeometry",
+   "metric": "luma_diff",
+   "value": 5.698944067901234,
+   "claim": "must rearrange pixels",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "dithering.custom_matrix",
+   "category": "Dithering",
+   "metric": "palette_ratio",
+   "value": 2.1244277322796172e-05,
+   "claim": "must quantise the palette",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "dithering.ordered_variants",
+   "category": "Dithering",
+   "metric": "palette_ratio",
+   "value": 2.1244277322796172e-05,
+   "claim": "must quantise the palette",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "artistic.posterize",
+   "category": "Artistic",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "datamoshing.shuffle",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "datamoshing.iframe_removal",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "dithering.auto_palette",
+   "category": "Dithering",
+   "metric": "palette_ratio",
+   "value": 8.497710929118469e-05,
+   "claim": "must quantise the palette",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "glitch.png_chunk",
+   "category": "Glitch",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "datamoshing.combine",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "datamoshing.optical_flow",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "datamoshing.stop",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "glitch.byte_reverse",
+   "category": "Glitch",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "dithering.line_screen",
+   "category": "Dithering",
+   "metric": "palette_ratio",
+   "value": 2.1244277322796172e-05,
+   "claim": "must quantise the palette",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "dithering.burkes",
+   "category": "Dithering",
+   "metric": "palette_ratio",
+   "value": 2.1244277322796172e-05,
+   "claim": "must quantise the palette",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "datamoshing.rise",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "dithering.riemersma",
+   "category": "Dithering",
+   "metric": "palette_ratio",
+   "value": 2.1244277322796172e-05,
+   "claim": "must quantise the palette",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "noise.gaussian",
+   "category": "Noise",
+   "metric": "hf_ratio",
+   "value": 14.465186886809926,
+   "claim": "must add high-frequency detail",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "datamoshing.bloom",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "datamoshing.delay",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "audio_reactive.pixelate",
+   "category": "AudioReactive",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "pixel_geo.anaglyph",
+   "category": "PixelGeometry",
+   "metric": "luma_diff",
+   "value": 1.2801868827160496,
+   "claim": "must rearrange pixels",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "audio_reactive.bass_pulse",
+   "category": "AudioReactive",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "color.channel_swap",
+   "category": "Color",
+   "metric": "luma_diff",
+   "value": 3.326302010030864,
+   "claim": "must alter colour",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "dithering.stucki",
+   "category": "Dithering",
+   "metric": "palette_ratio",
+   "value": 2.1244277322796172e-05,
+   "claim": "must quantise the palette",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "color.invert",
+   "category": "Color",
+   "metric": "luma_diff",
+   "value": 67.12599858564815,
+   "claim": "must alter colour",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "glitch.macroblock_glitch",
+   "category": "Glitch",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "glitch.byte_zero",
+   "category": "Glitch",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "color.historical_palettes",
+   "category": "Color",
+   "metric": "luma_diff",
+   "value": 15.20106651273148,
+   "claim": "must alter colour",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "noise.fractal",
+   "category": "Noise",
+   "metric": "hf_ratio",
+   "value": 21.168781657173383,
+   "claim": "must add high-frequency detail",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "dithering.blue_noise",
+   "category": "Dithering",
+   "metric": "palette_ratio",
+   "value": 2.1244277322796172e-05,
+   "claim": "must quantise the palette",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "glitch.jpeg_quantize",
+   "category": "Glitch",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "analog.chromatic_aberration",
+   "category": "Analog",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "color.lut_grading",
+   "category": "Color",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "pixel_geo.kaleidoscope",
+   "category": "PixelGeometry",
+   "metric": "luma_diff",
+   "value": 36.401541545524694,
+   "claim": "must rearrange pixels",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "noise.salt_pepper",
+   "category": "Noise",
+   "metric": "hf_ratio",
+   "value": 8.08456306212289,
+   "claim": "must add high-frequency detail",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "glitch.slice_shift",
+   "category": "Glitch",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "datamoshing.buffer",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "artistic.solarize",
+   "category": "Artistic",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "datamoshing.profile_smear",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "glitch.sorting_glitch",
+   "category": "Glitch",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "pixel_geo.pixelate",
+   "category": "PixelGeometry",
+   "metric": "luma_diff",
+   "value": 3.4365825250771604,
+   "claim": "must rearrange pixels",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "datamoshing.profile_glitch",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "analog.vhs",
+   "category": "Analog",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "pixel_geo.mirror_slices",
+   "category": "PixelGeometry",
+   "metric": "luma_diff",
+   "value": 7.812591022376543,
+   "claim": "must rearrange pixels",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "datamoshing.shear",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "datamoshing.profile_bloom",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "pixel_geo.block_shift",
+   "category": "PixelGeometry",
+   "metric": "luma_diff",
+   "value": 5.769700386959876,
+   "claim": "must rearrange pixels",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "dithering.threshold",
+   "category": "Dithering",
+   "metric": "palette_ratio",
+   "value": 2.1244277322796172e-05,
+   "claim": "must quantise the palette",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "composite.overlay",
+   "category": "Color",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "artistic.vaporwave",
+   "category": "Artistic",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "noise.uniform",
+   "category": "Noise",
+   "metric": "hf_ratio",
+   "value": 7.018726058163123,
+   "claim": "must add high-frequency detail",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "datamoshing.vibrate",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "analog.hue_shift",
+   "category": "Analog",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "dithering.kmeans",
+   "category": "Dithering",
+   "metric": "palette_ratio",
+   "value": 8.497710929118469e-05,
+   "claim": "must quantise the palette",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "dithering.jarvis_judice_ninke",
+   "category": "Dithering",
+   "metric": "palette_ratio",
+   "value": 2.1244277322796172e-05,
+   "claim": "must quantise the palette",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "analog.scan_drift",
+   "category": "Analog",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "color.brightness_contrast",
+   "category": "Color",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "glitch.databend",
+   "category": "Glitch",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "pixel_geo.pixel_sort",
+   "category": "PixelGeometry",
+   "metric": "luma_diff",
+   "value": 6.18816605941358,
+   "claim": "must rearrange pixels",
+   "verdict": "OK"
+  },
+  {
+   "effect_id": "datamoshing.frame_sort_by_size",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "datamoshing.frame_hold",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "datamoshing.iframe_removal_advanced",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "datamoshing.motion_transfer",
+   "category": "Datamoshing",
+   "verdict": "not asserted"
+  },
+  {
+   "effect_id": "glitch.byte_flip",
+   "category": "Glitch",
+   "verdict": "not asserted"
+  }
+ ],
+ "audio": [
+  {
+   "effect": "audio_reactive_audio_dither",
+   "frames": 48,
+   "beat_delta": 2.639467592592593,
+   "other_delta": 2.404644590435606,
+   "reacts": true
+  },
+  {
+   "effect": "audio_reactive_bass_pulse",
+   "frames": 48,
+   "beat_delta": 12.871310763888888,
+   "other_delta": 3.3925756589330804,
+   "reacts": true
+  },
+  {
+   "effect": "audio_reactive_beat_glitch",
+   "frames": 48,
+   "beat_delta": 5.080367476851851,
+   "other_delta": 2.400824652777778,
+   "reacts": true
+  },
+  {
+   "effect": "audio_reactive_chromatic",
+   "frames": 48,
+   "beat_delta": 6.453197337962962,
+   "other_delta": 2.6493055555555554,
+   "reacts": true
+  },
+  {
+   "effect": "audio_reactive_pixelate",
+   "frames": 48,
+   "beat_delta": 14.249168113425926,
+   "other_delta": 5.398800011837121,
+   "reacts": true
+  },
+  {
+   "effect": "audio_reactive_spectral_shift",
+   "frames": 48,
+   "beat_delta": 2.118236400462963,
+   "other_delta": 2.162161162405303,
+   "reacts": true
+  },
+  {
+   "effect": "audio_reactive_spectrum",
+   "frames": 48,
+   "beat_delta": 4.972330729166667,
+   "other_delta": 2.5280761718750004,
+   "reacts": true
+  },
+  {
+   "effect": "audio_reactive_waveform",
+   "frames": 48,
+   "beat_delta": 2.2604166666666665,
+   "other_delta": 2.2529124250315657,
+   "reacts": true
+  }
+ ]
+}

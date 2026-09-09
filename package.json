@@ -37,7 +37,8 @@
     "archive:build": "node scripts/archive-build.mjs",
     "fetch:external": "node scripts/fetch-external-bins.mjs",
     "sam3:publish": "node scripts/publish-sam3-addon.mjs",
-    "build:mosh-sidecar": "python scripts/build-mosh-sidecar.py"
+    "build:mosh-sidecar": "python scripts/build-mosh-sidecar.py",
+    "audit:quality": "python evals/quality-audit.py"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",
