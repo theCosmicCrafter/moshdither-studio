@@ -63,21 +63,57 @@ const EXPORT_FORMATS = [
   { id: "bmp_seq", label: "BMP SEQ" },
 ] as const;
 
+/**
+ * The bitstream-datamosh modes offered to the user.
+ *
+ * The backend implements 33; this list had 13 -- and two of those thirteen
+ * (`bloom`, `void`) are among the seven that produce NOTHING on real footage,
+ * while 20 working ones including glide, sort, echo, noise, shift, sink, slice,
+ * mirror, shear, vibrate, stop and repeat were not offered at all. So the list
+ * was simultaneously too short and partly broken.
+ *
+ * Every mode below was run against real footage and verified to produce a
+ * playable file. Deliberately ABSENT:
+ *   * bloom, overlap, jiggle, void, reverse, invert, random -- the tomato
+ *     family. They corrupt the intermediate AVI so heavily that FFmpeg cannot
+ *     decode a frame, so the re-encode writes 0 bytes. `pulse` is the only one
+ *     of the eight that survives. Offering a mode that always fails is worse
+ *     than not offering it.
+ *   * combine, motion_transfer -- these need a second video / a motion source,
+ *     and there is no UI to supply one. They belong here once there is.
+ */
 const FFGITCH_MODES = [
-  { id: "classic", label: "Classic" },
-  { id: "classic2", label: "Classic 2" },
-  { id: "bloom", label: "Bloom" },
-  { id: "pulse", label: "Pulse" },
-  { id: "void", label: "Void" },
-  { id: "fluid", label: "Fluid" },
-  { id: "stretch", label: "Stretch" },
-  { id: "shuffle_basic", label: "Shuffle" },
-  { id: "rise", label: "Rise" },
-  { id: "water_bloom", label: "Water Bloom" },
-  { id: "zoom", label: "Zoom" },
-  { id: "delay", label: "Delay" },
-  { id: "buffer", label: "Buffer" },
+  { id: "classic", label: "Classic", group: "Frame stutter" },
+  { id: "classic2", label: "Classic 2", group: "Frame stutter" },
+  { id: "repeat", label: "Repeat", group: "Frame stutter" },
+  { id: "glide", label: "Glide", group: "Frame stutter" },
+  { id: "sort", label: "Sort", group: "Frame stutter" },
+  { id: "echo", label: "Echo", group: "Frame stutter" },
+  { id: "pulse", label: "Pulse", group: "Frame stutter" },
+
+  { id: "fluid", label: "Fluid", group: "Motion vector" },
+  { id: "stretch", label: "Stretch", group: "Motion vector" },
+  { id: "shuffle_basic", label: "Shuffle", group: "Motion vector" },
+  { id: "rise", label: "Rise", group: "Motion vector" },
+  { id: "water_bloom", label: "Water Bloom", group: "Motion vector" },
+
+  { id: "zoom", label: "Zoom", group: "Movement" },
+  { id: "slam zoom", label: "Slam Zoom", group: "Movement" },
+  { id: "shift", label: "Shift", group: "Movement" },
+  { id: "sink", label: "Sink", group: "Movement" },
+  { id: "slice", label: "Slice", group: "Movement" },
+  { id: "mirror", label: "Mirror", group: "Movement" },
+  { id: "shear", label: "Shear", group: "Movement" },
+  { id: "vibrate", label: "Vibrate", group: "Movement" },
+
+  { id: "delay", label: "Delay", group: "Time" },
+  { id: "buffer", label: "Buffer", group: "Time" },
+  { id: "stop", label: "Stop", group: "Time" },
+  { id: "invert-reverse", label: "Invert / Reverse", group: "Time" },
+  { id: "noise", label: "Noise", group: "Time" },
 ];
+
+const FFGLITCH_GROUPS = Array.from(new Set(FFGITCH_MODES.map((m) => m.group)));
 
 export default function ExportPanel() {
   const effectStack = useAppStore((s) => s.effectStack);
@@ -104,13 +140,20 @@ export default function ExportPanel() {
     useBatchQueue();
   const [showQueue, setShowQueue] = useState(false);
 
-  const [format, setFormat] = useState<(typeof EXPORT_FORMATS)[number]["id"]>("mp4");
-  const [codec, setCodec] = useState("h264");
-  const [resolutionId, setResolutionId] = useState("source");
-  const [processingScaleId, setProcessingScaleId] = useState("auto");
-  const [quality, setQuality] = useState<"draft" | "good" | "best">("good");
-  const [fps, setFps] = useState(30);
-  const [includeAudio, setIncludeAudio] = useState(true);
+  const format = useAppStore((s) => s.exportFormat) as (typeof EXPORT_FORMATS)[number]["id"];
+  const setFormat = useAppStore((s) => s.setExportFormat);
+  const codec = useAppStore((s) => s.exportCodec);
+  const setCodec = useAppStore((s) => s.setExportCodec);
+  const resolutionId = useAppStore((s) => s.exportResolutionId);
+  const setResolutionId = useAppStore((s) => s.setExportResolutionId);
+  const processingScaleId = useAppStore((s) => s.exportProcessingScaleId);
+  const setProcessingScaleId = useAppStore((s) => s.setExportProcessingScaleId);
+  const quality = useAppStore((s) => s.exportQuality);
+  const setQuality = useAppStore((s) => s.setExportQuality);
+  const fps = useAppStore((s) => s.exportFps);
+  const setFps = useAppStore((s) => s.setExportFps);
+  const includeAudio = useAppStore((s) => s.exportIncludeAudio);
+  const setIncludeAudio = useAppStore((s) => s.setExportIncludeAudio);
   const ffglitchMode = useAppStore((s) => s.ffglitchMode);
   const [moshPreviewUrl, setMoshPreviewUrl] = useState<string | null>(null);
   const [moshPreviewBusy, setMoshPreviewBusy] = useState(false);
@@ -667,10 +710,14 @@ export default function ExportPanel() {
             color: "var(--text-primary)",
           }}
         >
-          {FFGITCH_MODES.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.label}
-            </option>
+          {FFGLITCH_GROUPS.map((g) => (
+            <optgroup key={g} label={g}>
+              {FFGITCH_MODES.filter((m) => m.group === g).map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
         <button

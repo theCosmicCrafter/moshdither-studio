@@ -137,6 +137,16 @@ export interface AppState {
    *  "classic" on every launch -- for what is arguably the app's signature
    *  capability. */
   ffglitchMode: string;
+  /** Export settings. These were component-local useState in ExportPanel, the
+   *  same fallacy as ffglitchMode one line below them: undocking or closing the
+   *  panel silently reset every one of a user's export choices. */
+  exportFormat: string;
+  exportCodec: string;
+  exportResolutionId: string;
+  exportProcessingScaleId: string;
+  exportQuality: "draft" | "good" | "best";
+  exportFps: number;
+  exportIncludeAudio: boolean;
 
   // Effects
   allEffects: EffectMeta[];
@@ -297,6 +307,13 @@ export interface AppState {
   setUseCpuPreview: (v: boolean) => void;
   setPreviewAutoExact: (v: boolean) => void;
   setFfglitchMode: (v: string) => void;
+  setExportFormat: (v: string) => void;
+  setExportCodec: (v: string) => void;
+  setExportResolutionId: (v: string) => void;
+  setExportProcessingScaleId: (v: string) => void;
+  setExportQuality: (v: "draft" | "good" | "best") => void;
+  setExportFps: (v: number) => void;
+  setExportIncludeAudio: (v: boolean) => void;
   setAllEffects: (effects: EffectMeta[]) => void;
   setActiveCategory: (cat: string) => void;
   setSearchQuery: (q: string) => void;
@@ -511,6 +528,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   useCpuPreview: false,
   previewAutoExact: true,
   ffglitchMode: "classic",
+  exportFormat: "mp4",
+  exportCodec: "h264",
+  exportResolutionId: "source",
+  exportProcessingScaleId: "auto",
+  exportQuality: "good",
+  exportFps: 30,
+  exportIncludeAudio: true,
   allEffects: [],
   activeCategory: "dithering",
   searchQuery: "",
@@ -641,6 +665,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   setUseCpuPreview: (v) => set({ useCpuPreview: v }),
   setPreviewAutoExact: (v) => set({ previewAutoExact: v }),
   setFfglitchMode: (v) => set({ ffglitchMode: v }),
+  setExportFormat: (v) => set({ exportFormat: v }),
+  setExportCodec: (v) => set({ exportCodec: v }),
+  setExportResolutionId: (v) => set({ exportResolutionId: v }),
+  setExportProcessingScaleId: (v) => set({ exportProcessingScaleId: v }),
+  setExportQuality: (v) => set({ exportQuality: v }),
+  setExportFps: (v) => set({ exportFps: v }),
+  setExportIncludeAudio: (v) => set({ exportIncludeAudio: v }),
   setAllEffects: (effects) => set({ allEffects: effects }),
   setActiveCategory: (cat) => set({ activeCategory: cat }),
   setSearchQuery: (q) => set({ searchQuery: q }),

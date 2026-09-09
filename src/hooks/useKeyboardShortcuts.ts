@@ -2,6 +2,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useRef } from "react";
 import { useAppStore } from "../store";
 import { eventToKeyString, getAllBindings } from "../utils/keyboardShortcuts";
+import { getCommands } from "../utils/commands";
 import { useProject } from "./useProject";
 
 /**
@@ -91,8 +92,22 @@ export function useKeyboardShortcuts() {
           case "accessibility:zoomOut":
             useAppStore.getState().setZoom(useAppStore.getState().zoom - 0.25);
             break;
-          default:
+          default: {
+            // Anything else came from the Keyboard Shortcuts editor, which
+            // lists the COMMAND PALETTE registry -- ids like "undo",
+            // "play-pause", "clear-stack" -- while the seven built-in bindings
+            // above use a namespaced set ("edit:undo", "app:open"). So every
+            // shortcut a user recorded wrote an id this switch had no case for
+            // and was silently swallowed. Worse, bindings are matched by KEY,
+            // so recording Ctrl+Z against "undo" could win the lookup over
+            // "edit:undo" and disable a working default.
+            //
+            // Dispatching through the registry makes the editor honest: every
+            // command it offers is now actually bindable.
+            const cmd = getCommands().find((c) => c.id === matchedCommand);
+            if (cmd) cmd.action();
             break;
+          }
         }
         return;
       }

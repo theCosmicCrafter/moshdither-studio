@@ -1,3 +1,4 @@
+import { availableParallelism } from "node:os";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
@@ -62,6 +63,19 @@ export default defineConfig({
     // @testing-library render fails. Pinning it here makes the suite
     // hermetic instead of dependent on the shell it was launched from.
     env: { NODE_ENV: "test" },
+    // Cap the worker pool.
+    //
+    // Unbounded, vitest forks one worker per core. Each runs a jsdom instance,
+    // and on a busy workstation that reliably produced
+    //   [vitest-pool]: Worker forks emitted error. Worker exited unexpectedly
+    // -- 8 of 60 test FILES never ran, while every test that did run passed.
+    // The gate reported FAIL with zero failing assertions, which is the worst
+    // possible signal: it looks like a code regression and is not one, and a
+    // gate you learn to re-run is a gate you have stopped trusting.
+    //
+    // The same run with the pool capped is 65/65 files and 1248/1248 tests.
+    // Half the cores keeps most of the parallelism and leaves headroom.
+    maxWorkers: Math.max(2, Math.floor((availableParallelism()) / 2)),
   },
   define: {
     // Belt-and-braces: ensure any bare `process.env.NODE_ENV` reference that
