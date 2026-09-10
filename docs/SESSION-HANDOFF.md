@@ -95,6 +95,36 @@ unsafe (a live process may own one). The safe route is `--runtime-tmpdir` in
 the two build-sidecar scripts plus a reaper beside `cleanup_stale_sam3_bridge`,
 and that is an owner decision under never-delete-recycle-instead.
 
+**Export memory: the budget is honest and the peak is lower.** The budget
+bounded only the decoded Vec while the pipeline held two or three copies of
+the clip beside it -- "4 GiB budget" meant 8-12 GiB in use, which on a laptop
+is the commit limit and an abort with no log line. Two changes:
+
+* *Lower the real peak.* The effects loop is in place: each frame is written
+  back where it came from, and the mask is blended per frame against that
+  frame's own previous contents, so the whole-sequence clone for the blend
+  and the collect-into-a-second-Vec per effect are both gone (non-temporal:
+  3x -> 1x plus one frame per rayon worker). The reader buffers are taken,
+  not cloned. The temporal branch keeps 2x -- `Effect::process_video` returns
+  an owned segment, so its input necessarily survives until the swap.
+* *Plan for what remains.* `PIPELINE_PEAK_COPIES = 2` divides the budget ONCE
+  in `adaptive_decode_memory_budget`; the plan, the decode cap and the still
+  cap all read that per-copy number. The cap is raised to 8 GiB TOTAL so a
+  machine with 16 GiB or more available keeps today's 4 GiB per-copy rung and
+  today's real peak; small machines finally get a plan they can complete.
+  Two reviewers independently caught that the first draft divided twice
+  (B/4 for an animated still); `budget_honesty_tests` pins the arithmetic.
+
+Found on the way and fixed: **every masked export with Frame Stutter (or any
+frame-repeating datamosh) PANICKED** -- `prev[i]` indexed the pre-effect
+clone past its end, because those effects return more frames than they take.
+Now the blend is skipped with a warning to the UI ("changes the clip length,
+so the mask could not be applied") instead of crashing the export.
+
+`PeakWorkingSet64` should now be at most ~2x the logged "memory budget" line
+(which is the per-copy number). Streaming decode is the self-contained
+follow-up that would remove the transient decode copy.
+
 **Export cancel is real now.** The flag was polled only inside the encoder's
 write loop -- the last 15 % of an export -- so Cancel during decode or effects
 changed nothing but the status text, while the job kept the export slot and

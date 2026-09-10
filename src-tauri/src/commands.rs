@@ -300,24 +300,77 @@ fn process_frame_with_mask(
     mode: &str,
 ) -> std::result::Result<Frame, String> {
     let blend_needed = needs_mask_blend(effect, mask);
-    let previous = if blend_needed {
-        Some(working.clone())
-    } else {
-        None
-    };
 
     let clamped_params = crate::effects::clamp_for_effect(effect, params);
     let mut result = effect
         .process_frame(working, mask, &clamped_params)
         .map_err(|e| e.to_string())?;
 
+    // `working` is borrowed for the whole call and process_frame returns an
+    // owned Frame, so the blend can read the caller's frame directly. This
+    // used to clone it first -- a full frame per call, for nothing.
     if blend_needed {
-        if let (Some(previous), Some(m)) = (previous.as_ref(), mask) {
-            blend_mask(&mut result, previous, m, mode).map_err(|e| e.to_string())?;
+        if let Some(m) = mask {
+            blend_mask(&mut result, working, m, mode).map_err(|e| e.to_string())?;
         }
     }
 
     Ok(result)
+}
+
+/// Process one frame IN PLACE, blending the mask against the frame's own
+/// previous contents.
+///
+/// The export loop used to `collect()` every effect's output into a second
+/// Vec while the input Vec was still alive, and to clone the whole sequence
+/// beforehand for the mask blend -- three copies of the clip for one masked
+/// effect. Writing each frame back where it came from drops the input the
+/// instant the output replaces it, so the extra memory is one frame per
+/// rayon worker instead of one more copy of the clip.
+///
+/// No clamp here: the export loop clamps the static map once and re-clamps
+/// after keyframe/audio injection; a third pass per frame would be waste.
+fn apply_frame_in_place(
+    effect: &dyn Effect,
+    frame: &mut Frame,
+    mask: Option<&Mask>,
+    params: &serde_json::Map<String, serde_json::Value>,
+    blend: bool,
+    mode: &str,
+) -> std::result::Result<(), String> {
+    let mut out = effect
+        .process_frame(&*frame, mask, params)
+        .map_err(|e| e.to_string())?;
+    if let (true, Some(m)) = (blend, mask) {
+        blend_mask(&mut out, &*frame, m, mode).map_err(|e| e.to_string())?;
+    }
+    *frame = out;
+    Ok(())
+}
+
+/// Blend a mask into `frames` against the matching frame of `previous`.
+///
+/// For the temporal branch only: a temporal effect returns an owned segment,
+/// so the input survives as `previous` anyway and can be the blend source.
+/// Zip semantics -- the caller checks the lengths match first; a
+/// frame-repeating datamosh returns MORE frames than it was given, and the
+/// old `prev[i]` indexed straight past the end and panicked.
+fn blend_segment_against(
+    previous: &[Frame],
+    frames: &mut [Frame],
+    mask: &Mask,
+    mode: &str,
+    cancel: &AtomicBool,
+) -> std::result::Result<(), String> {
+    frames
+        .par_iter_mut()
+        .zip(previous.par_iter())
+        .try_for_each(|(f, p)| {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
+            }
+            blend_mask(f, p, mask, mode).map_err(|e| e.to_string())
+        })
 }
 
 #[derive(serde::Deserialize)]
@@ -1129,10 +1182,10 @@ fn export_video_blocking(
         let requested_frames =
             ((target_duration * effective_fps).round().max(1.0) as usize).min(MAX_EXPORT_FRAMES);
         let frame_bytes = segment.frames[0].data.len().max(1);
-        // Half the budget: the effects stage collects a second copy of the whole
-        // sequence per non-temporal effect (see the rayon collect below), so the
-        // decoded Vec must leave room for one more of itself.
-        let max_by_budget = (((budget_bytes / 2) as usize) / frame_bytes).max(1);
+        // The budget is already per-copy: adaptive_decode_memory_budget divides
+        // by PIPELINE_PEAK_COPIES. Dividing again here (as this once did) was a
+        // double division that halved every animated still for nothing.
+        let max_by_budget = ((budget_bytes as usize) / frame_bytes).max(1);
         let target_frames = requested_frames.min(max_by_budget);
         if target_frames < requested_frames {
             let secs = target_frames as f64 / effective_fps.max(1.0);
@@ -1238,13 +1291,21 @@ fn export_video_blocking(
 
         // Check if mask blending is needed (avoids expensive clone)
         let needs_mask_blend = !effect.handles_masking() && active_mask.is_some();
+        let mode = call.mask_mode.as_deref().unwrap_or("inside");
 
-        // Store previous frames only if needed for mask blending
-        let previous_frames: Option<Vec<crate::effects::Frame>> = if needs_mask_blend {
-            Some(segment.frames.clone())
-        } else {
-            None
-        };
+        // Memory. Every branch below writes its result back into `segment`
+        // rather than building a second sequence beside it, and the mask is
+        // blended per frame against that frame's own previous contents. The
+        // old shape cloned the whole clip for the blend, collected a whole new
+        // clip per effect, and then blended the two -- three copies of the
+        // clip in flight for one masked effect, against a budget that only
+        // ever counted one. The temporal branch is the exception: a temporal
+        // effect returns an owned segment, so its input necessarily survives
+        // until the swap. That 2x is structural and PIPELINE_PEAK_COPIES in
+        // ffmpeg/mod.rs is what the memory plan divides by to allow for it.
+        //
+        // On an Err the segment may be half-processed in place. Nothing reads
+        // it after that -- the export bails -- so do not add a retry on top.
 
         // A temporal effect takes the whole segment through one
         // `Effect::process_video` call with no cancel hook, so a cancel during
@@ -1267,24 +1328,58 @@ fn export_video_blocking(
             if let Some(ref audio) = audio_data {
                 audio.inject_timeline_params(&mut temporal_params);
             }
-            segment = effect
+            let processed = effect
                 .process_video(&segment, active_mask, &temporal_params)
                 .map_err(|e| e.to_string())?;
+            let previous = std::mem::replace(&mut segment, processed);
+            if needs_mask_blend {
+                if let Some(m) = active_mask {
+                    if previous.frames.len() == segment.frames.len() {
+                        blend_segment_against(
+                            &previous.frames,
+                            &mut segment.frames,
+                            m,
+                            mode,
+                            &cancel,
+                        )?;
+                    } else {
+                        // A frame-repeating datamosh returns more frames than it
+                        // was given, so there is no one-to-one "before" frame to
+                        // blend against. This used to index `prev[i]` past the
+                        // end and PANIC: every masked export with Frame Stutter
+                        // failed. Skipping the blend and saying so is the honest
+                        // result; zipping would blend the wrong frames and leave
+                        // the tail unmasked.
+                        let message = format!(
+                            "{} changes the clip length, so the mask could not be \
+                             applied to it. The effect still ran on the whole frame.",
+                            call.effect_id
+                        );
+                        tracing::warn!("{}", message);
+                        let pct = 5 + ((effect_idx + 1) as f64 / stack.len() as f64 * 80.0) as u32;
+                        let _ = app_handle.emit(
+                            "export-progress",
+                            serde_json::json!({
+                                "stage": "effects",
+                                "progress": pct,
+                                "warning": message
+                            }),
+                        );
+                    }
+                }
+            }
+            // `previous` drops here: the input copy is gone before the next effect.
         } else if audio_data.is_none() {
-            // Non-temporal, no audio: parallelize frame processing with rayon
+            // Non-temporal, no audio: parallelize frame processing with rayon,
+            // in place.
             let mask_ref = active_mask;
             let params_ref = &params;
             let keyframes_ref = call.keyframes.as_ref();
             let fps_val = segment.fps;
-            let results: std::result::Result<Vec<_>, _> = segment
-                .frames
-                .par_iter()
-                .enumerate()
-                .map(|(idx, frame)| {
+            segment.frames.par_iter_mut().enumerate().try_for_each(
+                |(idx, frame)| -> std::result::Result<(), String> {
                     if cancel.load(Ordering::Relaxed) {
-                        return Err(crate::error::AppError::Generic(
-                            crate::ffmpeg::EXPORT_CANCELLED.to_string(),
-                        ));
+                        return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
                     }
                     let t = time_offset + idx as f64 / fps_val;
                     let mut frame_params = params_ref.clone();
@@ -1294,17 +1389,23 @@ fn export_video_blocking(
                     if inject_keyframe_params(keyframes_ref, &mut frame_params, t) {
                         frame_params = crate::effects::clamp_for_effect(effect, &frame_params);
                     }
-                    effect.process_frame(frame, mask_ref, &frame_params)
-                })
-                .collect();
-            segment.frames = results.map_err(|e| e.to_string())?;
+                    apply_frame_in_place(
+                        effect,
+                        frame,
+                        mask_ref,
+                        &frame_params,
+                        needs_mask_blend,
+                        mode,
+                    )
+                },
+            )?;
         } else {
-            // Non-temporal with audio: process frame-by-frame with per-frame audio params
-            let mut frames = Vec::with_capacity(segment.frames.len());
+            // Non-temporal with audio: sequential, because AudioBindingSmoother
+            // carries state from frame to frame. Still in place.
             let fps_val = segment.fps;
             let mut smoother = AudioBindingSmoother::default();
             let dt = 1.0 / (fps_val as f64).max(1.0);
-            for (frame_idx, frame) in segment.frames.iter().enumerate() {
+            for (frame_idx, frame) in segment.frames.iter_mut().enumerate() {
                 if cancel.load(Ordering::Relaxed) {
                     return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
                 }
@@ -1328,36 +1429,15 @@ fn export_video_blocking(
                         frame_params = crate::effects::clamp_for_effect(effect, &frame_params);
                     }
                 }
-                frames.push(
-                    effect
-                        .process_frame(frame, active_mask, &frame_params)
-                        .map_err(|e| e.to_string())?,
-                );
+                apply_frame_in_place(
+                    effect,
+                    frame,
+                    active_mask,
+                    &frame_params,
+                    needs_mask_blend,
+                    mode,
+                )?;
             }
-            segment = crate::effects::VideoSegment {
-                frames,
-                fps: segment.fps,
-            };
-        }
-
-        // Post-process mask blend for effects that don't handle masking internally
-        if let (Some(prev), Some(m)) = (previous_frames, active_mask) {
-            let mode = call.mask_mode.as_deref().unwrap_or("inside");
-            tracing::debug!(
-                "Blending mask (mode={}) for {} frames",
-                mode,
-                segment.frames.len()
-            );
-            segment
-                .frames
-                .par_iter_mut()
-                .enumerate()
-                .try_for_each(|(i, frame)| {
-                    if cancel.load(Ordering::Relaxed) {
-                        return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
-                    }
-                    blend_mask(frame, &prev[i], m, mode).map_err(|e| e.to_string())
-                })?;
         }
 
         tracing::debug!("Export effect {}/{} done", effect_idx + 1, stack.len());
@@ -3949,5 +4029,176 @@ mod audio_binding_tests {
         let b = &call.audio_bindings.unwrap()["amount"];
         assert_eq!(b.source, "bass");
         assert_eq!(b.output_max, 8.0);
+    }
+}
+
+#[cfg(test)]
+mod in_place_mask_tests {
+    use super::*;
+    use crate::effects::EffectRegistry;
+
+    fn grey(width: u32, height: u32) -> Frame {
+        let mut data = Vec::with_capacity((width * height * 4) as usize);
+        for _ in 0..(width * height) {
+            data.extend_from_slice(&[128, 128, 128, 255]);
+        }
+        Frame {
+            width,
+            height,
+            data,
+        }
+    }
+
+    /// Left half masked OUT (0), right half masked IN (255).
+    fn half_mask(width: u32, height: u32) -> Mask {
+        let mut data = Vec::with_capacity((width * height) as usize);
+        for _y in 0..height {
+            for x in 0..width {
+                data.push(if x < width / 2 { 0 } else { 255 });
+            }
+        }
+        Mask {
+            width,
+            height,
+            data,
+        }
+    }
+
+    fn left_right(frame: &Frame) -> (Vec<u8>, Vec<u8>) {
+        let w = frame.width as usize;
+        let mut left = Vec::new();
+        let mut right = Vec::new();
+        for y in 0..frame.height as usize {
+            for x in 0..w {
+                let i = (y * w + x) * 4;
+                let px = &frame.data[i..i + 4];
+                if x < w / 2 {
+                    left.extend_from_slice(px);
+                } else {
+                    right.extend_from_slice(px);
+                }
+            }
+        }
+        (left, right)
+    }
+
+    /// The regression test for deleting the clone in process_frame_with_mask:
+    /// the masked-out half must be BYTE-IDENTICAL to the input, and the other
+    /// half must have changed.
+    #[test]
+    fn process_frame_with_mask_leaves_the_masked_out_half_untouched() {
+        let reg = EffectRegistry::new();
+        let invert = reg.get("color.invert").expect("color.invert is registered");
+        let input = grey(8, 4);
+        let mask = half_mask(8, 4);
+        let (in_left, in_right) = left_right(&input);
+
+        let out = process_frame_with_mask(
+            invert,
+            &input,
+            Some(&mask),
+            &serde_json::Map::new(),
+            "inside",
+        )
+        .expect("processes");
+        let (out_left, out_right) = left_right(&out);
+
+        assert_eq!(out_left, in_left, "masked-out half must be byte-identical");
+        assert_ne!(
+            out_right, in_right,
+            "masked-in half must have been inverted"
+        );
+        assert_eq!(out_right[0], 127, "128 inverted is 127");
+    }
+
+    /// Same contract for the in-place path the export loop uses.
+    #[test]
+    fn apply_frame_in_place_mutates_only_the_masked_in_half() {
+        let reg = EffectRegistry::new();
+        let invert = reg.get("color.invert").expect("registered");
+        let mut frame = grey(8, 4);
+        let (in_left, in_right) = left_right(&frame);
+        let mask = half_mask(8, 4);
+
+        apply_frame_in_place(
+            invert,
+            &mut frame,
+            Some(&mask),
+            &serde_json::Map::new(),
+            true,
+            "inside",
+        )
+        .expect("processes in place");
+        let (out_left, out_right) = left_right(&frame);
+
+        assert_eq!(out_left, in_left);
+        assert_ne!(out_right, in_right);
+    }
+
+    /// With blend off, the whole frame changes -- proves `blend` is honoured.
+    #[test]
+    fn apply_frame_in_place_without_blend_changes_everything() {
+        let reg = EffectRegistry::new();
+        let invert = reg.get("color.invert").expect("registered");
+        let mut frame = grey(8, 4);
+        let (in_left, _) = left_right(&frame);
+        let mask = half_mask(8, 4);
+
+        apply_frame_in_place(
+            invert,
+            &mut frame,
+            Some(&mask),
+            &serde_json::Map::new(),
+            false,
+            "inside",
+        )
+        .expect("processes");
+        let (out_left, _) = left_right(&frame);
+        // color.invert handles no masking itself and is told not to blend, so
+        // the masked-out half is inverted too.
+        assert_ne!(out_left, in_left);
+    }
+
+    /// Zip semantics: a previous shorter than frames must not panic. The
+    /// old `prev[i]` did, on every masked Frame Stutter export.
+    #[test]
+    fn blend_segment_against_never_indexes_past_previous() {
+        let previous: Vec<Frame> = (0..3).map(|_| grey(4, 4)).collect();
+        let mut frames: Vec<Frame> = (0..9).map(|_| grey(4, 4)).collect();
+        let mask = half_mask(4, 4);
+        let cancel = AtomicBool::new(false);
+        blend_segment_against(&previous, &mut frames, &mask, "inside", &cancel)
+            .expect("zip must stop at the shorter side, not panic");
+    }
+
+    #[test]
+    fn blend_segment_against_blends_equal_length_sequences() {
+        let previous: Vec<Frame> = (0..2).map(|_| grey(4, 4)).collect();
+        // "processed" frames: all white. After the blend the masked-out left
+        // half must be grey again (previous) and the right half stay white.
+        let mut frames: Vec<Frame> = (0..2)
+            .map(|_| Frame {
+                width: 4,
+                height: 4,
+                data: vec![255u8; 4 * 4 * 4],
+            })
+            .collect();
+        let mask = half_mask(4, 4);
+        let cancel = AtomicBool::new(false);
+        blend_segment_against(&previous, &mut frames, &mask, "inside", &cancel).expect("blends");
+        let (left, right) = left_right(&frames[1]);
+        assert_eq!(left[0], 128);
+        assert_eq!(right[0], 255);
+    }
+
+    #[test]
+    fn blend_segment_against_honours_cancel() {
+        let previous: Vec<Frame> = (0..4).map(|_| grey(4, 4)).collect();
+        let mut frames: Vec<Frame> = (0..4).map(|_| grey(4, 4)).collect();
+        let mask = half_mask(4, 4);
+        let cancel = AtomicBool::new(true);
+        let err = blend_segment_against(&previous, &mut frames, &mask, "inside", &cancel)
+            .expect_err("a set cancel flag must abort");
+        assert!(err.contains("cancelled"));
     }
 }

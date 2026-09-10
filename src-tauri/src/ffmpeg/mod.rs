@@ -13,31 +13,56 @@ use std::sync::{Arc, OnceLock};
 
 /// Default ceiling on the number of decoded frames kept in memory.
 const DEFAULT_DECODE_MAX_FRAMES: usize = 10_000;
-/// Hard cap on the per-decode memory budget (bytes). We cap at 4 GiB
-/// because `cmd.output()` buffers all of FFmpeg's stdout in memory before
-/// we chunk it into frames, so peak memory is ~2× the raw RGBA size
-/// (stdout buffer + frame Vec). A 4 GiB budget means peak ~8 GiB, which
-/// is safe on most 16 GiB systems. Systems with more RAM still benefit
-/// because auto-scale will pick native resolution for shorter clips.
-const MAX_DECODE_MEMORY_BUDGET_BYTES: u64 = 4 * 1024 * 1024 * 1024;
-/// Floor on the per-decode memory budget. Even on low-RAM systems we still
-/// allow at least 1 GiB so short 1080p clips work.
+/// Hard cap on the memory the export plan may commit to in TOTAL (bytes),
+/// before division by [`PIPELINE_PEAK_COPIES`]. 8 GiB total is 4 GiB per
+/// copy, which is the rung the plan already chose on a machine with 16 GiB
+/// or more available -- so large machines keep today's resolution and
+/// today's real peak, while small ones finally get a plan they can
+/// complete instead of one that overcommits 2-3x and aborts.
+const MAX_DECODE_MEMORY_BUDGET_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+/// Floor on the TOTAL budget before division. Even on low-RAM systems the
+/// plan gets 1 GiB total -- 512 MiB per copy -- so short 1080p clips work.
 const MIN_DECODE_MEMORY_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
-/// Fraction of available system RAM to use as the decode budget. We use
-/// 50% of *available* (not total) RAM to leave headroom for the OS, GPU
-/// drivers, the WebView, the FFmpeg subprocess, and the effect-processing
-/// pipeline (which clones frames during rayon parallel processing).
-/// This matches the After Effects recommendation of reserving 20-30% of
-/// RAM for the OS and background apps, with an extra margin because our
-/// stdout-buffering pattern doubles peak memory.
+/// Fraction of *available* (not total) RAM the export may use, leaving
+/// headroom for the OS, GPU drivers, the WebView and the FFmpeg subprocess.
 const DECODE_MEMORY_FRACTION_OF_RAM: f64 = 0.50;
-
-/// Compute the per-decode memory budget based on available system RAM.
+/// How many copies of the decoded clip the pipeline holds at its peak.
 ///
-/// Returns a value in bytes between [`MIN_DECODE_MEMORY_BUDGET_BYTES`] and
-/// [`MAX_DECODE_MEMORY_BUDGET_BYTES`]. The budget is `total_ram * 0.60`,
-/// clamped to that range. This replaces the old fixed 2 GiB cap which
-/// silently truncated 4K video to ~64 frames.
+/// The budget used to bound only the decoded Vec while the pipeline held two
+/// or three copies beside it, so "4 GiB budget" meant 8-12 GiB in use. The
+/// copies now, after the effects loop went in place:
+///
+/// * decode: the raw stdout buffer plus the frames Vec while chunking --
+///   transient, 2x, until streaming decode replaces read_to_end;
+/// * a temporal effect: its input segment plus the owned one it returns --
+///   structural, 2x, because `Effect::process_video` returns a new segment;
+/// * non-temporal effects: 1x plus one frame per rayon worker.
+///
+/// So 2 is the honest multiplier for the common case. It is a FLOOR, not a
+/// ceiling: cross_video decodes a second clip inside the loop, and the
+/// repeat-based datamosh profiles return more frames than they were given.
+/// Divide by this ONCE, here; every consumer reads the result through
+/// `adaptive_decode_memory_budget`.
+const PIPELINE_PEAK_COPIES: u64 = 2;
+
+/// The per-copy budget for a given amount of available RAM: the fraction,
+/// clamped to [MIN, MAX], then divided by [`PIPELINE_PEAK_COPIES`]. The
+/// clamp happens BEFORE the division and is never re-applied after it, so
+/// on a tiny machine the plan is 512 MiB per copy and the real peak 1 GiB.
+fn budget_for(available: u64) -> u64 {
+    let total = ((available as f64 * DECODE_MEMORY_FRACTION_OF_RAM) as u64).clamp(
+        MIN_DECODE_MEMORY_BUDGET_BYTES,
+        MAX_DECODE_MEMORY_BUDGET_BYTES,
+    );
+    total / PIPELINE_PEAK_COPIES.max(1)
+}
+
+/// The per-copy memory budget for one export, from available system RAM.
+///
+/// "Per copy" is the point: the plan, the decode cap and the still-image
+/// cap all read this one number, and the pipeline holds
+/// [`PIPELINE_PEAK_COPIES`] of the clip at peak, so the real peak is that
+/// many times what is logged here.
 fn adaptive_decode_memory_budget() -> u64 {
     use sysinfo::System;
     let mut sys = System::new();
@@ -49,13 +74,9 @@ fn adaptive_decode_memory_budget() -> u64 {
     let available = sys.available_memory();
     if available == 0 {
         // Fallback if sysinfo can't read memory (rare/sandboxed envs).
-        return MIN_DECODE_MEMORY_BUDGET_BYTES;
+        return MIN_DECODE_MEMORY_BUDGET_BYTES / PIPELINE_PEAK_COPIES.max(1);
     }
-    let budget = (available as f64 * DECODE_MEMORY_FRACTION_OF_RAM) as u64;
-    budget.clamp(
-        MIN_DECODE_MEMORY_BUDGET_BYTES,
-        MAX_DECODE_MEMORY_BUDGET_BYTES,
-    )
+    budget_for(available)
 }
 
 /// Pick the largest scale (longest side in px) that allows decoding the
@@ -626,7 +647,8 @@ pub fn decode_video_cancellable(
     //
     // A warning is not a fix for that; it makes the loss visible. Removing the
     // limit outright is not safe either, since the decode is fully buffered in
-    // memory. The real fix is streaming decode, which is a larger change.
+    // memory. PIPELINE_PEAK_COPIES accounts for that transient copy in the
+    // plan; streaming decode, which would remove it, is the follow-up.
     if frames.len() == max_frames {
         tracing::warn!(
             "Decode stopped at the {}-frame limit ({:.1}s at {:.0} fps). \
@@ -1625,8 +1647,17 @@ fn output_with_timeout_cancellable(
     };
 
     join_readers(stdout_thread, stderr_thread);
-    let stdout = stdout_buf.lock().map(|g| g.clone()).unwrap_or_default();
-    let stderr = stderr_buf.lock().map(|g| g.clone()).unwrap_or_default();
+    // Take, do not clone: the readers are joined, nobody else reads these
+    // buffers, and a clone here was a transient second copy of the entire
+    // raw decode.
+    let stdout = stdout_buf
+        .lock()
+        .map(|mut g| std::mem::take(&mut *g))
+        .unwrap_or_default();
+    let stderr = stderr_buf
+        .lock()
+        .map(|mut g| std::mem::take(&mut *g))
+        .unwrap_or_default();
     Ok(std::process::Output {
         status,
         stdout,
@@ -3178,5 +3209,46 @@ mod aspect_preservation_tests {
 
         std::fs::remove_file(&src).ok();
         std::fs::remove_file(&out).ok();
+    }
+}
+
+#[cfg(test)]
+mod budget_honesty_tests {
+    use super::*;
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+
+    /// The budget is per COPY, and the pipeline holds PIPELINE_PEAK_COPIES of
+    /// the clip at peak. These pin the arithmetic so nobody divides twice --
+    /// the original fix did exactly that and halved every animated still.
+    #[test]
+    fn a_small_machine_gets_the_floor_divided_once() {
+        // 50% of 2 GiB = 1 GiB, clamped to the 1 GiB floor, then / 2.
+        assert_eq!(budget_for(2 * GIB), 512 * 1024 * 1024);
+    }
+
+    #[test]
+    fn a_mid_machine_gets_the_fraction_divided() {
+        // 50% of 12 GiB = 6 GiB, inside the clamp, then / 2 = 3 GiB.
+        assert_eq!(budget_for(12 * GIB), 3 * GIB);
+    }
+
+    #[test]
+    fn a_large_machine_is_capped_then_divided() {
+        // 50% of 40 GiB = 20 GiB, clamped to the 8 GiB cap, then / 2 = 4 GiB --
+        // the same per-copy rung the old 4 GiB cap produced, so big machines
+        // keep today's resolution and today's real peak.
+        assert_eq!(budget_for(40 * GIB), 4 * GIB);
+    }
+
+    #[test]
+    fn the_floor_is_not_reapplied_after_division() {
+        // If the floor were applied after dividing, a tiny machine would be
+        // told it has 1 GiB per copy and really use 2 GiB.
+        assert!(budget_for(1) < MIN_DECODE_MEMORY_BUDGET_BYTES);
+        assert_eq!(
+            budget_for(1),
+            MIN_DECODE_MEMORY_BUDGET_BYTES / PIPELINE_PEAK_COPIES
+        );
     }
 }
