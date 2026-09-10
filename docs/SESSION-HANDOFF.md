@@ -4,7 +4,7 @@ Living pass-down note. Update it at the end of every session and commit it.
 It lives in `docs/` on purpose: the previous handoff sat in `outputs/`, which is
 gitignored, so it never travelled with the branch.
 
-**Last updated:** 2026-09-10 · branch `docs/sam3-addon-published` (off master `b4972c2`)
+**Last updated:** 2026-09-10 02:30 · master `28c86bd` (PR #54 merged; CI, Security Gate and Secret Scan all green on master for the first time)
 
 ---
 
@@ -130,6 +130,22 @@ the point-tracker has a public ONNX export, not the text path. None of these
 should block the beta; (1) is the obvious add-on v2.
 
 ## MEMORY, ESCAPING, FIRST CI RUNS -- 2026-09-10 (this session)
+
+**Outcome:** everything below is merged as PR #54 (three commits, merge
+`28c86bd`). On master: CI green (first passing Linux `cargo test`), Security
+Gate green (Semgrep, Bandit, TruffleHog, CodeQL, Trivy, Snyk, cargo-deny,
+npm audit), Secret Scan green. Local: full 10-gate regression three times
+over the three commits. The rebuilt `mosh-cli` sidecar in `src-tauri/bin`
+carries the JS-mode scratch-dir fix; the installer picks it up on the next
+`tauri:build`.
+
+**Still open after this session** (unchanged from the release checklist
+unless noted): code signing; GPL corresponding-source tarballs; LUT
+provenance; the `_MEI` reaper decision; SAM3 add-on download
+cancel/resume/disk-space check; uninstall leaving 6.5 GB; add-on v2 (fp16
+checkpoint, evaluate SAM 3.1 against the loader first); a rebuilt
+`sam3-bridge` sidecar to carry the checkpoint-pin changes; the vendored
+`pymosh/container/riff.py` CodeQL note; the owner-side pagefile setting.
 
 **The datamosh "exit 4294967274" was the machine, not the code.** Both
 reported failures -- Classic via mosh-cli (`ffmpeg ... -> orig_in_*.avi`) and
