@@ -70,6 +70,47 @@ to end against a real clip with no system Python involved.
 the icons are all bundled. Effects, dithering, glitch, datamoshing, LUTs and
 export need nothing from the internet.
 
+## Session 2026-09-09 (night): cancel kills the tree; the scan finally excludes
+
+**Orphaned processes -- CONFIRMED empirically, then fixed.** mosh-cli and the
+SAM3 bridge are PyInstaller `--onefile` bundles: the exe the app spawns is a
+bootloader that spawns the real Python as a separate process, which spawns
+ffmpeg/ffgac/ffedit. `child.kill()` reached the bootloader only. Measured on
+this machine: `IsProcessInJob` false on all three, and killing the launcher
+left the Python child and ffmpeg encoding at full CPU (intermittently -- two
+of three runs happened to be clean, which is why the audit called it
+"unknown"). Fix: `proc::KillJob`, a kill-on-close Job Object the child is
+assigned to at spawn; every descendant inherits it and closing the handle
+terminates the lot. Used by `run_cancellable` (datamosh) and `Sam3Engine`.
+The `join_readers` on the early-return paths had to go too: `_job` drops at
+`return`, AFTER the join, and the join could not finish while the orphan held
+the pipe handles -- so the tree died only when the orphan finished on its own.
+Red-first: the tree test took 29.4 s on the unfixed tree, 1 s after.
+
+Not covered: non-Windows keeps the single-child kill. The `_MEI*` extraction
+directory still leaks on a kill -- TerminateProcess skips the bootloader's
+cleanup -- ~25 MB per mosh-cli cancel and **4.8 GB per SAM3 launch**; this
+machine had ten of them, **37.8 GB**. Sweeping `%TEMP%\_MEI*` blindly is
+unsafe (a live process may own one). The safe route is `--runtime-tmpdir` in
+the two build-sidecar scripts plus a reaper beside `cleanup_stale_sam3_bridge`,
+and that is an owner decision under never-delete-recycle-instead.
+
+**The pre-commit secret scan never excluded anything on Windows.** Its
+`--exclude-paths` patterns were `name/`, matched against backslash paths, so
+`recycling/`, `build-archive/` and `target/` were all scanned -- and TruffleHog
+errors on the .msi installers there ("brotli: excessive input"), which the
+script correctly reports as a FAILED scan and aborts the commit. Every commit
+today got through only because that error was flaky; one did not. Patterns are
+now `(^|[\/])name[\/]` and the scan takes 9 s instead of 35 s-2.5 min.
+
+**Time base.** Trim runs before the effects loop, so per-frame `idx / fps`
+counted from the in-point, while keyframes, the audio bake and the preview's
+shader time are all absolute. One `time_offset` now; the bake is looked up by
+TIME (it was indexed by the video's frame number, which also assumed equal fps).
+
+**Video mask tracking recycled** (ADR 0006): per-frame auto_mask with no
+identity, could not finish, rendered nowhere but the overlay.
+
 ## Session 2026-09-09 (latest): keyframes and audio bindings actually render
 
 Two controls the UI advertised prominently and the exported file ignored. Both

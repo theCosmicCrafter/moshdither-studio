@@ -126,11 +126,23 @@ else {
     # ~1 GB of third-party repositories and sam3_env ~5 GB of Python packages.
     # Anything found in them is someone else's test fixture, and including them
     # turns a short scan into a very long one.
+    # build-archive holds old .msi/.exe installers (gitignored). TruffleHog
+    # cannot decode an OLE-storage MSI -- it errors with "brotli: excessive
+    # input" -- and a decoder error is a non-zero exit, which the block below
+    # correctly reports as a FAILED scan and aborts the commit. That blocked a
+    # commit on 2026-09-09 over files that are not even tracked.
     $exclude = @("node_modules", "references", "sam3_env", "audit_venv", "sam3_repo",
                  "target", "dist", "test-results", "playwright-report", "recycling",
-                 "models", "outputs")
+                 "models", "outputs", "build-archive")
     $excludeFile = Join-Path ([System.IO.Path]::GetTempPath()) "moshdither-secret-scan-exclude.txt"
-    $exclude | ForEach-Object { "$_/" } | Set-Content -Path $excludeFile -Encoding UTF8
+    # --exclude-paths takes regexes matched against the path TruffleHog walks,
+    # which on Windows carries backslashes. A bare "name/" never matched those,
+    # so the recycling/ exclusion above was silently ineffective here. Match
+    # either separator.
+    # Single-quoted so PowerShell passes the backslashes through untouched; the
+    # class must reach TruffleHog as [\\/] -- backslash OR slash.
+    $sep = '[\\/]'
+    $exclude | ForEach-Object { '(^|' + $sep + ')' + $_ + $sep } | Set-Content -Path $excludeFile -Encoding UTF8
 
     Write-Host "Scanning working tree (excluding vendored and build directories)..." -ForegroundColor Cyan
     $scanArgs = @("filesystem", "$repoRoot", "--only-verified", "--no-update",

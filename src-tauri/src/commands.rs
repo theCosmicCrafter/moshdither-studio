@@ -2676,6 +2676,11 @@ fn find_python() -> Option<String> {
 /// process cannot deadlock on a full pipe buffer) with the addition of the
 /// cancel check, since this is the one subprocess path in the app a user
 /// can proactively cancel mid-run rather than only time out.
+///
+/// On Windows the child is placed in a kill-on-close Job Object, so a cancel
+/// or timeout takes down the whole process tree -- the PyInstaller bootloader,
+/// the Python it spawns and the ffmpeg that spawns -- not just the direct
+/// child. See `proc::KillJob`.
 fn run_cancellable(
     cmd: &mut Command,
     cancel: &AtomicBool,
@@ -2690,6 +2695,10 @@ fn run_cancellable(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("Failed to spawn process: {}", e))?;
+
+    // Put the child -- and everything it goes on to spawn -- in a job that
+    // dies when `_job` drops, i.e. on every return path below. See KillJob.
+    let _job = crate::proc::KillJob::new().filter(|j| j.assign(&child));
 
     let stdout = child
         .stdout
@@ -2734,13 +2743,21 @@ fn run_cancellable(
         if cancel.load(Ordering::Relaxed) {
             let _ = child.kill();
             let _ = child.wait_timeout(Duration::from_secs(10));
-            join_readers(stdout_thread, stderr_thread);
+            // Do NOT join the readers here. The job is dropped at `return`,
+            // AFTER a join -- and the join cannot finish while a surviving
+            // grandchild holds the inherited pipe handles. Joining first meant
+            // the tree died only when the orphan finished on its own. The
+            // JoinHandles detach at return instead.
             return Err("Cancelled by user".to_string());
         }
         if started.elapsed() > timeout {
             let _ = child.kill();
             let _ = child.wait_timeout(Duration::from_secs(10));
-            join_readers(stdout_thread, stderr_thread);
+            // Do NOT join the readers here. The job is dropped at `return`,
+            // AFTER a join -- and the join cannot finish while a surviving
+            // grandchild holds the inherited pipe handles. Joining first meant
+            // the tree died only when the orphan finished on its own. The
+            // JoinHandles detach at return instead.
             return Err(format!("Process timed out after {:?}", timeout));
         }
         match child.wait_timeout(poll_interval) {
@@ -2748,7 +2765,11 @@ fn run_cancellable(
             Err(e) if e.kind() == ErrorKind::TimedOut => continue,
             Err(e) => {
                 let _ = child.kill();
-                join_readers(stdout_thread, stderr_thread);
+                // Do NOT join the readers here. The job is dropped at `return`,
+                // AFTER a join -- and the join cannot finish while a surviving
+                // grandchild holds the inherited pipe handles. Joining first meant
+                // the tree died only when the orphan finished on its own. The
+                // JoinHandles detach at return instead.
                 return Err(format!("Failed to wait for process: {}", e));
             }
         }
@@ -3322,6 +3343,97 @@ mod run_cancellable_tests {
             c.arg("hello");
             c
         }
+    }
+
+    /// Cancelling must kill the WHOLE process tree, not just the direct child.
+    ///
+    /// mosh-cli is a PyInstaller --onefile bundle: the exe Rust spawns is a
+    /// bootloader that spawns the real Python as a SEPARATE process, which
+    /// then spawns ffmpeg/ffgac/ffedit. `child.kill()` reached only the
+    /// bootloader; measured on the dev machine, killing it left the Python
+    /// child and its ffmpeg running (IsProcessInJob = false on all three).
+    /// A cancelled datamosh kept encoding at full CPU, invisibly.
+    ///
+    /// The tree depth is arbitrary -- dev mode runs `python.exe mosh_cli.py`
+    /// directly with no bootloader, and python still spawns ffmpeg
+    /// grandchildren -- so the test builds a two-level tree of its own:
+    /// cmd (direct child) -> ping (grandchild) holding a redirected file.
+    /// Windows refuses to delete a file with an open handle, so being able
+    /// to delete the marker afterwards is direct proof the grandchild died.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn cancel_kills_the_whole_tree_not_just_the_direct_child() {
+        use std::sync::atomic::AtomicUsize;
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        // Relative and quote-free: cmd /C strips a quoted absolute path's
+        // outer quotes and the redirect then fails to create the file.
+        let marker = format!(
+            "moshdither-tree-{}-{}.marker",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        let marker_path = std::env::temp_dir().join(&marker);
+        let _ = std::fs::remove_file(&marker_path);
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_setter = Arc::clone(&cancel);
+        let watch = marker_path.clone();
+        // Flip cancel only once the grandchild is provably running (it has
+        // created the file), so the ordering is deterministic on a loaded
+        // gate machine rather than a fixed timer.
+        std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while !watch.exists() && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            cancel_setter.store(true, Ordering::Relaxed);
+        });
+
+        let mut cmd = crate::proc::command("cmd");
+        cmd.args(["/C", &format!("ping -n 30 127.0.0.1 > {marker}")])
+            .current_dir(std::env::temp_dir());
+        let started = std::time::Instant::now();
+        let result = run_cancellable(
+            &mut cmd,
+            &cancel,
+            Duration::from_secs(30),
+            Duration::from_millis(50),
+        );
+        let elapsed = started.elapsed();
+
+        // (a) The call returns promptly with the cancel error, rather than
+        // blocking on pipe readers the orphan still holds open.
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("cancelled run must not report success"),
+        };
+        assert!(err.contains("Cancelled"), "unexpected error: {err}");
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "cancel took {elapsed:?}; it should return well under the 30 s hang"
+        );
+
+        // (b) The grandchild is dead: the marker it held open can be deleted.
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let mut deleted = false;
+        while std::time::Instant::now() < deadline {
+            if std::fs::remove_file(&marker_path).is_ok() {
+                deleted = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        if !deleted {
+            // Do not leave a ping running for 30 s on a failed assertion.
+            let _ = crate::proc::command("taskkill")
+                .args(["/F", "/IM", "ping.exe"])
+                .output();
+            let _ = std::fs::remove_file(&marker_path);
+        }
+        assert!(
+            deleted,
+            "the grandchild (ping) still held the marker open after cancel: the tree survived"
+        );
     }
 
     #[test]

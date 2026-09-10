@@ -59,6 +59,14 @@ tauri-plugin-updater = "2.0.0"
 windows-sys = { version = "0.59", features = [
     "Win32_UI_Shell",
     "Win32_Foundation",
+    # Job objects, so cancelling a datamosh kills the whole process tree --
+    # the PyInstaller bootloader, the Python it spawns, and the ffmpeg that
+    # spawns. Killing only the direct child left the rest encoding.
+    "Win32_System_JobObjects",
+    # JOBOBJECT_EXTENDED_LIMIT_INFORMATION embeds Threading::IO_COUNTERS.
+    "Win32_System_Threading",
+    # CreateJobObjectW takes a SECURITY_ATTRIBUTES pointer.
+    "Win32_Security",
     "Win32_UI_WindowsAndMessaging",
     # SetUnhandledExceptionFilter, so hard faults (access violations, stack
     # overflows) are recorded to the log before the process dies. They never

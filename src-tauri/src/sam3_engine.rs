@@ -147,6 +147,13 @@ fn cleanup_stale_sam3_bridge() {
 
 pub struct Sam3Engine {
     child: Mutex<Option<std::process::Child>>,
+    /// Kill-on-close job the bridge lives in, so shutting it down also takes
+    /// out the Python the PyInstaller bootloader spawned. Same --onefile
+    /// build as mosh-cli, same orphan otherwise: `child.kill()` reached the
+    /// bootloader and the 3.4 GB model process kept running. None where a
+    /// job could not be created or assigned (logged); then it is the old
+    /// single-child kill.
+    job: Mutex<Option<crate::proc::KillJob>>,
     stdin: Mutex<ChildStdin>,
     rx: Mutex<Receiver<String>>,
     /// Serializes the entire send→receive cycle so concurrent callers
@@ -428,6 +435,7 @@ impl Sam3Engine {
             })?;
 
         write_sam3_pid(&child);
+        let job = crate::proc::KillJob::new().filter(|j| j.assign(&child));
 
         let mut stdin = child
             .stdin
@@ -537,6 +545,7 @@ impl Sam3Engine {
 
         Ok(Sam3Engine {
             child: Mutex::new(Some(child)),
+            job: Mutex::new(job),
             stdin: Mutex::new(stdin),
             rx: Mutex::new(rx),
             command_mutex: Mutex::new(()),
@@ -918,7 +927,10 @@ impl Sam3Engine {
             tracing::warn!("SAM3 graceful shutdown request failed: {}", e);
         }
         let mut child = self.child.lock().take();
-        Self::kill_child(&mut child)
+        let result = Self::kill_child(&mut child);
+        // Closing the job terminates whatever the bootloader spawned.
+        drop(self.job.lock().take());
+        result
     }
 
     /// Kill and reap the bridge child process with a bounded wait so we never
@@ -964,6 +976,7 @@ impl Drop for Sam3Engine {
     fn drop(&mut self) {
         let mut child = self.child.lock().take();
         let _ = Sam3Engine::kill_child(&mut child);
+        drop(self.job.lock().take());
     }
 }
 
