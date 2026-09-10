@@ -143,7 +143,7 @@ impl Effect for BrightnessContrast {
         let intercept = 0.5 * (1.0 - contrast_factor) + brightness;
 
         let mut data = input.data.clone();
-        for chunk in data.chunks_exact_mut(4) {
+        for chunk in data.as_chunks_mut::<4>().0.iter_mut() {
             let r = chunk[0] as f32 / 255.0;
             let g = chunk[1] as f32 / 255.0;
             let b = chunk[2] as f32 / 255.0;

@@ -405,7 +405,7 @@ mod tests {
         params.insert("head_switching".to_string(), json!(0.0));
         let effect = VhsEffect::new(0.0, 0.0);
         let result = effect.process_frame(&frame, None, &params).unwrap();
-        for chunk in result.data.chunks_exact(4) {
+        for chunk in result.data.as_chunks::<4>().0.iter() {
             assert!((chunk[0] as i16 - 128).abs() <= 1);
             assert!((chunk[1] as i16 - 128).abs() <= 1);
             assert!((chunk[2] as i16 - 128).abs() <= 1);

@@ -54,7 +54,7 @@ impl Effect for Posterize {
             .unwrap_or(self.bits as u64) as u8;
         let shift = 8 - bits;
         let mut data = input.data.clone();
-        for chunk in data.chunks_exact_mut(4) {
+        for chunk in data.as_chunks_mut::<4>().0.iter_mut() {
             for c in &mut chunk[..3] {
                 *c = (*c >> shift) << shift;
             }

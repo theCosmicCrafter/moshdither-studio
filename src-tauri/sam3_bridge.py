@@ -415,6 +415,8 @@ def _ensure_checkpoint():
                 try:
                     os.remove(stale)
                 except OSError:
+                    # Best effort: the digest error below is the message that
+                    # matters, and it already tells the user where the file is.
                     pass
             raise RuntimeError(
                 "SAM3 checkpoint digest mismatch: expected sha256 "
@@ -441,6 +443,8 @@ def _ensure_checkpoint():
             try:
                 os.remove(partial)
             except OSError:
+                # The copy failed before the .part existed, or the disk is in
+                # no state to delete it either; the original error is re-raised.
                 pass
             raise
     log("SAM3 checkpoint ready at %s", dest)

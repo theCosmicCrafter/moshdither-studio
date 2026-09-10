@@ -55,10 +55,23 @@ jobs:
             --severity=ERROR \
             --error \
             --sarif > semgrep.sarif
+      # Semgrep reports "0 findings" for a match under a `# nosemgrep:` marker
+      # but still writes it to the SARIF with `suppressions: [{kind:
+      # inSource}]`, and GitHub code scanning does not honour SARIF
+      # suppressions: each one became an open "Semgrep OSS" alert that failed
+      # the PR check (first seen on PR #54 -- the two signed-off markers in
+      # mosh_cli.py and download-sam3-checkpoint.py). The suppression and its
+      # rationale live next to the code; drop those results here so the
+      # upload carries only what the scan itself counts.
+      - name: Drop results suppressed in source
+        run: |
+          jq '.runs[].results |= map(select((.suppressions // []) | length == 0))' \
+            semgrep.sarif > semgrep.upload.sarif
+          echo "kept $(jq '[.runs[].results[]] | length' semgrep.upload.sarif) of $(jq '[.runs[].results[]] | length' semgrep.sarif) results"
       - uses: github/codeql-action/upload-sarif@v3
         continue-on-error: true
         with:
-          sarif_file: semgrep.sarif
+          sarif_file: semgrep.upload.sarif
           category: semgrep
 
   # ── CODEQL ───────────────────────────────────────────────────

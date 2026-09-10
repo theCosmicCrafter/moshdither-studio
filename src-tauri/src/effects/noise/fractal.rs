@@ -234,7 +234,9 @@ mod tests {
 
         let clipped = out
             .data
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[0] < 4 || p[0] > 251)
             .count() as f64
             / (w * h) as f64;

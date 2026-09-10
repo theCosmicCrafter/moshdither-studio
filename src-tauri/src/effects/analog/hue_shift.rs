@@ -53,7 +53,7 @@ impl Effect for HueShift {
             .and_then(|v| v.as_f64())
             .unwrap_or(self.degrees as f64) as f32;
         let mut data = input.data.clone();
-        for chunk in data.chunks_exact_mut(4) {
+        for chunk in data.as_chunks_mut::<4>().0.iter_mut() {
             let (h, s, v) = rgb_to_hsv(chunk[0], chunk[1], chunk[2]);
             let new_h = (h + deg / 360.0).rem_euclid(1.0);
             let (r, g, b) = hsv_to_rgb(new_h, s, v);

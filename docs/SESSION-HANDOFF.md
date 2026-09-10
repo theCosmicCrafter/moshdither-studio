@@ -226,6 +226,25 @@ the `e2e-real-backend` CI job had its own stub list missing `mosh-cli`.
 - Security Gate / TruffleHog: `base: master` on a push to master is
   `master..master`; the action refuses it. Removed, matching the
   secret-scan job that passes.
+- PR #54's own first run, three more: (1) CI's stable clippy is **1.98**
+  (local was 1.97.1) and it added `chunks_exact_to_as_chunks` -- 66 sites
+  rewritten to `as_chunks::<4>().0.iter()` / `as_chunks_mut::<4>().0
+  .iter_mut()` by script, because clippy's own `--fix` suggestion for the
+  `_mut` case is wrong (`.iter()`) and rolls itself back; plus two
+  Linux-only lints in the `KillJob` stub path. `rustup toolchain install
+  1.98.0 --component clippy` and `cargo +1.98.0 clippy --all-targets` is
+  how to see what CI sees without changing the default toolchain.
+  (2) Semgrep's SARIF carries `nosemgrep`-suppressed matches with
+  `suppressions: inSource`; GitHub does not honour that, so the two
+  signed-off markers became open "Semgrep OSS" alerts. The job now drops
+  suppressed results with `jq` before upload. (3) CodeQL flagged the TS
+  edge-whitespace escaper (a trailing `.replace` that adds backslashes
+  reads as an escaper that forgot them) -- rewritten as a scan -- and two
+  `except: pass` blocks in the bridge, now commented.
+- The bridge edits (pin, atomic copy, eviction) affect only the *fallback*
+  download; the published add-on v1 sidecar predates them and never takes
+  that path because the add-on installs the checkpoint. They ship with the
+  next sidecar build.
 - CodeQL: `watermark.ts` (above), `external_script.py` uninitialised
   `script_path` (now raises), `publish-sam3-addon.mjs` stat-then-open race
   (`fstatSync` on the open descriptor). Left: vendored `pymosh/container/

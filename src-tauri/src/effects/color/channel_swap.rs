@@ -68,7 +68,7 @@ impl Effect for ChannelSwap {
         ];
         let (r_idx, g_idx, b_idx) = map[mode % 6];
 
-        for chunk in data.chunks_exact_mut(4) {
+        for chunk in data.as_chunks_mut::<4>().0.iter_mut() {
             let r = chunk[r_idx];
             let g = chunk[g_idx];
             let b = chunk[b_idx];

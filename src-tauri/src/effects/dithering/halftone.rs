@@ -279,7 +279,7 @@ mod screen_angle_tests {
     #[test]
     fn output_is_still_bilevel_and_preserves_alpha() {
         let out = run(30.0, 6);
-        for px in out.data.chunks_exact(4) {
+        for px in out.data.as_chunks::<4>().0.iter() {
             assert!(
                 px[0] == 0 || px[0] == 255,
                 "halftone must be pure black or white, got {}",

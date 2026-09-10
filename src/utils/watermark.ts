@@ -143,8 +143,17 @@ export function escapeFilterValue(value: string): string {
     .replace(/'/g, "'\\\\\\''");
   // The option-level parser trims unescaped whitespace at both ends of a
   // value (the quotes are gone by then), so "  MoshDither  " would render as
-  // "MoshDither". An escaped space survives both passes.
-  const edged = escaped.replace(/^[ \t]+|[ \t]+$/g, (run) => run.replace(/[ \t]/g, "\\$&"));
+  // "MoshDither". An escaped space survives both passes. Written as a scan,
+  // not a replace: backslashes were already doubled above, and a trailing
+  // `.replace` that adds backslashes reads to CodeQL as an escaper that
+  // forgot them.
+  const isBlank = (c: string) => c === " " || c === "\t";
+  let start = 0;
+  while (start < escaped.length && isBlank(escaped[start])) start++;
+  let end = escaped.length;
+  while (end > start && isBlank(escaped[end - 1])) end--;
+  const escapeRun = (run: string) => Array.from(run, (c) => `\\${c}`).join("");
+  const edged = escapeRun(escaped.slice(0, start)) + escaped.slice(start, end) + escapeRun(escaped.slice(end));
   return `'${edged}'`;
 }
 

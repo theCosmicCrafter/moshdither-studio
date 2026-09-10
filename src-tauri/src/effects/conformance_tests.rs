@@ -53,7 +53,7 @@ fn detail_frame() -> Frame {
 }
 
 fn mean_red(f: &Frame) -> f64 {
-    let sum: f64 = f.data.chunks_exact(4).map(|p| p[0] as f64).sum();
+    let sum: f64 = f.data.as_chunks::<4>().0.iter().map(|p| p[0] as f64).sum();
     sum / (f.data.len() / 4) as f64
 }
 
@@ -615,8 +615,10 @@ fn threshold_effects_work_on_a_dark_image() {
 
         let changed = out
             .data
-            .chunks_exact(4)
-            .zip(dark.data.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(dark.data.as_chunks::<4>().0.iter())
             .filter(|(a, b)| {
                 a[0].abs_diff(b[0])
                     .max(a[1].abs_diff(b[1]))

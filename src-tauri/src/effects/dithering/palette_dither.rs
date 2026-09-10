@@ -301,7 +301,9 @@ mod tests {
 
         let colors: std::collections::HashSet<(u8, u8, u8)> = out
             .data
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|px| (px[0], px[1], px[2]))
             .collect();
         assert!(

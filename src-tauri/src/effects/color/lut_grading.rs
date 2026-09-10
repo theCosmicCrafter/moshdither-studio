@@ -265,7 +265,7 @@ impl LoadedLut {
         let tile_size = 64u32; // 512 / 8
 
         let mut data = input.data.clone();
-        for chunk in data.chunks_exact_mut(4) {
+        for chunk in data.as_chunks_mut::<4>().0.iter_mut() {
             let r = chunk[0] as f32 / 255.0;
             let g = chunk[1] as f32 / 255.0;
             let b = chunk[2] as f32 / 255.0;
@@ -311,7 +311,7 @@ impl LoadedLut {
     fn apply_cube(data: &[[f32; 3]], size: usize, input: &Frame, amount: f32) -> Frame {
         let _n = size as f32;
         let mut output = input.data.clone();
-        for chunk in output.chunks_exact_mut(4) {
+        for chunk in output.as_chunks_mut::<4>().0.iter_mut() {
             let r_in = chunk[0] as f32 / 255.0;
             let g_in = chunk[1] as f32 / 255.0;
             let b_in = chunk[2] as f32 / 255.0;
@@ -582,7 +582,7 @@ mod tests {
             .process_frame(&input, None, &ParameterValues::default())
             .unwrap();
 
-        for (i, chunk) in output.data.chunks_exact(4).enumerate() {
+        for (i, chunk) in output.data.as_chunks::<4>().0.iter().enumerate() {
             let expected_r = (i * 64) as u8;
             let expected_g = 128u8;
             let expected_b = (255 - i * 64) as u8;

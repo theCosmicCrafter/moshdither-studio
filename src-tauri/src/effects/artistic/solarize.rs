@@ -51,7 +51,7 @@ impl Effect for Solarize {
             .and_then(|v| v.as_u64())
             .unwrap_or(self.threshold as u64) as u8;
         let mut data = input.data.clone();
-        for chunk in data.chunks_exact_mut(4) {
+        for chunk in data.as_chunks_mut::<4>().0.iter_mut() {
             for c in &mut chunk[..3] {
                 if *c > threshold {
                     *c = 255 - *c;

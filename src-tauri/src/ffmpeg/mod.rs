@@ -2150,7 +2150,7 @@ mod export_matrix_tests {
         use crate::effects::types::Frame;
         let (w, h) = (96u32, 72u32);
         let mut data = vec![255u8; (w * h * 4) as usize];
-        for (i, px) in data.chunks_exact_mut(4).enumerate() {
+        for (i, px) in data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             px[0] = (i % 256) as u8;
             px[1] = ((i / 96) % 256) as u8;
             px[2] = ((i / 7) % 256) as u8;
@@ -2214,7 +2214,7 @@ mod export_matrix_tests {
         use crate::effects::types::Frame;
         let (w, h) = (128u32, 96u32);
         let mut data = vec![255u8; (w * h * 4) as usize];
-        for (i, px) in data.chunks_exact_mut(4).enumerate() {
+        for (i, px) in data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             px[0] = (i % 256) as u8;
             px[1] = 90;
             px[2] = ((i / 128) % 256) as u8;
@@ -2298,7 +2298,7 @@ mod export_matrix_tests {
         let mut frames = Vec::with_capacity(n);
         for f in 0..n {
             let mut data = vec![0u8; per];
-            for (i, px) in data.chunks_exact_mut(4).enumerate() {
+            for (i, px) in data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 px[0] = ((i + f * 7) % 256) as u8;
                 px[1] = ((i / 97 + f) % 256) as u8;
                 px[2] = ((i / 13) % 256) as u8;

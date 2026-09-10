@@ -127,7 +127,7 @@ pub fn warp_by_motion_field(src: &Frame, field: &MotionField) -> Frame {
     let w = src.width as usize;
     let h = src.height as usize;
     let mut out = vec![0u8; src.data.len()];
-    for (i, chunk) in out.chunks_exact_mut(4).enumerate() {
+    for (i, chunk) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let x = i % w;
         let y = i / w;
         let mv = field.at_pixel(x, y);
@@ -281,7 +281,7 @@ pub fn warp_by_flow(src: &Frame, u: &[f32], v: &[f32]) -> Frame {
     let w = src.width as usize;
     let h = src.height as usize;
     let mut out = vec![0u8; src.data.len()];
-    for (i, chunk) in out.chunks_exact_mut(4).enumerate() {
+    for (i, chunk) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let x = (i % w) as i32;
         let y = (i / w) as i32;
         let sx = (x + u[i].round() as i32).rem_euclid(w as i32) as usize;

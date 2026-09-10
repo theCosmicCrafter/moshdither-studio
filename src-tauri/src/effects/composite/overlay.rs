@@ -456,7 +456,7 @@ mod tests {
         let ov = frame(1, 1, [255, 255, 255, 255]);
         let out = blend_frame(&base, &ov, 1.0, 1);
         assert!(
-            out.data.chunks_exact(4).all(|p| p[0] == 255),
+            out.data.as_chunks::<4>().0.iter().all(|p| p[0] == 255),
             "every pixel should have been screened to white"
         );
     }
