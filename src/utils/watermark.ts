@@ -97,42 +97,60 @@ export function buildDrawtextFilter(settings: WatermarkSettings): string | null 
   const { x, y } = getOverlayCoords(settings.position, "text");
   const color = toDrawtextColor(settings.color);
   const opacity = Math.max(0, Math.min(1, Number.isNaN(settings.opacity) ? 0 : settings.opacity));
-  const alpha = Math.round(opacity * 255)
-    .toString(16)
-    .padStart(2, "0");
+  // drawtext wants `color@<float 0..1>`; bare hex is rejected outright.
+  const alpha = opacity.toFixed(3);
   const fontSize = Math.max(
     1,
     Math.min(999, Math.round(Number.isNaN(settings.fontSize) ? 24 : settings.fontSize))
   );
 
-  let filter = `drawtext=text='${escapeDrawtext(settings.text)}':x=${x}:y=${y}:fontsize=${fontSize}:fontcolor=${color}@${alpha}`;
+  // `expansion=none`: the watermark is literal text. With the default
+  // expansion drawtext treats `%` and `%{...}` as its own template syntax.
+  let filter = `drawtext=text=${escapeFilterValue(settings.text.replace(/[\r\n]/g, " "))}:expansion=none:x=${x}:y=${y}:fontsize=${fontSize}:fontcolor=${color}@${alpha}`;
 
   // Use selected font file if available
   if (settings.fontPath) {
-    filter += `:fontfile=${settings.fontPath.replace(/'/g, "\\'").replace(/:/g, "\\:")}`;
+    filter += `:fontfile=${escapeFilterValue(stripVerbatimPrefix(settings.fontPath))}`;
   }
 
   return filter;
 }
 
 /**
- * Escape special characters in drawtext string.
- * Escapes characters that FFmpeg drawtext treats as special:
- * ' : \ { } ( ) ; | % and newlines
+ * One filter option value, escaped for BOTH of FFmpeg's parser levels.
+ *
+ * This mirrors `escape_filter_value` in src-tauri/src/ffmpeg/mod.rs, which is
+ * the builder the export actually runs; keep the two identical. A `-vf`
+ * string is parsed twice: the graph parser takes each filter's argument
+ * string as one token (literal inside `'...'`, one backslash dropped
+ * outside), then the option parser splits on `:` and processes escapes
+ * again. So the value is quoted to survive the first pass and escaped
+ * (`\` `:` `,` `;`) for the second. A quote cannot be escaped inside quotes,
+ * so `'` is spliced in from outside them: close, `\\\'`, reopen.
+ *
+ * Every rule was measured against the bundled ffmpeg 8.0 by rendering and
+ * comparing pixels. The previous escaper aborted the export on an apostrophe
+ * (`text='It\'s'` -> "No option name near ..."), lost everything after a `%`
+ * ("Stray %"), and never quoted or backslash-escaped `fontfile=`, so a
+ * Windows font path was read as `C:WindowsFontsarial.ttf`.
  */
-function escapeDrawtext(text: string): string {
-  return text
+export function escapeFilterValue(value: string): string {
+  const escaped = value
     .replace(/\\/g, "\\\\")
-    .replace(/'/g, "\\'")
     .replace(/:/g, "\\:")
-    .replace(/\{/g, "\\{")
-    .replace(/\}/g, "\\}")
-    .replace(/\(/g, "\\(")
-    .replace(/\)/g, "\\)")
+    .replace(/,/g, "\\,")
     .replace(/;/g, "\\;")
-    .replace(/\|/g, "\\|")
-    .replace(/%/g, "\\%")
-    .replace(/\n/g, " ");
+    .replace(/'/g, "'\\\\\\''");
+  // The option-level parser trims unescaped whitespace at both ends of a
+  // value (the quotes are gone by then), so "  MoshDither  " would render as
+  // "MoshDither". An escaped space survives both passes.
+  const edged = escaped.replace(/^[ \t]+|[ \t]+$/g, (run) => run.replace(/[ \t]/g, "\\$&"));
+  return `'${edged}'`;
+}
+
+/** Rust's canonicalize yields `\\?\C:\...` on Windows; freetype does not want it. */
+function stripVerbatimPrefix(path: string): string {
+  return path.startsWith("\\\\?\\") ? path.slice(4) : path;
 }
 
 /**

@@ -117,10 +117,29 @@ fn allowed_roots() -> Vec<PathBuf> {
         push_if_canonical(Path::new(&home), &mut roots);
     }
 
+    #[cfg(target_os = "windows")]
+    {
+        // Every system font lives under C:\Windows\Fonts, and a text
+        // watermark's `fontfile=` is read from exactly there -- so the
+        // "windows" component rule above refused every font a user could
+        // pick, and with it the whole export (the check runs before
+        // ffmpeg). Fonts are read, never written; this is the one directory
+        // under the system root the app legitimately opens.
+        if let Some(windir) = std::env::var_os("WINDIR").or_else(|| std::env::var_os("SystemRoot"))
+        {
+            push_if_canonical(&Path::new(&windir).join("Fonts"), &mut roots);
+        }
+    }
+
     #[cfg(not(target_os = "windows"))]
     {
         push_if_canonical(Path::new("/tmp"), &mut roots);
         push_if_canonical(Path::new("/var/tmp"), &mut roots);
+        // The distro font trees, for the same reason as C:\Windows\Fonts.
+        push_if_canonical(Path::new("/usr/share/fonts"), &mut roots);
+        push_if_canonical(Path::new("/usr/local/share/fonts"), &mut roots);
+        push_if_canonical(Path::new("/System/Library/Fonts"), &mut roots);
+        push_if_canonical(Path::new("/Library/Fonts"), &mut roots);
     }
 
     roots
@@ -267,5 +286,23 @@ mod tests {
     fn test_rejects_unc_paths() {
         assert!(validate_io_path(r"\\attacker\share\payload.mp4", false).is_err());
         assert!(validate_io_path(r"\\?\UNC\attacker\share\payload.mp4", false).is_err());
+    }
+
+    /// A text watermark's font is read from the system font directory, which
+    /// sits under the one root the guard otherwise refuses outright. Every
+    /// custom-font export was rejected here, before ffmpeg ever ran.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn system_fonts_are_readable_but_the_rest_of_windows_is_not() {
+        let font = r"C:\Windows\Fonts\arial.ttf";
+        if !Path::new(font).exists() {
+            eprintln!("SKIP: no arial.ttf");
+            return;
+        }
+        let ok = validate_io_path(font, true);
+        assert!(ok.is_ok(), "{ok:?}");
+        // Read-only allowance for fonts must not open the directory next door.
+        assert!(validate_io_path(r"C:\Windows\System32\drivers\etc\hosts", true).is_err());
+        assert!(validate_io_path(r"C:\Windows\Fonts\..\System32\drivers\etc\hosts", true).is_err());
     }
 }

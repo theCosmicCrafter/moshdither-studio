@@ -158,8 +158,8 @@ describe("Export Pipeline Edge Cases", () => {
         text: "C:\\Users\\test",
       });
       expect(result).not.toBeNull();
-      // Colons are escaped to \: by escapeDrawtext
-      expect(result).toContain("C\\:");
+      // Quoted and escaped for both of ffmpeg's parser levels.
+      expect(result).toContain("text='C\\:\\\\Users\\\\test':expansion=none");
       expect(result).toContain("Users");
     });
 
@@ -206,35 +206,37 @@ describe("Export Pipeline Edge Cases", () => {
 
   // ── Watermark opacity boundary values ──
   describe("watermark opacity edge cases", () => {
-    it("opacity=0 produces alpha hex 00", () => {
+    // drawtext wants `color@<float 0..1>`; bare hex is rejected outright
+    // ("Invalid alpha value specifier"), which aborted every text-watermark
+    // export. These pin the float form the Rust builder also emits.
+    it("opacity=0 produces alpha 0.000", () => {
       const result = buildDrawtextFilter({
         ...DEFAULT_WATERMARK,
         enabled: true,
         text: "Test",
         opacity: 0,
       });
-      expect(result).toContain("@00");
+      expect(result).toContain("@0.000");
     });
 
-    it("opacity=1 produces alpha hex ff", () => {
+    it("opacity=1 produces alpha 1.000", () => {
       const result = buildDrawtextFilter({
         ...DEFAULT_WATERMARK,
         enabled: true,
         text: "Test",
         opacity: 1,
       });
-      expect(result).toContain("@ff");
+      expect(result).toContain("@1.000");
     });
 
-    it("opacity=0.5 produces alpha hex 80 (rounded)", () => {
+    it("opacity=0.5 produces alpha 0.500", () => {
       const result = buildDrawtextFilter({
         ...DEFAULT_WATERMARK,
         enabled: true,
         text: "Test",
         opacity: 0.5,
       });
-      // Math.round(0.5 * 255) = 128 → hex "80"
-      expect(result).toContain("@80");
+      expect(result).toContain("@0.500");
     });
 
     it("opacity >1 still produces valid hex (clamped by FFmpeg)", () => {

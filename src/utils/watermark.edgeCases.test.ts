@@ -10,6 +10,7 @@ import {
 
 describe("Watermark Edge Cases", () => {
   describe("buildDrawtextFilter edge cases", () => {
+    // Alpha is a float: ffmpeg rejects bare hex ("Invalid alpha value specifier").
     it("handles opacity at exactly 0 (transparent)", () => {
       const s: WatermarkSettings = {
         ...DEFAULT_WATERMARK,
@@ -18,7 +19,7 @@ describe("Watermark Edge Cases", () => {
         opacity: 0,
       };
       const filter = buildDrawtextFilter(s);
-      expect(filter).toContain("@00");
+      expect(filter).toContain("@0.000");
     });
 
     it("handles opacity at exactly 1 (opaque)", () => {
@@ -29,10 +30,10 @@ describe("Watermark Edge Cases", () => {
         opacity: 1,
       };
       const filter = buildDrawtextFilter(s);
-      expect(filter).toContain("@ff");
+      expect(filter).toContain("@1.000");
     });
 
-    it("handles opacity with rounding (0.5 = 128 = 0x80)", () => {
+    it("handles opacity 0.5", () => {
       const s: WatermarkSettings = {
         ...DEFAULT_WATERMARK,
         enabled: true,
@@ -40,7 +41,7 @@ describe("Watermark Edge Cases", () => {
         opacity: 0.5,
       };
       const filter = buildDrawtextFilter(s);
-      expect(filter).toContain("@80");
+      expect(filter).toContain("@0.500");
     });
 
     it("maps all supported color names", () => {
@@ -86,7 +87,8 @@ describe("Watermark Edge Cases", () => {
         text: "it's: a:test's",
       };
       const filter = buildDrawtextFilter(s);
-      expect(filter).toContain("it\\'s\\: a\\:test\\'s");
+      // Quotes are spliced in from outside the quoted value; colons escaped.
+      expect(filter).toContain("text='it'\\\\\\''s\\: a\\:test'\\\\\\''s':expansion=none");
     });
 
     it("handles text with only special characters", () => {
@@ -96,7 +98,7 @@ describe("Watermark Edge Cases", () => {
         text: "':'",
       };
       const filter = buildDrawtextFilter(s);
-      expect(filter).toContain("\\'\\:\\'");
+      expect(filter).toContain("text=''\\\\\\''\\:'\\\\\\''':expansion=none");
     });
 
     it("handles very large fontSize", () => {
@@ -139,7 +141,7 @@ describe("Watermark Edge Cases", () => {
         fontPath: "C:/Program Files/Fonts/arial.ttf",
       };
       const filter = buildDrawtextFilter(s);
-      expect(filter).toContain("fontfile=C\\:/Program Files/Fonts/arial.ttf");
+      expect(filter).toContain("fontfile='C\\:/Program Files/Fonts/arial.ttf'");
     });
   });
 

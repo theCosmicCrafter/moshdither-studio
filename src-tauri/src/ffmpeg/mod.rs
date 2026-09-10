@@ -64,14 +64,15 @@ fn budget_for(available: u64) -> u64 {
 /// [`PIPELINE_PEAK_COPIES`] of the clip at peak, so the real peak is that
 /// many times what is logged here.
 fn adaptive_decode_memory_budget() -> u64 {
-    use sysinfo::System;
-    let mut sys = System::new();
-    sys.refresh_memory();
-    // Use available (not total) RAM — the OS, GPU drivers, WebView, and
-    // other app components are already using much of the total. Without
-    // this, a 16 GiB system reports an 8 GiB budget but the actual
-    // contiguous allocation may fail at 4 GiB.
-    let available = sys.available_memory();
+    // Use what can actually be allocated (not total RAM) — the OS, GPU
+    // drivers, WebView, and other app components are already using much of
+    // the total. Without this, a 16 GiB system reports an 8 GiB budget but
+    // the actual contiguous allocation may fail at 4 GiB. On Windows this is
+    // the smaller of free physical RAM and free *commit*: with 39 GB of RAM
+    // free but the commit limit exhausted, the old physical-only figure
+    // planned a multi-gigabyte decode that could not allocate a megabyte
+    // (see sysmem.rs for the incident).
+    let available = crate::sysmem::allocatable_bytes();
     if available == 0 {
         // Fallback if sysinfo can't read memory (rare/sandboxed envs).
         return MIN_DECODE_MEMORY_BUDGET_BYTES / PIPELINE_PEAK_COPIES.max(1);
@@ -213,6 +214,29 @@ pub const EXPORT_CANCELLED: &str = "Export cancelled by user";
 
 pub fn ffmpeg_binary() -> Result<String> {
     locate_binary("ffmpeg")
+}
+
+/// The ffmpeg a test may run, or `None` when there is none to run.
+///
+/// `ffmpeg_binary()` cannot fail -- its last resort is the bare name on
+/// PATH -- so every `let Some(ffmpeg) = ffmpeg_for_tests() else { skip }` guard
+/// was dead, and on a machine without ffmpeg those tests spawned a
+/// non-existent program and failed instead of skipping. This resolves the
+/// same way and then proves the binary runs, once per process.
+#[cfg(test)]
+pub(crate) fn ffmpeg_for_tests() -> Option<String> {
+    static PROBED: OnceLock<Option<String>> = OnceLock::new();
+    PROBED
+        .get_or_init(|| {
+            let bin = ffmpeg_binary().ok()?;
+            let runs = crate::proc::command(&bin)
+                .arg("-version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            runs.then_some(bin)
+        })
+        .clone()
 }
 
 /// Hidden sibling of `dest` that an encode writes to before being renamed onto
@@ -680,6 +704,55 @@ fn find_output_arg_index(args: &[String], output_path: &str) -> Option<usize> {
     args.iter().rposition(|a| a == output_path)
 }
 
+/// One filter option value, escaped for BOTH of FFmpeg's parser levels.
+///
+/// A `-vf` string is parsed twice. The graph parser first splits filters on
+/// `,`/`;` and takes each filter's argument string as one token: inside
+/// `'...'` it copies literally, outside it drops one backslash. The option
+/// parser then splits that token on `:` and processes escapes again. So a
+/// value is wrapped in quotes to survive the first pass intact, and escaped
+/// (`\` `:` `,` `;`) for the second to restore it. A quote cannot be escaped
+/// inside quotes, so `'` is spliced in from outside them: close the quote,
+/// emit `\\\'` (which the first pass turns into `\'` and the second into
+/// `'`), reopen.
+///
+/// The previous escapers got this wrong in both directions, and each was
+/// measured against the bundled ffmpeg 8.0 by rendering and comparing pixels:
+/// `text='It\'s'` aborted the export ("No option name near ..."), `50% off`
+/// logged "Stray %" and lost the rest of the line, and `fontfile=` was never
+/// quoted or backslash-escaped, so `C\:\Windows\Fonts\arial.ttf` was read as
+/// `C:WindowsFontsarial.ttf` -- a custom font file never loaded on Windows.
+fn escape_filter_value(value: &str) -> String {
+    let escaped = value
+        .replace('\\', "\\\\")
+        .replace(':', "\\:")
+        .replace(',', "\\,")
+        .replace(';', "\\;")
+        .replace('\'', "'\\\\\\''");
+    // The option-level parser trims unescaped whitespace at both ends of a
+    // value (the quotes are gone by then), so "  MoshDither  " would render
+    // as "MoshDither". An escaped space survives: the first pass keeps `\ `
+    // literally inside the quotes, the second turns it into a space.
+    let is_blank = |c: char| c == ' ' || c == '\t';
+    let chars: Vec<char> = escaped.chars().collect();
+    let leading = chars.iter().take_while(|c| is_blank(**c)).count();
+    let trailing = if leading == chars.len() {
+        0
+    } else {
+        chars.iter().rev().take_while(|c| is_blank(**c)).count()
+    };
+    let mut out = String::with_capacity(escaped.len() + leading + trailing + 2);
+    out.push('\'');
+    for (i, ch) in chars.iter().enumerate() {
+        if i < leading || i >= chars.len() - trailing {
+            out.push('\\');
+        }
+        out.push(*ch);
+    }
+    out.push('\'');
+    out
+}
+
 fn apply_watermark_args(
     mut args: Vec<String>,
     wm: &WatermarkSettings,
@@ -689,31 +762,12 @@ fn apply_watermark_args(
         return args;
     }
 
-    fn escape_drawtext(text: &str) -> String {
-        text.replace('\\', "\\\\")
-            .replace('\'', "\\'")
-            .replace(':', "\\:")
-            .replace('{', "\\{")
-            .replace('}', "\\}")
-            .replace('(', "\\(")
-            .replace(')', "\\)")
-            .replace(';', "\\;")
-            .replace('|', "\\|")
-            .replace('%', "\\%")
-            .replace(['\n', '\r'], " ")
-    }
+    let escape_drawtext = |text: &str| escape_filter_value(&text.replace(['\n', '\r'], " "));
 
-    fn escape_path(path: &str) -> String {
-        // Comma and semicolon are filtergraph-level separators (chain
-        // multiple filters / filter stages within one -vf argument) even
-        // though this value is unquoted -- without escaping them, a
-        // font_path containing one lets a caller splice extra FFmpeg
-        // filters/options into the export's filtergraph.
-        path.replace('\'', "\\'")
-            .replace(':', "\\:")
-            .replace(',', "\\,")
-            .replace(';', "\\;")
-    }
+    // Rust's canonicalize hands back `\\?\C:\...` on Windows. FFmpeg's file
+    // opener accepts that form, but the prefix is four more characters to
+    // escape for nothing, and freetype's fopen does not want it. Strip it.
+    let escape_path = |path: &str| escape_filter_value(path.strip_prefix(r"\\?\").unwrap_or(path));
 
     fn to_drawtext_color(color: &str) -> &str {
         match color.to_lowercase().as_str() {
@@ -756,8 +810,11 @@ fn apply_watermark_args(
         let alpha_f = wm.opacity.clamp(0.0, 1.0);
         let alpha = format!("{alpha_f:.3}");
         let color = to_drawtext_color(&wm.color);
+        // `expansion=none`: the watermark is literal text. With the default
+        // expansion drawtext treats `%` and `%{...}` as its own template
+        // syntax -- "50% off" logged "Stray %" and rendered nothing after it.
         let mut drawtext = format!(
-            "drawtext=text='{}':x={}:y={}:fontsize={}:fontcolor={}@{}",
+            "drawtext=text={}:expansion=none:x={}:y={}:fontsize={}:fontcolor={}@{}",
             escape_drawtext(&wm.text),
             x,
             y,
@@ -1964,7 +2021,7 @@ mod input_format_tests {
     /// same path the app uses.
     #[test]
     fn every_offered_video_container_decodes() {
-        let Ok(ffmpeg) = ffmpeg_binary() else {
+        let Some(ffmpeg) = ffmpeg_for_tests() else {
             eprintln!(
                 "SKIP every_offered_video_container_decodes: no ffmpeg binary.                  Run `npm run fetch:external` to obtain it."
             );
@@ -2150,7 +2207,7 @@ mod export_matrix_tests {
     /// capability and had no test of its own.
     #[test]
     fn animate_still_as_video_produces_a_playable_clip() {
-        if ffmpeg_binary().is_err() {
+        if ffmpeg_for_tests().is_none() {
             eprintln!("SKIP animate_still_as_video: no ffmpeg binary");
             return;
         }
@@ -2226,7 +2283,7 @@ mod export_matrix_tests {
     #[test]
     #[ignore = "memory-heavy; run explicitly with --ignored"]
     fn large_frames_export_without_corrupting_the_heap() {
-        if ffmpeg_binary().is_err() {
+        if ffmpeg_for_tests().is_none() {
             eprintln!("SKIP: no ffmpeg binary");
             return;
         }
@@ -2283,7 +2340,7 @@ mod export_matrix_tests {
     fn every_export_format_produces_a_real_file() {
         // The binaries are gitignored, so a fresh clone legitimately has none.
         // Say so loudly rather than passing in silence.
-        if ffmpeg_binary().is_err() {
+        if ffmpeg_for_tests().is_none() {
             eprintln!(
                 "SKIP every_export_format_produces_a_real_file: no ffmpeg binary.                  Run `npm run fetch:external` to obtain it."
             );
@@ -2444,6 +2501,164 @@ mod watermark_tests {
             .join(" ");
             assert!(joined.contains(want), "opacity {given} -> {joined}");
         }
+    }
+
+    /// The escaping rules, at the string level. Each expectation was first
+    /// established by rendering with the bundled ffmpeg and comparing pixels
+    /// (see `renders_the_text_and_font_it_was_given` below, which repeats
+    /// that measurement when ffmpeg and the fonts are present).
+    #[test]
+    fn filter_values_are_quoted_and_escaped_for_both_parser_levels() {
+        use super::escape_filter_value;
+        assert_eq!(escape_filter_value("plain"), "'plain'");
+        assert_eq!(escape_filter_value("a:b"), r"'a\:b'");
+        assert_eq!(
+            escape_filter_value(r"C:\Windows\Fonts\arial.ttf"),
+            r"'C\:\\Windows\\Fonts\\arial.ttf'"
+        );
+        // A quote is spliced in from outside the quotes: close, \\\', reopen.
+        assert_eq!(escape_filter_value("It's"), r"'It'\\\''s'");
+        assert_eq!(escape_filter_value("a,b;c"), r"'a\,b\;c'");
+        // Nothing else is special once the value is quoted and drawtext runs
+        // with expansion=none: these pass through as they are.
+        assert_eq!(
+            escape_filter_value("50% off %{n} (x) [y] {z} |"),
+            "'50% off %{n} (x) [y] {z} |'"
+        );
+        // Edge whitespace is escaped so the option parser does not trim it;
+        // interior whitespace is left alone.
+        assert_eq!(escape_filter_value(" both "), r"'\ both\ '");
+        assert_eq!(escape_filter_value("  a  b  "), r"'\ \ a  b\ \ '");
+        assert_eq!(escape_filter_value("   "), r"'\ \ \ '");
+        assert_eq!(escape_filter_value(""), "''");
+    }
+
+    #[test]
+    fn drawtext_is_literal_and_the_font_path_loses_its_verbatim_prefix() {
+        let mut wm = text_wm(1.0);
+        wm.text = "It's 50% off".into();
+        wm.font_path = Some(r"\\?\C:\Windows\Fonts\arial.ttf".into());
+        let joined = apply_watermark_args(
+            vec!["-i".into(), "in.mp4".into(), "out.mp4".into()],
+            &wm,
+            "out.mp4",
+        )
+        .join(" ");
+        assert!(
+            joined.contains(r"drawtext=text='It'\\\''s 50% off':expansion=none:"),
+            "{joined}"
+        );
+        assert!(
+            joined.contains(r":fontfile='C\:\\Windows\\Fonts\\arial.ttf'"),
+            "{joined}"
+        );
+        assert!(
+            !joined.contains(r"\\?\"),
+            "verbatim prefix must not reach ffmpeg: {joined}"
+        );
+    }
+
+    /// The measurement the rules above came from, re-run against the real
+    /// encoder: render one frame through the exact `-vf` this builder emits,
+    /// and compare its bytes with (a) a render through `textfile=`, which
+    /// needs no text escaping at all, and (b) a render with a font whose
+    /// glyphs look nothing like the default. Exit codes are not enough here:
+    /// drawtext silently falls back to a default font when `fontfile` cannot
+    /// be opened, and exits 0.
+    #[test]
+    fn renders_the_text_and_font_it_was_given() {
+        let Some(ffmpeg) = super::ffmpeg_for_tests() else {
+            eprintln!("SKIP: no ffmpeg");
+            return;
+        };
+        let arial = std::path::Path::new(r"C:\Windows\Fonts\arial.ttf");
+        let webdings = std::path::Path::new(r"C:\Windows\Fonts\webdings.ttf");
+        if !arial.exists() || !webdings.exists() {
+            eprintln!("SKIP: Windows fonts not present");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("moshdither-wm-test-{}", std::process::id()));
+        // The directory name carries every character the escaper has to get
+        // right, and the font is copied under it so the path is what is tested.
+        let awkward_dir = dir.join("x, y; rich's (1)");
+        std::fs::create_dir_all(&awkward_dir).unwrap();
+        let awkward_font = awkward_dir.join("f, 'v2'.ttf");
+        std::fs::copy(webdings, &awkward_font).unwrap();
+
+        let render = |vf: &str, name: &str| -> Vec<u8> {
+            let out = dir.join(format!("{name}.png"));
+            let status = crate::proc::command(&ffmpeg)
+                .args([
+                    "-v",
+                    "error",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=black:size=200x48:d=1",
+                    "-vf",
+                ])
+                .arg(vf)
+                .args(["-frames:v", "1"])
+                .arg(&out)
+                .status()
+                .unwrap();
+            assert!(status.success(), "ffmpeg rejected: {vf}");
+            std::fs::read(&out).unwrap()
+        };
+        let vf_for = |text: &str, font: Option<&str>| -> String {
+            let mut wm = text_wm(1.0);
+            wm.text = text.into();
+            wm.font_path = font.map(String::from);
+            let args = apply_watermark_args(
+                vec!["-i".into(), "in.mp4".into(), "out.png".into()],
+                &wm,
+                "out.png",
+            );
+            let idx = args.iter().position(|a| a == "-vf").expect("-vf emitted");
+            args[idx + 1].clone()
+        };
+
+        // (b) the font: a real file renders differently from the fallback.
+        let fallback = render(
+            &vf_for("Hi", Some(dir.join("nope.ttf").to_str().unwrap())),
+            "fallback",
+        );
+        let with_webdings = render(&vf_for("Hi", Some(webdings.to_str().unwrap())), "webdings");
+        assert_ne!(fallback, with_webdings, "fontfile is being ignored");
+        for path in [
+            awkward_font.to_string_lossy().into_owned(),
+            format!(r"\\?\{}", awkward_font.display()),
+        ] {
+            let got = render(&vf_for("Hi", Some(&path)), "awkward");
+            assert_eq!(got, with_webdings, "font at {path} did not load");
+        }
+
+        // (a) the text: identical to an escaping-free textfile render.
+        let textfile = dir.join("ref.txt");
+        for text in [
+            "It's 12:00",
+            "100% {x} (y) a\\b",
+            "50% off %{n}",
+            "semi; comma, pipe| [br]",
+            "  both  ",
+        ] {
+            std::fs::write(&textfile, text).unwrap();
+            let reference = render(
+                &format!(
+                    "drawtext=textfile={}:expansion=none:fontsize=24:fontcolor=white@1.000:x=w-text_w-10:y=h-text_h-10:fontfile={}",
+                    super::escape_filter_value(textfile.to_str().unwrap()),
+                    super::escape_filter_value(arial.to_str().unwrap())
+                ),
+                "reference",
+            );
+            let got = render(&vf_for(text, Some(arial.to_str().unwrap())), "text");
+            assert_eq!(
+                got, reference,
+                "text {text:?} rendered differently from its reference"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
@@ -3154,7 +3369,7 @@ mod aspect_preservation_tests {
     /// unit test of our own formatting would have agreed with itself.
     #[test]
     fn a_vertical_source_is_letterboxed_not_stretched() {
-        let Ok(ffmpeg) = ffmpeg_binary() else {
+        let Some(ffmpeg) = ffmpeg_for_tests() else {
             eprintln!("SKIP: no ffmpeg");
             return;
         };

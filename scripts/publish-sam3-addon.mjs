@@ -35,6 +35,7 @@ import {
   readSync,
   readFileSync,
   rmSync,
+  fstatSync,
   statSync,
   writeFileSync,
   writeSync,
@@ -83,10 +84,12 @@ function sha256File(path) {
 
 /** Split `src` into <=PART_BYTES chunks named `<base>.partN`, hashing each. */
 function split(src, base, outDir) {
-  const total = statSync(src).size;
+  const fd = openSync(src, "r");
+  // Size from the open descriptor, not from a second look-up by path: the
+  // file this splits could otherwise be swapped between the two.
+  const total = fstatSync(fd).size;
   const count = Math.ceil(total / PART_BYTES);
   const parts = [];
-  const fd = openSync(src, "r");
   const buf = Buffer.alloc(8 * 1024 * 1024);
   try {
     for (let i = 0; i < count; i++) {

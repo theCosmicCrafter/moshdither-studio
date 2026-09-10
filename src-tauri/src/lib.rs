@@ -14,6 +14,7 @@ pub mod presets;
 pub mod proc;
 pub mod sam3_addon;
 pub mod sam3_engine;
+pub mod sysmem;
 pub mod utils;
 
 use commands::{

@@ -223,12 +223,26 @@ pub fn install_exception_handler() {
         // Deliberately minimal: the process is already broken, so this reads a
         // couple of fields and writes a line. No allocation-heavy formatting,
         // no locks that another thread might hold.
-        let (code, address) = unsafe {
+        let (code, address, access) = unsafe {
             if info.is_null() || (*info).ExceptionRecord.is_null() {
-                (0u32, 0usize)
+                (0u32, 0usize, None)
             } else {
                 let rec = &*(*info).ExceptionRecord;
-                (rec.ExceptionCode as u32, rec.ExceptionAddress as usize)
+                // For an access violation the record also says what the
+                // faulting instruction was doing and to which address: a read
+                // of 0x0 is a null dereference, a write far from anything is a
+                // buffer overrun. The instruction address alone says neither.
+                let access = if rec.ExceptionCode as u32 == 0xC0000005 && rec.NumberParameters >= 2
+                {
+                    Some((rec.ExceptionInformation[0], rec.ExceptionInformation[1]))
+                } else {
+                    None
+                };
+                (
+                    rec.ExceptionCode as u32,
+                    rec.ExceptionAddress as usize,
+                    access,
+                )
             }
         };
         let name = match code {
@@ -239,11 +253,39 @@ pub fn install_exception_handler() {
             0xC000041D => "FATAL_USER_CALLBACK_EXCEPTION",
             _ => "UNKNOWN",
         };
+        // The 2026-09-10 crash logged "at address 0x00007FF7A04902D7" and
+        // nothing else; under ASLR that number means nothing once the
+        // process is gone. Module name plus offset from its base is what a
+        // PDB can resolve.
+        let location = match module_of(address) {
+            Some((base, file)) => format!(
+                "{file}+0x{:X} (base 0x{base:016X})",
+                address.wrapping_sub(base)
+            ),
+            None => "an unmapped address".to_string(),
+        };
+        let access_line = match access {
+            Some((kind, at)) => {
+                let verb = match kind {
+                    0 => "reading",
+                    1 => "writing",
+                    8 => "executing (DEP)",
+                    _ => "accessing",
+                };
+                format!("{verb} address 0x{at:016X}\n")
+            }
+            None => String::new(),
+        };
+        // The same crash happened on a machine whose commit limit was
+        // exhausted; the state at the moment of death is the first thing a
+        // post-mortem wants.
+        let memory = crate::sysmem::describe(&crate::sysmem::memory_headroom());
         append_raw(&format!(
             "\n=== FATAL EXCEPTION ===\ncode 0x{code:08X} ({name})\nat address 0x{address:016X}\n\
+             in {location}\n{access_line}{memory}\n\
              The process is about to die. This is a hard fault, not a Rust panic,\n\
-             so no backtrace is available here -- match the address against the\n\
-             module map in a debugger to locate it.\n"
+             so no backtrace is available here -- resolve the module offset\n\
+             against that build's PDB to locate it.\n"
         ));
         // Let Windows Error Reporting still see it, so a configured crash dump
         // is written and the Event Log entry is unchanged.
@@ -253,6 +295,36 @@ pub fn install_exception_handler() {
     unsafe {
         SetUnhandledExceptionFilter(Some(on_fault));
     }
+}
+
+/// The module an address belongs to: its load base and file name.
+#[cfg(windows)]
+fn module_of(address: usize) -> Option<(usize, String)> {
+    use windows_sys::Win32::Foundation::HMODULE;
+    use windows_sys::Win32::System::LibraryLoader::{
+        GetModuleFileNameW, GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+    };
+    let mut module: HMODULE = std::ptr::null_mut();
+    // SAFETY: FROM_ADDRESS makes the API treat the pointer as an address to
+    // look up, never as a string to read; UNCHANGED_REFCOUNT means there is
+    // nothing to release afterwards.
+    let found = unsafe {
+        GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            address as *const u16,
+            &mut module,
+        )
+    } != 0;
+    if !found || module.is_null() {
+        return None;
+    }
+    let mut name = [0u16; 512];
+    // SAFETY: the buffer is valid for the length passed; the API truncates.
+    let len = unsafe { GetModuleFileNameW(module, name.as_mut_ptr(), name.len() as u32) } as usize;
+    let path = String::from_utf16_lossy(&name[..len.min(name.len())]);
+    let file = path.rsplit(['\\', '/']).next().unwrap_or(&path).to_string();
+    Some((module as usize, file))
 }
 
 #[cfg(not(windows))]
