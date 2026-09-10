@@ -241,6 +241,12 @@ the `e2e-real-backend` CI job had its own stub list missing `mosh-cli`.
   edge-whitespace escaper (a trailing `.replace` that adds backslashes
   reads as an escaper that forgot them) -- rewritten as a scan -- and two
   `except: pass` blocks in the bridge, now commented.
+- Second CI run: Linux `cargo test` reached 688/689 -- the one failure was a
+  real cross-platform bug, not the test: the web form of a bundled asset
+  (`/overlays/dust.mp4`, `/lut/amatorka.png`) is not an absolute path on
+  Windows but IS on Linux/macOS, where both locators sent it through the
+  path guard as a file on the filesystem root. Both now recognise the
+  bundled form before the absolute check; a LUT test covers both forms.
 - The bridge edits (pin, atomic copy, eviction) affect only the *fallback*
   download; the published add-on v1 sidecar predates them and never takes
   that path because the add-on installs the checkpoint. They ship with the

@@ -24,7 +24,19 @@ const MAX_OVERLAY_FRAMES: usize = 240;
 /// - absolute paths go through the standard path guard.
 fn locate_overlay_file(overlay_path: &str) -> Result<Option<PathBuf>> {
     let cleaned = overlay_path.trim_start_matches(['/', '\\']);
-    if Path::new(overlay_path).is_absolute() {
+    let cleaned_path = Path::new(cleaned);
+    // A bundled overlay is `overlays/<file>`, with or without a leading slash
+    // (the web form). Decide that BEFORE asking whether the string is an
+    // absolute path: on Windows `/overlays/dust.mp4` is not absolute and was
+    // handled below, but on Linux and macOS it is, and it went through the
+    // path guard as a file on the filesystem root -- which does not exist.
+    // The first CI run on Linux found it.
+    let first = cleaned_path.components().next();
+    let bundled = matches!(
+        first,
+        Some(Component::Normal(name)) if name.to_string_lossy().eq_ignore_ascii_case("overlays")
+    );
+    if !bundled && Path::new(overlay_path).is_absolute() {
         return Ok(Some(
             crate::path_guard::validate_io_path(overlay_path, true)
                 .map_err(crate::error::AppError::Generic)?,
@@ -34,13 +46,12 @@ fn locate_overlay_file(overlay_path: &str) -> Result<Option<PathBuf>> {
     // Bundled overlays are referenced as `overlays/<file>`. Reject anything
     // outside that subtree so a compromised frontend cannot read arbitrary
     // files through a relative overlay path.
-    let cleaned_path = Path::new(cleaned);
-    let Some(Component::Normal(first)) = cleaned_path.components().next() else {
+    let Some(Component::Normal(first)) = first else {
         return Err(crate::error::AppError::Generic(
             "Relative overlay path must start with a directory name".to_string(),
         ));
     };
-    if first.to_string_lossy().to_lowercase() != "overlays" {
+    if !first.to_string_lossy().eq_ignore_ascii_case("overlays") {
         return Err(crate::error::AppError::Generic(format!(
             "Relative overlay path must be inside the overlays/ directory, got: {}",
             cleaned

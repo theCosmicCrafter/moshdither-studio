@@ -41,8 +41,19 @@ impl Default for LutGrading {
 /// - absolute paths are validated with the standard path guard before use.
 fn locate_lut_file(lut_path: &str) -> Result<Option<PathBuf>> {
     let cleaned = lut_path.trim_start_matches(['/', '\\']);
-    let direct = Path::new(lut_path);
-    if direct.is_absolute() {
+    let cleaned_path = Path::new(cleaned);
+    // A bundled preset is `lut/<file>`, with or without a leading slash (the
+    // web form). Decide that BEFORE asking whether the string is absolute: on
+    // Windows `/lut/amatorka.png` is not absolute, but on Linux and macOS it
+    // is, and it would go through the path guard as a file on the filesystem
+    // root. Same fix as composite/overlay.rs, found by the first Linux CI run.
+    let mut components = cleaned_path.components();
+    let first = components.next();
+    let bundled = matches!(
+        first,
+        Some(Component::Normal(name)) if name.to_string_lossy().eq_ignore_ascii_case("lut")
+    );
+    if !bundled && Path::new(lut_path).is_absolute() {
         // Custom user LUTs must pass the same security validation as any
         // frontend-supplied file path.
         return Ok(Some(
@@ -53,14 +64,12 @@ fn locate_lut_file(lut_path: &str) -> Result<Option<PathBuf>> {
     // Bundled presets are referenced as e.g. `lut/amatorka.png`. Reject any
     // path traversal or paths outside the `lut/` subtree so a compromised
     // frontend cannot read arbitrary files through a relative LUT path.
-    let cleaned_path = Path::new(cleaned);
-    let mut components = cleaned_path.components();
-    let Some(Component::Normal(first)) = components.next() else {
+    let Some(Component::Normal(first)) = first else {
         return Err(crate::error::AppError::Generic(
             "Relative LUT path must start with a directory name".to_string(),
         ));
     };
-    if first.to_string_lossy().to_lowercase() != "lut" {
+    if !first.to_string_lossy().eq_ignore_ascii_case("lut") {
         return Err(crate::error::AppError::Generic(format!(
             "Relative LUT path must be inside the lut/ directory, got: {}",
             cleaned
@@ -546,6 +555,20 @@ mod tests {
     use super::*;
     use crate::effects::{Effect, Frame};
     use std::io::Write;
+
+    /// The web form of a bundled preset resolves on every platform. On Unix
+    /// `/lut/amatorka.png` is an absolute path, and it used to be sent to the
+    /// path guard as a file on the filesystem root.
+    #[test]
+    fn a_bundled_lut_resolves_with_or_without_a_leading_slash() {
+        for form in ["lut/amatorka.png", "/lut/amatorka.png"] {
+            let found = locate_lut_file(form).expect("should not error");
+            assert!(found.is_some(), "{form} did not resolve");
+        }
+        // The bundled form still cannot reach outside its subtree.
+        assert!(locate_lut_file("/lut/../secrets.env").is_err());
+        assert!(locate_lut_file("/overlays/dust.mp4").is_err());
+    }
 
     fn write_identity_cube(path: &Path, size: usize) {
         let mut file = std::fs::File::create(path).unwrap();
