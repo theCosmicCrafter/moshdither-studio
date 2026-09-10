@@ -70,6 +70,25 @@ to end against a real clip with no system Python involved.
 the icons are all bundled. Effects, dithering, glitch, datamoshing, LUTs and
 export need nothing from the internet.
 
+## BRANCHES -- 2026-09-09 23:20: everything live is on master
+
+`master` = `2ec2f03` (PR #49 then PR #51). Every branch was inventoried
+against it. Five branches still show commits "not in master" BY HASH, and all
+five were verified to be already on master by another route, or harmful now:
+
+| Branch | Verdict | Why |
+|---|---|---|
+| `fix/mask-texture-load-hang` (Aug 8) | superseded | `git merge-tree` produces master's tree unchanged: the 5 s timeout + onerror it adds are already at `EffectChain.ts:85-91` |
+| `fix/hang-audit-freezes-and-cancellation` (Aug 9) | superseded | all three fixes present: `stackSignature` gone, `cpuRenderSignature` drives the loop, `live-preview-param-update.spec.ts` exists, `output_with_timeout` and `run_cancellable` in |
+| `chore/recycle-legacy-sam3-rpc-backend` (Aug 12) | do NOT merge | the legacy files it removes are already gone; what it would still delete is `packages/python-backend/requirements.txt`, which `scripts/setup-sam3-env.py:19` reads |
+| `ui/typography-consistency-pass` (Aug 9-10) | superseded | 13 conflicting files, all on the same lines PR #49's design-token work already changed; the tokens it introduces are on master |
+| `origin/devin/register-skill` (Aug 3) | superseded | 2-file docs edit against a CLAUDE.md that has since been rewritten |
+
+They are left in place (never-delete); merging any of them now is either a
+no-op or a regression. `fix/export-keyframe-trim-offset` (today, the other
+session's refactor of `time_offset` into `export_frame_time()` + 2 tests) was
+the one live branch and is merged as PR #51.
+
 ## STATE OF THE TREE -- 2026-09-09 23:00 (read this first)
 
 **Everything is committed and pushed.** `Cosmic/upbeat-golick-68081b` is at
