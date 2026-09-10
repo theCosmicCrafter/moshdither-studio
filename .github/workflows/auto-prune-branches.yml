@@ -1,11 +1,20 @@
 name: Auto Prune Merged & Stale Branches
 
+# Manual trigger only.
+#
+# This job deletes every remote branch already merged into master. It never
+# ran while the repo was private (Actions was off), and going public turns
+# Actions on for free -- so a push-and-nightly trigger would have started
+# deleting branches automatically the same day. A merged branch loses only
+# its name, but this project's rule is that nothing is deleted without a
+# deliberate act. Run it from the Actions tab when you mean to; restore the
+# push/schedule triggers below if you decide you want it automatic.
+#
+#   push:
+#     branches: [master]
+#   schedule:
+#     - cron: '0 0 * * *'
 on:
-  push:
-    branches:
-      - master
-  schedule:
-    - cron: '0 0 * * *' # Daily at midnight UTC
   workflow_dispatch:
 
 jobs:

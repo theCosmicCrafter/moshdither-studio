@@ -139,3 +139,11 @@ test_*.txt
 # Archived installers (scripts/archive-build.mjs keeps the last few).
 # Large binaries; kept locally for rollback, never committed.
 /build-archive/
+
+# Per-machine and per-session files. These were tracked by mistake (a
+# checkpoint commit swept them in) and would have gone public with the repo:
+#   .claude/settings.local.json  -- this machine's tool permissions and MCP list
+#   evals/compensating-actions.log, evals/snapshots/  -- checkpoint bookkeeping
+.claude/settings.local.json
+evals/compensating-actions.log
+evals/snapshots/
