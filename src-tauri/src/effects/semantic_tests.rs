@@ -157,7 +157,7 @@ fn test_lift_shifts_shadows() {
     params.insert("lift_b".to_string(), json!(1.0));
     params.insert("amount".to_string(), json!(1.0));
     let result = effect.process_frame(&frame, None, &params).unwrap();
-    for chunk in result.data.chunks_exact(4) {
+    for chunk in result.data.as_chunks::<4>().0.iter() {
         assert_eq!(chunk[0], 0, "red channel should be unchanged");
         assert_eq!(chunk[1], 0, "green channel should be unchanged");
         assert_eq!(chunk[2], 255, "blue channel should max out with full lift");
@@ -200,8 +200,10 @@ fn test_jpeg_quantize_quality_100_reconstructs_input() {
     let result = effect.process_frame(&frame, None, &params).unwrap();
     let max_err = frame
         .data
-        .chunks_exact(4)
-        .zip(result.data.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(result.data.as_chunks::<4>().0.iter())
         .flat_map(|(a, b)| (0..3).map(move |c| (a[c] as i32 - b[c] as i32).abs()))
         .max()
         .unwrap();
@@ -251,7 +253,7 @@ fn test_bayer_dither_is_binary() {
     let result = effect
         .process_frame(&frame, None, &serde_json::Map::new())
         .unwrap();
-    for chunk in result.data.chunks_exact(4) {
+    for chunk in result.data.as_chunks::<4>().0.iter() {
         for channel in chunk.iter().take(3) {
             assert!(
                 *channel == 0 || *channel == 255,
@@ -273,7 +275,13 @@ fn test_blue_noise_rank_matrix_is_uniform() {
     let result = matrix
         .process_frame(&frame, None, &serde_json::Map::new())
         .unwrap();
-    let white = result.data.chunks_exact(4).filter(|c| c[0] == 255).count();
+    let white = result
+        .data
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|c| c[0] == 255)
+        .count();
     let total = (result.width * result.height) as usize;
     let ratio = white as f64 / total as f64;
     assert!(
@@ -312,7 +320,7 @@ fn test_halftone_rotation_respected() {
     params.insert("screen_angle".to_string(), json!(45.0));
     let result = effect.process_frame(&frame, None, &params).unwrap();
     assert_ne!(frame.data, result.data, "halftone should alter the image");
-    for chunk in result.data.chunks_exact(4) {
+    for chunk in result.data.as_chunks::<4>().0.iter() {
         assert!(
             chunk[0] == 0 || chunk[0] == 255,
             "halftone output should be binary"
@@ -331,8 +339,10 @@ fn test_lut_identity_lut_reconstructs_input() {
 
     let max_diff = frame
         .data
-        .chunks_exact(4)
-        .zip(result.data.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(result.data.as_chunks::<4>().0.iter())
         .flat_map(|(a, b)| (0..3).map(move |c| (a[c] as i32 - b[c] as i32).abs()))
         .max()
         .unwrap();
@@ -412,7 +422,9 @@ fn test_riemersma_dither_spreads_error() {
     // The total output should average close to the input mid-gray.
     let sum = result
         .data
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| c[0] as u64)
         .sum::<u64>();
     let avg = sum as f64 / (result.width as f64 * result.height as f64 * 255.0);

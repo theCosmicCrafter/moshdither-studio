@@ -226,7 +226,13 @@ mod tests {
         assert!(m1 >= m0 - 0.5, "bloom must not darken: {m0} -> {m1}");
         // The image survives. Both halves matter: not blown to white, and
         // detail retained rather than flattened.
-        let white = data.chunks_exact(4).filter(|p| p[0] > 251).count() as f64 / (w * h) as f64;
+        let white = data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[0] > 251)
+            .count() as f64
+            / (w * h) as f64;
         assert!(
             white < 0.5,
             "bloom blew {:.0}% of pixels to white",

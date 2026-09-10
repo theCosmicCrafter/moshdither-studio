@@ -74,6 +74,13 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Diagnostics_Debug",
     # EXCEPTION_POINTERS lives behind this one.
     "Win32_System_Kernel",
+    # GlobalMemoryStatusEx: the commit headroom, which on Windows is what
+    # actually bounds an allocation -- free physical RAM is not (sysmem.rs).
+    "Win32_System_SystemInformation",
+    # GetModuleHandleExW / GetModuleFileNameW, so the fault handler can say
+    # which module an address is in and at what offset from its base. Without
+    # the base the address in the log cannot be resolved after the fact.
+    "Win32_System_LibraryLoader",
 ] }
 
 [dev-dependencies]

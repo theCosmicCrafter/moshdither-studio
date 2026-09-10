@@ -83,7 +83,9 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          # ffmpeg: the encoder tests in src-tauri/src/ffmpeg skip without a
+          # runnable ffmpeg, and skipping is not the point of running them here.
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf ffmpeg
 
       # tauri.conf.json declares externalBin: bin/ffmpeg, ffprobe, ffgac, ffedit.
       # Tauri's build script requires a file to exist for the HOST target triple
@@ -103,7 +105,10 @@ jobs:
         run: |
           TRIPLE=$(rustc -vV | awk '/^host:/ {print $2}')
           mkdir -p src-tauri/bin
-          for b in ffmpeg ffprobe ffgac ffedit; do
+          # Every entry in tauri.conf.json's externalBin, or the Tauri build
+          # script fails with "resource path ... doesn't exist" before clippy
+          # runs. mosh-cli joined the list after the first four.
+          for b in ffmpeg ffprobe ffgac ffedit mosh-cli; do
             touch "src-tauri/bin/${b}-${TRIPLE}"
             chmod +x "src-tauri/bin/${b}-${TRIPLE}"
           done
@@ -200,7 +205,9 @@ jobs:
           mkdir -p src-tauri/bin
           ln -sf "$(command -v ffmpeg)"  "src-tauri/bin/ffmpeg-${TRIPLE}"
           ln -sf "$(command -v ffprobe)" "src-tauri/bin/ffprobe-${TRIPLE}"
-          for b in ffgac ffedit; do
+          # Every externalBin entry, or the Tauri build script aborts (same list
+          # as the rust job's stub above -- keep them together).
+          for b in ffgac ffedit mosh-cli; do
             touch "src-tauri/bin/${b}-${TRIPLE}"
             chmod +x "src-tauri/bin/${b}-${TRIPLE}"
           done

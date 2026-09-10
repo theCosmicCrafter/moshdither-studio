@@ -124,7 +124,7 @@ fn shifted_frame(input: &Frame, dx: i32, dy: i32) -> Frame {
     let w = input.width as usize;
     let h = input.height as usize;
     let mut out = vec![0u8; input.data.len()];
-    for (i, chunk) in out.chunks_exact_mut(4).enumerate() {
+    for (i, chunk) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let x = (i % w) as i32;
         let y = (i / w) as i32;
         let sx = (x - dx).rem_euclid(w as i32) as usize;

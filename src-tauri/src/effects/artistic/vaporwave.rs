@@ -36,7 +36,7 @@ impl Effect for Vaporwave {
     ) -> Result<Frame> {
         let mut data = input.data.clone();
 
-        for chunk in data.chunks_exact_mut(4) {
+        for chunk in data.as_chunks_mut::<4>().0.iter_mut() {
             let r = chunk[0] as f32;
             let g = chunk[1] as f32;
             let b = chunk[2] as f32;

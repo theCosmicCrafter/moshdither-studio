@@ -6,6 +6,7 @@ import {
   buildImageOverlayFilter,
   appendTextWatermarkToVf,
   buildWatermarkArgs,
+  escapeFilterValue,
   type WatermarkSettings,
 } from "./watermark";
 import { stackToRustPayload } from "../utils/effectConverter";
@@ -134,9 +135,10 @@ describe("Export Pipeline E2E", () => {
       const result = buildDrawtextFilter(settings);
       expect(result).not.toBeNull();
       expect(result).toContain("drawtext=");
-      expect(result).toContain("text='Hello'");
+      expect(result).toContain("text='Hello':expansion=none:");
       expect(result).toContain("fontsize=32");
-      expect(result).toContain("fontcolor=white");
+      // A float, never bare hex: ffmpeg rejects `white@b3` outright.
+      expect(result).toContain("fontcolor=white@0.700");
     });
 
     it("includes fontfile when fontPath is set", () => {
@@ -146,17 +148,40 @@ describe("Export Pipeline E2E", () => {
         text: "Test",
         fontPath: "/usr/share/fonts/arial.ttf",
       });
-      expect(result).toContain("fontfile=/usr/share/fonts/arial.ttf");
+      expect(result).toContain("fontfile='/usr/share/fonts/arial.ttf'");
     });
 
-    it("escapes special characters in text", () => {
+    // The same fixtures the Rust builder's tests assert
+    // (src-tauri/src/ffmpeg/mod.rs, `watermark_tests`): the two escapers must
+    // stay identical, and those expectations were measured against ffmpeg.
+    it("quotes and escapes a Windows font path for both parser levels", () => {
       const result = buildDrawtextFilter({
         ...DEFAULT_WATERMARK,
         enabled: true,
-        text: "it's a: test",
+        text: "It's 50% off",
+        fontPath: "\\\\?\\C:\\Windows\\Fonts\\arial.ttf",
       });
-      expect(result).toContain("\\'");
-      expect(result).toContain("\\:");
+      expect(result).toContain("drawtext=text='It'\\\\\\''s 50% off':expansion=none:");
+      expect(result).toContain(":fontfile='C\\:\\\\Windows\\\\Fonts\\\\arial.ttf'");
+      expect(result).not.toContain("\\\\?\\");
+    });
+
+    it("escapes filter values exactly as the Rust builder does", () => {
+      expect(escapeFilterValue("plain")).toBe("'plain'");
+      expect(escapeFilterValue("a:b")).toBe("'a\\:b'");
+      expect(escapeFilterValue("C:\\Windows\\Fonts\\arial.ttf")).toBe(
+        "'C\\:\\\\Windows\\\\Fonts\\\\arial.ttf'"
+      );
+      expect(escapeFilterValue("It's")).toBe("'It'\\\\\\''s'");
+      expect(escapeFilterValue("a,b;c")).toBe("'a\\,b\\;c'");
+      expect(escapeFilterValue("50% off %{n} (x) [y] {z} |")).toBe(
+        "'50% off %{n} (x) [y] {z} |'"
+      );
+      // Edge whitespace is escaped so the option parser does not trim it.
+      expect(escapeFilterValue(" both ")).toBe("'\\ both\\ '");
+      expect(escapeFilterValue("  a  b  ")).toBe("'\\ \\ a  b\\ \\ '");
+      expect(escapeFilterValue("   ")).toBe("'\\ \\ \\ '");
+      expect(escapeFilterValue("")).toBe("''");
     });
   });
 

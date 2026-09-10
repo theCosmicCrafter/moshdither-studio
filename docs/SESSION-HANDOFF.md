@@ -4,7 +4,7 @@ Living pass-down note. Update it at the end of every session and commit it.
 It lives in `docs/` on purpose: the previous handoff sat in `outputs/`, which is
 gitignored, so it never travelled with the branch.
 
-**Last updated:** 2026-09-09 · branch `fix/export-keyframe-trim-offset` (off `Cosmic/upbeat-golick-68081b`, PR #49)
+**Last updated:** 2026-09-10 · branch `docs/sam3-addon-published` (off master `b4972c2`)
 
 ---
 
@@ -27,11 +27,13 @@ gitignored, so it never travelled with the branch.
   stale sidecar survives an uninstall/reinstall cycle. Check for it by hand.
 
 
-- **CI is meaningless here.** Every check on PR #49 fails with "The job was not
-  started because recent account payments have failed." This is a free-plan
-  account with billing deliberately off. Red CI says nothing about the code.
-  **Local gates (`npm run gate`) are the only real signal, and they cover
-  Windows only.** Do not suggest enabling billing.
+- **CI runs now -- the repo went public on 2026-09-10 and Actions is free
+  there.** Until then every check failed with "recent account payments have
+  failed" and red CI meant nothing. It means something now, with two caveats:
+  the Linux job is the first ever to run, so its first failures are
+  environment (see "First CI runs" below), and **local gates (`npm run gate`)
+  remain the real signal for Windows, the only platform anyone has verified.**
+  Do not suggest enabling billing; nothing here needs it.
 - **Never delete anything.** Removals go to `recycling/<YYYY-MM-DD>_<reason>/`
   with a row in `recycling/MANIFEST.md`. (`recycling/` is gitignored — local by
   design.)
@@ -69,6 +71,190 @@ to end against a real clip with no system Python involved.
 `ffprobe`, `ffgac`, `ffedit`, `mosh-cli`), the 35 LUTs, the Python backend and
 the icons are all bundled. Effects, dithering, glitch, datamoshing, LUTs and
 export need nothing from the internet.
+
+## SAM3 ADD-ON PUBLISHED; REPO IS PUBLIC -- 2026-09-09 23:50
+
+**The add-on is live.** `sam3-addon-v1` on GitHub carries the manifest, the
+SAM licence, and four parts (3.06 GB sidecar + 3.45 GB checkpoint). Before
+upload every part was hashed against the manifest, and the manifest's sidecar
+hash was confirmed equal to `EXPECTED_SIDECAR_SHA256` compiled into the app --
+a mismatch would have made users download 3 GB and be refused.
+
+**It was unreachable anyway, and the audit missed why: the repo was PRIVATE.**
+A private repo's release-download URLs 404 without auth, and the app sends
+none (correctly -- a token cannot ship). So the SAM3 installer would have
+404'd for every user, owner included, no matter what was uploaded. Resolved by
+making the repo public (owner's decision; the app is MIT). Gate first: a
+full-history TruffleHog scan of every commit and branch found **0 verified
+secrets, no HF token**; the only non-fixture candidate is a literal
+`mongodb://username:password@host` placeholder in an old findings doc. Then
+PR #53 untracked this machine's `.claude/settings.local.json` and the
+checkpoint bookkeeping (they stay in history; nothing secret), and made
+`auto-prune-branches.yml` manual-only -- it deletes merged remote branches
+on push and nightly, had never run because Actions was off, and going public
+turns Actions on for free.
+
+After the flip, anonymous curl: manifest HTTP 200 and byte-identical to the
+staged one; all four parts HTTP 200 with the exact manifest sizes. The full
+anonymous download-and-hash of all 6.5 GB then passed: every part's sha256
+equals the manifest's.
+
+**Actions now runs (free on public repos).** Secret Scan passed on master
+immediately. CI and Security Gate ran for the first time ever and failed on
+environment, not code; what each needed is in "First CI runs" below. The
+memory note "Actions never runs" is obsolete and has been rewritten.
+
+**Which checkpoint the add-on ships -- corrected.** It is `facebook/sam3`'s
+`sam3.pt` (3,450,062,241 bytes, sha256 `9999e234...`), NOT SAM 3.1: the local
+file was hashed and matches both the published manifest and the hub's LFS
+digest for that file. `sam3_bridge.py`'s *fallback* download had defaulted to
+`facebook/sam3.1` / `sam3.1_multiplex.pt` (3,502,755,717 bytes, a different
+file this loader has never been run against) since 76610aa. The fallback is
+now pinned to the add-on's exact bytes: repo `facebook/sam3`, revision
+`3c879f39826c281e95690f02c7821c4de09afae7`, sha256-checked after download
+(which also closes bandit B615). SAM 3.1 remains a candidate for add-on v2
+*after* the loader is tested against it.
+
+**Smaller SAM3? Checked on the hub, not from memory.** Meta ships one size
+(860M; `facebook/sam3.1` from March 2026 is the same class, newer weights).
+The 6.5 GB is 3.06 GB of PyTorch+CUDA runtime plus a 3.45 GB **fp32**
+checkpoint -- a smaller model touches only the second half. Ranked by payoff:
+(1) store the checkpoint in fp16: 3.45 -> ~1.7 GB, zero functional change,
+half a day; evaluate SAM 3.1 at the same time; (2) `vil-uob/sam3-litetext-s0`
+(Apache-2.0, 529M) keeps SAM3's full image encoder and only distils the text
+encoder, so clicks/auto-mask are unchanged and text prompts lose a little
+reach -- but its Apache tag is the distillers' claim over weights that still
+contain Meta's ViT-H, and it is a `transformers` class, so a bridge rewrite;
+(3) ONNX Runtime would kill the 3 GB sidecar and run on any GPU/CPU, but only
+the point-tracker has a public ONNX export, not the text path. None of these
+should block the beta; (1) is the obvious add-on v2.
+
+## MEMORY, ESCAPING, FIRST CI RUNS -- 2026-09-10 (this session)
+
+**The datamosh "exit 4294967274" was the machine, not the code.** Both
+reported failures -- Classic via mosh-cli (`ffmpeg ... -> orig_in_*.avi`) and
+Slam Zoom via ffgac -- were `-22` (EINVAL) from a process that could not get
+memory. Windows' *commit* charge was at 109.3 of a 109.7 GB limit (93.7 GB RAM
+plus a fixed 16 GB pagefile) while 39 GB of RAM showed free; ComfyUI Desktop
+held 21 GB committed and 27 GB of VRAM, with the GPU driver backing the spill
+in system memory. At that level ffgac/ffmpeg exit -22, the bundled mosh-cli
+dies in numpy (`OpenBLAS error: Memory allocation still failed after 10
+retries`), PowerShell refuses to start (`0x800705AF`), and the app itself
+died with an ACCESS_VIOLATION (log `moshdither-1789008513-77020.log`). After
+ComfyUI was closed, the same commands -- same sidecar, same `\\?\` verbatim
+input path, same config -- passed. Two red herrings were run down and
+excluded on the way: the `\\?\` prefix (ffmpeg, ffgac and ffprobe all open
+it, from Rust and from Python; a Bash-heredoc backslash mangle faked the
+failure once) and frame rate (15 fps, jittered VFR at 90k timescale and 120
+fps all encode to MPEG-2 and MPEG-4 fine).
+
+What changed so it is diagnosable next time:
+- `src-tauri/src/sysmem.rs` reads commit headroom (`GlobalMemoryStatusEx`);
+  the export budget now plans from `min(free RAM, free commit)`; export,
+  FFglitch apply and FFglitch preview refuse up front below 1 GiB with a
+  sentence that names the binding limit; every child-process failure gets
+  the same sentence appended when it applies.
+- The fault handler logs the module and offset (`moshdither-studio.exe+0x...`
+  with the base), the read/write address for an access violation, and the
+  memory line -- the old log had only an ASLR'd address that could not be
+  resolved afterwards.
+- Owner-side: close GPU tools before exporting, and consider a
+  system-managed pagefile (it is fixed at 16 GB, so the limit can never grow).
+
+**Watermark text and fonts were broken, found while closing a CodeQL alert.**
+`escape_path` never quoted or backslash-escaped `fontfile=`, so on Windows
+`C\:\Windows\Fonts\arial.ttf` reached ffmpeg as `C:WindowsFontsarial.ttf`:
+a custom font never loaded (drawtext falls back silently, exit 0). Worse,
+`text='It\'s'` aborts the export outright ("No option name near ...") and
+`50% off` lost everything after the `%`. All three were established by
+rendering frames with the bundled ffmpeg 8.0 and comparing pixels against an
+escaping-free `textfile=`/`expansion=none` reference -- exit codes are not
+evidence here. One escaper now serves both values: quote for the graph
+parser, escape `\ : , ;` for the option parser, splice `'` in from outside
+the quotes, `expansion=none`; `\\?\` is stripped. Rust
+(`escape_filter_value`) and TS (`escapeFilterValue`, dead at runtime but kept
+identical) assert the same fixtures, and a Rust test re-runs the pixel
+measurement whenever ffmpeg and the Windows fonts are present. Four legacy TS
+test files that pinned the old strings (including bare-hex alpha, which
+ffmpeg rejects) were rewritten to the measured behaviour.
+
+**Adversarial review of the above, before it was committed.** Six
+independent reviewers (memory, escaping, crash handler, Python, CI, scanner
+honesty) produced 21 findings; each was attacked by three refuters and 14
+survived a majority. All 13 real ones are fixed in the same commit; the
+14th was a verification record that none of the scanner remediations is
+cosmetic. The two that mattered most: (a) `validate_io_path` refused every
+font under `C:\Windows\Fonts` -- the `windows` component rule -- so no
+custom-font export could have run even with the escaping right; the system
+font directories are now allowed roots (read-only use), with a test that
+`..\System32` through it is still refused. (b) `ffmpeg_binary()` cannot fail
+(its last resort is the bare name on PATH), so every "skip without ffmpeg"
+test guard was dead and the Linux CI `cargo test` would have failed; tests
+now gate on `ffmpeg_for_tests()`, which proves the binary runs, and the CI
+job installs ffmpeg so they run rather than skip. Also from the review: a
+commit reading of exactly 0 was being treated as "unknown" and waved through
+(now fires); the refusal gated on free RAM as well as commit, which would
+refuse a laptop that could page (commit only now); `escape_filter_value`
+lost leading/trailing spaces (escaped now, pixel-verified); the checkpoint
+copy went straight to the final path (`.part` + rename now, and a digest
+mismatch evicts the cached file so a retry re-downloads); the SAM3 env
+overrides dragged the facebook/sam3 revision along (pins apply only at the
+defaults); the JS-effect modes wrote `tmp.mpg` into the inherited cwd and
+leaked it on failure (`_scratch_dir` now, like the other modes -- sidecar
+rebuilt through the new build script and re-run on Slam Zoom and Classic);
+the `e2e-real-backend` CI job had its own stub list missing `mosh-cli`.
+
+**First CI runs (public repo), and what each needed.**
+- CI / Rust: Tauri's build script wants every `externalBin` present for the
+  target; the stub loop lacked `mosh-cli`. Added.
+- Security Gate / Semgrep: 2 blocking community findings (the job writes
+  SARIF to a file, so the log never says which). Reproduced locally only
+  after two detours: the Anaconda `pysemgrep.exe` is broken (`mcp.server.
+  fastmcp`), and a venv under the long scratchpad path fails a DLL load
+  ("filename too long") -- `%TEMP%\sgv` works; run `pysemgrep.exe` directly,
+  and with `SEMGREP_SETTINGS_FILE` pointed at an empty file to see the
+  community rules CI sees (the logged-in local scan adds Pro rules: 14
+  `rust.actix.path-traversal` hits on a desktop app's own file dialogs, and a
+  skill-doc example -- not CI's, left alone, listed here so nobody chases
+  them). Fixed for real: `build-mosh-sidecar.py` keeps the argv-derived
+  target triple off the PyInstaller command line (fixed `--name` into the
+  work dir, `os.replace` into `bin/`), `generate-lut-thumbs.mjs` chooses the
+  binary from a fixed table, and `mosh_cli.py`'s existing signed-off
+  `nosemgrep` marker was one line off its match (the call had wrapped).
+  Anonymous local scan: 0 findings.
+- Security Gate / Bandit: B615, the checkpoint pin above.
+- Security Gate / TruffleHog: `base: master` on a push to master is
+  `master..master`; the action refuses it. Removed, matching the
+  secret-scan job that passes.
+- PR #54's own first run, three more: (1) CI's stable clippy is **1.98**
+  (local was 1.97.1) and it added `chunks_exact_to_as_chunks` -- 66 sites
+  rewritten to `as_chunks::<4>().0.iter()` / `as_chunks_mut::<4>().0
+  .iter_mut()` by script, because clippy's own `--fix` suggestion for the
+  `_mut` case is wrong (`.iter()`) and rolls itself back; plus two
+  Linux-only lints in the `KillJob` stub path. `rustup toolchain install
+  1.98.0 --component clippy` and `cargo +1.98.0 clippy --all-targets` is
+  how to see what CI sees without changing the default toolchain.
+  (2) Semgrep's SARIF carries `nosemgrep`-suppressed matches with
+  `suppressions: inSource`; GitHub does not honour that, so the two
+  signed-off markers became open "Semgrep OSS" alerts. The job now drops
+  suppressed results with `jq` before upload. (3) CodeQL flagged the TS
+  edge-whitespace escaper (a trailing `.replace` that adds backslashes
+  reads as an escaper that forgot them) -- rewritten as a scan -- and two
+  `except: pass` blocks in the bridge, now commented.
+- Second CI run: Linux `cargo test` reached 688/689 -- the one failure was a
+  real cross-platform bug, not the test: the web form of a bundled asset
+  (`/overlays/dust.mp4`, `/lut/amatorka.png`) is not an absolute path on
+  Windows but IS on Linux/macOS, where both locators sent it through the
+  path guard as a file on the filesystem root. Both now recognise the
+  bundled form before the absolute check; a LUT test covers both forms.
+- The bridge edits (pin, atomic copy, eviction) affect only the *fallback*
+  download; the published add-on v1 sidecar predates them and never takes
+  that path because the add-on installs the checkpoint. They ship with the
+  next sidecar build.
+- CodeQL: `watermark.ts` (above), `external_script.py` uninitialised
+  `script_path` (now raises), `publish-sam3-addon.mjs` stat-then-open race
+  (`fstatSync` on the open descriptor). Left: vendored `pymosh/container/
+  riff.py` missing `__init__`.
 
 ## BRANCHES -- 2026-09-09 23:20: everything live is on master
 

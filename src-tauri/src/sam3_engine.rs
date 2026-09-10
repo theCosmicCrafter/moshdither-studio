@@ -928,8 +928,10 @@ impl Sam3Engine {
         }
         let mut child = self.child.lock().take();
         let result = Self::kill_child(&mut child);
-        // Closing the job terminates whatever the bootloader spawned.
-        drop(self.job.lock().take());
+        // Closing the job terminates whatever the bootloader spawned: the
+        // taken value is dropped at the end of this statement. (Not `drop(..)`
+        // -- on non-Windows the stub has no Drop impl and clippy rejects it.)
+        self.job.lock().take();
         result
     }
 
@@ -976,7 +978,7 @@ impl Drop for Sam3Engine {
     fn drop(&mut self) {
         let mut child = self.child.lock().take();
         let _ = Sam3Engine::kill_child(&mut child);
-        drop(self.job.lock().take());
+        self.job.lock().take();
     }
 }
 

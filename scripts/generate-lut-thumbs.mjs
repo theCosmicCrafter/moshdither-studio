@@ -73,7 +73,12 @@ function fail(msg) {
   console.error(`[lut-thumbs] ${msg}`);
   process.exit(1);
 }
-function run(bin, args) {
+function run(tool, args) {
+  // `tool` is a name, never a path: the only two binaries this script can
+  // launch are resolved above from the project tree. (Taking the path as a
+  // parameter tripped Semgrep's detect-child-process, correctly -- a caller
+  // could have passed anything.)
+  const bin = tool === "verify" ? verify : ffmpeg;
   const r = spawnSync(bin, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   if (r.status !== 0) fail(`${bin} failed (${r.status}):\n${(r.stderr || "").slice(-1500)}`);
   return r;
@@ -97,13 +102,13 @@ for (const f of ["portrait.jpg", "mountain.jpg", "landscape.jpg"]) {
 // which the --check guard in prebuild depends on. `geq` is byte-identical
 // across runs.
 const ramp = join(tmp, "ramp.png");
-run(ffmpeg, [
+run("ffmpeg", [
   "-y", "-v", "error",
   "-f", "lavfi", "-i", "color=c=black:s=256x256",
   "-vf", "geq=r='X*255/(W-1)':g='X*255/(W-1)':b='X*255/(W-1)'",
   "-frames:v", "1", "-pix_fmt", "rgb24", ramp,
 ]);
-run(ffmpeg, [
+run("ffmpeg", [
   "-y", "-v", "error",
   "-i", join(sampleDir, "portrait.jpg"),
   "-i", join(sampleDir, "mountain.jpg"),
@@ -116,7 +121,7 @@ run(ffmpeg, [
 ]);
 
 console.log(`[lut-thumbs] rendering ${lutNames.length} LUTs...`);
-run(verify, ["render-luts", "--image", sample, "--lut-dir", lutDir, "--output", join(tmp, "full")]);
+run("verify", ["render-luts", "--image", sample, "--lut-dir", lutDir, "--output", join(tmp, "full")]);
 
 mkdirSync(thumbDir, { recursive: true });
 let written = 0;
@@ -128,7 +133,7 @@ for (const name of lutNames) {
     continue;
   }
   const dst = join(thumbDir, `${name}.jpg`);
-  run(ffmpeg, ["-y", "-v", "error", "-i", src, "-vf", "scale=120:-1", "-q:v", "6", dst]);
+  run("ffmpeg", ["-y", "-v", "error", "-i", src, "-vf", "scale=120:-1", "-q:v", "6", dst]);
   written++;
   bytes += statSync(dst).size;
 }

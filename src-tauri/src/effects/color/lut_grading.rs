@@ -41,8 +41,19 @@ impl Default for LutGrading {
 /// - absolute paths are validated with the standard path guard before use.
 fn locate_lut_file(lut_path: &str) -> Result<Option<PathBuf>> {
     let cleaned = lut_path.trim_start_matches(['/', '\\']);
-    let direct = Path::new(lut_path);
-    if direct.is_absolute() {
+    let cleaned_path = Path::new(cleaned);
+    // A bundled preset is `lut/<file>`, with or without a leading slash (the
+    // web form). Decide that BEFORE asking whether the string is absolute: on
+    // Windows `/lut/amatorka.png` is not absolute, but on Linux and macOS it
+    // is, and it would go through the path guard as a file on the filesystem
+    // root. Same fix as composite/overlay.rs, found by the first Linux CI run.
+    let mut components = cleaned_path.components();
+    let first = components.next();
+    let bundled = matches!(
+        first,
+        Some(Component::Normal(name)) if name.to_string_lossy().eq_ignore_ascii_case("lut")
+    );
+    if !bundled && Path::new(lut_path).is_absolute() {
         // Custom user LUTs must pass the same security validation as any
         // frontend-supplied file path.
         return Ok(Some(
@@ -53,14 +64,12 @@ fn locate_lut_file(lut_path: &str) -> Result<Option<PathBuf>> {
     // Bundled presets are referenced as e.g. `lut/amatorka.png`. Reject any
     // path traversal or paths outside the `lut/` subtree so a compromised
     // frontend cannot read arbitrary files through a relative LUT path.
-    let cleaned_path = Path::new(cleaned);
-    let mut components = cleaned_path.components();
-    let Some(Component::Normal(first)) = components.next() else {
+    let Some(Component::Normal(first)) = first else {
         return Err(crate::error::AppError::Generic(
             "Relative LUT path must start with a directory name".to_string(),
         ));
     };
-    if first.to_string_lossy().to_lowercase() != "lut" {
+    if !first.to_string_lossy().eq_ignore_ascii_case("lut") {
         return Err(crate::error::AppError::Generic(format!(
             "Relative LUT path must be inside the lut/ directory, got: {}",
             cleaned
@@ -265,7 +274,7 @@ impl LoadedLut {
         let tile_size = 64u32; // 512 / 8
 
         let mut data = input.data.clone();
-        for chunk in data.chunks_exact_mut(4) {
+        for chunk in data.as_chunks_mut::<4>().0.iter_mut() {
             let r = chunk[0] as f32 / 255.0;
             let g = chunk[1] as f32 / 255.0;
             let b = chunk[2] as f32 / 255.0;
@@ -311,7 +320,7 @@ impl LoadedLut {
     fn apply_cube(data: &[[f32; 3]], size: usize, input: &Frame, amount: f32) -> Frame {
         let _n = size as f32;
         let mut output = input.data.clone();
-        for chunk in output.chunks_exact_mut(4) {
+        for chunk in output.as_chunks_mut::<4>().0.iter_mut() {
             let r_in = chunk[0] as f32 / 255.0;
             let g_in = chunk[1] as f32 / 255.0;
             let b_in = chunk[2] as f32 / 255.0;
@@ -547,6 +556,20 @@ mod tests {
     use crate::effects::{Effect, Frame};
     use std::io::Write;
 
+    /// The web form of a bundled preset resolves on every platform. On Unix
+    /// `/lut/amatorka.png` is an absolute path, and it used to be sent to the
+    /// path guard as a file on the filesystem root.
+    #[test]
+    fn a_bundled_lut_resolves_with_or_without_a_leading_slash() {
+        for form in ["lut/amatorka.png", "/lut/amatorka.png"] {
+            let found = locate_lut_file(form).expect("should not error");
+            assert!(found.is_some(), "{form} did not resolve");
+        }
+        // The bundled form still cannot reach outside its subtree.
+        assert!(locate_lut_file("/lut/../secrets.env").is_err());
+        assert!(locate_lut_file("/overlays/dust.mp4").is_err());
+    }
+
     fn write_identity_cube(path: &Path, size: usize) {
         let mut file = std::fs::File::create(path).unwrap();
         writeln!(file, "TITLE \"Identity\"").unwrap();
@@ -582,7 +605,7 @@ mod tests {
             .process_frame(&input, None, &ParameterValues::default())
             .unwrap();
 
-        for (i, chunk) in output.data.chunks_exact(4).enumerate() {
+        for (i, chunk) in output.data.as_chunks::<4>().0.iter().enumerate() {
             let expected_r = (i * 64) as u8;
             let expected_g = 128u8;
             let expected_b = (255 - i * 64) as u8;

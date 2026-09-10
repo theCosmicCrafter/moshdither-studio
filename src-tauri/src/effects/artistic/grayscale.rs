@@ -53,7 +53,7 @@ impl Effect for Grayscale {
             .and_then(|v| v.as_f64())
             .unwrap_or(self.intensity as f64) as f32;
         let mut data = input.data.clone();
-        for chunk in data.chunks_exact_mut(4) {
+        for chunk in data.as_chunks_mut::<4>().0.iter_mut() {
             let lum = crate::effects::luminance_f32(chunk[0], chunk[1], chunk[2]);
             for c in &mut chunk[..3] {
                 *c = (*c as f32 * (1.0 - intensity) + lum * intensity) as u8;

@@ -947,6 +947,15 @@ pub async fn export_video(
     let validated_source = validate_io_path(&source_path, true).inspect_err(|e| {
         tracing::error!("export_video rejected source {source_path}: {e}");
     })?;
+    // Before the queue and the probe: when the OS cannot hand out memory the
+    // decode fails deep inside ffmpeg with an exit code and no explanation,
+    // or this process dies. Say so while there is still a process to say it.
+    let headroom = crate::sysmem::memory_headroom();
+    tracing::info!("export_video {}", crate::sysmem::describe(&headroom));
+    if let Some(notice) = crate::sysmem::notice_for(&headroom) {
+        tracing::error!("export_video refused: {notice}");
+        return Err(notice);
+    }
     let validated_output = validate_io_path(&output_path, false).inspect_err(|e| {
         tracing::error!("export_video rejected output {output_path}: {e}");
     })?;
@@ -1015,6 +1024,9 @@ pub async fn export_video(
     })
     .await
     .map_err(|e| format!("Export task failed: {}", e))?
+    // A failure that started with plenty of memory can still end in an
+    // allocation that did not fit; the suffix is empty unless it did.
+    .map_err(|e: String| format!("{e}{}", crate::sysmem::low_memory_suffix()))
 }
 
 fn export_video_blocking(
@@ -2953,7 +2965,7 @@ fn run_ffglitch_subprocess(
         FFGLITCH_TIMEOUT,
         POLL_INTERVAL,
     )
-    .map_err(|e| format!("FFglitch: {e}"))
+    .map_err(|e| format!("FFglitch: {e}{}", crate::sysmem::low_memory_suffix()))
 }
 
 /// `"params": null` reaches mosh_cli.py as `None`, and its very first
@@ -3136,11 +3148,12 @@ pub async fn preview_ffglitch(
         .map_err(|e| format!("Could not run ffmpeg for the preview trim: {e}"))?;
     if !trim.status.success() {
         return Err(format!(
-            "Could not trim a preview segment: {}",
+            "Could not trim a preview segment: {}{}",
             String::from_utf8_lossy(&trim.stderr)
                 .lines()
                 .last()
-                .unwrap_or("unknown error")
+                .unwrap_or("unknown error"),
+            crate::sysmem::low_memory_suffix()
         ));
     }
 
@@ -3171,6 +3184,16 @@ pub async fn apply_ffglitch(
     let params = ffglitch_params_or_empty(params);
 
     validate_ffglitch_extra_paths(&mode, &params)?;
+
+    // The sidecar is Python plus numpy: importing it alone commits hundreds
+    // of MB of BLAS buffers, and when that fails the only symptom is
+    // "OpenBLAS error: Memory allocation still failed" on stderr, or ffgac
+    // exiting -22 opening a file that is right there. Refuse with the
+    // reason instead. (Observed 2026-09-10, commit limit exhausted by
+    // another app -- see sysmem.rs.)
+    if let Some(notice) = crate::sysmem::low_memory_notice() {
+        return Err(notice);
+    }
 
     // Prefer the bundled sidecar: it carries its own interpreter and numpy, so
     // datamoshing works on a machine with no Python at all. The interpreter
@@ -3269,8 +3292,9 @@ pub async fn apply_ffglitch(
             }
         }
         return Err(format!(
-            "FFglitch failed: {}",
-            String::from_utf8_lossy(&output.stderr)
+            "FFglitch failed: {}{}",
+            String::from_utf8_lossy(&output.stderr),
+            crate::sysmem::low_memory_suffix()
         ));
     }
 

@@ -124,11 +124,11 @@ def ffmpeg_convert(input_path, output_path, extra_args=None):
     # leaving it orphaned until the whole process tree is eventually reaped.
     #
     try:
-        # The marker must sit on the line immediately before the call.
+        # The marker covers only the line after it, and Semgrep anchors this
+        # finding on the `cmd` argument -- so the call stays on one line. (It
+        # had wrapped, and the marker silently stopped applying.)
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=1200, **_NO_WINDOW
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1200, **_NO_WINDOW)
     except subprocess.TimeoutExpired as e:
         raise RuntimeError(f"ffmpeg timed out after {e.timeout}s") from e
     if result.returncode != 0:

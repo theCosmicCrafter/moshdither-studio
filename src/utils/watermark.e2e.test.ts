@@ -61,7 +61,7 @@ describe("Export Pipeline — Watermark E2E", () => {
         fontPath: "/usr/share/fonts/arial.ttf",
       };
       const filter = buildDrawtextFilter(s);
-      expect(filter).toContain("fontfile=/usr/share/fonts/arial.ttf");
+      expect(filter).toContain("fontfile='/usr/share/fonts/arial.ttf'");
     });
 
     it("generates correct position coords for each position", () => {
@@ -82,7 +82,8 @@ describe("Export Pipeline — Watermark E2E", () => {
     it("escapes special characters in text", () => {
       const s = { ...DEFAULT_WATERMARK, enabled: true, text: "it's:cool" };
       const filter = buildDrawtextFilter(s);
-      expect(filter).toContain("it\\'s\\:cool");
+      // A quote is spliced in from outside the quotes: close, \\\', reopen.
+      expect(filter).toContain("text='it'\\\\\\''s\\:cool':expansion=none");
     });
   });
 

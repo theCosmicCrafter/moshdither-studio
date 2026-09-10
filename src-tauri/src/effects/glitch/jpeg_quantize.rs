@@ -211,7 +211,7 @@ impl Effect for JpegQuantize {
         let mut y_plane = vec![0.0f32; n];
         let mut cb_plane = vec![0.0f32; n];
         let mut cr_plane = vec![0.0f32; n];
-        for (i, chunk) in input.data.chunks_exact(4).enumerate() {
+        for (i, chunk) in input.data.as_chunks::<4>().0.iter().enumerate() {
             let r = chunk[0] as f32;
             let g = chunk[1] as f32;
             let b = chunk[2] as f32;
@@ -226,7 +226,7 @@ impl Effect for JpegQuantize {
 
         // YCbCr → RGB
         let mut data = input.data.clone();
-        for (i, chunk) in data.chunks_exact_mut(4).enumerate() {
+        for (i, chunk) in data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let y = y_plane[i];
             let cb = cb_plane[i] - 128.0;
             let cr = cr_plane[i] - 128.0;
@@ -293,8 +293,10 @@ mod tests {
         let result = effect.process_frame(&frame, None, &params).unwrap();
         let max_err = frame
             .data
-            .chunks_exact(4)
-            .zip(result.data.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(result.data.as_chunks::<4>().0.iter())
             .flat_map(|(a, b)| (0..3).map(move |c| (a[c] as i32 - b[c] as i32).abs()))
             .max()
             .unwrap();

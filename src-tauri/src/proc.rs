@@ -26,13 +26,17 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// A drop-in replacement for `Command::new`; on every other platform it is
 /// exactly `Command::new`.
 pub fn command<S: AsRef<std::ffi::OsStr>>(program: S) -> Command {
-    let mut cmd = Command::new(program);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        let mut cmd = Command::new(program);
         cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd
     }
-    cmd
+    #[cfg(not(windows))]
+    {
+        Command::new(program)
+    }
 }
 
 /// A Windows Job Object that kills every process assigned to it when the

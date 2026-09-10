@@ -315,7 +315,7 @@ impl Effect for HistoricalPalettes {
         let mix = mix.clamp(0.0, 1.0);
         let mut data = input.data.clone();
 
-        for chunk in data.chunks_exact_mut(4) {
+        for chunk in data.as_chunks_mut::<4>().0.iter_mut() {
             let r = chunk[0];
             let g = chunk[1];
             let b = chunk[2];

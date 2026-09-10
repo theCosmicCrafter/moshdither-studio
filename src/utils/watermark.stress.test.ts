@@ -10,26 +10,30 @@ import {
 describe("Watermark Stress Tests — Trying to Break FFmpeg", () => {
   // ── FFmpeg expression injection via text ──
   describe("FFmpeg expression injection via text", () => {
-    it("text with { } braces is escaped", () => {
+    // Escaping was re-measured against the bundled ffmpeg 8.0 by rendering
+    // pixels (see src-tauri/src/ffmpeg/mod.rs, watermark_tests): a value is
+    // quoted for the graph parser and escaped for the option parser, and
+    // drawtext runs with expansion=none so its own template syntax is off.
+    // That is what neutralises the injections below -- not a backslash in
+    // front of every punctuation mark, which ffmpeg simply stripped.
+    it("text with { } braces is literal under expansion=none", () => {
       const result = buildDrawtextFilter({
         ...DEFAULT_WATERMARK,
         enabled: true,
         text: "{n}: frame count",
       });
       expect(result).not.toBeNull();
-      expect(result).not.toMatch(/(?<!\\)\{/);
-      expect(result).toContain("\\{");
+      expect(result).toContain("text='{n}\\: frame count':expansion=none");
     });
 
-    it("text with FFmpeg function call is escaped", () => {
+    it("text with FFmpeg function call is literal under expansion=none", () => {
       const result = buildDrawtextFilter({
         ...DEFAULT_WATERMARK,
         enabled: true,
         text: "sin(t)",
       });
       expect(result).not.toBeNull();
-      expect(result).not.toMatch(/(?<!\\)\(/);
-      expect(result).toContain("\\(");
+      expect(result).toContain("text='sin(t)':expansion=none");
     });
 
     it("text with backslash is escaped", () => {
@@ -39,19 +43,19 @@ describe("Watermark Stress Tests — Trying to Break FFmpeg", () => {
         text: String.raw`back\slash`,
       });
       expect(result).not.toBeNull();
-      expect(result).toContain("\\\\");
-      expect(result).not.toMatch(/(?<!\\)\\s/);
+      expect(result).toContain("text='back\\\\slash':expansion=none");
     });
 
-    it("text with percent sign is escaped", () => {
+    it("text with percent sign is literal under expansion=none", () => {
       const result = buildDrawtextFilter({
         ...DEFAULT_WATERMARK,
         enabled: true,
         text: "%{eif\\:n\\:d}",
       });
       expect(result).not.toBeNull();
-      expect(result).not.toMatch(/(?<!\\)%\{/);
-      expect(result).toContain("\\%");
+      // The input already carries drawtext-style escapes; they are data now.
+      // Each `\:` in the input becomes `\\\:`: its backslash doubled, then the colon escaped.
+      expect(result).toContain("text='%{eif\\\\\\:n\\\\\\:d}':expansion=none");
     });
 
     it("text with newline is replaced with space", () => {
@@ -71,19 +75,17 @@ describe("Watermark Stress Tests — Trying to Break FFmpeg", () => {
         text: "ok;drawbox=c=red:t=fill",
       });
       expect(result).not.toBeNull();
-      expect(result).not.toMatch(/(?<!\\);drawbox/);
-      expect(result).toContain("\\;");
+      expect(result).toContain("text='ok\\;drawbox=c=red\\:t=fill':expansion=none");
     });
 
-    it("text with pipe is escaped", () => {
+    it("text with pipe is literal inside the quoted value", () => {
       const result = buildDrawtextFilter({
         ...DEFAULT_WATERMARK,
         enabled: true,
         text: "ok|negate",
       });
       expect(result).not.toBeNull();
-      expect(result).not.toMatch(/(?<!\\)\|negate/);
-      expect(result).toContain("\\|");
+      expect(result).toContain("text='ok|negate':expansion=none");
     });
   });
 
@@ -97,8 +99,7 @@ describe("Watermark Stress Tests — Trying to Break FFmpeg", () => {
         fontPath: "C:\\Windows\\Fonts\\arial.ttf",
       });
       expect(result).not.toBeNull();
-      expect(result).not.toContain("C:");
-      expect(result).toContain("\\:");
+      expect(result).toContain("fontfile='C\\:\\\\Windows\\\\Fonts\\\\arial.ttf'");
     });
 
     it("fontPath with spaces passes through unescaped", () => {
@@ -110,10 +111,10 @@ describe("Watermark Stress Tests — Trying to Break FFmpeg", () => {
       });
       expect(result).not.toBeNull();
       // Spaces in fontPath could cause issues depending on how args are passed
-      expect(result).toContain("/path with spaces/font.ttf");
+      expect(result).toContain("fontfile='/path with spaces/font.ttf'");
     });
 
-    it("fontPath with single quote is escaped", () => {
+    it("fontPath with single quote is spliced in from outside the quotes", () => {
       const result = buildDrawtextFilter({
         ...DEFAULT_WATERMARK,
         enabled: true,
@@ -121,15 +122,13 @@ describe("Watermark Stress Tests — Trying to Break FFmpeg", () => {
         fontPath: "/path/with'quote/font.ttf",
       });
       expect(result).not.toBeNull();
-      const fontfilePart = result!.split("fontfile=")[1];
-      expect(fontfilePart).not.toMatch(/(?<!\\)'/);
-      expect(fontfilePart).toContain("\\'");
+      expect(result).toContain("fontfile='/path/with'\\\\\\''quote/font.ttf'");
     });
   });
 
   // ── NaN opacity produces invalid FFmpeg alpha ──
   describe("NaN/Infinity opacity produces invalid FFmpeg", () => {
-    it("NaN opacity clamps to 0 (safe default)", () => {
+    it("NaN opacity clamps to 0.000 (safe default)", () => {
       const result = buildDrawtextFilter({
         ...DEFAULT_WATERMARK,
         enabled: true,
@@ -138,10 +137,10 @@ describe("Watermark Stress Tests — Trying to Break FFmpeg", () => {
       });
       expect(result).not.toBeNull();
       expect(result).not.toContain("@NaN");
-      expect(result).toContain("@00");
+      expect(result).toContain("@0.000");
     });
 
-    it("negative opacity clamps to 0", () => {
+    it("negative opacity clamps to 0.000", () => {
       const result = buildDrawtextFilter({
         ...DEFAULT_WATERMARK,
         enabled: true,
@@ -150,10 +149,10 @@ describe("Watermark Stress Tests — Trying to Break FFmpeg", () => {
       });
       expect(result).not.toBeNull();
       expect(result).not.toContain("@-");
-      expect(result).toContain("@00");
+      expect(result).toContain("@0.000");
     });
 
-    it("opacity > 1 clamps to 1", () => {
+    it("opacity > 1 clamps to 1.000", () => {
       const result = buildDrawtextFilter({
         ...DEFAULT_WATERMARK,
         enabled: true,
@@ -162,10 +161,10 @@ describe("Watermark Stress Tests — Trying to Break FFmpeg", () => {
       });
       expect(result).not.toBeNull();
       expect(result).not.toMatch(/@1fe/);
-      expect(result).toContain("@ff");
+      expect(result).toContain("@1.000");
     });
 
-    it("Infinity opacity clamps to 1", () => {
+    it("Infinity opacity clamps to 1.000", () => {
       const result = buildDrawtextFilter({
         ...DEFAULT_WATERMARK,
         enabled: true,
@@ -174,7 +173,7 @@ describe("Watermark Stress Tests — Trying to Break FFmpeg", () => {
       });
       expect(result).not.toBeNull();
       expect(result).not.toContain("@Infinity");
-      expect(result).toContain("@ff");
+      expect(result).toContain("@1.000");
     });
   });
 

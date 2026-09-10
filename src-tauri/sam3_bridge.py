@@ -302,8 +302,46 @@ NL2 = chr(10) + chr(10)
 # the installer from ~1.5 GB to ~4.7 GB, and they version independently of the
 # app. Fetched once on first use and cached forever -- the same shape Ollama and
 # LM Studio use.
-_CHECKPOINT_REPO = os.environ.get("SAM3_REPO_ID", "facebook/sam3.1")
-_CHECKPOINT_FILE = os.environ.get("SAM3_FILENAME", "sam3.1_multiplex.pt")
+#
+# This is the fallback for a missing checkpoint; the SAM3 add-on normally
+# installs it. The fallback is pinned to the SAME bytes the add-on ships
+# (`sam3-addon-v1`'s manifest lists this sha256), which is `facebook/sam3`'s
+# `sam3.pt` -- the only checkpoint this bridge's loader has been run against.
+# The previous default was `facebook/sam3.1` / `sam3.1_multiplex.pt`: a
+# different, never-loaded file, fetched from whatever `main` happened to be.
+# The revision pin is a commit hash, so a re-upload under the same file name
+# cannot change what arrives, and the digest check catches a torn download
+# before torch.load reports it as a corrupt zip.
+_DEFAULT_REPO = "facebook/sam3"
+_DEFAULT_FILE = "sam3.pt"
+_CHECKPOINT_REPO = os.environ.get("SAM3_REPO_ID", _DEFAULT_REPO)
+_CHECKPOINT_FILE = os.environ.get("SAM3_FILENAME", _DEFAULT_FILE)
+# The revision and digest belong to the default file. Pointing SAM3_REPO_ID or
+# SAM3_FILENAME elsewhere without re-pinning must not carry them along: a
+# commit hash from facebook/sam3 does not exist in another repo, and the
+# download would fail with a "not found" that reads like a gating problem.
+# An empty SAM3_REVISION means "the repo's main", not a revision named "".
+_PINS_APPLY = _CHECKPOINT_REPO == _DEFAULT_REPO and _CHECKPOINT_FILE == _DEFAULT_FILE
+_CHECKPOINT_REVISION = (
+    os.environ.get("SAM3_REVISION")
+    if "SAM3_REVISION" in os.environ
+    else ("3c879f39826c281e95690f02c7821c4de09afae7" if _PINS_APPLY else None)
+) or None
+_CHECKPOINT_SHA256 = (
+    os.environ.get("SAM3_SHA256")
+    if "SAM3_SHA256" in os.environ
+    else ("9999e2341ceef5e136daa386eecb55cb414446a00ac2b55eb2dfd2f7c3cf8c9e" if _PINS_APPLY else "")
+)
+
+
+def _sha256_of(path, chunk=64 << 20):
+    import hashlib
+
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(chunk), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def _ensure_checkpoint():
@@ -334,10 +372,13 @@ def _ensure_checkpoint():
 
     try:
         fetched = hf_hub_download(
-            repo_id=_CHECKPOINT_REPO, filename=_CHECKPOINT_FILE, token=token
+            repo_id=_CHECKPOINT_REPO,
+            filename=_CHECKPOINT_FILE,
+            revision=_CHECKPOINT_REVISION,
+            token=token,
         )
     except Exception as exc:
-        # facebook/sam3.1 is gated: Meta requires accepting the licence, so a
+        # facebook/sam3 is gated: Meta requires accepting the licence, so a
         # first-use fetch cannot be fully automatic however the app is packaged.
         raise RuntimeError(
             "SAM3 weights could not be downloaded."
@@ -360,8 +401,52 @@ def _ensure_checkpoint():
             + str(exc)
         ) from exc
 
+    if _CHECKPOINT_SHA256:
+        actual = _sha256_of(fetched)
+        if actual != _CHECKPOINT_SHA256:
+            # Evict the bad bytes before raising. With a commit-hash pin,
+            # hf_hub_download returns the cached file without a network
+            # round-trip, so leaving it in place would make every retry hash
+            # the same corrupt file and fail identically.
+            evicted = [fetched]
+            if os.path.islink(fetched):
+                evicted.append(os.path.realpath(fetched))
+            for stale in evicted:
+                try:
+                    os.remove(stale)
+                except OSError:
+                    # Best effort: the digest error below is the message that
+                    # matters, and it already tells the user where the file is.
+                    pass
+            raise RuntimeError(
+                "SAM3 checkpoint digest mismatch: expected sha256 "
+                + _CHECKPOINT_SHA256
+                + " but the downloaded file hashes to "
+                + actual
+                + ". The download was incomplete or the file is not the pinned "
+                + "checkpoint; it was not installed, and the cached copy at "
+                + str(fetched)
+                + " has been removed so a retry downloads it again. Set "
+                + "SAM3_SHA256 if you pinned a different checkpoint on purpose."
+            )
     if Path(fetched) != dest:
-        shutil.copyfile(fetched, dest)
+        # Copy to a sibling and rename: ensure_model_loaded() trusts
+        # dest.exists(), so a copy that dies part-way (disk full, the commit
+        # limit that took this machine down on 2026-09-10) must not leave a
+        # truncated file under the final name, where nothing would ever
+        # re-validate or re-fetch it.
+        partial = dest.with_name(dest.name + ".part")
+        try:
+            shutil.copyfile(fetched, partial)
+            os.replace(partial, dest)
+        except BaseException:
+            try:
+                os.remove(partial)
+            except OSError:
+                # The copy failed before the .part existed, or the disk is in
+                # no state to delete it either; the original error is re-raised.
+                pass
+            raise
     log("SAM3 checkpoint ready at %s", dest)
 
 

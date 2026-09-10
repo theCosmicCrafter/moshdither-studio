@@ -21,7 +21,7 @@ Writes `src-tauri/bin/mosh-cli-<target>`.
 
 import argparse
 import os
-import shutil
+import re
 import subprocess
 import sys
 import tempfile
@@ -119,6 +119,11 @@ def main() -> int:
             return 1
 
     target = get_target(args)
+    # A target triple is [a-z0-9_.-] only; anything else is a typo or an
+    # attempt to make the output land somewhere other than bin/.
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", target):
+        print(f"error: {target!r} is not a target triple", file=sys.stderr)
+        return 1
     output_name = f"mosh-cli-{target}"
     BIN_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -130,6 +135,11 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(dir=work_parent, prefix="mosh-sidecar-") as tmp:
         work_dir = Path(tmp)
+        # PyInstaller builds under a fixed name into the work dir, and the
+        # result is renamed into bin/ afterwards. The target triple comes from
+        # the command line or the environment, and this keeps it off the
+        # PyInstaller command line altogether (Semgrep's tainted-subprocess
+        # rule flagged it, and it never needed to be there).
         cmd = [
             str(python),
             "-m",
@@ -138,9 +148,9 @@ def main() -> int:
             "--noconfirm",
             "--clean",
             "--name",
-            output_name,
+            "mosh-cli",
             "--distpath",
-            str(BIN_DIR),
+            str(work_dir / "dist"),
             "--workpath",
             str(work_dir / "build"),
             "--specpath",
@@ -164,10 +174,16 @@ def main() -> int:
         if result.returncode != 0:
             return result.returncode
 
-    exe = BIN_DIR / (output_name + (".exe" if sys.platform == "win32" else ""))
-    if not exe.exists():
-        print(f"error: PyInstaller exited 0 but {exe} is missing", file=sys.stderr)
-        return 1
+        suffix = ".exe" if sys.platform == "win32" else ""
+        built = work_dir / "dist" / ("mosh-cli" + suffix)
+        if not built.exists():
+            print(f"error: PyInstaller exited 0 but {built} is missing", file=sys.stderr)
+            return 1
+        exe = BIN_DIR / (output_name + suffix)
+        # os.replace, not shutil.move: atomic when bin/ is on the same volume as
+        # build/ (it is -- both sit under the project root), so a build that is
+        # interrupted here leaves the old sidecar intact rather than a stub.
+        os.replace(built, exe)
     print(f"Sidecar built: {exe} ({exe.stat().st_size / 1048576:.1f} MB)")
     return 0
 

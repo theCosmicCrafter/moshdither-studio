@@ -3064,7 +3064,13 @@ mod tests {
 
             // The glow must spread beyond the highlight without erasing the
             // frame -- the failure mode being guarded against is "all white".
-            let white = result.data.chunks_exact(4).filter(|p| p[0] > 251).count();
+            let white = result
+                .data
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|p| p[0] > 251)
+                .count();
             assert!(
                 white < result.data.len() / 4 / 2,
                 "bloom blew {white} of {} pixels to white",

@@ -55,7 +55,7 @@ pub fn extract_palette(frame: &Frame, num_colors: usize) -> Vec<RgbColor> {
 
 fn collect_pixels(frame: &Frame) -> Vec<RgbColor> {
     let mut pixels = Vec::with_capacity(frame.data.len() / 4);
-    for chunk in frame.data.chunks_exact(4) {
+    for chunk in frame.data.as_chunks::<4>().0.iter() {
         if chunk[3] > 0 {
             pixels.push(RgbColor {
                 r: chunk[0],
@@ -572,7 +572,7 @@ mod tests {
 
         let mut shared_colors = std::collections::HashSet::new();
         for f in &out.frames {
-            for px in f.data.chunks_exact(4) {
+            for px in f.data.as_chunks::<4>().0.iter() {
                 shared_colors.insert(px[0]);
             }
         }
@@ -598,8 +598,13 @@ mod tests {
 
         // Pin the actual shared value: frame A's two native tones (10, 60)
         // must have collapsed onto the same merged dark-cluster palette entry.
-        let frame_a_shared_values: std::collections::HashSet<u8> =
-            out.frames[0].data.chunks_exact(4).map(|px| px[0]).collect();
+        let frame_a_shared_values: std::collections::HashSet<u8> = out.frames[0]
+            .data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|px| px[0])
+            .collect();
         assert_eq!(
             frame_a_shared_values.len(),
             1,
@@ -614,7 +619,7 @@ mod tests {
         // native bimodal structure is exactly what a 2-color extraction
         // recovers, demonstrating what the shared-palette fix avoids.
         let mut independent_a_values = std::collections::HashSet::new();
-        for px in independent_a.data.chunks_exact(4) {
+        for px in independent_a.data.as_chunks::<4>().0.iter() {
             independent_a_values.insert(px[0]);
         }
         assert_eq!(

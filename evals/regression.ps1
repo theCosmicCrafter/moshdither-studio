@@ -1,8 +1,9 @@
 # MoshDither Studio — Regression Gate
 #
 # Runs every local gate and exits non-zero if any fail. These gates are the
-# only real signal on this project: GitHub Actions never runs (free plan, no
-# billing), so a green PR page means nothing.
+# primary signal on this project: Windows is the only platform anyone ships
+# or has verified. GitHub Actions did not run at all until the repo went
+# public on 2026-09-10; it covers the Linux build and the SAST suite now.
 #
 # Usage: pwsh -File evals/regression.ps1 [-Quick] [-Verbose]
 #          -Quick  skip the slow Rust release build

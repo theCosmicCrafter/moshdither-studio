@@ -56,7 +56,7 @@ impl Effect for UniformNoise {
             .unwrap_or(self.range as u64) as i16;
         let time = params.get("time").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
         let mut data = input.data.clone();
-        for (i, chunk) in data.chunks_exact_mut(4).enumerate() {
+        for (i, chunk) in data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let seed = (i as u32)
                 .wrapping_add(time.wrapping_mul(101))
                 .wrapping_mul(374761393u32);

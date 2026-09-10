@@ -393,7 +393,7 @@ mod tests {
     fn grayscale_is_the_default_and_output_is_neutral() {
         let frame = color_frame(32, 32);
         let out = apply(&frame, FS, 2, true, &serde_json::Map::new()).unwrap();
-        for px in out.data.chunks_exact(4) {
+        for px in out.data.as_chunks::<4>().0.iter() {
             assert_eq!(px[0], px[1], "default mode must be neutral grey");
             assert_eq!(px[1], px[2], "default mode must be neutral grey");
         }
@@ -417,7 +417,9 @@ mod tests {
         let out = apply(&frame, FS, 2, true, &params).unwrap();
         assert!(
             out.data
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .any(|px| px[0] != px[1] || px[1] != px[2]),
             "rgb mode must produce at least one non-neutral pixel"
         );
@@ -434,7 +436,7 @@ mod tests {
 
         let distinct = |f: &Frame| {
             let mut seen = std::collections::HashSet::new();
-            for px in f.data.chunks_exact(4) {
+            for px in f.data.as_chunks::<4>().0.iter() {
                 seen.insert(px[0]);
             }
             seen.len()
@@ -500,7 +502,7 @@ mod tests {
         let out = apply(&frame, FS, 2, true, &params).unwrap();
 
         let gameboy = crate::effects::color::historical_palettes::palette_by_name("GameBoy");
-        for px in out.data.chunks_exact(4) {
+        for px in out.data.as_chunks::<4>().0.iter() {
             let colour = (px[0], px[1], px[2]);
             assert!(
                 gameboy.contains(&colour),
@@ -555,7 +557,9 @@ mod tests {
 
         let distinct: std::collections::HashSet<_> = out
             .data
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| (p[0], p[1], p[2]))
             .collect();
         assert!(
@@ -585,13 +589,19 @@ mod tests {
     #[test]
     fn palette_mode_preserves_alpha() {
         let mut frame = color_frame(16, 16);
-        for (i, px) in frame.data.chunks_exact_mut(4).enumerate() {
+        for (i, px) in frame.data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             px[3] = (i % 256) as u8;
         }
         let mut params = palette_params("preset");
         params.insert("palette".into(), json!("NES"));
         let out = apply(&frame, FS, 2, true, &params).unwrap();
-        for (a, b) in frame.data.chunks_exact(4).zip(out.data.chunks_exact(4)) {
+        for (a, b) in frame
+            .data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(out.data.as_chunks::<4>().0.iter())
+        {
             assert_eq!(a[3], b[3]);
         }
     }
@@ -602,7 +612,7 @@ mod tests {
         // projects store no color_mode and must render exactly as before.
         let frame = color_frame(32, 32);
         let out = apply(&frame, FS, 2, true, &serde_json::Map::new()).unwrap();
-        for px in out.data.chunks_exact(4) {
+        for px in out.data.as_chunks::<4>().0.iter() {
             assert_eq!(px[0], px[1]);
             assert_eq!(px[1], px[2]);
         }
@@ -611,11 +621,17 @@ mod tests {
     #[test]
     fn alpha_is_preserved() {
         let mut frame = color_frame(16, 16);
-        for (i, px) in frame.data.chunks_exact_mut(4).enumerate() {
+        for (i, px) in frame.data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             px[3] = (i % 256) as u8;
         }
         let out = apply(&frame, FS, 2, true, &serde_json::Map::new()).unwrap();
-        for (a, b) in frame.data.chunks_exact(4).zip(out.data.chunks_exact(4)) {
+        for (a, b) in frame
+            .data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(out.data.as_chunks::<4>().0.iter())
+        {
             assert_eq!(a[3], b[3]);
         }
     }

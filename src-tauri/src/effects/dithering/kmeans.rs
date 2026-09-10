@@ -46,7 +46,7 @@ impl Centroid {
 fn kmeans(data: &[u8], k: usize, max_iters: usize, seed: u64) -> Vec<Centroid> {
     // Collect non-transparent pixels, subsample for performance
     let mut pixels: Vec<(f64, f64, f64)> = Vec::new();
-    for chunk in data.chunks_exact(4) {
+    for chunk in data.as_chunks::<4>().0.iter() {
         if chunk[3] > 0 {
             pixels.push((chunk[0] as f64, chunk[1] as f64, chunk[2] as f64));
         }
@@ -410,7 +410,7 @@ impl KMeansDither {
         } else {
             // Nearest-color quantization without dithering
             let mut data = input.data.clone();
-            for chunk in data.chunks_exact_mut(4) {
+            for chunk in data.as_chunks_mut::<4>().0.iter_mut() {
                 let (nr, ng, nb) = nearest_centroid_color(
                     centroids,
                     chunk[0] as f64,
@@ -486,7 +486,9 @@ mod tests {
 
         let unique: std::collections::HashSet<(u8, u8, u8)> = result
             .data
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| (c[0], c[1], c[2]))
             .collect();
         assert!(
@@ -715,7 +717,7 @@ mod tests {
         // The whole segment must be drawn from ONE shared 2-color palette.
         let mut shared_colors = std::collections::HashSet::new();
         for f in &out.frames {
-            for px in f.data.chunks_exact(4) {
+            for px in f.data.as_chunks::<4>().0.iter() {
                 shared_colors.insert(px[0]);
             }
         }
@@ -744,8 +746,13 @@ mod tests {
         // And pin the actual shared value: frame A's two native tones (10, 60)
         // must have collapsed onto the SAME merged centroid, since the merged
         // 2-means groups the close dark pair together rather than splitting it.
-        let frame_a_shared_values: std::collections::HashSet<u8> =
-            out.frames[0].data.chunks_exact(4).map(|px| px[0]).collect();
+        let frame_a_shared_values: std::collections::HashSet<u8> = out.frames[0]
+            .data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|px| px[0])
+            .collect();
         assert_eq!(
             frame_a_shared_values.len(),
             1,
@@ -758,7 +765,7 @@ mod tests {
         // Sanity check on the independent path: run on its own, frame A's
         // native bimodal structure is exactly what 2-means recovers.
         let mut independent_a_values = std::collections::HashSet::new();
-        for px in independent_a.data.chunks_exact(4) {
+        for px in independent_a.data.as_chunks::<4>().0.iter() {
             independent_a_values.insert(px[0]);
         }
         assert_eq!(
