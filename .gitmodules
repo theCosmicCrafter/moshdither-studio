@@ -1,0 +1,108 @@
+[submodule "references/CamCamPlus_Datamosh-Filters"]
+	path = references/CamCamPlus_Datamosh-Filters
+	url = https://github.com/seanpm2001/CamCamPlus_Datamosh-Filters.git
+[submodule "references/CamCamPlus_Datamosh-Filters_Docs"]
+	path = references/CamCamPlus_Datamosh-Filters_Docs
+	url = https://github.com/seanpm2001/CamCamPlus_Datamosh-Filters_Docs.git
+[submodule "references/Datamosh"]
+	path = references/Datamosh
+	url = https://github.com/maelswarm/Datamosh.git
+[submodule "references/Datamosh-Den"]
+	path = references/Datamosh-Den
+	url = https://github.com/g-l-i-t-c-h-o-r-s-e/Datamosh-Den.git
+[submodule "references/Datamosher-Pro"]
+	path = references/Datamosher-Pro
+	url = https://github.com/Akascape/Datamosher-Pro.git
+[submodule "references/GlitchNodes"]
+	path = references/GlitchNodes
+	url = https://github.com/pxl-pshr/GlitchNodes.git
+[submodule "references/GuD-V1B3"]
+	path = references/GuD-V1B3
+	url = https://github.com/g-l-i-t-c-h-o-r-s-e/GuD-V1B3.git
+[submodule "references/JPEGGED"]
+	path = references/JPEGGED
+	url = https://github.com/Nuvotion-Visuals/JPEGGED.git
+[submodule "references/Regenerative_Vases"]
+	path = references/Regenerative_Vases
+	url = https://github.com/alessandroplantera/Regenerative_Vases.git
+[submodule "references/audacity-scripting"]
+	path = references/audacity-scripting
+	url = https://github.com/ychalier/audacity-scripting.git
+[submodule "references/beatviewer"]
+	path = references/beatviewer
+	url = https://github.com/ychalier/beatviewer.git
+[submodule "references/bitrot"]
+	path = references/bitrot
+	url = https://github.com/sixem/bitrot.git
+[submodule "references/crasher"]
+	path = references/crasher
+	url = https://github.com/witch-software/crasher.git
+[submodule "references/datamosh-js"]
+	path = references/datamosh-js
+	url = https://github.com/Datamosh-js/datamosh.git
+[submodule "references/datamosh-qbixxx"]
+	path = references/datamosh-qbixxx
+	url = https://github.com/qbixxx/datamosh.git
+[submodule "references/datamoshlive"]
+	path = references/datamoshlive
+	url = https://github.com/geikha/datamoshlive.git
+[submodule "references/didder"]
+	path = references/didder
+	url = https://github.com/makew0rld/didder.git
+[submodule "references/dither_pie"]
+	path = references/dither_pie
+	url = https://github.com/dobrosketchkun/dither_pie.git
+[submodule "references/ditherista"]
+	path = references/ditherista
+	url = https://github.com/robertkist/ditherista.git
+[submodule "references/eternal-mess"]
+	path = references/eternal-mess
+	url = https://github.com/ninofiliu/eternal-mess.git
+[submodule "references/fftools"]
+	path = references/fftools
+	url = https://github.com/ychalier/fftools.git
+[submodule "references/generative-art"]
+	path = references/generative-art
+	url = https://github.com/ychalier/generative-art.git
+[submodule "references/glitch-image"]
+	path = references/glitch-image
+	url = https://github.com/adamfuhrer/glitch-image.git
+[submodule "references/glitch-studio"]
+	path = references/glitch-studio
+	url = https://github.com/alexadam/glitch-studio.git
+[submodule "references/glitch-tool"]
+	path = references/glitch-tool
+	url = https://github.com/tobloef/glitch-tool.git
+[submodule "references/glitching_images"]
+	path = references/glitching_images
+	url = https://github.com/venam/glitching_images.git
+[submodule "references/imagerot"]
+	path = references/imagerot
+	url = https://github.com/sixem/imagerot.git
+[submodule "references/jpg-glitch"]
+	path = references/jpg-glitch
+	url = https://github.com/snorpey/jpg-glitch.git
+[submodule "references/putpix-3d-ts"]
+	path = references/putpix-3d-ts
+	url = https://github.com/tobloef/putpix-3d-ts.git
+[submodule "references/pymosh"]
+	path = references/pymosh
+	url = https://github.com/grampajoe/pymosh.git
+[submodule "references/python-moshion"]
+	path = references/python-moshion
+	url = https://github.com/rjmoggach/python-moshion.git
+[submodule "references/shpigford-dither"]
+	path = references/shpigford-dither
+	url = https://github.com/Shpigford/dither.git
+[submodule "references/supermosh"]
+	path = references/supermosh
+	url = https://github.com/supermosh/supermosh.github.io.git
+[submodule "references/supermosh.github.io"]
+	path = references/supermosh.github.io
+	url = https://github.com/supermosh/supermosh.github.io.git
+[submodule "references/transflow"]
+	path = references/transflow
+	url = https://github.com/ychalier/transflow.git
+[submodule "references/wrong"]
+	path = references/wrong
+	url = https://github.com/willbearfruits/wrong.git

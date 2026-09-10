@@ -1,6 +1,7 @@
 import { useRef, useState, useMemo } from "react";
 import { useAppStore } from "../../store";
 import ParameterPanel from "./ParameterPanel";
+import StackContextMenu, { type StackContextMenuItem } from "./StackContextMenu";
 import { isVideoOnlyEffect, VIDEO_ONLY_ON_IMAGE_WARNING } from "../../utils/effectConverter";
 
 export default function EffectStack() {
@@ -25,7 +26,14 @@ export default function EffectStack() {
   // no indication why.
   const showVideoOnlyWarnings = mediaLoaded && !isVideo;
 
+  const duplicateStackItem = useAppStore((s) => s.duplicateStackItem);
+  const soloStackItem = useAppStore((s) => s.soloStackItem);
+  const copyStackItem = useAppStore((s) => s.copyStackItem);
+  const pasteStackItem = useAppStore((s) => s.pasteStackItem);
+  const copiedStackEntry = useAppStore((s) => s.copiedStackEntry);
+
   const containerRef = useRef<HTMLDivElement>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   
   const [filterQuery, setFilterQuery] = useState("");
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -143,7 +151,12 @@ export default function EffectStack() {
               <div
                 key={entry.id}
                 onClick={() => selectStackItem(entry.id)}
-                className={`group relative flex flex-col p-3 rounded-lg cursor-pointer transition-all duration-300 filigree-corner ${
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  selectStackItem(entry.id);
+                  setContextMenu({ x: e.clientX, y: e.clientY, id: entry.id });
+                }}
+                className={`group relative flex flex-col p-3 rounded-lg cursor-pointer transition duration-300 filigree-corner ${
                   isSelected ? "neo-pressed active-card-pulse border border-accent-pink/40" : "neo-flat hover:border-outline-variant/50"
                 } ${entry.maskId ? "ring-1 ring-accent-pink/50 shadow-[0_0_10px_rgba(236,72,153,0.2)]" : ""}`}
                 style={{ opacity: entry.enabled ? 1 : 0.4 }}
@@ -174,7 +187,8 @@ export default function EffectStack() {
                     </div>
                     <div className="flex items-center gap-1">
                       <span className="text-label-sm font-label-sm text-on-surface-variant opacity-70 truncate">
-                        {Object.keys(entry.params).length} params
+                        {Object.keys(entry.params).length} parameter
+                        {Object.keys(entry.params).length !== 1 ? "s" : ""}
                       </span>
                       {entry.maskId && (
                         <span className="material-symbols-outlined text-accent-pink" style={{ fontSize: 12 }} title="Effect locked to mask">
@@ -285,6 +299,54 @@ export default function EffectStack() {
           })
         )}
       </div>
+
+      {contextMenu && (() => {
+        const entry = effectStack.find((e) => e.id === contextMenu.id);
+        if (!entry) return null;
+        const soloed =
+          entry.enabled && effectStack.every((e) => e.id === entry.id || !e.enabled);
+        const items: StackContextMenuItem[] = [
+          {
+            label: entry.enabled ? "Disable" : "Enable",
+            icon: entry.enabled ? "visibility_off" : "visibility",
+            onSelect: () => toggleStackItem(entry.id),
+          },
+          {
+            // Label reflects what the action will do, so the toggle is not a
+            // guess -- "Solo" isolates, "Unsolo" restores the rest.
+            label: soloed ? "Unsolo" : "Solo",
+            icon: "headphones",
+            onSelect: () => soloStackItem(entry.id),
+          },
+          {
+            label: "Duplicate",
+            icon: "file_copy",
+            separatorBefore: true,
+            onSelect: () => duplicateStackItem(entry.id),
+          },
+          { label: "Copy", icon: "content_copy", onSelect: () => copyStackItem(entry.id) },
+          {
+            label: copiedStackEntry ? `Paste ${copiedStackEntry.effectName}` : "Paste",
+            icon: "content_paste",
+            disabled: !copiedStackEntry,
+            onSelect: () => pasteStackItem(),
+          },
+          {
+            label: "Remove",
+            icon: "delete",
+            separatorBefore: true,
+            onSelect: () => removeFromStack(entry.id),
+          },
+        ];
+        return (
+          <StackContextMenu
+            x={contextMenu.x}
+            y={contextMenu.y}
+            items={items}
+            onClose={() => setContextMenu(null)}
+          />
+        );
+      })()}
     </div>
   );
 }

@@ -65,7 +65,11 @@ impl Effect for PaletteDither {
                     default: json!(0.0),
                     min: Some(-std::f64::consts::PI),
                     max: Some(std::f64::consts::PI),
-                    step: Some(0.1),
+                    // PI/32 is ~5.6 degrees and divides the full 2*PI turn into
+                    // exactly 64 positions. A flat 0.1 stepped from -PI stopped
+                    // at 3.0584 and never reached +PI, so the last sliver of the
+                    // rotation was unreachable from the input's arrows.
+                    step: Some(std::f64::consts::PI / 32.0),
                     options: None,
                 },
                 ParameterDef {

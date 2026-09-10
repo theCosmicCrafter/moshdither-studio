@@ -31,36 +31,52 @@ test("dock system renders with panel rail", async ({ page }) => {
 });
 
 test("dock tabs are clickable", async ({ page }) => {
-  // Look for dock tabs
-  const dockTabs = page.locator("[data-testid*='dock-tab-']");
-  const count = await dockTabs.count();
+  // flexlayout gives every docked tab a real role="tab" + accessible name,
+  // and its content pane is role="tabpanel" aria-labelledby that tab -- so
+  // Playwright resolves getByRole("tabpanel", { name }) to the pane owned by
+  // that specific tab, not just "something" on screen.
+  const dockTabs = page.getByRole("tab");
+  await expect(dockTabs.first()).toBeVisible({ timeout: 10000 });
+  expect(await dockTabs.count()).toBeGreaterThan(0);
 
-  if (count > 0) {
-    // Click each tab
-    for (let i = 0; i < Math.min(count, 5); i++) {
-      await dockTabs.nth(i).click();
-      await page.waitForTimeout(300);
-    }
+  // A handful of tabs from the default layout (defaultLayout.ts), each in a
+  // different tabset so this also exercises independent dock zones. The
+  // Timeline is not among them: it is the transport strip pinned under the
+  // workspace, not a panel (tests/e2e/timeline.spec.ts covers it).
+  const knownTabs = ["Effects", "Preview", "Stack"];
+
+  for (const label of knownTabs) {
+    const tab = page.getByRole("tab", { name: label }).first();
+    await expect(tab).toBeVisible();
+    await tab.click();
+
+    // Clicking must actually switch the visible panel content, not just
+    // leave the rest of the app looking unchanged.
+    const panel = page.getByRole("tabpanel", { name: label });
+    await expect(panel).toBeVisible({ timeout: 5000 });
   }
-
-  const toolbar = page.locator("header").first();
-  await expect(toolbar).toBeVisible();
 });
 
-test("floating windows can be opened and closed", async ({ page }) => {
-  // Look for panel menu or floating window triggers
-  const panelBtn = page
-    .locator("[title*='panel'], [title*='Panel'], [class*='panel-menu']")
-    .first();
+test("a panel can be added from the rail and closed again", async ({ page }) => {
+  // The old test was named for floating windows but clicked a loose
+  // [title*='panel'] match and asserted <header> was visible, so it exercised
+  // nothing. What the rail actually does is dock and undock panels, and that
+  // round trip is worth pinning: PanelRail only offers panels that are not
+  // already docked, so add-then-close must return the rail to its start state.
+  const railButton = page.getByTitle("Add Presets to right");
+  await expect(railButton).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Presets" })).toHaveCount(0);
 
-  if (await panelBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await panelBtn.click();
-    await page.waitForTimeout(500);
-  }
+  await railButton.click();
+  const tab = page.getByRole("tab", { name: "Presets" });
+  await expect(tab).toBeVisible();
+  // Once docked it is no longer on offer in the rail.
+  await expect(page.getByTitle("Add Presets to right")).toHaveCount(0);
 
-  // App should be responsive
-  const toolbar = page.locator("header").first();
-  await expect(toolbar).toBeVisible();
+  await tab.hover();
+  await tab.locator(".flexlayout__tab_button_trailing").click();
+  await expect(page.getByRole("tab", { name: "Presets" })).toHaveCount(0);
+  await expect(page.getByTitle("Add Presets to right")).toBeVisible();
 });
 
 test("window controls (minimize/maximize) don't crash", async ({ page }) => {

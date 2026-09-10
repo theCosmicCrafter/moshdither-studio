@@ -133,7 +133,9 @@ export default function WindowControls() {
 
   return (
     <div className="flex items-center gap-1" role="toolbar" aria-label="Window controls">
-      {/* Edge snap toggle */}
+      {/* Edge snap toggle. The glyph is `border_outer`; "magnet" was used here
+          but is not a Material Symbols name, so the ligature never formed and
+          the button rendered the literal text "MAGNET" in the toolbar. */}
       <button
         onClick={handleToggleSnap}
         className={`material-symbols-outlined transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full ${edgeSnapEnabled ? "text-accent-teal neo-pressed" : "text-on-surface-variant hover:text-accent-teal"}`}
@@ -142,7 +144,7 @@ export default function WindowControls() {
         aria-pressed={edgeSnapEnabled}
         style={{ fontSize: 18 }}
       >
-        magnet
+        border_outer
       </button>
 
       {/* AppBar dock button — Windows only */}

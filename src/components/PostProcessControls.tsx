@@ -86,7 +86,7 @@ export default function PostProcessControls({
           <button
             onClick={handlePostprocess}
             disabled={isLoading || (ppGrow === 0 && ppShrink === 0 && ppFeather === 0 && !ppFillHoles)}
-            className="w-full py-1.5 px-3 rounded bg-[var(--accent)] text-black font-label-md text-label-md font-semibold uppercase hover:brightness-110 transition-all disabled:opacity-50"
+            className="w-full py-1.5 px-3 rounded bg-[var(--accent)] text-black font-label-md text-label-md font-semibold uppercase hover:brightness-110 transition disabled:opacity-50"
           >
             {isLoading ? "Processing..." : "Apply"}
           </button>

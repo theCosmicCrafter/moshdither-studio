@@ -24,6 +24,19 @@ vi.mock("../../lib/tauri", () => ({
         setTimeout(() => resolve("data:image/png;base64,abc"), 50)
       )
   ),
+  sam3AddonStatus: vi.fn(() =>
+    Promise.resolve({
+      ready: true,
+      sidecar_installed: true,
+      sidecar_path: null,
+      sidecar_bytes: null,
+      checkpoint_installed: true,
+      checkpoint_path: null,
+      checkpoint_bytes: null,
+      dev_override: null,
+    })
+  ),
+  sam3AddonInstall: vi.fn(() => Promise.reject(new Error("not used in tests"))),
   sam3Init: vi.fn(() => Promise.resolve({})),
   sam3LoadImage: vi.fn(() => Promise.resolve({ width: 100, height: 100 })),
   sam3TextPrompt: vi.fn(() => Promise.resolve({ count: 1, masks: ["mask1"], scores: [0.95] })),
@@ -100,6 +113,20 @@ describe("MaskPanel", () => {
     render(<MaskPanel />);
 
     expect(screen.getByText(/SAM3 idle/i).parentElement?.querySelector(".animate-spin")).toBeNull();
+  });
+
+  // "Run Video Predictor" is recycled (recycling/MANIFEST.md, ADR 0006). It ran
+  // an independent auto-segment per frame with no identity carried between
+  // them, and its output reached only the green overlay -- never the
+  // renderer, never the export. This fails if the button comes back without an
+  // export path behind it, which is the exact bug being kept out.
+  it("offers no video predictor on a video source", () => {
+    useAppStore.setState({ mediaLoaded: true, isVideo: true, sam3Ready: true, maskTab: "sam3" });
+    render(<MaskPanel />);
+    // Positive anchor first, so a silent early return cannot pass this test.
+    expect(screen.getByText("Load Current Image")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /video predictor/i })).toBeNull();
+    expect(screen.queryByText(/frame timeline/i)).toBeNull();
   });
 
   it("shows Load Current Image button when sam3 is ready", () => {

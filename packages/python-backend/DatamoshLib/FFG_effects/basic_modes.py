@@ -1,8 +1,21 @@
 #Author: Akash Bora
-import os, shutil, subprocess, random, json, tempfile
+import os, shutil, subprocess, sys, random, json, tempfile
 from contextlib import contextmanager
 from pathlib import Path
 import numpy as np
+
+# Windows: keep child processes from flashing a console window.
+#
+# The app is a GUI. ffmpeg, ffgac and ffedit are console-subsystem programs, so
+# Windows allocates a console for each one and a black command-prompt window
+# appears -- and for a long convert, SITS there. Suppressing it on the Rust side
+# (crate::proc::command) only covers the processes RUST starts; every ffmpeg
+# this script spawns is a child of THIS process and needs its own flag.
+# CREATE_NO_WINDOW is 0x08000000. Output still pipes normally.
+_NO_WINDOW = {}
+if sys.platform == "win32":
+    _NO_WINDOW["creationflags"] = 0x08000000
+
 
 
 @contextmanager
@@ -63,7 +76,9 @@ def _run(args):
     # subprocess.run's own kill logic clean up that specific child
     # immediately instead of leaving it orphaned.
     try:
-        result = subprocess.run(args, capture_output=True, text=True, check=False, timeout=1200)
+        result = subprocess.run(
+            args, capture_output=True, text=True, check=False, timeout=1200, **_NO_WINDOW
+        )
     except subprocess.TimeoutExpired as e:
         tool = os.path.basename(str(args[0]))
         raise RuntimeError(f"{tool} timed out after {e.timeout}s: {' '.join(str(a) for a in args)}") from e

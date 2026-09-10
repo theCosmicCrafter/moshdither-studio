@@ -1,3 +1,4 @@
+pub mod beat_sync;
 pub mod bloom;
 pub mod classic;
 pub mod combine;

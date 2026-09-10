@@ -6,7 +6,10 @@ import { stackToRustPayload } from "../utils/effectConverter";
 export interface BatchJob {
   id: string;
   name: string;
-  format: "mp4" | "webm" | "gif" | "png_seq";
+  /** Any id from EXPORT_FORMATS in ExportPanel. Kept as a plain string so the
+   *  queue does not have to be edited every time a format is added -- the
+   *  backend's output_spec() is the single place that decides what each means. */
+  format: string;
   codec: string;
   resolutionW: number | undefined;
   resolutionH: number | undefined;
@@ -15,6 +18,11 @@ export interface BatchJob {
   status: "pending" | "running" | "completed" | "failed";
   outputPath?: string;
   error?: string;
+  trimStart?: number;
+  trimEnd?: number;
+  includeAudio?: boolean;
+  watermark?: import("../utils/watermark").WatermarkSettings | null;
+  processingScale?: number;
 }
 
 export function useBatchQueue() {
@@ -77,7 +85,23 @@ export function useBatchQueue() {
       try {
         const state = useAppStore.getState();
         const activeEffects = state.effectStack.filter((e) => e.enabled);
-        const stack = stackToRustPayload(activeEffects, state.activeMask, state.sam3Masks);
+        const stack = stackToRustPayload(
+          activeEffects,
+          state.activeMask,
+          state.sam3Masks,
+          undefined,
+          state.keyframes
+        );
+
+        const trimStart =
+          job.trimStart ?? (typeof state.inPoint === "number" ? state.inPoint : undefined);
+        const trimEnd =
+          job.trimEnd ?? (typeof state.outPoint === "number" ? state.outPoint : state.duration);
+        const watermark =
+          job.watermark ?? (state.watermark.enabled ? state.watermark : undefined);
+        const includeAudio = job.includeAudio ?? state.exportIncludeAudio;
+        const processingScale = job.processingScale;
+        const audioBakeJson = state.audioBakeData ? JSON.stringify(state.audioBakeData) : null;
 
         const outputPath = await exportVideo(filePath, stack, {
           maskB64: null,
@@ -87,6 +111,12 @@ export function useBatchQueue() {
           height: job.resolutionH,
           format: job.format,
           quality: job.quality,
+          trimStart,
+          trimEnd,
+          watermark,
+          includeAudio,
+          processingScale,
+          audioBakeJson,
         });
 
         if (abortRef.current) break;

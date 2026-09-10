@@ -31,7 +31,10 @@ const BIN =
   join(process.cwd(), "src-tauri", "target", "release", "mosh-verify") +
     (process.platform === "win32" ? ".exe" : "");
 
-const TEST_IMAGE = process.env.MOSHDITHER_TEST_IMAGE ?? "";
+// Committed fixture so this suite runs by default rather than skipping
+// silently. See tests/e2e/real-backend.spec.ts for the same reasoning.
+const TEST_IMAGE =
+  process.env.MOSHDITHER_TEST_IMAGE ?? join(process.cwd(), "tests", "fixtures", "test-image.png");
 
 const PRESETS_JSON = join(process.cwd(), "scripts", "presets.json");
 const LUT_DIR = join(process.cwd(), "public", "lut");
@@ -83,7 +86,9 @@ test("real backend: render-presets produces a PNG for every preset", () => {
     // Spot-check a few expected names.
     expect(pngs).toContain("vhs-analog.png");
     expect(pngs).toContain("cyberpunk-dither.png");
-    expect(pngs).toContain("bw-halftone.png");
+    // The preset is named `b&w-halftone`; `&` is one of the characters
+    // sanitize_filename maps to `_`, so the file lands as `b_w-halftone.png`.
+    expect(pngs).toContain("b_w-halftone.png");
     expect(pngs).toContain("kaleidoscope.png");
 
     // The summary line should report 10 ok, 0 errors.

@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback } from "react";
 import { AudioEngine, setGlobalAudioEngine } from "../engine/audio/AudioEngine";
 import { ManifestAudioEngine } from "../engine/audio/ManifestAudioEngine";
 import { AudioParameterMapper } from "../engine/audio/AudioParameterMapper";
+import { audioChannelName, splitAudioChannelName } from "../engine/audio/channelName";
 import { AudioFeatureExtractor } from "../engine/audio/AudioFeatureExtractor";
 import { useAppStore } from "../store";
 import type { FrameAudioFeatures, ManifestFrame } from "../engine/audio/types";
@@ -62,11 +63,45 @@ export function useAudioEngine() {
     mapper.clear();
     for (const [stackId, params] of Object.entries(audioBindings)) {
       for (const [paramId, binding] of Object.entries(params)) {
-        const channelName = `${stackId}.${paramId}`;
-        mapper.addMapping(channelName, binding);
+        mapper.addMapping(audioChannelName(stackId, paramId), binding);
       }
     }
   }, [audioBindings, getMapper]);
+
+  /**
+   * Publish the mapped values AND drive the parameters they are bound to.
+   *
+   * Binding a parameter to audio wrote an AudioBinding into the store, and
+   * the mapper dutifully computed a value for it every frame -- which went
+   * only into `audioMappedValues`, read by a readout label and nothing else.
+   * The control said "Audio Bound", offered source/range/attack/decay
+   * editors, and the parameter never moved: not in the preview, not in the
+   * export. Only the dedicated audio_reactive.* effects responded to audio,
+   * through the separate bake mechanism.
+   *
+   * updateStackParamsSilent is the same door useKeyframePlayback drives the
+   * preview through, so this does not pollute the undo history.
+   */
+  const publishMapped = useCallback(
+    (channels: Record<string, { smoothed: number }>) => {
+      const mapped: Record<string, number> = {};
+      const byStack: Record<string, Record<string, number>> = {};
+      for (const [name, val] of Object.entries(channels)) {
+        mapped[name] = val.smoothed;
+        const parts = splitAudioChannelName(name);
+        if (!parts) continue;
+        (byStack[parts.stackId] ??= {})[parts.paramId] = val.smoothed;
+      }
+      setAudioMappedValues(mapped);
+      const { updateStackParamsSilent, effectStack } = useAppStore.getState();
+      for (const [stackId, params] of Object.entries(byStack)) {
+        // A binding can outlive the effect it pointed at.
+        if (!effectStack.some((e) => e.id === stackId)) continue;
+        updateStackParamsSilent(stackId, params);
+      }
+    },
+    [setAudioMappedValues]
+  );
 
   // Sync volume to both engines
   useEffect(() => {
@@ -130,11 +165,7 @@ export function useAudioEngine() {
           beatEnergy: frame.beatEnergy,
         };
         const state = mapper.process(features);
-        const mapped: Record<string, number> = {};
-        for (const [name, val] of Object.entries(state.channels)) {
-          mapped[name] = val.smoothed;
-        }
-        setAudioMappedValues(mapped);
+        publishMapped(state.channels);
       }
       if (event.type === "play") setAudioPlaying(true);
       if (event.type === "pause" || event.type === "stop") setAudioPlaying(false);
@@ -170,11 +201,7 @@ export function useAudioEngine() {
         });
 
         const state = mapper.process(features);
-        const mapped: Record<string, number> = {};
-        for (const [name, val] of Object.entries(state.channels)) {
-          mapped[name] = val.smoothed;
-        }
-        setAudioMappedValues(mapped);
+        publishMapped(state.channels);
       }
       if (event.type === "play") setAudioPlaying(true);
       if (event.type === "pause" || event.type === "stop") setAudioPlaying(false);
@@ -200,6 +227,7 @@ export function useAudioEngine() {
     setAudioBandEnergies,
     setAudioBeatFlags,
     setAudioMappedValues,
+    publishMapped,
   ]);
 
   return {

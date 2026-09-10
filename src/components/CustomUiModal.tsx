@@ -140,7 +140,7 @@ export default function CustomUiModal() {
           </button>
           <button
             onClick={handleApply}
-            className="px-4 py-1.5 font-label-md text-label-md font-semibold rounded bg-accent-teal text-surface hover:brightness-110 transition-all shadow-md"
+            className="px-4 py-1.5 font-label-md text-label-md font-semibold rounded bg-accent-teal text-surface hover:brightness-110 transition shadow-md"
           >
             Apply Theme
           </button>

@@ -1,6 +1,7 @@
 import { useState, useEffect, memo, useCallback } from "react";
 import {
     getFrameData,
+    sam3AddonStatus,
     sam3AutoMask,
     sam3Clear,
     sam3Init,
@@ -13,10 +14,23 @@ import { useAppStore } from "../store";
 import MaskSelector from "./MaskSelector";
 import PostProcessControls from "./PostProcessControls";
 import ManualMaskEditor from "./ManualMaskEditor";
-import FrameTimeline from "./FrameTimeline";
+import Sam3Setup from "./Sam3Setup";
 import LabeledSlider from "./LabeledSlider";
 
 export default function MaskPanel() {
+  // Whether the ~6 GB SAM3 add-on is present. `null` while unknown, so the
+  // panel shows nothing rather than flashing a download prompt at a user who
+  // already has it installed.
+  const [addonReady, setAddonReady] = useState<boolean | null>(null);
+  const refreshAddon = useCallback(() => {
+    void sam3AddonStatus()
+      .then((st) => setAddonReady(st.ready))
+      // A failed probe must not render the setup panel: that would offer a 6 GB
+      // download on the strength of an unanswered question.
+      .catch(() => setAddonReady(true));
+  }, []);
+  useEffect(() => refreshAddon(), [refreshAddon]);
+
   const mediaLoaded = useAppStore((s) => s.mediaLoaded);
   const activeMask = useAppStore((s) => s.activeMask);
   const maskVisible = useAppStore((s) => s.maskVisible);
@@ -46,22 +60,40 @@ export default function MaskPanel() {
 
   // Ensure SAM3 is running before executing a command. Restarts if idle-shutdown occurred.
   const ensureSam3Ready = useCallback(async (): Promise<boolean> => {
-    if (useAppStore.getState().sam3Ready) return true;
     setIsLoading(true);
-    setStatusMessage("Starting SAM3 engine...");
     try {
-      await sam3Init();
-      setSam3Ready(true);
-      // Image auto-load is handled by the useEffect below when sam3Ready flips.
+      if (!useAppStore.getState().sam3Ready) {
+        setStatusMessage("Starting SAM3 engine...");
+        await sam3Init();
+        setSam3Ready(true);
+      }
+      // The image has to be IN the bridge before any prompt, and it must be
+      // awaited here.
+      //
+      // This used to return as soon as sam3Init() resolved and leave the image
+      // to a useEffect that fires when sam3Ready flips. So every prompt raced
+      // that effect: clicking Auto straight after opening a photo called
+      // auto_mask against a bridge that had never been sent a frame, and the
+      // user got "Auto-mask failed: Model not loaded" -- the model is only
+      // loaded inside cmd_load_image. The effect below still exists for the
+      // case where the engine is started from somewhere else.
+      const state = useAppStore.getState();
+      if (state.mediaLoaded && !state.sam3ImageLoaded) {
+        setStatusMessage("Loading image into SAM3...");
+        const b64 = await getFrameData();
+        await sam3LoadImage(b64);
+        setSam3ImageLoaded(true);
+      }
       setStatusMessage("SAM3 ready");
       return true;
     } catch (e) {
-      setStatusMessage(`SAM3 start failed: ${e}`);
+      setSam3ImageLoaded(false);
+      setStatusMessage(`SAM3 start failed: ${e}`, "error");
       return false;
     } finally {
       setIsLoading(false);
     }
-  }, [setSam3Ready, setStatusMessage]);
+  }, [setSam3Ready, setSam3ImageLoaded, setStatusMessage]);
 
   // Post-processing params
   const [ppGrow, setPpGrow] = useState(0);
@@ -273,11 +305,13 @@ export default function MaskPanel() {
 
       {maskTab === "manual" ? (
         <ManualMaskEditor />
+      ) : addonReady === false ? (
+        <Sam3Setup onReady={refreshAddon} />
       ) : !sam3Ready ? (
         <div className="flex flex-col gap-2 py-2">
           <div className="flex items-center justify-center gap-2 font-body-sm text-body-sm text-[var(--text-muted)]">
             <span className="inline-block w-2 h-2 rounded-full bg-[var(--accent)]" aria-hidden="true" />
-            SAM3 idle — enter a prompt to restart
+            SAM3 idle — enter a prompt to start
           </div>
           {/* Mode selector */}
           <div className="flex gap-2">
@@ -305,7 +339,7 @@ export default function MaskPanel() {
               <button
                 onClick={ensureSam3Ready}
                 disabled={isLoading}
-                className="flex-1 px-3 py-1.5 rounded bg-[var(--accent)] text-black font-label-md text-label-md font-semibold uppercase hover:brightness-110 transition-all disabled:opacity-50 flex items-center justify-center gap-1"
+                className="flex-1 px-3 py-1.5 rounded bg-[var(--accent)] text-black font-label-md text-label-md font-semibold uppercase hover:brightness-110 transition disabled:opacity-50 flex items-center justify-center gap-1"
               >
                 <span className="material-symbols-outlined" style={{ fontSize: 12 }}>auto_awesome</span>
                 {isLoading ? "Starting..." : "Start SAM3"}
@@ -314,7 +348,7 @@ export default function MaskPanel() {
               <button
                 onClick={handleAutoMask}
                 disabled={isLoading}
-                className="flex-1 px-3 py-1.5 rounded bg-[var(--accent)] text-black font-label-md text-label-md font-semibold uppercase hover:brightness-110 transition-all disabled:opacity-50 flex items-center justify-center gap-1"
+                className="flex-1 px-3 py-1.5 rounded bg-[var(--accent)] text-black font-label-md text-label-md font-semibold uppercase hover:brightness-110 transition disabled:opacity-50 flex items-center justify-center gap-1"
               >
                 <span className="material-symbols-outlined" style={{ fontSize: 12 }}>auto_awesome</span>
                 {isLoading ? "Starting..." : "Start SAM3 & Auto Mask"}
@@ -359,7 +393,7 @@ export default function MaskPanel() {
               <button
                 onClick={handleAutoMask}
                 disabled={isLoading}
-                className="flex-1 px-3 py-1.5 rounded bg-[var(--accent)] text-black font-label-md text-label-md font-semibold uppercase hover:brightness-110 transition-all disabled:opacity-50 flex items-center justify-center gap-1"
+                className="flex-1 px-3 py-1.5 rounded bg-[var(--accent)] text-black font-label-md text-label-md font-semibold uppercase hover:brightness-110 transition disabled:opacity-50 flex items-center justify-center gap-1"
               >
                 <span className="material-symbols-outlined" style={{ fontSize: 12 }}>auto_awesome</span>
                 {isLoading ? "Running..." : "Auto Mask"}
@@ -466,9 +500,6 @@ export default function MaskPanel() {
             />
           )}
 
-          {/* Frame Timeline for Video */}
-          <FrameTimeline />
-
           {activeMask && (
             <button
               onClick={handleClear}
@@ -509,7 +540,7 @@ const TextPromptInput = memo(function TextPromptInput({
       <button
         onClick={handleSubmit}
         disabled={isLoading || !prompt.trim()}
-        className="px-3 py-1.5 rounded bg-[var(--accent)] text-black font-label-md text-label-md font-semibold uppercase hover:brightness-110 transition-all disabled:opacity-50"
+        className="px-3 py-1.5 rounded bg-[var(--accent)] text-black font-label-md text-label-md font-semibold uppercase hover:brightness-110 transition disabled:opacity-50"
       >
         {isLoading ? "..." : "Go"}
       </button>

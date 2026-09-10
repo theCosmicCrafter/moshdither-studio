@@ -49,13 +49,15 @@ fn print_usage() {
     );
     eprintln!("    --image <path>         Path to test image (required)");
     eprintln!("    --video <path>         Path to test video (required for video effects)");
-    eprintln!("    --output <dir>         Output directory (default: ./test-outputs)");
+    eprintln!("    --output <dir>         Output directory (default: ./outputs/render)");
     eprintln!("    --filter <substring>   Only render effects whose ID contains substring");
     eprintln!("    --duration <secs>      Clip duration in seconds (default: 5)");
+    eprintln!("    --set <name>=<value>   Override a parameter (repeatable), e.g.");
+    eprintln!("                           --set intensity=5 --set threshold=0.4");
     eprintln!();
     eprintln!("  animate-all              Animate a still image through every effect (time 0→1)");
     eprintln!("    --image <path>         Path to still image (required)");
-    eprintln!("    --output <dir>         Output directory (default: ./test-outputs/animated)");
+    eprintln!("    --output <dir>         Output directory (default: ./outputs/animated)");
     eprintln!("    --filter <substring>   Only animate effects whose ID contains substring");
     eprintln!("    --duration <secs>      Clip duration in seconds (default: 5)");
     eprintln!("    --fps <n>              Frames per second (default: 24)");
@@ -63,7 +65,7 @@ fn print_usage() {
     eprintln!("  audio-render            Render audio-reactive effects with baked audio features");
     eprintln!("    --video <path>        Path to input video (required)");
     eprintln!("    --audio-bake <path>   Path to AudioBakeData JSON (required)");
-    eprintln!("    --output <dir>        Output directory (default: ./audio-outputs)");
+    eprintln!("    --output <dir>        Output directory (default: ./outputs/audio)");
     eprintln!("    --filter <substring>  Only render effects whose ID contains substring");
     eprintln!("    --max-frames <n>      Max frames to decode (default: 450 = 15s @ 30fps)");
     eprintln!("    --scale <n>           Downscale so longest side = n px (e.g. 720 for 720p)");
@@ -73,12 +75,12 @@ fn print_usage() {
     eprintln!("  render-presets          Render preset stacks on a test image");
     eprintln!("    --image <path>        Path to test image (required)");
     eprintln!("    --presets <path>      JSON file with preset specs (required)");
-    eprintln!("    --output <dir>        Output directory (default: ./preset-outputs)");
+    eprintln!("    --output <dir>        Output directory (default: ./outputs/presets)");
     eprintln!();
     eprintln!("  render-luts             Render every LUT in a directory via color.lut_grading");
     eprintln!("    --image <path>        Path to test image (required)");
     eprintln!("    --lut-dir <dir>       Directory containing LUT PNGs (default: ./public/lut)");
-    eprintln!("    --output <dir>        Output directory (default: ./lut-outputs)");
+    eprintln!("    --output <dir>        Output directory (default: ./outputs/luts)");
     eprintln!();
     eprintln!("EXAMPLES:");
     eprintln!("  mosh-verify verify-all --format json > report.json");
@@ -87,7 +89,7 @@ fn print_usage() {
     eprintln!("  mosh-verify list-effects --category dithering");
     eprintln!("  mosh-verify test-all --format json");
     eprintln!(
-        "  mosh-verify render-all --image photo.png --video clip.mp4 --output ./test-outputs"
+        "  mosh-verify render-all --image photo.png --video clip.mp4 --output ./outputs/render"
     );
     eprintln!("  mosh-verify status");
 }
@@ -305,15 +307,40 @@ fn cmd_status() -> ExitCode {
 
 // ── render-all: render every effect on real image + video ──────────────────
 
-/// Build default params from an effect's ParameterDef list.
-/// `effect_id` lets us apply effect-specific strong defaults so every effect is
-/// immediately noticeable in the test outputs.
+/// Build params from an effect's ParameterDef list, using each parameter's own
+/// declared default -- what a user actually gets on first drop.
 fn build_default_params(
     effect_id: &str,
     params: &[ParameterDef],
 ) -> serde_json::Map<String, serde_json::Value> {
+    build_params(effect_id, params, false)
+}
+
+/// Build params, optionally substituting deliberately strong values so every
+/// effect is unmistakable in a sweep.
+///
+/// The strong values are keyed by parameter *name*, but names are not unique
+/// across scales: six effects declare a `threshold`, ranging from 0.1-0.9
+/// (line_screen) to 0-255 (dithering.threshold, solarize, pixel_sort). Feeding
+/// the same literal 0.3 to all of them drove five to a degenerate end of their
+/// range -- `dithering.threshold` rendered pure white, and `profile_smear` at
+/// `strength: 1.0` (its max, vs a 0.8 default) collapsed every row onto the one
+/// above it and output vertical stripes. Both looked exactly like product bugs.
+///
+/// So exaggeration is now opt-in via `--exaggerate`. Injected `_audio_*` values
+/// are always applied: they are not user-facing parameters, and without them the
+/// audio-reactive family is inert in a sweep that has no audio.
+fn build_params(
+    effect_id: &str,
+    params: &[ParameterDef],
+    exaggerate: bool,
+) -> serde_json::Map<String, serde_json::Value> {
     let mut map = serde_json::Map::new();
     for p in params {
+        if !exaggerate && !p.id.starts_with('_') {
+            map.insert(p.id.clone(), p.default.clone());
+            continue;
+        }
         // Use the default value, but override zero-amount/zero-lift effects
         // and clamp audio-reactive audio params to neutral so they are animated by
         // the animate-all command rather than left silent.
@@ -364,9 +391,19 @@ fn build_default_params(
     map
 }
 
-/// Sanitize an effect ID into a filesystem-safe filename.
+/// Sanitize an effect ID or preset name into a filesystem-safe filename.
+///
+/// This started out handling effect IDs, which are only ever `[a-z0-9._]`, so
+/// replacing the separators was enough. It is also applied to preset and LUT
+/// names, which are free-form human text -- `b&w-halftone` ships today -- and
+/// those can carry characters Windows flatly refuses in a filename (`<>:"|?*`).
+/// Letting one through means the render fails at the write rather than
+/// producing a slightly odd name, so every reserved character is mapped.
 fn sanitize_filename(id: &str) -> String {
-    id.replace(['.', '/', '\\'], "_")
+    id.replace(
+        ['.', '/', '\\', '&', '<', '>', ':', '"', '|', '?', '*'],
+        "_",
+    )
 }
 
 /// Create a circular gradient mask for testing mask-dependent effects.
@@ -402,9 +439,13 @@ struct RenderStats {
 fn cmd_render_all(args: &[String]) -> ExitCode {
     let mut image_path: Option<&str> = None;
     let mut video_path: Option<&str> = None;
-    let mut output_dir = "./test-outputs".to_string();
+    let mut output_dir = "./outputs/render".to_string();
     let mut filter: Option<&str> = None;
     let mut duration_secs = 5.0f64;
+    // `--set name=value`, repeatable. Without this there was no way to render an
+    // effect at anything but its default, so a parameter's RANGE could not be
+    // examined at all -- only the single point the author happened to pick.
+    let mut overrides: Vec<(String, f64)> = Vec::new();
 
     let mut i = 0;
     while i < args.len() {
@@ -431,6 +472,24 @@ fn cmd_render_all(args: &[String]) -> ExitCode {
                 i += 1;
                 if i < args.len() {
                     filter = Some(&args[i]);
+                }
+            }
+            "--set" => {
+                i += 1;
+                if i < args.len() {
+                    match args[i].split_once('=') {
+                        Some((k, v)) => match v.parse::<f64>() {
+                            Ok(v) => overrides.push((k.to_string(), v)),
+                            Err(_) => {
+                                eprintln!("--set expects name=<number>, got '{}'", args[i]);
+                                return ExitCode::from(2);
+                            }
+                        },
+                        None => {
+                            eprintln!("--set expects name=value, got '{}'", args[i]);
+                            return ExitCode::from(2);
+                        }
+                    }
                 }
             }
             "--duration" => {
@@ -531,7 +590,20 @@ fn cmd_render_all(args: &[String]) -> ExitCode {
         };
 
         let safe_name = sanitize_filename(&meta.id);
-        let params = clamp_params(&meta.id, &build_default_params(&meta.id, &meta.parameters));
+        let mut base = build_default_params(&meta.id, &meta.parameters);
+        for (k, v) in &overrides {
+            // Only override parameters the effect actually declares, so a typo
+            // fails loudly at the report rather than silently doing nothing.
+            if meta.parameters.iter().any(|p| &p.id == k) {
+                base.insert(
+                    k.clone(),
+                    serde_json::Number::from_f64(*v)
+                        .map(serde_json::Value::Number)
+                        .unwrap_or(serde_json::Value::Null),
+                );
+            }
+        }
+        let params = clamp_params(&meta.id, &base);
 
         // ── Render image output ──────────────────────────────
         let img_out_path = format!("{}/images/{}.png", output_dir, safe_name);
@@ -610,6 +682,7 @@ fn cmd_render_all(args: &[String]) -> ExitCode {
                                 &segment,
                                 &vid_out_path,
                                 "h264",
+                                None,
                                 None,
                                 None,
                                 None,
@@ -700,7 +773,7 @@ struct PresetSpec {
 
 fn cmd_render_presets(args: &[String]) -> ExitCode {
     let mut image_path: Option<&str> = None;
-    let mut output_dir = "./preset-outputs".to_string();
+    let mut output_dir = "./outputs/presets".to_string();
     let mut presets_file: Option<&str> = None;
 
     let mut i = 0;
@@ -863,7 +936,7 @@ fn cmd_render_presets(args: &[String]) -> ExitCode {
 
 fn cmd_render_luts(args: &[String]) -> ExitCode {
     let mut image_path: Option<&str> = None;
-    let mut output_dir = "./lut-outputs".to_string();
+    let mut output_dir = "./outputs/luts".to_string();
     let mut lut_dir = "./public/lut".to_string();
 
     let mut i = 0;
@@ -996,7 +1069,7 @@ fn cmd_render_luts(args: &[String]) -> ExitCode {
 fn cmd_audio_render(args: &[String]) -> ExitCode {
     let mut video_path: Option<&str> = None;
     let mut audio_bake_path: Option<&str> = None;
-    let mut output_dir = "./audio-outputs".to_string();
+    let mut output_dir = "./outputs/audio".to_string();
     let mut filter: Option<&str> = None;
     let mut max_frames: usize = 450; // 15s @ 30fps default
     let mut scale: Option<usize> = None;
@@ -1213,7 +1286,7 @@ fn cmd_audio_render(args: &[String]) -> ExitCode {
 
         match ffmpeg::encode_video(
             &segment, &out_path, "h264", None, None, None, None, None, None, None, None, None,
-            None, None,
+            None, None, None,
         ) {
             Ok(()) => {
                 eprintln!(
@@ -1469,7 +1542,7 @@ const INTENDED_STATIC_EFFECTS: &[&str] = &["datamoshing.frame_hold"];
 
 fn cmd_animate_all(args: &[String]) -> ExitCode {
     let mut image_path: Option<&str> = None;
-    let mut output_dir = "./test-outputs/animated".to_string();
+    let mut output_dir = "./outputs/animated".to_string();
     let mut filter: Option<&str> = None;
     let mut duration_secs = 5.0f64;
     let mut fps = 24.0f64;
@@ -1686,6 +1759,7 @@ fn cmd_animate_all(args: &[String]) -> ExitCode {
             None,
             None,
             None,
+            None,
         ) {
             Ok(()) => {
                 let is_intended_static =
@@ -1871,5 +1945,38 @@ fn main() -> ExitCode {
             print_usage();
             ExitCode::from(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_filename;
+
+    #[test]
+    fn effect_ids_keep_their_shape_with_separators_flattened() {
+        assert_eq!(
+            sanitize_filename("color.brightness_contrast"),
+            "color_brightness_contrast"
+        );
+        assert_eq!(sanitize_filename(r"a/b\c"), "a_b_c");
+    }
+
+    #[test]
+    fn preset_names_lose_characters_windows_refuses_in_a_filename() {
+        // `b&w-halftone` is a real preset in scripts/presets.json.
+        assert_eq!(sanitize_filename("b&w-halftone"), "b_w-halftone");
+
+        // Any of these would make the write fail outright on Windows.
+        for reserved in ['<', '>', ':', '"', '|', '?', '*'] {
+            let out = sanitize_filename(&format!("retro{reserved}vhs"));
+            assert_eq!(out, "retro_vhs", "{reserved:?} must not survive");
+        }
+    }
+
+    #[test]
+    fn ordinary_names_are_left_alone() {
+        // Spaces, hyphens and case are legal and worth preserving -- the point
+        // is filesystem safety, not aggressive slugification.
+        assert_eq!(sanitize_filename("Deep Bass-Pulse 2"), "Deep Bass-Pulse 2");
     }
 }

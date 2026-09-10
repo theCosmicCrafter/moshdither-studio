@@ -38,11 +38,70 @@ if (-not $trufflehog) {
     New-Item -ItemType Directory -Force -Path (Split-Path $trufflehog) | Out-Null
     Write-Host "TruffleHog not found in tools directories or on PATH." -ForegroundColor Yellow
     Write-Host "Downloading (~170 MB)..." -ForegroundColor Yellow
-    $latest = (Invoke-RestMethod "https://api.github.com/repos/trufflesecurity/trufflehog/releases/latest").tag_name
-    $url = "https://github.com/trufflesecurity/trufflehog/releases/download/$latest/trufflehog_${latest}_windows_amd64.tar.gz"
+    # Pinned rather than tracking `releases/latest`, and pinned by HASH as well
+    # as by version.
+    #
+    # Following "latest" meant an upstream release silently changed which binary
+    # ran the commit gate, and re-downloaded ~170 MB whenever it moved. Worse,
+    # fetching the expected hash from the same release that serves the asset
+    # only proves the download matches what that release currently claims: an
+    # attacker who could replace the tarball could replace checksums.txt with
+    # it, and verification would pass.
+    #
+    # Keeping the expected digest here instead means the trusted value lives in
+    # this repository's history, where changing it is a reviewable commit rather
+    # than a server-side edit. That is most of what signature verification
+    # (cosign against TruffleHog's Sigstore identity) would buy, without adding
+    # cosign as a second tool that would itself need bootstrapping.
+    #
+    # To bump: set both constants together, from the release's own checksums.txt
+    # (`trufflehog_<version>_checksums.txt`), and verify the new value in the PR.
+    $version = "3.97.0"
+    $expected = "2A8208E6E5BE8D6CD855322480EDA4790A437F805DBD6538AD7495C27F40D4E5"
+
+    $base = "https://github.com/trufflesecurity/trufflehog/releases/download/v$version"
+    # The git tag carries a leading "v" but the asset filename does not, so the
+    # two halves are built separately; interpolating the tag into both produced
+    # a 404 and left the gate unable to run at all.
+    $asset = "trufflehog_${version}_windows_amd64.tar.gz"
     $tmp = [System.IO.Path]::GetTempFileName() + ".tar.gz"
-    Invoke-WebRequest -Uri $url -OutFile $tmp
-    tar -xzf $tmp -C (Split-Path $trufflehog)
+    Write-Host "Fetching TruffleHog $version..." -ForegroundColor Yellow
+    Invoke-WebRequest -Uri "$base/$asset" -OutFile $tmp
+
+    # Report before cleaning up, and use Write-Host rather than Write-Error:
+    # $ErrorActionPreference is "Stop" at the top of this script, so Write-Error
+    # would terminate immediately, making the `exit 1` unreachable and surfacing
+    # the refusal as an unhandled error rather than a clean abort. The
+    # Remove-Item is best-effort so a locked temp file cannot swallow the
+    # message explaining why the install was refused.
+    $abort = {
+        param($Reason)
+        Write-Host $Reason -ForegroundColor Red
+        try { Remove-Item $tmp -ErrorAction SilentlyContinue } catch { }
+        exit 1
+    }
+    $actual = (Get-FileHash -Path $tmp -Algorithm SHA256).Hash
+    if ($actual -ne $expected) {
+        & $abort @"
+Checksum mismatch for $asset.
+  expected $expected  (pinned in scripts/secret-scan.ps1)
+  actual   $actual
+Refusing to install. Either the download was corrupted, or the release no
+longer matches the pinned digest -- do not "fix" this by pasting in the new
+hash without establishing where it came from.
+"@
+    }
+    Write-Host "Verified against pinned digest for $version." -ForegroundColor Green
+
+    # Resolve tar explicitly rather than trusting PATH. When this script is
+    # invoked through `npm run` from a Git Bash shell, PATH puts GNU tar
+    # (/usr/bin/tar) ahead of the Windows one, and GNU tar reads the leading
+    # "C:" of an absolute Windows path as a remote host spec -- it fails with
+    # "Cannot connect to C: resolve failed" and leaves no binary behind, so the
+    # scan then dies on a missing executable.
+    $sysTar = Join-Path $env:SystemRoot "System32\tar.exe"
+    $tarExe = if (Test-Path $sysTar) { $sysTar } else { "tar" }
+    & $tarExe -xzf $tmp -C (Split-Path $trufflehog)
     Remove-Item $tmp
     Write-Host "TruffleHog installed: $trufflehog" -ForegroundColor Green
 }
@@ -67,11 +126,23 @@ else {
     # ~1 GB of third-party repositories and sam3_env ~5 GB of Python packages.
     # Anything found in them is someone else's test fixture, and including them
     # turns a short scan into a very long one.
+    # build-archive holds old .msi/.exe installers (gitignored). TruffleHog
+    # cannot decode an OLE-storage MSI -- it errors with "brotli: excessive
+    # input" -- and a decoder error is a non-zero exit, which the block below
+    # correctly reports as a FAILED scan and aborts the commit. That blocked a
+    # commit on 2026-09-09 over files that are not even tracked.
     $exclude = @("node_modules", "references", "sam3_env", "audit_venv", "sam3_repo",
                  "target", "dist", "test-results", "playwright-report", "recycling",
-                 "models", "outputs")
+                 "models", "outputs", "build-archive")
     $excludeFile = Join-Path ([System.IO.Path]::GetTempPath()) "moshdither-secret-scan-exclude.txt"
-    $exclude | ForEach-Object { "$_/" } | Set-Content -Path $excludeFile -Encoding UTF8
+    # --exclude-paths takes regexes matched against the path TruffleHog walks,
+    # which on Windows carries backslashes. A bare "name/" never matched those,
+    # so the recycling/ exclusion above was silently ineffective here. Match
+    # either separator.
+    # Single-quoted so PowerShell passes the backslashes through untouched; the
+    # class must reach TruffleHog as [\\/] -- backslash OR slash.
+    $sep = '[\\/]'
+    $exclude | ForEach-Object { '(^|' + $sep + ')' + $_ + $sep } | Set-Content -Path $excludeFile -Encoding UTF8
 
     Write-Host "Scanning working tree (excluding vendored and build directories)..." -ForegroundColor Cyan
     $scanArgs = @("filesystem", "$repoRoot", "--only-verified", "--no-update",

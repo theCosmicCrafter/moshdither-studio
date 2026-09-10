@@ -124,35 +124,14 @@
 }
 
 /* ── Light Theme Preset ────────────────────────────────── */
-[data-theme="light"] {
-  --background: #f4f4f6;
-  --on-background: #18181b;
-  --surface: #ffffff;
-  --surface-dim: #e4e4e7;
-  --surface-bright: #ffffff;
-  --surface-container-lowest: #ffffff;
-  --surface-container-low: #f4f4f6;
-  --surface-container: #e4e4e7;
-  --surface-container-high: #d4d4d8;
-  --surface-container-highest: #a1a1aa;
-  --surface-main: #f4f4f6;
-  --surface-variant: #e4e4e7;
-  --on-surface: #18181b;
-  --on-surface-variant: #52525b;
-  --outline: #71717a;
-  --outline-variant: #d4d4d8;
-  --primary: #d62884;
-  --on-primary: #ffffff;
-  --accent: #d62884;
-  --accent-pink: #d62884;
-  --accent-teal: #008899;
-  --accent-gold: #859900;
-  --text-primary: #18181b;
-  --text-secondary: #52525b;
-  --text-muted: #71717a;
-  --neo-dark: rgba(0, 0, 0, 0.12);
-  --neo-light: rgba(255, 255, 255, 0.8);
-}
+/* NOTE: the light theme is defined once, in the `:root[data-theme="light"]`
+   block further down this file. A second `[data-theme="light"]` block used to
+   sit here with a divergent palette (different primary/teal/gold); it never
+   rendered, because the `:root`-qualified block outscores it on specificity.
+   It has been removed rather than merged — every token it declared is already
+   declared below, so the only thing it contributed was a phantom palette that
+   looked authoritative while having no effect. Keep light-theme edits in the
+   one block below. */
 
 /* ── High-Contrast Dark Theme Preset ──────────────────── */
 [data-theme="high-contrast"] {
@@ -382,7 +361,15 @@
       4px 4px 8px var(--neo-dark),
       -4px -4px 8px var(--neo-light);
     border: 1px solid rgba(255, 255, 255, 0.05);
-    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    /* Enumerated rather than `transition: all`. `all` includes `outline`, and
+       because `outline-style` animates discretely the focus ring stayed pinned
+       to its pre-focus computed value (0-width/none) instead of resolving to
+       the `:focus-visible` ring below -- keyboard focus was invisible on every
+       .neo-* surface. Keep `outline` out of this list. */
+    transition-property: background-color, border-color, border-width, box-shadow, color, transform, opacity,
+      filter, backdrop-filter, -webkit-backdrop-filter;
+    transition-duration: 0.3s;
+    transition-timing-function: cubic-bezier(0.25, 0.8, 0.25, 1);
   }
 
   .neo-pressed {
@@ -402,7 +389,10 @@
     box-shadow:
       3px 3px 6px var(--neo-dark),
       -3px -3px 6px var(--neo-light);
-    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    transition-property: background-color, border-color, border-width, box-shadow, color, transform, opacity,
+      filter, backdrop-filter, -webkit-backdrop-filter;
+    transition-duration: 0.3s;
+    transition-timing-function: cubic-bezier(0.25, 0.8, 0.25, 1);
   }
   .neo-btn:hover {
     box-shadow:
@@ -450,17 +440,23 @@
   }
 
   /* Animations */
+  /* These glows are the ones that actually render. An identically-purposed pair
+     of keyframes also lived in tailwind.config.js; for `shimmer` the two names
+     collided and this file won, so re-theming the config copy alone was a no-op.
+     The config copies have been removed and these are now the single definition,
+     driven by the accent tokens so the glow follows the active theme instead of
+     being pinned to the dark palette's literals. */
   @keyframes pulse-glow {
     0% {
-      box-shadow: 0 0 5px rgba(255, 173, 224, 0.4);
+      box-shadow: 0 0 5px color-mix(in srgb, var(--accent-pink) 40%, transparent);
       opacity: 0.8;
     }
     50% {
-      box-shadow: 0 0 20px rgba(184, 211, 0, 0.8);
+      box-shadow: 0 0 20px color-mix(in srgb, var(--accent-gold) 80%, transparent);
       opacity: 1;
     }
     100% {
-      box-shadow: 0 0 5px rgba(255, 173, 224, 0.4);
+      box-shadow: 0 0 5px color-mix(in srgb, var(--accent-pink) 40%, transparent);
       opacity: 0.8;
     }
   }
@@ -470,16 +466,16 @@
 
   @keyframes pulse-glow-border {
     0% {
-      border-color: rgba(255, 173, 224, 0.4);
-      box-shadow: inset 0 0 10px rgba(255, 173, 224, 0.2);
+      border-color: color-mix(in srgb, var(--accent-pink) 40%, transparent);
+      box-shadow: inset 0 0 10px color-mix(in srgb, var(--accent-pink) 20%, transparent);
     }
     50% {
-      border-color: rgba(184, 211, 0, 0.8);
-      box-shadow: inset 0 0 20px rgba(184, 211, 0, 0.4);
+      border-color: color-mix(in srgb, var(--accent-gold) 80%, transparent);
+      box-shadow: inset 0 0 20px color-mix(in srgb, var(--accent-gold) 40%, transparent);
     }
     100% {
-      border-color: rgba(255, 173, 224, 0.4);
-      box-shadow: inset 0 0 10px rgba(255, 173, 224, 0.2);
+      border-color: color-mix(in srgb, var(--accent-pink) 40%, transparent);
+      box-shadow: inset 0 0 10px color-mix(in srgb, var(--accent-pink) 20%, transparent);
     }
   }
   .active-card-pulse {
@@ -499,15 +495,15 @@
   @keyframes shimmer {
     0% {
       opacity: 0.5;
-      filter: drop-shadow(0 0 2px rgba(255, 173, 224, 0.5));
+      filter: drop-shadow(0 0 2px color-mix(in srgb, var(--accent-pink) 50%, transparent));
     }
     50% {
       opacity: 1;
-      filter: drop-shadow(0 0 8px rgba(184, 211, 0, 0.8));
+      filter: drop-shadow(0 0 8px color-mix(in srgb, var(--accent-gold) 80%, transparent));
     }
     100% {
       opacity: 0.5;
-      filter: drop-shadow(0 0 2px rgba(255, 173, 224, 0.5));
+      filter: drop-shadow(0 0 2px color-mix(in srgb, var(--accent-pink) 50%, transparent));
     }
   }
 
@@ -523,7 +519,10 @@
     height: 20px;
     border: 1px solid transparent;
     pointer-events: none;
-    transition: all 0.3s ease;
+    transition-property: background-color, border-color, border-width, box-shadow, color, transform, opacity,
+      filter, backdrop-filter, -webkit-backdrop-filter;
+    transition-duration: 0.3s;
+    transition-timing-function: ease;
   }
   .filigree-corner::before {
     top: 4px;
@@ -643,7 +642,10 @@
     cursor: pointer;
     border: 2px solid var(--accent);
     margin-top: -5px;
-    transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+    transition-property: background-color, border-color, border-width, box-shadow, color, transform, opacity,
+      filter, backdrop-filter, -webkit-backdrop-filter;
+    transition-duration: 0.2s;
+    transition-timing-function: cubic-bezier(0.25, 0.8, 0.25, 1);
   }
   .slider-track::-webkit-slider-thumb:hover {
     box-shadow:
@@ -706,7 +708,10 @@
     border-radius: 6px;
     border: none;
     cursor: pointer;
-    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    transition-property: background-color, border-color, border-width, box-shadow, color, transform, opacity,
+      filter, backdrop-filter, -webkit-backdrop-filter;
+    transition-duration: 0.3s;
+    transition-timing-function: cubic-bezier(0.25, 0.8, 0.25, 1);
     box-shadow: 0 0 10px rgba(184, 211, 0, 0.3);
   }
   .btn-primary:hover {
@@ -728,7 +733,10 @@
     border-radius: 6px;
     border: 1px solid var(--border-secondary);
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition-property: background-color, border-color, border-width, box-shadow, color, transform, opacity,
+      filter, backdrop-filter, -webkit-backdrop-filter;
+    transition-duration: 0.15s;
+    transition-timing-function: ease;
   }
   .btn-secondary:hover {
     color: var(--text-primary);
@@ -752,7 +760,10 @@
     border: 1px solid transparent;
     color: var(--text-muted);
     cursor: pointer;
-    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    transition-property: background-color, border-color, border-width, box-shadow, color, transform, opacity,
+      filter, backdrop-filter, -webkit-backdrop-filter;
+    transition-duration: 0.3s;
+    transition-timing-function: cubic-bezier(0.25, 0.8, 0.25, 1);
   }
   .btn-icon:hover {
     color: var(--text-primary);
@@ -807,7 +818,10 @@
     cursor: pointer;
     border: 2px solid var(--accent);
     margin-top: -5px;
-    transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+    transition-property: background-color, border-color, border-width, box-shadow, color, transform, opacity,
+      filter, backdrop-filter, -webkit-backdrop-filter;
+    transition-duration: 0.2s;
+    transition-timing-function: cubic-bezier(0.25, 0.8, 0.25, 1);
   }
   .slider-thumb::-webkit-slider-thumb:hover {
     box-shadow:
@@ -908,27 +922,37 @@
   --accent-bright: #e91e63;
   --accent-pink: #c2185b;
   --accent-gold: #689f00;
-  --accent-teal: #00bcd4;
+  /* Light-theme teal is darkened from the dark-theme cyan (#00bcd4) rather
+     than shared with it. The accent doubles as a text/icon color (~45 uses)
+     and as a fill, and on a white-to-#d0d0d6 surface ramp the bright cyan
+     only reached 2.3:1 — well under the 4.5:1 AA floor for text. This value
+     holds the same hue (187deg) and clears 4.5:1 on every light surface token,
+     while white text sitting ON it stays at 6.96:1 for the filled variants. */
+  --accent-teal: #006370;
 
   --accent-2: #689f00;
   --accent-2-glow: rgba(104, 159, 0, 0.12);
-  --teal: #00bcd4;
-  --teal-dim: rgba(0, 188, 212, 0.7);
+  --teal: #006370;
+  --teal-dim: rgba(0, 99, 112, 0.7);
 
   --danger: #d32f2f;
   --success: #2e7d32;
-  --info: #00bcd4;
+  --info: #006370;
   --warning: #f9a825;
 
   --cat-dithering: #689f00;
   --cat-analog: #c2185b;
-  --cat-glitch: #00bcd4;
+  /* Category colors are applied as foreground (`style={{ color }}` in
+     CategoryAccordion), so the cyan ones need the same AA-safe value the teal
+     accent was darkened to rather than the dark theme's #00bcd4 (2.3:1 on
+     white). --info follows suit for consistency though nothing reads it yet. */
+  --cat-glitch: #006370;
   --cat-pixel: #5c6bc0;
   --cat-artistic: #8a8a9a;
   --cat-datamoshing: #c2185b;
   --cat-noise: #689f00;
   --cat-color: #689f00;
-  --cat-audio-reactive: #00bcd4;
+  --cat-audio-reactive: #006370;
   --cat-segmentation: #c2185b;
   --cat-composite: #8a8a9a;
 

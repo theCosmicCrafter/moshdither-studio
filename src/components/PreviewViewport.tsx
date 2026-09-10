@@ -92,7 +92,9 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     showBeforeAfter,
     zoom,
     isPlaying,
+    playbackSpeed,
     useCpuPreview,
+    previewAutoExact,
     audioEnabled,
     proxyUrl,
     isVideo,
@@ -107,7 +109,9 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       showBeforeAfter: s.showBeforeAfter,
       zoom: s.zoom,
       isPlaying: s.isPlaying,
+      playbackSpeed: s.playbackSpeed,
       useCpuPreview: s.useCpuPreview,
+      previewAutoExact: s.previewAutoExact,
       audioEnabled: s.audioEnabled,
       proxyUrl: s.proxyUrl,
       isVideo: s.isVideo,
@@ -125,7 +129,6 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     sam3Points,
     maskTab,
     sam3HoverMask,
-    sam3FrameMasks,
     sam3OverlayOpacity,
     sam3OverlayColor,
     theme,
@@ -139,7 +142,6 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       sam3Points: s.sam3Points,
       maskTab: s.maskTab,
       sam3HoverMask: s.sam3HoverMask,
-      sam3FrameMasks: s.sam3FrameMasks,
       sam3OverlayOpacity: s.sam3OverlayOpacity,
       sam3OverlayColor: s.sam3OverlayColor,
       theme: s.theme,
@@ -218,7 +220,10 @@ function PreviewViewport({ isDropTarget = false }: Props) {
   const rafRef = useRef<number>(0);
   const cpuAnimRafRef = useRef<number>(0);
   const cpuRenderRevisionRef = useRef(0);
-  const lastFrameTimeRef = useRef<number>(0);
+  // Playhead position of the last frame drawn, so a paused preview can skip
+  // redrawing an instant it has already rendered. NaN so the first pass always
+  // draws, whatever currentTime starts at.
+  const lastRenderedTimeRef = useRef<number>(Number.NaN);
   const sam3CanvasRef = useRef<HTMLCanvasElement>(null);
   const hoverTimeoutRef = useRef<number | null>(null);
   const hoverRequestRevisionRef = useRef(0);
@@ -721,6 +726,16 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       glCtxRef.current = ctx;
       uploaderRef.current = new MediaUploader(ctx);
       chainRef.current = new EffectChain(ctx, 1024, 1024);
+      // Surface render faults where the user can actually see them. A black
+      // preview in the installed build previously produced nothing but a
+      // console line, so the only way to diagnose one was to read source and
+      // guess. Both of these say which step failed and on what.
+      chainRef.current.onGlFault = (error, step) => {
+        setStatusMessage(`Preview error: GL ${error} at ${step}`);
+      };
+      chainRef.current.onTextureError = (uniform, url) => {
+        setStatusMessage(`Preview: texture "${uniform}" failed to load (${url})`);
+      };
       logger.log("Preview", "WebGL2 context initialized OK");
     } catch (e) {
       logger.error("Preview", "WebGL2 not available", { err: e });
@@ -773,29 +788,40 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     };
   }, [isVideo, proxyUrl, retireSourceTexture]);
 
-  // Sync video play/pause
+  // Sync video play/pause and speed. The speed selector changed the transport
+  // clock but not the <video>, so at 0.5x the readout crawled while the
+  // picture ran at full speed.
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !isVideo) return;
+    video.playbackRate = playbackSpeed;
     if (isPlaying) {
       video.play().catch(() => {});
     } else {
       video.pause();
     }
-  }, [isPlaying, isVideo]);
+  }, [isPlaying, isVideo, playbackSpeed]);
 
   // Sync video time when timeline is scrubbed (without re-rendering the whole viewport)
   useEffect(() => {
     return useAppStore.subscribe((state, prevState) => {
       if (state.currentTime === prevState.currentTime) return;
 
-      // Sync video element
-      if (isVideo && !isPlaying) {
+      // Keep the <video> on the transport clock. The proxy is the FULL clip,
+      // so its time IS the playhead time -- this used to subtract the in
+      // point, which showed the frame from (t - in) whenever an in point was
+      // set. It also only synced while paused, so during playback the element
+      // free-ran with loop=true and ignored the in/out range entirely: the
+      // readout looped 2s-4s while the picture played the whole clip. Now it
+      // follows while playing too, with a looser tolerance so ordinary drift
+      // between two clocks does not seek every frame -- a loop wrap or a
+      // scrub during playback is a big jump and is caught.
+      if (isVideo) {
         const video = videoRef.current;
         if (video) {
-          const start = state.inPoint ?? 0;
-          const target = Math.max(0, state.currentTime - start);
-          if (Number.isFinite(target) && Math.abs(video.currentTime - target) > 0.05) {
+          const target = Math.max(0, state.currentTime);
+          const tolerance = state.isPlaying ? 0.25 : 0.05;
+          if (Number.isFinite(target) && Math.abs(video.currentTime - target) > tolerance) {
             video.currentTime = target;
           }
         }
@@ -804,15 +830,13 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       // Sync mask image
       const maskImg = maskImgRef.current;
       if (maskImg && !state.sam3HoverMask) {
-        const currentFrameIndex = Math.floor(state.currentTime * 10);
-        const frameMask = state.sam3FrameMasks[currentFrameIndex];
-        const src = frameMask || state.activeMask || "";
+        const src = state.activeMask || "";
         if (maskImg.getAttribute("src") !== src) {
           maskImg.src = src;
         }
       }
     });
-  }, [isVideo, isPlaying]);
+  }, [isVideo]);
 
   // WebGL real-time preview: re-render when image or effect stack changes.
   // Skipped when useCpuPreview is true (effects without accurate WebGL shaders
@@ -877,12 +901,19 @@ function PreviewViewport({ isDropTarget = false }: Props) {
           u_beatMid: s.audioBeatFlags.mid ? 1 : 0,
           u_beatTreble: s.audioBeatFlags.treble ? 1 : 0,
         };
-        // Inject time uniforms so shaders can animate over time
-        // When playing, use the timeline currentTime for keyframe sync.
-        // When not playing, use performance.now() so time-based effects still animate.
-        const animTime = s.isPlaying
-          ? s.currentTime
-          : performance.now() / 1000;
+        // Shader time is ALWAYS the timeline's time, playing or not.
+        //
+        // This used to fall back to performance.now() while paused so that
+        // time-based effects "still animate" -- which meant pause did not
+        // pause: a VHS or TV Glitch effect ran identically whether playing or
+        // stopped, the transport's two states were indistinguishable, and the
+        // timeline read as disconnected from the preview. It also meant the
+        // paused frame was never the frame that would be exported, because
+        // export renders from timeline time.
+        //
+        // Now a paused preview shows exactly the frame at the playhead, and
+        // scrubbing moves through the animation.
+        const animTime = s.currentTime;
         const timeUniforms: Record<string, number> = {
           u_time: animTime,
           u_frame: Math.floor(animTime * 30),
@@ -945,26 +976,27 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     );
     if (hasAnimatedEffect || audioEnabled || isPlaying) {
       const loop = () => {
-        // Advance currentTime for image sources when playing so the time slider
-        // moves and keyframe-driven effects sync with export. Videos drive time
-        // via the <video> element instead.
+        // This loop only DRAWS. usePlaybackEngine is the one clock that moves
+        // currentTime; advancing it here as well made stills play at 2x.
         const s = useAppStore.getState();
-        if (s.isPlaying && !isVideo) {
-          const now = performance.now();
-          const last = lastFrameTimeRef.current || now;
-          const deltaT = (now - last) / 1000 * s.playbackSpeed;
-          lastFrameTimeRef.current = now;
-          let next = s.currentTime + deltaT;
-          const dur = s.duration || 10;
-          if (next > dur) next = 0; // loop
-          s.setCurrentTime(next);
-        } else {
-          lastFrameTimeRef.current = performance.now();
+        // While paused, shader time is frozen at the playhead, so redrawing the
+        // same instant 60 times a second only burns GPU. Render when the
+        // playhead actually moves (scrubbing) and skip otherwise. Parameter
+        // edits do not rely on this loop -- they re-run the whole effect via
+        // cpuRenderSignature, which restarts it and draws.
+        if (s.isPlaying || lastRenderedTimeRef.current !== s.currentTime) {
+          lastRenderedTimeRef.current = s.currentTime;
+          render();
         }
-        render();
         rafRef.current = requestAnimationFrame(loop);
       };
-      lastFrameTimeRef.current = performance.now();
+      // Force the first frame after any (re)start to draw. This effect re-runs
+      // on cpuRenderSignature, which is how a PARAMETER CHANGE reaches the
+      // preview -- and the ref survives that restart, so leaving it matching
+      // currentTime made the skip-if-unchanged test suppress exactly the redraw
+      // the parameter change was asking for. While paused, that meant edits
+      // simply did not appear.
+      lastRenderedTimeRef.current = Number.NaN;
       rafRef.current = requestAnimationFrame(loop);
     }
 
@@ -983,31 +1015,8 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     deleteRetiredSourceTextures,
   ]);
 
-  // CPU preview playback loop — advances currentTime when playing and useCpuPreview
-  // is true, so the CPU preview re-renders each frame during playback.
-  useEffect(() => {
-    if (!useCpuPreview || !mediaLoaded || !isPlaying) return;
-    let raf: number;
-    const loop = () => {
-      const s = useAppStore.getState();
-      if (s.isPlaying && !isVideo) {
-        const now = performance.now();
-        const last = lastFrameTimeRef.current || now;
-        const deltaT = ((now - last) / 1000) * s.playbackSpeed;
-        lastFrameTimeRef.current = now;
-        let next = s.currentTime + deltaT;
-        const dur = s.duration || 10;
-        if (next > dur) next = 0;
-        s.setCurrentTime(next);
-      } else {
-        lastFrameTimeRef.current = performance.now();
-      }
-      raf = requestAnimationFrame(loop);
-    };
-    lastFrameTimeRef.current = performance.now();
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, [useCpuPreview, mediaLoaded, isPlaying, isVideo]);
+  // (The CPU-preview loop that used to advance currentTime here is gone:
+  // usePlaybackEngine is the single clock. See the note on that hook.)
 
   // CPU preview render: when useCpuPreview is true, render via Rust backend for
   // accurate algorithm output (error diffusion, blue noise, etc.).
@@ -1039,9 +1048,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       try {
         const s = useAppStore.getState();
         const animTime = s.isPlaying ? s.currentTime : 0;
-        const currentFrameIndex = Math.floor(animTime * 10);
-        const activeMaskForFrame = s.sam3FrameMasks[currentFrameIndex] || s.activeMask;
-        const activeStack = stackToRustPayload(s.effectStack, activeMaskForFrame, s.sam3Masks, animTime);
+        const activeStack = stackToRustPayload(s.effectStack, s.activeMask, s.sam3Masks, animTime);
         const result = await applyEffectStack(activeStack, null, scale);
         if (!cancelled && renderRevision === cpuRenderRevisionRef.current) state.setPreviewDataUrl(result);
       } catch (e) {
@@ -1096,9 +1103,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
         try {
           const s = useAppStore.getState();
           const animTime = s.currentTime;
-          const currentFrameIndex = Math.floor(animTime * 10);
-          const activeMaskForFrame = s.sam3FrameMasks[currentFrameIndex] || s.activeMask;
-          const activeStack = stackToRustPayload(s.effectStack, activeMaskForFrame, s.sam3Masks, animTime);
+          const activeStack = stackToRustPayload(s.effectStack, s.activeMask, s.sam3Masks, animTime);
           const result = await applyEffectStack(activeStack, null, 0.5); // Playing uses 0.5 for performance
           if (!cancelled && renderRevision === cpuRenderRevisionRef.current) s.setPreviewDataUrl(result);
         } catch (e) {
@@ -1169,14 +1174,56 @@ function PreviewViewport({ isDropTarget = false }: Props) {
 
   const showDropOverlay = isDropTarget || isHtmlDropTarget;
 
+  // AUTOMATIC EXACT PREVIEW.
+  //
+  // Two preview methods existed and the user had to pick one -- a fast WebGL
+  // approximation, or the exact Rust render that matches the exported file.
+  // That is an implementation detail presented as a decision, and it is not how
+  // any NLE or compositor behaves: they show a fast preview while you work and
+  // the real thing when you stop.
+  //
+  // So: GPU while anything is changing or playing, and the exact frame swapped
+  // in once you have been still for a moment. Only the effects whose shader is
+  // an approximation actually need it, so a stack that previews exactly on the
+  // GPU is left alone rather than paying for a redundant CPU render.
+  useEffect(() => {
+    if (!previewAutoExact || !mediaLoaded) return;
+    // Playing, or nothing to correct: stay on the GPU.
+    if (isPlaying || !isApproximatePreview) {
+      if (useCpuPreview) setUseCpuPreview(false);
+      return;
+    }
+    // Something just changed -- drop to the fast path immediately so dragging a
+    // slider never waits on a CPU render.
+    if (useCpuPreview) setUseCpuPreview(false);
+    const t = setTimeout(() => setUseCpuPreview(true), 450);
+    return () => clearTimeout(t);
+    // useCpuPreview is deliberately NOT a dependency: this effect sets it, and
+    // depending on it would re-arm the timer from its own result.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    previewAutoExact,
+    mediaLoaded,
+    isPlaying,
+    isApproximatePreview,
+    cpuRenderSignature,
+    setUseCpuPreview,
+  ]);
+
   let statusDotBg = "solar-bg animate-pulse-glow";
   let statusText = "LIVE PREVIEW";
   if (useCpuPreview) {
     statusDotBg = "bg-accent-teal";
-    statusText = "EXACT OUTPUT (CPU)";
+    statusText = "EXACT";
   } else if (isApproximatePreview) {
+    // With auto-exact on, this state lasts about half a second after you stop
+    // moving, so it reports what is happening rather than asking for a click.
     statusDotBg = "bg-amber-400";
-    statusText = "APPROXIMATE (CLICK FOR EXACT)";
+    statusText = !previewAutoExact
+      ? "APPROXIMATE (CLICK FOR EXACT)"
+      : isPlaying
+        ? "LIVE PREVIEW"
+        : "REFINING…";
   } else if (stackCount > 0) {
     statusDotBg = "bg-accent-pink animate-pulse-glow";
     statusText = "ANIMATING";
@@ -1252,17 +1299,19 @@ function PreviewViewport({ isDropTarget = false }: Props) {
             )}
             <button
               className="material-symbols-outlined text-sm text-on-surface-variant neo-btn p-1.5 rounded-full hover:text-primary transition-colors"
-              title="Aspect ratio"
+              title="Reset zoom to 100% (1:1)"
+              aria-label="Reset zoom to 100% (1:1)"
               onClick={() => useAppStore.getState().setZoom(1)}
             >
               aspect_ratio
             </button>
             <button
               className="material-symbols-outlined text-sm text-on-surface-variant neo-btn p-1.5 rounded-full hover:text-primary transition-colors"
-              title="More options"
+              title={isFullscreen ? "Exit fullscreen" : "Fullscreen preview"}
+              aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen preview"}
               onClick={toggleFullscreen}
             >
-              more_vert
+              {isFullscreen ? "fullscreen_exit" : "fullscreen"}
             </button>
           </div>
         </div>
@@ -1299,7 +1348,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
               — or click to browse —
             </div>
             <div
-              className="text-[11px] px-3 py-1.5 rounded-md dropzone-formats"
+              className="text-dense-sm px-3 py-1.5 rounded-md dropzone-formats"
             >
               PNG, JPG, GIF, WEBP, TIFF, BMP, MP4, MOV, MKV, AVI, WEBM
             </div>
@@ -1330,33 +1379,32 @@ function PreviewViewport({ isDropTarget = false }: Props) {
                 ref={beforeClipRef}
                 className={showBeforeAfter && originalDataUrl ? "absolute top-0 left-0 w-full h-full" : "relative"}
               >
-                {useCpuPreview ? (
-                  /* CPU-processed preview image (accurate algorithms via Rust backend) */
-                  <img
-                    ref={previewImgRef}
-                    src={previewDataUrl || ""}
-                    alt="Preview"
-                    draggable={false}
-                    className="preview-img"
-                  />
-                ) : (
-                  /* WebGL Preview Canvas */
-                  <canvas
-                    ref={webglCanvasRef}
-                    className="preview-canvas"
-                  />
-                )}
-              </div>
-              {/* Hidden img for SAM3 coord reference and fallback */}
-              {!useCpuPreview && (
+                {/* BOTH surfaces stay mounted; only visibility changes.
+                    They used to be swapped with a ternary, which UNMOUNTED the
+                    canvas whenever the CPU preview showed. React then mounts a
+                    NEW canvas element on the way back -- and a canvas gets one
+                    WebGL context for its lifetime, so the replacement had none
+                    and the preview went black. That was survivable while the
+                    toggle was a rare manual click; automatic switching hits it
+                    every time.
+
+                    Keeping one <img> also fixes a ref collision: previewImgRef
+                    was attached to both the visible and the hidden copy, so
+                    whichever mounted last won. SAM3 reads that ref for click
+                    coordinates. */}
                 <img
                   ref={previewImgRef}
                   src={previewDataUrl || ""}
                   alt="Preview"
                   draggable={false}
-                  className="preview-hidden"
+                  className={useCpuPreview ? "preview-img" : "preview-hidden"}
                 />
-              )}
+                <canvas
+                  ref={webglCanvasRef}
+                  className="preview-canvas"
+                  style={useCpuPreview ? { display: "none" } : undefined}
+                />
+              </div>
               {/* Splitter handle and labels */}
               {showBeforeAfter && originalDataUrl && (
                 <>
@@ -1388,10 +1436,10 @@ function PreviewViewport({ isDropTarget = false }: Props) {
                       rendered when split mode was off, and merging that branch into this always-mounted
                       tree dropped the guard, so the colored mask painted over both halves of the
                       comparison it exists to let the user check. */}
-                  {(Object.keys(sam3FrameMasks).length > 0 || activeMask || sam3HoverMask) && maskVisible && !isManualMaskActive && !showBeforeAfter && (
+                  {(activeMask || sam3HoverMask) && maskVisible && !isManualMaskActive && !showBeforeAfter && (
                     <img
                       ref={maskImgRef}
-                      src={sam3HoverMask || sam3FrameMasks[Math.floor((useAppStore.getState().currentTime || 0) * 10)] || activeMask || undefined}
+                      src={sam3HoverMask || activeMask || undefined}
                       alt="Mask"
                       draggable={false}
                       className="absolute inset-0 pointer-events-none preview-img mask-overlay-img"

@@ -1,6 +1,21 @@
 /node_modules
 /.vscode
 /.idea
+# Local agent/editor tooling. launch.json is a per-developer run configuration.
+# It had already been committed once, and .gitignore does not affect tracked
+# paths, so it is untracked here (`git rm --cached`) for this to take effect --
+# the file itself stays on disk. Its current contents happen to be generic
+# (`npm run dev` on the project's fixed port), so if you would rather share it
+# than ignore it, drop this rule and re-add the file.
+/.claude/launch.json
+
+# TruffleHog binary and the docs bundled in its release tarball, fetched on
+# demand by scripts/secret-scan.ps1. The executable alone is ~170 MB. The rest
+# of tools/ is checked-in project scripts, so this ignores the download only.
+/tools/trufflehog.exe
+/tools/LICENSE
+/tools/README.md
+/tools/docs/
 /dist
 /dist-ssr
 *.local
@@ -58,6 +73,7 @@ Thumbs.db
 # Python venvs
 /audit_venv
 /sam3_env
+/sam3_env_cpu
 /packages/python-backend/venv
 
 # SAM3 sidecar binaries (built per target in CI / local release builds)
@@ -112,5 +128,14 @@ test_*.txt
 /recycling/
 /desktop.png
 
-# Scratch/output directory used by audit and export tooling
+# Single root for generated artifacts. Every mosh-verify subcommand defaults
+# under here (outputs/render, /animated, /audio, /presets, /luts) so one rule
+# covers them all. Previously each had its own top-level default and only
+# test-outputs was ignored, so `render-presets`, `render-luts` and
+# `audio-render` dropped hundreds of MB of PNGs into the repo root as
+# untracked files. Pass --output to write elsewhere.
 /outputs/
+
+# Archived installers (scripts/archive-build.mjs keeps the last few).
+# Large binaries; kept locally for rollback, never committed.
+/build-archive/

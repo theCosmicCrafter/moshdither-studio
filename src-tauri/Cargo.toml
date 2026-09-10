@@ -1,6 +1,6 @@
 [package]
 name = "moshdither-studio"
-version = "0.1.0"
+version = "0.2.0"
 description = "A unified desktop app for datamoshing, dithering, and glitch art"
 authors = ["MoshDither Studio Contributors"]
 license = "MIT"
@@ -32,6 +32,12 @@ sysinfo = "0.38"
 tokio = { version = "1", features = ["sync"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# SAM3 add-on downloader. rustls rather than native-tls so the build does not
+# depend on a system OpenSSL; stream so a multi-GB asset is written to disk as
+# it arrives instead of being buffered whole in memory.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "http2"] }
+futures-util = "0.3"
+sha2 = "0.10"
 
 [features]
 default = ["custom-protocol"]
@@ -53,5 +59,23 @@ tauri-plugin-updater = "2.0.0"
 windows-sys = { version = "0.59", features = [
     "Win32_UI_Shell",
     "Win32_Foundation",
+    # Job objects, so cancelling a datamosh kills the whole process tree --
+    # the PyInstaller bootloader, the Python it spawns, and the ffmpeg that
+    # spawns. Killing only the direct child left the rest encoding.
+    "Win32_System_JobObjects",
+    # JOBOBJECT_EXTENDED_LIMIT_INFORMATION embeds Threading::IO_COUNTERS.
+    "Win32_System_Threading",
+    # CreateJobObjectW takes a SECURITY_ATTRIBUTES pointer.
+    "Win32_Security",
     "Win32_UI_WindowsAndMessaging",
+    # SetUnhandledExceptionFilter, so hard faults (access violations, stack
+    # overflows) are recorded to the log before the process dies. They never
+    # reach the Rust panic hook -- they are CPU exceptions, not panics.
+    "Win32_System_Diagnostics_Debug",
+    # EXCEPTION_POINTERS lives behind this one.
+    "Win32_System_Kernel",
 ] }
+
+[dev-dependencies]
+# Drives the async downloader in tests; the app itself runs on Tauri's runtime.
+tokio = { version = "1", features = ["rt", "macros"] }

@@ -22,6 +22,8 @@ export class EffectChain {
   // Without bounding, long editing sessions with many distinct masks would leak
   // GPU memory indefinitely.
   private maskTextureCache = new Map<string, WebGLTexture>();
+  /** Labels already reported by `ckpt`, so a per-frame fault logs once. */
+  private reportedGlFaults = new Set<string>();
   private static readonly MASK_CACHE_MAX = 8;
 
   constructor(ctx: WebGLContext, width: number, height: number) {
@@ -136,6 +138,16 @@ export class EffectChain {
     this.initialized = true;
   }
 
+  /** Notified on a WebGL fault, with the error name and the step that hit it. */
+  onGlFault?: (error: string, step: string) => void;
+
+  /**
+   * Notified when a sampler2D texture fails to load. The chain keeps
+   * rendering without it; this exists so the UI can tell the user why an
+   * effect silently did nothing, rather than leaving it to the console.
+   */
+  onTextureError?: (uniform: string, url: string, error: unknown) => void;
+
   async render(
     sourceTexture: WebGLTexture,
     passes: RenderPass[],
@@ -156,7 +168,19 @@ export class EffectChain {
     const gl = this.gl;
     let inputTex = sourceTexture;
     let outputFB = "fb_a";
-    let nextTextureUnit = 1;
+    // Texture units 0, 2 and 3 are reserved by the chain itself: 0 is the pass
+    // input, 2 the pre-effect frame and 3 the mask (see the maskBlend binding
+    // below). Extra samplers such as a LUT must therefore start above all of
+    // them.
+    //
+    // This counter used to start at 1 and was never reset, so it ran 1, 2, 3...
+    // across the whole render: a *second* LUT in the stack landed on unit 2 and
+    // a third on unit 3. Passes without a mask then unbind those very units,
+    // wiping the texture that had just been bound there, and sampling an
+    // unbound texture returns black -- the preview went black the moment a
+    // second LUT was added, while a single LUT worked fine.
+    const FIRST_FREE_TEXTURE_UNIT = 4;
+    let nextTextureUnit = FIRST_FREE_TEXTURE_UNIT;
     let renderedAnyPass = false;
 
     // Expand passes: after each pass with a mask, insert a maskBlend pass
@@ -187,6 +211,10 @@ export class EffectChain {
     }
 
     for (let i = 0; i < expandedPasses.length; i++) {
+      // Units are per-pass: nothing bound for one pass needs to survive into
+      // the next, and letting the counter climb would eventually walk past
+      // MAX_COMBINED_TEXTURE_IMAGE_UNITS on a long stack.
+      nextTextureUnit = FIRST_FREE_TEXTURE_UNIT;
       const pass = expandedPasses[i];
       const shader = shaders.get(pass.shaderId);
       if (!shader) {
@@ -223,12 +251,14 @@ export class EffectChain {
       );
 
       gl.useProgram(program);
+      this.ckpt(`useProgram(${pass.shaderId})`);
 
       // Bind input texture to unit 0
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, inputTex);
       const samplerLoc = gl.getUniformLocation(program, "tDiffuse");
       if (samplerLoc !== null) gl.uniform1i(samplerLoc, 0);
+      this.ckpt(`bind input texture (${pass.shaderId})`);
 
       // For maskBlend: bind tPrevious to unit 2 and tMask to unit 3
       if (isMaskBlend && previousTex && maskTex) {
@@ -259,11 +289,29 @@ export class EffectChain {
         const type = udef?.type;
         if (typeof value === "string") {
           if (type === "sampler2D") {
-            const tex = await this.lutLoader.loadLUT(value);
-            const unit = nextTextureUnit++;
-            gl.activeTexture(gl.TEXTURE0 + unit);
-            gl.bindTexture(gl.TEXTURE_2D, tex);
-            gl.uniform1i(loc, unit);
+            // A texture that will not load must not take the whole preview
+            // with it. This await used to be unguarded, so one failed LUT
+            // image rejected out of render() entirely -- PreviewViewport
+            // caught it, logged "WebGL render failed", and left the canvas
+            // undrawn. The user saw the preview go black on applying a LUT,
+            // with the only explanation in a console they cannot see.
+            //
+            // Skipping the sampler renders the frame ungraded instead, which
+            // is wrong but visible and recoverable.
+            try {
+              const tex = await this.lutLoader.loadLUT(value);
+              const unit = nextTextureUnit++;
+              gl.activeTexture(gl.TEXTURE0 + unit);
+              gl.bindTexture(gl.TEXTURE_2D, tex);
+              gl.uniform1i(loc, unit);
+            } catch (err) {
+              console.error(
+                `[EffectChain] texture for uniform "${name}" failed to load (${value}); ` +
+                  `rendering this pass without it`,
+                err
+              );
+              this.onTextureError?.(name, value, err);
+            }
           }
         } else if (typeof value === "number") {
           if (type === "int") {
@@ -279,6 +327,8 @@ export class EffectChain {
           gl.uniform1i(loc, value ? 1 : 0);
         }
       }
+
+      this.ckpt(`pass uniforms (${pass.shaderId})`);
 
       // Set default uniform values from shader definition for uniforms not already set
       for (const u of shader.uniforms) {
@@ -299,6 +349,8 @@ export class EffectChain {
           gl.uniform1i(loc, u.default ? 1 : 0);
         }
       }
+
+      this.ckpt(`default uniforms (${pass.shaderId})`);
 
       // Set resolution uniform
       const resLoc = gl.getUniformLocation(program, "resolution");
@@ -333,6 +385,7 @@ export class EffectChain {
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
         this.quad.draw();
+        this.ckpt(`draw to ${fbName} (${pass.shaderId})`);
         inputTex = this.ctx.getTexture(
           fbName === "fb_a" ? "fbo_a" : fbName === "fb_b" ? "fbo_b" : "fbo_c"
         )!;
@@ -343,6 +396,7 @@ export class EffectChain {
         gl.clearColor(0, 0, 0, 1);
         gl.clear(gl.COLOR_BUFFER_BIT);
         this.quad.draw();
+        this.ckpt(`draw to screen (${pass.shaderId})`);
       }
       renderedAnyPass = true;
     }
@@ -352,6 +406,57 @@ export class EffectChain {
       console.warn("[EffectChain] No passes were rendered — falling back to blit");
       this.blit(sourceTexture);
     }
+  }
+
+  /**
+   * Dev-only labelled GL error checkpoint.
+   *
+   * PreviewViewport calls `gl.getError()` once at the end of a frame, which
+   * reports *that* something failed but not *what* -- in practice a wall of
+   * bare "WebGL error after render: 1282" with no way to attribute it (741 of
+   * them in one session). getError also clears the flag, so a single trailing
+   * call collapses every fault in the frame into one number.
+   *
+   * Calling it at labelled points names the offending operation instead. This
+   * is deliberately DEV-only: getError forces a synchronous pipeline flush, so
+   * it must not sit in the per-pass hot path of a release build.
+   *
+   * Each label reports once per chain instance -- a fault that recurs every
+   * frame is one bug, not hundreds.
+   */
+  /**
+   * Report a WebGL fault, naming the step that caused it.
+   *
+   * This used to bail out unless `import.meta.env.DEV`, which meant the
+   * shipping build was silent exactly where faults matter. A preview that goes
+   * black in a packaged app gave the user nothing and left diagnosis to
+   * reading source and guessing -- which produced two wrong diagnoses for the
+   * black-LUT-preview bug before this changed. The check costs one
+   * `gl.getError()` per checkpoint and each distinct fault is reported once.
+   */
+  private ckpt(label: string) {
+    const err = this.gl.getError();
+    if (err === this.gl.NO_ERROR) return;
+    const names: Record<number, string> = {
+      0x0500: "INVALID_ENUM",
+      0x0501: "INVALID_VALUE",
+      0x0502: "INVALID_OPERATION",
+      0x0505: "OUT_OF_MEMORY",
+      0x0506: "INVALID_FRAMEBUFFER_OPERATION",
+      0x9242: "CONTEXT_LOST_WEBGL",
+    };
+    const key = `${label}:${err}`;
+    if (this.reportedGlFaults.has(key)) return;
+    this.reportedGlFaults.add(key);
+    const name = names[err] ?? String(err);
+    console.error(
+      `[EffectChain] GL ${name} (${err}) at ${label} — reported once per chain; ` +
+        "later occurrences of this same label are suppressed."
+    );
+    // Surfaced to the UI as well: a console message cannot be read by someone
+    // running the installed build, and this is the only signal that explains a
+    // black preview.
+    this.onGlFault?.(name, label);
   }
 
   private blit(sourceTexture: WebGLTexture) {

@@ -42,12 +42,57 @@ const BIN =
   join(process.cwd(), "src-tauri", "target", "release", "mosh-verify") +
     (process.platform === "win32" ? ".exe" : "");
 
-const TEST_IMAGE = process.env.MOSHDITHER_TEST_IMAGE ?? "";
-const TEST_VIDEO = process.env.MOSHDITHER_TEST_VIDEO ?? "";
+// Small committed fixtures (139 KB total) so these tests actually run. They
+// previously defaulted to "", which made every media-dependent case skip
+// silently -- indistinguishable from passing. Override to point at heavier
+// media when exercising the pipeline at real resolutions.
+const TEST_IMAGE =
+  process.env.MOSHDITHER_TEST_IMAGE ?? join(process.cwd(), "tests", "fixtures", "test-image.png");
+const TEST_VIDEO =
+  process.env.MOSHDITHER_TEST_VIDEO ?? join(process.cwd(), "tests", "fixtures", "test-video.mp4");
 
 const canRun = BIN.length > 0 && existsSync(BIN);
 
 test.skip(!canRun, "mosh-verify binary not found — run `cargo build --release --bin mosh-verify`");
+
+/**
+ * Newest mtime across the Rust sources the binary is built from.
+ *
+ * A running mosh-verify holds a lock on its own exe, so `cargo build` fails
+ * with "Access is denied (os error 5)". If that failure is piped or ignored,
+ * the suite happily runs the previous binary and reports green for code that
+ * was never compiled — which happened during this suite's own development and
+ * produced a completely false pass. A present-but-stale binary must be an
+ * error, not a silent substitution.
+ */
+function newestRustSourceMtime(dir: string): number {
+  let newest = 0;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      newest = Math.max(newest, newestRustSourceMtime(full));
+    } else if (entry.name.endsWith(".rs")) {
+      newest = Math.max(newest, statSync(full).mtimeMs);
+    }
+  }
+  return newest;
+}
+
+if (canRun && !process.env.MOSHDITHER_VERIFY_BIN) {
+  const srcDir = join(process.cwd(), "src-tauri", "src");
+  const binAge = statSync(BIN).mtimeMs;
+  const srcAge = existsSync(srcDir) ? newestRustSourceMtime(srcDir) : 0;
+  if (srcAge > binAge) {
+    const behind = Math.round((srcAge - binAge) / 1000);
+    throw new Error(
+      `mosh-verify is ${behind}s older than the newest Rust source — these tests ` +
+        `would validate stale code. Rebuild with ` +
+        `\`cargo build --release --bin mosh-verify --manifest-path src-tauri/Cargo.toml\`. ` +
+        `If the build reports "Access is denied (os error 5)", a mosh-verify ` +
+        `process is still running and holding the exe.`
+    );
+  }
+}
 
 test.use({
   timeout: 600_000, // 10 min — render-all on 4K video across 98 effects is slow

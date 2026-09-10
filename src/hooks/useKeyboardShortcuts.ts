@@ -2,6 +2,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useRef } from "react";
 import { useAppStore } from "../store";
 import { eventToKeyString, getAllBindings } from "../utils/keyboardShortcuts";
+import { getCommands } from "../utils/commands";
+import { formatTimecode } from "../utils/timecode";
 import { useProject } from "./useProject";
 
 /**
@@ -91,8 +93,22 @@ export function useKeyboardShortcuts() {
           case "accessibility:zoomOut":
             useAppStore.getState().setZoom(useAppStore.getState().zoom - 0.25);
             break;
-          default:
+          default: {
+            // Anything else came from the Keyboard Shortcuts editor, which
+            // lists the COMMAND PALETTE registry -- ids like "undo",
+            // "play-pause", "clear-stack" -- while the seven built-in bindings
+            // above use a namespaced set ("edit:undo", "app:open"). So every
+            // shortcut a user recorded wrote an id this switch had no case for
+            // and was silently swallowed. Worse, bindings are matched by KEY,
+            // so recording Ctrl+Z against "undo" could win the lookup over
+            // "edit:undo" and disable a working default.
+            //
+            // Dispatching through the registry makes the editor honest: every
+            // command it offers is now actually bindable.
+            const cmd = getCommands().find((c) => c.id === matchedCommand);
+            if (cmd) cmd.action();
             break;
+          }
         }
         return;
       }
@@ -116,7 +132,12 @@ export function useKeyboardShortcuts() {
         case "ArrowRight":
           if (!isInput) {
             e.preventDefault();
-            setCurrentTime(currentTimeRef.current + 1 / 30);
+            // Bounded by duration, mirroring ArrowLeft's Math.max(0, ...).
+            // Without it, holding the key walked the playhead indefinitely past
+            // the end of the clip.
+            setCurrentTime(
+              Math.min(useAppStore.getState().duration, currentTimeRef.current + 1 / 30)
+            );
           }
           break;
 
@@ -170,17 +191,24 @@ export function useKeyboardShortcuts() {
           break;
 
         case "s":
+        case "S":
           if (isMeta) {
             e.preventDefault();
-            saveProject();
+            if (e.shiftKey) {
+              saveProject(true);
+            } else {
+              saveProject(false);
+            }
           }
           break;
 
         case "i":
           if (!isInput && !isMeta) {
             e.preventDefault();
-            setInPoint(Math.round(currentTimeRef.current));
-            setStatusMessage(`In point set at frame ${Math.round(currentTimeRef.current)}`);
+            // Frame-accurate. Rounding to whole seconds made a trim at 1.5 s
+            // impossible, and the message called that second a "frame".
+            setInPoint(currentTimeRef.current);
+            setStatusMessage(`In point set at ${formatTimecode(currentTimeRef.current)}`);
           }
           break;
 
@@ -198,8 +226,8 @@ export function useKeyboardShortcuts() {
             openProject();
           } else if (!isInput) {
             e.preventDefault();
-            setOutPoint(Math.round(currentTimeRef.current));
-            setStatusMessage(`Out point set at frame ${Math.round(currentTimeRef.current)}`);
+            setOutPoint(currentTimeRef.current);
+            setStatusMessage(`Out point set at ${formatTimecode(currentTimeRef.current)}`);
           }
           break;
 

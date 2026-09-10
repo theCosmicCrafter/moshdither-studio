@@ -1,4 +1,5 @@
 import { execSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,6 +40,78 @@ function fileSize(path) {
   }
 }
 
+/**
+ * Known-good sidecar manifest, or null when it cannot be read.
+ *
+ * Recorded because the binaries are gitignored and were never committed: losing
+ * src-tauri/bin/ made the project unbuildable with nothing in the repository
+ * saying which version to go and get.
+ */
+function loadManifest(binDir) {
+  const path = join(binDir, "SIDECARS.json");
+  if (!existsSync(path)) return null;
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch (e) {
+    warn(`SIDECARS.json is unreadable (${e.message}); checksum checks skipped.`);
+    return null;
+  }
+}
+
+function sha256(path) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+/** What to tell someone whose binary is missing, so the message is actionable. */
+function recoveryHint(base, entry) {
+  if (!entry) {
+    return `No manifest entry for ${base}. See docs/deployment.md section 3.`;
+  }
+  return (
+    `Run:  npm run fetch:external
+
+` +
+    `  It downloads ${base} ${entry.version} from ${entry.source},
+` +
+    `  verifies SHA-256 ${entry.sha256},
+` +
+    `  and installs it at src-tauri/bin/${entry.file}.` +
+    (entry.note ? `
+  ${entry.note}` : "")
+  );
+}
+
+/**
+ * Find a dev SAM3 interpreter the same way sam3_engine.rs does.
+ *
+ * MUST mirror `locate_dev_python` in src-tauri/src/sam3_engine.rs: the env
+ * override first, then walking ancestors. This checked only projectRoot, while
+ * the Rust walks up to five levels -- so from a git worktree, where sam3_env
+ * lives back in the main checkout, this reported "SAM3 features will not work"
+ * about an interpreter the application then found and used perfectly well. A
+ * check that is stricter than the code it describes is worse than no check: it
+ * sends someone off to fix something that was never broken.
+ */
+function locateDevPython(root) {
+  const override = process.env.MOSHDITHER_SAM3_PYTHON;
+  if (override && existsSync(override)) return override;
+
+  const rel =
+    process.platform === "win32"
+      ? ["sam3_env", "Scripts", "python.exe"]
+      : ["sam3_env", "bin", "python"];
+
+  let dir = root;
+  for (let i = 0; i < 5; i++) {
+    const candidate = join(dir, ...rel);
+    if (existsSync(candidate)) return candidate;
+    const parent = resolve(dir, "..");
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return undefined;
+}
+
 function main() {
   const target = detectTargetTriple();
   ok(`Host target triple: ${target}`);
@@ -46,14 +119,45 @@ function main() {
   const binDir = join(projectRoot, "src-tauri", "bin");
   const ext = process.platform === "win32" ? ".exe" : "";
   const requiredExternalBins = ["ffmpeg", "ffprobe", "ffgac", "ffedit"];
+  const manifest = loadManifest(binDir);
 
   for (const base of requiredExternalBins) {
     const name = `${base}-${target}${ext}`;
     const path = join(binDir, name);
     if (!existsSync(path)) {
-      fail(`Missing external binary: ${path}`);
+      // Name the version and the source. This used to print only the path,
+      // which told someone their build was broken without telling them what
+      // would fix it -- and nothing else in the repository knew either.
+      fail(
+        `Missing external binary: ${path}
+
+` +
+          recoveryHint(base, manifest?.binaries?.[base])
+      );
     }
     ok(`Found ${name} (${fileSize(path)})`);
+
+    // Checksum against the known-good build. A mismatch WARNS rather than
+    // fails: upgrading FFmpeg is legitimate. What is not legitimate is an
+    // unnoticed change, so it has to be a deliberate one -- update the hash in
+    // SIDECARS.json when you mean it.
+    const expected = manifest?.binaries?.[base]?.sha256;
+    if (expected) {
+      const actual = sha256(path);
+      if (actual === expected) {
+        ok(`${base} matches the pinned build (${manifest.binaries[base].version})`);
+      } else {
+        warn(
+          `${base} differs from the pinned build.
+` +
+            `  expected ${expected}  (${manifest.binaries[base].version})
+` +
+            `  actual   ${actual}
+` +
+            `  If this upgrade is intended, update src-tauri/bin/SIDECARS.json.`
+        );
+      }
+    }
 
     if (base === "ffmpeg" || base === "ffprobe") {
       try {
@@ -72,11 +176,7 @@ function main() {
   const sam3BridgePath = join(binDir, sam3BridgeName);
   const sam3BridgeReady = existsSync(sam3BridgePath);
 
-  const pythonPaths = [
-    join(projectRoot, "sam3_env", "Scripts", "python.exe"),
-    join(projectRoot, "sam3_env", "bin", "python"),
-  ];
-  const python = pythonPaths.find((p) => existsSync(p));
+  const python = locateDevPython(projectRoot);
 
   if (sam3BridgeReady) {
     ok(`Found SAM3 sidecar: ${sam3BridgeName} (${fileSize(sam3BridgePath)})`);
@@ -117,6 +217,30 @@ function main() {
       fail(`tauri.conf.json bundle.externalBin is missing: ${missingRequired.join(", ")}`);
     }
     ok("tauri.conf.json FFmpeg/FFglitch externalBin configuration is present");
+
+    // The datamosh sidecar carries its own Python and numpy. Without it the app
+    // falls back to hunting a `python.exe` on PATH -- which exists on a
+    // developer's machine and on almost no user's, so datamoshing silently
+    // becomes developer-only. It is listed in externalBin for exactly that
+    // reason, and a listed-but-absent binary fails deep inside Tauri with a
+    // message that does not name the cause, so name it here instead.
+    if (externalBinConfig.includes("bin/mosh-cli")) {
+      const moshName = `mosh-cli-${target}${ext}`;
+      const moshPath = join(binDir, moshName);
+      if (!existsSync(moshPath)) {
+        fail(
+          `tauri.conf.json lists bin/mosh-cli but the binary is missing: ${moshPath}
+` +
+            `  Build it with:  npm run build:mosh-sidecar`
+        );
+      }
+      ok(`Found datamosh sidecar: ${moshName} (${fileSize(moshPath)})`);
+    } else {
+      warn(
+        "tauri.conf.json does not list bin/mosh-cli -- datamoshing will need a " +
+          "system Python with numpy, which most users do not have."
+      );
+    }
 
     // SAM3 sidecar is optional in dev; if it is listed in the config, the
     // corresponding binary must exist.

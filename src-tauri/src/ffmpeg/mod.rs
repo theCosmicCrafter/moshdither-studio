@@ -7,37 +7,62 @@ use crate::effects::types::{Frame, VideoSegment};
 use crate::error::{AppError, Result};
 use parking_lot::Mutex as ParkingLotMutex;
 use std::collections::{HashMap, VecDeque};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, OnceLock};
 
 /// Default ceiling on the number of decoded frames kept in memory.
 const DEFAULT_DECODE_MAX_FRAMES: usize = 10_000;
-/// Hard cap on the per-decode memory budget (bytes). We cap at 4 GiB
-/// because `cmd.output()` buffers all of FFmpeg's stdout in memory before
-/// we chunk it into frames, so peak memory is ~2× the raw RGBA size
-/// (stdout buffer + frame Vec). A 4 GiB budget means peak ~8 GiB, which
-/// is safe on most 16 GiB systems. Systems with more RAM still benefit
-/// because auto-scale will pick native resolution for shorter clips.
-const MAX_DECODE_MEMORY_BUDGET_BYTES: u64 = 4 * 1024 * 1024 * 1024;
-/// Floor on the per-decode memory budget. Even on low-RAM systems we still
-/// allow at least 1 GiB so short 1080p clips work.
+/// Hard cap on the memory the export plan may commit to in TOTAL (bytes),
+/// before division by [`PIPELINE_PEAK_COPIES`]. 8 GiB total is 4 GiB per
+/// copy, which is the rung the plan already chose on a machine with 16 GiB
+/// or more available -- so large machines keep today's resolution and
+/// today's real peak, while small ones finally get a plan they can
+/// complete instead of one that overcommits 2-3x and aborts.
+const MAX_DECODE_MEMORY_BUDGET_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+/// Floor on the TOTAL budget before division. Even on low-RAM systems the
+/// plan gets 1 GiB total -- 512 MiB per copy -- so short 1080p clips work.
 const MIN_DECODE_MEMORY_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
-/// Fraction of available system RAM to use as the decode budget. We use
-/// 50% of *available* (not total) RAM to leave headroom for the OS, GPU
-/// drivers, the WebView, the FFmpeg subprocess, and the effect-processing
-/// pipeline (which clones frames during rayon parallel processing).
-/// This matches the After Effects recommendation of reserving 20-30% of
-/// RAM for the OS and background apps, with an extra margin because our
-/// stdout-buffering pattern doubles peak memory.
+/// Fraction of *available* (not total) RAM the export may use, leaving
+/// headroom for the OS, GPU drivers, the WebView and the FFmpeg subprocess.
 const DECODE_MEMORY_FRACTION_OF_RAM: f64 = 0.50;
-
-/// Compute the per-decode memory budget based on available system RAM.
+/// How many copies of the decoded clip the pipeline holds at its peak.
 ///
-/// Returns a value in bytes between [`MIN_DECODE_MEMORY_BUDGET_BYTES`] and
-/// [`MAX_DECODE_MEMORY_BUDGET_BYTES`]. The budget is `total_ram * 0.60`,
-/// clamped to that range. This replaces the old fixed 2 GiB cap which
-/// silently truncated 4K video to ~64 frames.
+/// The budget used to bound only the decoded Vec while the pipeline held two
+/// or three copies beside it, so "4 GiB budget" meant 8-12 GiB in use. The
+/// copies now, after the effects loop went in place:
+///
+/// * decode: the raw stdout buffer plus the frames Vec while chunking --
+///   transient, 2x, until streaming decode replaces read_to_end;
+/// * a temporal effect: its input segment plus the owned one it returns --
+///   structural, 2x, because `Effect::process_video` returns a new segment;
+/// * non-temporal effects: 1x plus one frame per rayon worker.
+///
+/// So 2 is the honest multiplier for the common case. It is a FLOOR, not a
+/// ceiling: cross_video decodes a second clip inside the loop, and the
+/// repeat-based datamosh profiles return more frames than they were given.
+/// Divide by this ONCE, here; every consumer reads the result through
+/// `adaptive_decode_memory_budget`.
+const PIPELINE_PEAK_COPIES: u64 = 2;
+
+/// The per-copy budget for a given amount of available RAM: the fraction,
+/// clamped to [MIN, MAX], then divided by [`PIPELINE_PEAK_COPIES`]. The
+/// clamp happens BEFORE the division and is never re-applied after it, so
+/// on a tiny machine the plan is 512 MiB per copy and the real peak 1 GiB.
+fn budget_for(available: u64) -> u64 {
+    let total = ((available as f64 * DECODE_MEMORY_FRACTION_OF_RAM) as u64).clamp(
+        MIN_DECODE_MEMORY_BUDGET_BYTES,
+        MAX_DECODE_MEMORY_BUDGET_BYTES,
+    );
+    total / PIPELINE_PEAK_COPIES.max(1)
+}
+
+/// The per-copy memory budget for one export, from available system RAM.
+///
+/// "Per copy" is the point: the plan, the decode cap and the still-image
+/// cap all read this one number, and the pipeline holds
+/// [`PIPELINE_PEAK_COPIES`] of the clip at peak, so the real peak is that
+/// many times what is logged here.
 fn adaptive_decode_memory_budget() -> u64 {
     use sysinfo::System;
     let mut sys = System::new();
@@ -49,13 +74,9 @@ fn adaptive_decode_memory_budget() -> u64 {
     let available = sys.available_memory();
     if available == 0 {
         // Fallback if sysinfo can't read memory (rare/sandboxed envs).
-        return MIN_DECODE_MEMORY_BUDGET_BYTES;
+        return MIN_DECODE_MEMORY_BUDGET_BYTES / PIPELINE_PEAK_COPIES.max(1);
     }
-    let budget = (available as f64 * DECODE_MEMORY_FRACTION_OF_RAM) as u64;
-    budget.clamp(
-        MIN_DECODE_MEMORY_BUDGET_BYTES,
-        MAX_DECODE_MEMORY_BUDGET_BYTES,
-    )
+    budget_for(available)
 }
 
 /// Pick the largest scale (longest side in px) that allows decoding the
@@ -131,6 +152,35 @@ pub fn plan_decode(path: &str, preferred_scale: Option<usize>) -> Result<(Option
     Ok((scale, budget))
 }
 
+/// Plan a decode for a source whose ONE frame will be multiplied to fill a
+/// duration -- a still image animated to video.
+///
+/// [`plan_decode`] asks [`probe_frame_count`], which reports 0 for a still, so
+/// it planned for a single frame, found it comfortably inside the budget and
+/// chose native resolution. The export then cloned that frame `duration x fps`
+/// times. A 4032x3024 phone photo is 48.8 MB per frame; the default 10 s at
+/// 30 fps is 300 of them -- 14.6 GB -- and the per-effect rayon collect doubles
+/// it. That allocation does not panic: it ABORTS, which is why the crash left
+/// nothing after "Decoded 1 frames" in the log.
+///
+/// Planning against the real frame count picks a rung that fits, exactly as it
+/// does for video.
+pub fn plan_decode_for_frames(
+    path: &str,
+    preferred_scale: Option<usize>,
+    target_frames: usize,
+) -> Result<(Option<usize>, u64)> {
+    let budget = adaptive_decode_memory_budget();
+    if let Some(n) = preferred_scale {
+        // The user chose this deliberately; honour it. export_video still caps
+        // the clone against the budget, so an explicit choice cannot abort.
+        return Ok((Some(n), budget));
+    }
+    let (src_w, src_h, _fps) = probe_video(path)?;
+    let scale = pick_auto_scale(src_w, src_h, target_frames.max(1), budget);
+    Ok((scale, budget))
+}
+
 /// Locate a binary by name. Tries bundled sidecar first, then dev path, then PATH.
 fn locate_binary(base: &str) -> Result<String> {
     // Check bundled binary next to executable (production — Tauri strips suffix)
@@ -157,8 +207,30 @@ fn locate_binary(base: &str) -> Result<String> {
 }
 
 /// Locate the FFmpeg binary. Tries bundled sidecar first, then PATH.
+/// The error every NEW cancel site returns. The frontend branches on the
+/// store's cancel flag, never on this text, so it is free to stay terse.
+pub const EXPORT_CANCELLED: &str = "Export cancelled by user";
+
 pub fn ffmpeg_binary() -> Result<String> {
     locate_binary("ffmpeg")
+}
+
+/// Hidden sibling of `dest` that an encode writes to before being renamed onto
+/// the real destination.
+///
+/// The destination's extension is preserved deliberately: FFmpeg chooses its
+/// muxer from the output filename, so a temp name ending in `.moshdither-tmp`
+/// aborts the encode with "Unable to choose an output format" before a single
+/// frame is read. Keeping it a sibling (rather than using the system temp dir)
+/// keeps the final rename on one filesystem, so it stays atomic.
+fn encode_temp_path(dest: &Path) -> PathBuf {
+    dest.with_file_name(format!(
+        ".{}.moshdither-tmp.{}",
+        dest.file_stem()
+            .and_then(|f| f.to_str())
+            .unwrap_or("export"),
+        dest.extension().and_then(|e| e.to_str()).unwrap_or("mp4")
+    ))
 }
 
 /// Locate the FFprobe binary. Tries bundled sidecar first, then PATH.
@@ -200,7 +272,7 @@ pub fn generate_proxy(source_path: &str, max_width: u32, crf: u32) -> Result<Str
 
     const PROXY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
     let output = output_with_timeout(
-        Command::new(&ffmpeg).args([
+        crate::proc::command(&ffmpeg).args([
             "-i",
             source_path,
             "-vf",
@@ -352,7 +424,11 @@ pub fn image_to_video(image_path: &str, duration_secs: f64, fps: f64) -> Result<
         .join("animated-stills");
     std::fs::create_dir_all(&out_dir).map_err(AppError::Io)?;
 
-    let output_path = out_dir.join(build_animated_still_filename(image_path, duration_secs, fps));
+    let output_path = out_dir.join(build_animated_still_filename(
+        image_path,
+        duration_secs,
+        fps,
+    ));
     let output_path_str = output_path.to_string_lossy().to_string();
 
     let args = build_image_to_video_args(
@@ -365,7 +441,10 @@ pub fn image_to_video(image_path: &str, duration_secs: f64, fps: f64) -> Result<
     );
 
     const IMAGE_TO_VIDEO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
-    let output = output_with_timeout(Command::new(&ffmpeg).args(&args), IMAGE_TO_VIDEO_TIMEOUT)?;
+    let output = output_with_timeout(
+        crate::proc::command(&ffmpeg).args(&args),
+        IMAGE_TO_VIDEO_TIMEOUT,
+    )?;
 
     if !output.status.success() {
         return Err(AppError::Ffmpeg(format!(
@@ -431,6 +510,19 @@ pub fn decode_video_with_options(
     max_frames: Option<usize>,
     scale: Option<usize>,
 ) -> Result<VideoSegment> {
+    decode_video_cancellable(path, max_frames, scale, None)
+}
+
+/// [`decode_video_with_options`] that can be interrupted: the export passes
+/// its cancel flag so the decode -- the first and, for long clips, one of
+/// the slowest stages -- stops when the user asks rather than running to
+/// completion behind a UI that already said it had.
+pub fn decode_video_cancellable(
+    path: &str,
+    max_frames: Option<usize>,
+    scale: Option<usize>,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<VideoSegment> {
     // Resolve an explicit or default frame cap up-front.
     let requested_max = max_frames.unwrap_or(DEFAULT_DECODE_MAX_FRAMES);
     let budget = adaptive_decode_memory_budget() as usize;
@@ -477,15 +569,27 @@ pub fn decode_video_with_options(
     let budget_frames = budget / frame_size;
     let max_frames = requested_max.min(budget_frames).max(1);
     if max_frames < requested_max {
-        tracing::warn!(
-            "Requested {} frames but only {} fit in memory budget \
-             ({}x{} @ {} bytes/frame, budget {} bytes). Clip will be truncated.",
-            requested_max, max_frames, width, height, frame_size, budget
+        // DEBUG, not WARN, and it no longer claims truncation. `requested_max`
+        // is a 10,000-frame SAFETY CEILING, not the clip length, so comparing it
+        // against the memory budget says nothing about whether this particular
+        // clip loses anything -- at any real resolution the budget sits below
+        // that ceiling, so a healthy 300-frame export announced "Clip will be
+        // truncated" on every single run. The accurate warning is the one after
+        // the decode loop, which fires only when the cap was actually reached.
+        tracing::debug!(
+            "Frame cap lowered from the {}-frame ceiling to {} by the memory budget \
+             ({}x{} @ {} bytes/frame, budget {} bytes).",
+            requested_max,
+            max_frames,
+            width,
+            height,
+            frame_size,
+            budget
         );
     }
 
     let ffmpeg = ffmpeg_binary()?;
-    let mut cmd = Command::new(&ffmpeg);
+    let mut cmd = crate::proc::command(&ffmpeg);
     cmd.args(["-i", path]);
     // max_frames, not requested_max. ffmpeg buffers everything it decodes into
     // this process's stdout pipe, so asking for more frames than the memory
@@ -511,7 +615,7 @@ pub fn decode_video_with_options(
     cmd.args(["-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"]);
 
     const DECODE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
-    let output = output_with_timeout(&mut cmd, DECODE_TIMEOUT)?;
+    let output = output_with_timeout_cancellable(&mut cmd, DECODE_TIMEOUT, cancel)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(AppError::Ffmpeg(format!(
@@ -543,7 +647,8 @@ pub fn decode_video_with_options(
     //
     // A warning is not a fix for that; it makes the loss visible. Removing the
     // limit outright is not safe either, since the decode is fully buffered in
-    // memory. The real fix is streaming decode, which is a larger change.
+    // memory. PIPELINE_PEAK_COPIES accounts for that transient copy in the
+    // plan; streaming decode, which would remove it, is the follow-up.
     if frames.len() == max_frames {
         tracing::warn!(
             "Decode stopped at the {}-frame limit ({:.1}s at {:.0} fps). \
@@ -575,7 +680,11 @@ fn find_output_arg_index(args: &[String], output_path: &str) -> Option<usize> {
     args.iter().rposition(|a| a == output_path)
 }
 
-fn apply_watermark_args(mut args: Vec<String>, wm: &WatermarkSettings, output_path: &str) -> Vec<String> {
+fn apply_watermark_args(
+    mut args: Vec<String>,
+    wm: &WatermarkSettings,
+    output_path: &str,
+) -> Vec<String> {
     if !wm.enabled {
         return args;
     }
@@ -641,8 +750,11 @@ fn apply_watermark_args(mut args: Vec<String>, wm: &WatermarkSettings, output_pa
 
     if wm.watermark_type == "text" && !wm.text.is_empty() {
         let (x, y) = text_position_coords(&wm.position);
-        let alpha = ((wm.opacity * 255.0).round() as u32).clamp(0, 255);
-        let alpha_hex = format!("{:02x}", alpha);
+        // FFmpeg's drawtext wants `color@<float 0..1>`; a bare two-digit hex is
+        // rejected outright with "Invalid alpha value specifier", which aborted
+        // EVERY text-watermark export. Verified against the bundled ffmpeg 8.0.
+        let alpha_f = wm.opacity.clamp(0.0, 1.0);
+        let alpha = format!("{alpha_f:.3}");
         let color = to_drawtext_color(&wm.color);
         let mut drawtext = format!(
             "drawtext=text='{}':x={}:y={}:fontsize={}:fontcolor={}@{}",
@@ -651,7 +763,7 @@ fn apply_watermark_args(mut args: Vec<String>, wm: &WatermarkSettings, output_pa
             y,
             wm.font_size.clamp(1, 999),
             color,
-            alpha_hex
+            alpha
         );
         if let Some(font_path) = &wm.font_path {
             drawtext.push_str(&format!(":fontfile={}", escape_path(font_path)));
@@ -809,6 +921,116 @@ impl Drop for TempFileGuard {
     }
 }
 
+/// What a chosen output format needs from FFmpeg.
+///
+/// Split out from `encode_video` because the encoder is only half the story:
+/// GIF, APNG, animated WebP and image sequences all reject the H.264 defaults
+/// the encoder used to hardcode (`-crf`, `-pix_fmt yuv420p`, an AAC audio
+/// track). Previously `format` never reached the encoder at all -- "GIF" and
+/// "PNG sequence" were accepted by the UI and silently produced an H.264 MP4.
+pub(crate) struct OutputSpec {
+    pub encoder: &'static str,
+    /// `None` lets the encoder choose. The image and animation codecs reject
+    /// `yuv420p`, which is only meaningful for the video muxers.
+    pub pix_fmt: Option<&'static str>,
+    /// CRF is an x264/x265/VP9 concept; the image codecs use `-q:v` or nothing.
+    pub uses_crf: bool,
+    /// GIF, APNG, WebP and image sequences carry no audio track.
+    pub supports_audio: bool,
+    /// Filter chain applied before encoding. GIF needs a generated palette or
+    /// it quantises to a fixed 256-colour table and bands badly.
+    pub filter: Option<&'static str>,
+    /// Extra flag pairs (loop counts, quality knobs).
+    pub extra: &'static [&'static str],
+    /// True when the output is a numbered image sequence rather than one file.
+    pub is_sequence: bool,
+}
+
+/// Resolve the output format name (as sent by the UI) to concrete FFmpeg needs.
+///
+/// `codec` still selects between H.264/H.265/ProRes for the video containers;
+/// it is ignored for formats that admit exactly one encoder.
+pub(crate) fn output_spec(format: Option<&str>, codec: &str) -> OutputSpec {
+    let video = |encoder: &'static str| OutputSpec {
+        encoder,
+        pix_fmt: Some("yuv420p"),
+        uses_crf: true,
+        supports_audio: true,
+        filter: None,
+        extra: &[],
+        is_sequence: false,
+    };
+    let still = |encoder: &'static str, extra: &'static [&'static str]| OutputSpec {
+        encoder,
+        pix_fmt: None,
+        uses_crf: false,
+        supports_audio: false,
+        filter: None,
+        extra,
+        is_sequence: true,
+    };
+
+    match format.unwrap_or("mp4") {
+        // Animated single-file images.
+        "gif" => OutputSpec {
+            encoder: "gif",
+            pix_fmt: None,
+            uses_crf: false,
+            supports_audio: false,
+            // Two-stage palette: generate an optimal table for the clip, then
+            // map to it. Without this GIF falls back to a generic palette and
+            // gradients band severely -- which matters here, because the whole
+            // app is about gradients and dither.
+            filter: Some(
+                "split[s0][s1];[s0]palettegen=stats_mode=diff[p];\
+                 [s1][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
+            ),
+            extra: &["-loop", "0"],
+            is_sequence: false,
+        },
+        "apng" => OutputSpec {
+            encoder: "apng",
+            pix_fmt: Some("rgba"),
+            uses_crf: false,
+            supports_audio: false,
+            filter: None,
+            extra: &["-plays", "0"],
+            is_sequence: false,
+        },
+        "webp" => OutputSpec {
+            encoder: "libwebp_anim",
+            pix_fmt: Some("yuva420p"),
+            uses_crf: false,
+            supports_audio: false,
+            filter: None,
+            extra: &["-loop", "0", "-lossless", "0", "-q:v", "80"],
+            is_sequence: false,
+        },
+
+        // Numbered image sequences.
+        "png_seq" => still("png", &[]),
+        "jpg_seq" => still("mjpeg", &["-q:v", "2"]),
+        "webp_seq" => still("libwebp", &["-lossless", "0", "-q:v", "80"]),
+        "tiff_seq" => still("tiff", &[]),
+        "bmp_seq" => still("bmp", &[]),
+
+        // Video containers. `codec` chooses the encoder within these.
+        "webm" => video(match codec {
+            "av1" | "libaom-av1" => "libaom-av1",
+            _ => "libvpx-vp9",
+        }),
+        _ => video(match codec {
+            "h265" | "hevc" | "libx265" => "libx265",
+            "vp9" | "libvpx-vp9" => "libvpx-vp9",
+            "av1" | "libaom-av1" => "libaom-av1",
+            "prores" | "prores_ks" => "prores_ks",
+            "ffv1" => "ffv1",
+            "qtrle" => "qtrle",
+            _ => "libx264",
+        }),
+    }
+}
+
 pub fn encode_video(
     segment: &VideoSegment,
     path: &str,
@@ -824,6 +1046,9 @@ pub fn encode_video(
     output_height: Option<u32>,
     cancel: Option<&std::sync::atomic::AtomicBool>,
     timeout: Option<std::time::Duration>,
+    // Output format name from the UI ("gif", "png_seq", "webm", ...). None
+    // keeps the historical behaviour of inferring everything from `codec`.
+    format: Option<&str>,
 ) -> Result<()> {
     if segment.frames.is_empty() {
         return Err(AppError::Ffmpeg("No frames to encode".to_string()));
@@ -835,29 +1060,64 @@ pub fn encode_video(
     // already started writing directly to `path` -- leaves a truncated or
     // corrupt file at the user's chosen destination, silently destroying
     // whatever was there before if they picked an existing file to overwrite.
+    //
+    // The temp name must keep the destination's extension. FFmpeg picks the
+    // muxer from the output filename, so a bare `.moshdither-tmp` suffix makes
+    // it exit with "Unable to choose an output format" before reading a single
+    // frame -- which reaches the caller only as a broken stdin pipe ("The pipe
+    // has been ended"), with the real reason buried in FFmpeg's stderr.
     let final_path = path;
     let dest = std::path::Path::new(final_path);
-    let temp_path_buf = dest.with_file_name(format!(
-        ".{}.moshdither-tmp",
-        dest.file_name().and_then(|f| f.to_str()).unwrap_or("export")
-    ));
+
+    // An image sequence writes MANY files, so neither the encode-to-temp dance
+    // nor a single output name applies to it: FFmpeg's image2 muxer refuses a
+    // fixed filename outright ("Cannot write more than one file with the same
+    // name. Are you missing ... a sequence pattern?"), which is what sequence
+    // export did before this. The chosen name seeds a numbered pattern instead,
+    // written directly to the destination.
+    let sequence_spec = output_spec(format, codec);
+    let sequence_path = if sequence_spec.is_sequence {
+        let stem = dest
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("frame")
+            .to_string();
+        let ext = dest
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("png")
+            .to_string();
+        Some(
+            dest.with_file_name(format!("{stem}_%05d.{ext}"))
+                .to_string_lossy()
+                .into_owned(),
+        )
+    } else {
+        None
+    };
+
+    let temp_path_buf = encode_temp_path(dest);
     let temp_path = temp_path_buf.to_string_lossy().into_owned();
-    let path: &str = &temp_path;
-    let mut temp_guard = TempFileGuard::new(temp_path_buf.clone());
+    let path: &str = sequence_path.as_deref().unwrap_or(&temp_path);
+    // Nothing to clean up for a sequence: it writes its frames straight out, so
+    // there is no temp file standing in for the destination.
+    let mut temp_guard = TempFileGuard::new(if sequence_spec.is_sequence {
+        std::path::PathBuf::new()
+    } else {
+        temp_path_buf.clone()
+    });
 
     let ffmpeg = ffmpeg_binary()?;
     let first = &segment.frames[0];
+    // Held separately: the write loop below moves `segment.frames`, and the
+    // declared size has to outlive that to validate each frame against it.
+    let (first_w, first_h) = (first.width, first.height);
     let w = first.width;
     let h = first.height;
     let fps = fps_override.unwrap_or(segment.fps);
 
-    let encoder = match codec {
-        "h264" | "libx264" => "libx264",
-        "h265" | "hevc" | "libx265" => "libx265",
-        "vp9" | "libvpx-vp9" => "libvpx-vp9",
-        "prores" | "prores_ks" => "prores_ks",
-        _ => "libx264",
-    };
+    let spec = output_spec(format, codec);
+    let encoder = spec.encoder;
 
     let mut args: Vec<String> = vec![
         "-f".to_string(),
@@ -923,22 +1183,45 @@ pub fn encode_video(
             }
         } // "good" or default
     };
-    args.push("-crf".to_string());
-    args.push(crf.to_string());
+    if spec.uses_crf {
+        args.push("-crf".to_string());
+        args.push(crf.to_string());
 
-    // VP9 needs -b:v 0 for CRF mode to work properly
-    if encoder == "libvpx-vp9" {
-        args.push("-b:v".to_string());
-        args.push("0".to_string());
+        // VP9 needs -b:v 0 for CRF mode to work properly
+        if encoder == "libvpx-vp9" {
+            args.push("-b:v".to_string());
+            args.push("0".to_string());
+        }
+    }
+
+    // A GIF needs its palette built from the clip before encoding, or gradients
+    // band. Skipped when a watermark is present: that path rewrites the argument
+    // list into a -filter_complex chain further down, and the two cannot both
+    // own -vf.
+    if let Some(filter) = spec.filter {
+        if watermark.is_none() {
+            args.push("-vf".to_string());
+            args.push(filter.to_string());
+        }
+    }
+
+    for flag in spec.extra {
+        args.push((*flag).to_string());
     }
 
     args.push("-r".to_string());
     args.push(fps.to_string());
-    args.push("-fps_mode".to_string());
-    args.push("cfr".to_string());
+    // An image sequence has no timeline to conform, and -fps_mode cfr makes the
+    // muxer drop or duplicate stills to hit a rate nobody asked for.
+    if !spec.is_sequence {
+        args.push("-fps_mode".to_string());
+        args.push("cfr".to_string());
+    }
 
-    args.push("-pix_fmt".to_string());
-    args.push("yuv420p".to_string());
+    if let Some(pix) = spec.pix_fmt {
+        args.push("-pix_fmt".to_string());
+        args.push(pix.to_string());
+    }
 
     // ProRes needs profile argument
     if encoder == "prores_ks" {
@@ -946,8 +1229,10 @@ pub fn encode_video(
         args.push("3".to_string()); // ProRes 422 HQ
     }
 
-    // Audio: encode from second input if present
-    if audio_input_idx.is_some() {
+    // Audio: encode from second input if present. GIF, APNG, WebP and image
+    // sequences carry no audio track -- asking their muxers for an AAC stream
+    // fails the whole encode rather than being ignored.
+    if audio_input_idx.is_some() && spec.supports_audio {
         args.push("-c:a".to_string());
         args.push("aac".to_string());
         args.push("-shortest".to_string());
@@ -991,7 +1276,19 @@ pub fn encode_video(
     // Apply resolution scale via FFmpeg filter (replaces CPU-based per-frame resize)
     if let (Some(ow), Some(oh)) = (output_width, output_height) {
         if ow != w || oh != h {
-            let scale_filter = format!("scale={}:{}", ow, oh);
+            // Fit inside the target and letterbox the remainder, rather than
+            // stretching to it.
+            //
+            // `scale=W:H` on its own IGNORES the source aspect ratio. Exporting
+            // a 640x1146 vertical clip at "1080p HD" ran scale=1920:1080 and
+            // squashed it 3.2x horizontally -- the standard resolution presets
+            // mangled any source that was not already 16:9, which for a tool
+            // aimed at phone footage is most of them. `decrease` + `pad` is the
+            // conventional fix and leaves an already-matching source untouched.
+            let scale_filter = format!(
+                "scale={ow}:{oh}:force_original_aspect_ratio=decrease,\
+                 pad={ow}:{oh}:(ow-iw)/2:(oh-ih)/2:black"
+            );
             let vf_pos = args.iter().position(|a| a == "-vf");
             let fc_pos = args.iter().position(|a| a == "-filter_complex");
             if let Some(pos) = vf_pos {
@@ -1048,7 +1345,7 @@ pub fn encode_video(
     );
     tracing::debug!("FFmpeg args: {}", args.join(" "));
 
-    let mut child = Command::new(&ffmpeg)
+    let mut child = crate::proc::command(&ffmpeg)
         .args(&args)
         .stdin(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1101,7 +1398,54 @@ pub fn encode_video(
             if i % 50 == 0 || i == total - 1 {
                 tracing::debug!("Writing frame {}/{} to FFmpeg stdin", i + 1, total);
             }
-            stdin.write_all(&frame.data).map_err(AppError::Io)?;
+            // FFmpeg is told ONE frame size (`-s WxH`, taken from frame 0) and
+            // then fed a raw byte stream with no framing. A frame of a
+            // different size therefore does not produce an error -- it silently
+            // shifts every subsequent frame, and FFmpeg reinterprets whatever
+            // follows as pixel data. Several effects legitimately resize
+            // (kaleidoscope, pixelate), so this is reachable from a normal
+            // stack. Refuse with a message that names the frame instead.
+            let expected = (frame.width as usize) * (frame.height as usize) * 4;
+            if frame.width != first_w || frame.height != first_h || frame.data.len() != expected {
+                let _ = stdin.flush();
+                drop(stdin);
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(AppError::Ffmpeg(format!(
+                    "Frame {} is {}x{} with {} bytes, but the encode was opened for                      {}x{} ({} bytes per frame). An effect changed the frame size                      mid-stream; FFmpeg cannot be re-sized once started.",
+                    i + 1,
+                    frame.width,
+                    frame.height,
+                    frame.data.len(),
+                    first_w,
+                    first_h,
+                    (first_w as usize) * (first_h as usize) * 4
+                )));
+            }
+            if let Err(e) = stdin.write_all(&frame.data) {
+                // A write failure here almost always means FFmpeg already
+                // exited -- bad arguments, an unsupported codec, a full disk.
+                // The IO error is only ever "the pipe has been ended", which
+                // says nothing about the cause; FFmpeg's own diagnosis is
+                // sitting in `stderr_buf`. Surface that instead of the errno.
+                use child_wait_timeout::ChildWT;
+                let _ = child.wait_timeout(std::time::Duration::from_secs(10));
+                if let Some(t) = stderr_thread.take() {
+                    let _ = t.join();
+                }
+                let stderr = stderr_buf
+                    .lock()
+                    .map(|g| String::from_utf8_lossy(&g).into_owned())
+                    .unwrap_or_default();
+                tracing::error!("FFmpeg exited early. stderr:\n{}", stderr);
+                return Err(AppError::Ffmpeg(format!(
+                    "FFmpeg exited while writing frame {}/{} ({}): {}",
+                    i + 1,
+                    total,
+                    e,
+                    stderr.trim().chars().take(2000).collect::<String>()
+                )));
+            }
         }
         // Close stdin so FFmpeg sees EOF and can finish encoding the final frames.
         drop(stdin);
@@ -1158,9 +1502,13 @@ pub fn encode_video(
     // partially-written file at `final_path`. Disarm the guard first so a
     // successful rename doesn't get immediately deleted by Drop.
     temp_guard.disarm();
-    if let Err(e) = std::fs::rename(&temp_path_buf, final_path) {
-        let _ = std::fs::remove_file(&temp_path_buf);
-        return Err(AppError::Io(e));
+    // A sequence wrote its numbered frames straight to the destination
+    // directory; there is no single temp file to move into place.
+    if !sequence_spec.is_sequence {
+        if let Err(e) = std::fs::rename(&temp_path_buf, final_path) {
+            let _ = std::fs::remove_file(&temp_path_buf);
+            return Err(AppError::Io(e));
+        }
     }
     tracing::info!("FFmpeg encode completed successfully");
     Ok(())
@@ -1191,8 +1539,30 @@ fn output_with_timeout(
     cmd: &mut Command,
     timeout: std::time::Duration,
 ) -> Result<std::process::Output> {
+    output_with_timeout_cancellable(cmd, timeout, None)
+}
+
+/// [`output_with_timeout`] that also watches a cancel flag.
+///
+/// The export's decode is one blocking ffmpeg call; it used to be the one
+/// stage a user could not interrupt at all. While it ran, the UI already
+/// said "Export cancelled" and the job kept the export slot. Now the child
+/// is polled every 100 ms and killed when the flag is set. ffmpeg has no
+/// grandchildren, so a plain kill closes its pipes and the readers join.
+fn output_with_timeout_cancellable(
+    cmd: &mut Command,
+    timeout: std::time::Duration,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<std::process::Output> {
     use child_wait_timeout::ChildWT;
     use std::io::{ErrorKind, Read};
+    use std::sync::atomic::Ordering;
+
+    let cancelled = || cancel.is_some_and(|c| c.load(Ordering::Relaxed));
+    // Cheap, and it avoids launching an ffmpeg only to kill it.
+    if cancelled() {
+        return Err(AppError::Generic(EXPORT_CANCELLED.to_string()));
+    }
 
     let mut child = cmd
         .stdout(Stdio::piped())
@@ -1241,31 +1611,53 @@ fn output_with_timeout(
         let _ = stderr_thread.join();
     };
 
-    let status = match child.wait_timeout(timeout) {
-        Ok(status) => status,
-        Err(e) if e.kind() == ErrorKind::TimedOut => {
-            tracing::warn!(
-                "Command timed out after {:?}, killing process",
-                timeout
-            );
-            let _ = child.kill();
-            let _ = child.wait_timeout(std::time::Duration::from_secs(10));
-            join_readers(stdout_thread, stderr_thread);
-            return Err(AppError::Ffmpeg(format!(
-                "Process timed out after {:?}",
-                timeout
-            )));
-        }
-        Err(e) => {
-            let _ = child.kill();
-            join_readers(stdout_thread, stderr_thread);
-            return Err(AppError::Io(e));
+    // Poll in short ticks so a cancel is noticed within ~100 ms, instead of
+    // one wait for the whole timeout. The deadline message is kept
+    // byte-identical to what it was; a test matches on "timed out".
+    let started = std::time::Instant::now();
+    let tick = std::time::Duration::from_millis(100);
+    let status = loop {
+        match child.wait_timeout(tick) {
+            Ok(status) => break status,
+            Err(e) if e.kind() == ErrorKind::TimedOut => {
+                if cancelled() {
+                    tracing::info!("Cancel requested; killing child process");
+                    let _ = child.kill();
+                    let _ = child.wait_timeout(std::time::Duration::from_secs(10));
+                    join_readers(stdout_thread, stderr_thread);
+                    return Err(AppError::Generic(EXPORT_CANCELLED.to_string()));
+                }
+                if started.elapsed() > timeout {
+                    tracing::warn!("Command timed out after {:?}, killing process", timeout);
+                    let _ = child.kill();
+                    let _ = child.wait_timeout(std::time::Duration::from_secs(10));
+                    join_readers(stdout_thread, stderr_thread);
+                    return Err(AppError::Ffmpeg(format!(
+                        "Process timed out after {:?}",
+                        timeout
+                    )));
+                }
+            }
+            Err(e) => {
+                let _ = child.kill();
+                join_readers(stdout_thread, stderr_thread);
+                return Err(AppError::Io(e));
+            }
         }
     };
 
     join_readers(stdout_thread, stderr_thread);
-    let stdout = stdout_buf.lock().map(|g| g.clone()).unwrap_or_default();
-    let stderr = stderr_buf.lock().map(|g| g.clone()).unwrap_or_default();
+    // Take, do not clone: the readers are joined, nobody else reads these
+    // buffers, and a clone here was a transient second copy of the entire
+    // raw decode.
+    let stdout = stdout_buf
+        .lock()
+        .map(|mut g| std::mem::take(&mut *g))
+        .unwrap_or_default();
+    let stderr = stderr_buf
+        .lock()
+        .map(|mut g| std::mem::take(&mut *g))
+        .unwrap_or_default();
     Ok(std::process::Output {
         status,
         stdout,
@@ -1307,7 +1699,7 @@ pub fn probe_video(path: &str) -> Result<(u32, u32, f64)> {
 
     const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
     let output = output_with_timeout(
-        Command::new(&bin).args([
+        crate::proc::command(&bin).args([
             "-v",
             "error",
             "-select_streams",
@@ -1397,7 +1789,7 @@ pub fn probe_metadata(path: &str) -> Result<MediaMetadata> {
     let bin = ffprobe_binary()?;
     const PROBE_METADATA_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
     let output = output_with_timeout(
-        Command::new(&bin).args([
+        crate::proc::command(&bin).args([
             "-v",
             "error",
             "-show_entries",
@@ -1492,7 +1884,7 @@ pub fn has_audio_stream(path: &str) -> Result<bool> {
     let bin = ffprobe_binary()?;
     const HAS_AUDIO_STREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
     let output = output_with_timeout(
-        Command::new(&bin).args([
+        crate::proc::command(&bin).args([
             "-v",
             "error",
             "-select_streams",
@@ -1525,7 +1917,7 @@ pub fn extract_audio_to_wav(
     max_duration_secs: Option<f64>,
 ) -> Result<()> {
     let ffmpeg = ffmpeg_binary()?;
-    let mut cmd = Command::new(&ffmpeg);
+    let mut cmd = crate::proc::command(&ffmpeg);
     cmd.args(["-y", "-i", video_path, "-vn", "-ac", "1", "-ar", "44100"]);
     if let Some(secs) = max_duration_secs {
         if secs > 0.0 {
@@ -1560,6 +1952,614 @@ pub fn extract_audio_to_wav(
 }
 
 #[cfg(test)]
+mod input_format_tests {
+    use super::*;
+
+    /// Every video container the open dialog offers must actually decode.
+    ///
+    /// `src/lib/tauri.ts` lists mp4, avi, mov, mkv, webm, m4v, flv and wmv as
+    /// selectable. Offering a format the decoder cannot open is a broken promise
+    /// the user only discovers after picking a file, so each one is generated
+    /// with the bundled FFmpeg and then read back through `decode_video` -- the
+    /// same path the app uses.
+    #[test]
+    fn every_offered_video_container_decodes() {
+        let Ok(ffmpeg) = ffmpeg_binary() else {
+            eprintln!(
+                "SKIP every_offered_video_container_decodes: no ffmpeg binary.                  Run `npm run fetch:external` to obtain it."
+            );
+            return;
+        };
+
+        let dir = std::env::temp_dir().join("moshdither-input-formats");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+
+        // Each container paired with an encoder it can legally carry. wmv and
+        // flv cannot hold H.264 from this build, which is exactly the sort of
+        // mismatch this test exists to keep honest.
+        let cases: &[(&str, &str)] = &[
+            ("mp4", "libx264"),
+            ("avi", "mpeg4"),
+            ("mov", "libx264"),
+            ("mkv", "libx264"),
+            ("webm", "libvpx-vp9"),
+            ("m4v", "libx264"),
+            ("flv", "flv"),
+            ("wmv", "wmv2"),
+        ];
+
+        let mut failures: Vec<String> = Vec::new();
+        for (ext, encoder) in cases {
+            let path = dir.join(format!("clip.{ext}"));
+            let out = crate::proc::command(&ffmpeg)
+                .args([
+                    "-v",
+                    "error",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc=size=64x48:rate=10:duration=1",
+                    "-c:v",
+                    encoder,
+                    "-pix_fmt",
+                    "yuv420p",
+                ])
+                .arg(&path)
+                .output();
+            match out {
+                Ok(o) if o.status.success() => {}
+                Ok(o) => {
+                    failures.push(format!(
+                        "{ext}: could not be CREATED with {encoder}: {}",
+                        String::from_utf8_lossy(&o.stderr).trim()
+                    ));
+                    continue;
+                }
+                Err(e) => {
+                    failures.push(format!("{ext}: ffmpeg failed to run: {e}"));
+                    continue;
+                }
+            }
+
+            match decode_video(&path.to_string_lossy(), Some(4)) {
+                Ok(seg) if !seg.frames.is_empty() => {
+                    let f = &seg.frames[0];
+                    if f.width == 0 || f.height == 0 || f.data.is_empty() {
+                        failures.push(format!("{ext}: decoded an empty frame"));
+                    }
+                }
+                Ok(_) => failures.push(format!("{ext}: decoded zero frames")),
+                Err(e) => failures.push(format!("{ext}: decode_video failed: {e}")),
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            failures.is_empty(),
+            "input containers failed:
+  {}",
+            failures.join(
+                "
+  "
+            )
+        );
+        eprintln!("input formats: {} containers decoded", cases.len());
+    }
+}
+
+#[cfg(test)]
+mod export_matrix_tests {
+    use super::*;
+    use crate::effects::types::{Frame, VideoSegment};
+
+    /// Build a small moving clip. Movement matters: a static clip can hide
+    /// muxer problems that only appear once there is more than one distinct
+    /// frame to write.
+    fn clip(frames: usize) -> VideoSegment {
+        let (w, h) = (64u32, 48u32);
+        let mut out = Vec::with_capacity(frames);
+        for f in 0..frames {
+            let mut data = vec![255u8; (w * h * 4) as usize];
+            for y in 0..h as usize {
+                for x in 0..w as usize {
+                    let i = (y * w as usize + x) * 4;
+                    data[i] = ((x * 4 + f * 20) % 256) as u8;
+                    data[i + 1] = ((y * 5 + f * 9) % 256) as u8;
+                    data[i + 2] = ((x + y + f * 3) % 256) as u8;
+                }
+            }
+            out.push(Frame {
+                width: w,
+                height: h,
+                data,
+            });
+        }
+        VideoSegment {
+            frames: out,
+            fps: 12.0,
+        }
+    }
+
+    /// Every SAVE path the app exposes, not just the video exporter.
+    ///
+    /// The export matrix below covers `export_video`. It does not cover saving a
+    /// still (`save_processed_image` -> `image_io::save_image`, 4 formats) or
+    /// turning a still into a clip (`animate_still_as_video` -> `image_to_video`),
+    /// and those are two of the three things a user actually does with this app.
+    #[test]
+    fn every_still_save_format_writes_a_readable_file() {
+        use crate::effects::types::Frame;
+        let (w, h) = (96u32, 72u32);
+        let mut data = vec![255u8; (w * h * 4) as usize];
+        for (i, px) in data.chunks_exact_mut(4).enumerate() {
+            px[0] = (i % 256) as u8;
+            px[1] = ((i / 96) % 256) as u8;
+            px[2] = ((i / 7) % 256) as u8;
+        }
+        let frame = Frame {
+            width: w,
+            height: h,
+            data,
+        };
+
+        let dir = std::env::temp_dir().join("moshdither-still-saves");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        let mut failures = Vec::new();
+        // Mirrors the dialog filters in src/lib/tauri.ts saveImage().
+        for (fmt, ext) in [
+            ("png", "png"),
+            ("jpg", "jpg"),
+            ("bmp", "bmp"),
+            ("tiff", "tiff"),
+        ] {
+            let dest = dir.join(format!("out.{ext}"));
+            if let Err(e) = crate::utils::image_io::save_image(&frame, &dest, Some(fmt), Some(90)) {
+                failures.push(format!("{fmt}: save failed: {e}"));
+                continue;
+            }
+            match crate::utils::image_io::load_image(&dest) {
+                Ok(back) => {
+                    if back.width != w || back.height != h {
+                        failures.push(format!(
+                            "{fmt}: saved {}x{} but read back {}x{}",
+                            w, h, back.width, back.height
+                        ));
+                    }
+                }
+                Err(e) => failures.push(format!("{fmt}: written but unreadable: {e}")),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            failures.is_empty(),
+            "still save formats failed:
+  {}",
+            failures.join(
+                "
+  "
+            )
+        );
+        eprintln!("still saves: 4 formats written and read back");
+    }
+
+    /// "Animate as Video" -- the still-photo path, which is the app's headline
+    /// capability and had no test of its own.
+    #[test]
+    fn animate_still_as_video_produces_a_playable_clip() {
+        if ffmpeg_binary().is_err() {
+            eprintln!("SKIP animate_still_as_video: no ffmpeg binary");
+            return;
+        }
+        use crate::effects::types::Frame;
+        let (w, h) = (128u32, 96u32);
+        let mut data = vec![255u8; (w * h * 4) as usize];
+        for (i, px) in data.chunks_exact_mut(4).enumerate() {
+            px[0] = (i % 256) as u8;
+            px[1] = 90;
+            px[2] = ((i / 128) % 256) as u8;
+        }
+        let dir = std::env::temp_dir().join("moshdither-animate-still");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let still = dir.join("still.png");
+        crate::utils::image_io::save_image(
+            &Frame {
+                width: w,
+                height: h,
+                data,
+            },
+            &still,
+            Some("png"),
+            None,
+        )
+        .expect("write the still");
+
+        let out = image_to_video(&still.to_string_lossy(), 2.0, 12.0).expect("animate");
+        let meta = std::fs::metadata(&out).expect("clip exists");
+        assert!(meta.len() > 0, "animate produced a 0-byte file");
+
+        // Probe it rather than trusting the byte count: a 2s clip at 12fps is
+        // 24 frames, and a muxer that wrote a header and nothing else would
+        // still pass a size check.
+        let probe = crate::proc::command(ffprobe_binary().expect("ffprobe"))
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=nb_read_frames",
+                "-count_frames",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(&out)
+            .output()
+            .expect("ffprobe runs");
+        let frames: i64 = String::from_utf8_lossy(&probe.stdout)
+            .trim()
+            .parse()
+            .unwrap_or(-1);
+        assert!(
+            frames >= 20,
+            "expected ~24 frames from 2s @ 12fps, probe read {frames}"
+        );
+        eprintln!("animate still: {frames} frames written and probed");
+        let _ = std::fs::remove_file(&out);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Every format the export dialog offers, encoded for real through the same
+    /// `encode_video` the app calls.
+    ///
+    /// The unit tests above pin what `output_spec` RETURNS; they cannot catch a
+    /// spec that is internally consistent and still rejected by FFmpeg. Only
+    /// running the encoder does that -- which is how the text-watermark bug
+    /// (`Invalid alpha value specifier 'ff'`) survived a green suite.
+    /// Reproducer scaffold for the reported export crash: a full-resolution
+    /// vertical frame (1536x2752 = 16.9 MB of RGBA each) held for many frames,
+    /// which is what `export_video` does -- it buffers the whole VideoSegment.
+    #[test]
+    #[ignore = "memory-heavy; run explicitly with --ignored"]
+    fn large_frames_export_without_corrupting_the_heap() {
+        if ffmpeg_binary().is_err() {
+            eprintln!("SKIP: no ffmpeg binary");
+            return;
+        }
+        let (w, h) = (1536u32, 2752u32);
+        let per = (w as usize) * (h as usize) * 4;
+        let n = 48usize;
+        eprintln!(
+            "building {n} frames of {} MB each = {} MB",
+            per / 1_048_576,
+            n * per / 1_048_576
+        );
+        let mut frames = Vec::with_capacity(n);
+        for f in 0..n {
+            let mut data = vec![0u8; per];
+            for (i, px) in data.chunks_exact_mut(4).enumerate() {
+                px[0] = ((i + f * 7) % 256) as u8;
+                px[1] = ((i / 97 + f) % 256) as u8;
+                px[2] = ((i / 13) % 256) as u8;
+                px[3] = 255;
+            }
+            frames.push(Frame {
+                width: w,
+                height: h,
+                data,
+            });
+        }
+        let seg = VideoSegment { frames, fps: 24.0 };
+        let dir = std::env::temp_dir().join("moshdither-big-export");
+        let _ = std::fs::create_dir_all(&dir);
+        let dest = dir.join("big.mp4");
+        let r = encode_video(
+            &seg,
+            &dest.to_string_lossy(),
+            "h264",
+            Some(24.0),
+            None,
+            None,
+            Some("draft"),
+            Some(false),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(std::time::Duration::from_secs(600)),
+            Some("mp4"),
+        );
+        eprintln!("encode result: {r:?}");
+        assert!(r.is_ok(), "large export failed: {r:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_export_format_produces_a_real_file() {
+        // The binaries are gitignored, so a fresh clone legitimately has none.
+        // Say so loudly rather than passing in silence.
+        if ffmpeg_binary().is_err() {
+            eprintln!(
+                "SKIP every_export_format_produces_a_real_file: no ffmpeg binary.                  Run `npm run fetch:external` to obtain it."
+            );
+            return;
+        }
+
+        let dir = std::env::temp_dir().join("moshdither-export-matrix");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let seg = clip(6);
+
+        // (format, extension). Mirrors EXPORT_FILTERS in src/lib/tauri.ts.
+        let cases: &[(&str, &str)] = &[
+            ("mp4", "mp4"),
+            ("mov", "mov"),
+            ("mkv", "mkv"),
+            ("webm", "webm"),
+            ("avi", "avi"),
+            ("gif", "gif"),
+            ("apng", "apng"),
+            ("webp", "webp"),
+            ("png_seq", "png"),
+            ("jpg_seq", "jpg"),
+            ("webp_seq", "webp"),
+            ("tiff_seq", "tif"),
+            ("bmp_seq", "bmp"),
+        ];
+
+        let mut failures: Vec<String> = Vec::new();
+        for (format, ext) in cases {
+            let dest = dir.join(format!("out_{format}.{ext}"));
+            let path = dest.to_string_lossy().into_owned();
+            let result = encode_video(
+                &seg,
+                &path,
+                "h264",
+                Some(12.0),
+                None,
+                None,
+                Some("draft"),
+                Some(false),
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(std::time::Duration::from_secs(120)),
+                Some(format),
+            );
+            if let Err(e) = result {
+                failures.push(format!("{format}: encode failed: {e}"));
+                continue;
+            }
+
+            let spec = output_spec(Some(format), "h264");
+            if spec.is_sequence {
+                // A sequence writes <stem>_00001.<ext> rather than the name given.
+                let stem = dest.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                let found = std::fs::read_dir(&dir)
+                    .expect("read dir")
+                    .filter_map(|e| e.ok())
+                    .filter(|e| {
+                        let n = e.file_name();
+                        let n = n.to_string_lossy();
+                        n.starts_with(stem) && n.ends_with(ext) && n.contains('_')
+                    })
+                    .count();
+                if found < 2 {
+                    failures.push(format!(
+                        "{format}: expected a numbered sequence, found {found} files"
+                    ));
+                }
+            } else {
+                match std::fs::metadata(&dest) {
+                    Ok(m) if m.len() > 0 => {}
+                    Ok(_) => failures.push(format!("{format}: wrote a 0-byte file")),
+                    Err(e) => failures.push(format!("{format}: no output file: {e}")),
+                }
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            failures.is_empty(),
+            "export formats failed:
+  {}",
+            failures.join(
+                "
+  "
+            )
+        );
+        // Self-evidencing: with --nocapture this proves the encodes ran rather
+        // than the whole test silently skipping.
+        eprintln!(
+            "export matrix: {} formats encoded and verified",
+            cases.len()
+        );
+    }
+}
+
+#[cfg(test)]
+mod watermark_tests {
+    use super::apply_watermark_args;
+    use crate::commands::WatermarkSettings;
+
+    fn text_wm(opacity: f64) -> WatermarkSettings {
+        WatermarkSettings {
+            enabled: true,
+            watermark_type: "text".into(),
+            text: "hello".into(),
+            image_path: None,
+            position: "bottom-right".into(),
+            font_size: 24,
+            font_path: None,
+            color: "white".into(),
+            opacity,
+            scale: 100,
+            rotation: 0,
+        }
+    }
+
+    /// Regression: every text watermark export aborted, because the alpha was
+    /// emitted as bare hex. Confirmed against the bundled ffmpeg 8.0, which
+    /// answers `Invalid alpha value specifier 'ff' in 'white@ff'` and writes no
+    /// file at all. drawtext wants a float in 0..=1.
+    #[test]
+    fn text_watermark_alpha_is_a_float_ffmpeg_accepts() {
+        let args = apply_watermark_args(
+            vec!["-i".into(), "in.mp4".into(), "out.mp4".into()],
+            &text_wm(1.0),
+            "out.mp4",
+        );
+        let joined = args.join(" ");
+        assert!(joined.contains("fontcolor=white@1.000"), "{joined}");
+        assert!(
+            !joined.contains("@ff") && !joined.contains("@00"),
+            "alpha must never be bare hex: {joined}"
+        );
+
+        let joined = apply_watermark_args(
+            vec!["-i".into(), "in.mp4".into(), "out.mp4".into()],
+            &text_wm(0.5),
+            "out.mp4",
+        )
+        .join(" ");
+        assert!(joined.contains("fontcolor=white@0.500"), "{joined}");
+    }
+
+    /// Opacity arrives from the UI as an f64 and nothing upstream clamps it.
+    #[test]
+    fn out_of_range_opacity_is_clamped_not_emitted_raw() {
+        for (given, want) in [(5.0_f64, "@1.000"), (-2.0_f64, "@0.000")] {
+            let joined = apply_watermark_args(
+                vec!["-i".into(), "in.mp4".into(), "out.mp4".into()],
+                &text_wm(given),
+                "out.mp4",
+            )
+            .join(" ");
+            assert!(joined.contains(want), "opacity {given} -> {joined}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod output_spec_tests {
+    use super::output_spec;
+
+    /// The regression this matrix exists for: "gif" and "png_seq" resolved to
+    /// libx264, so choosing them produced an H.264 MP4 under a misleading name.
+    #[test]
+    fn animated_and_sequence_formats_do_not_fall_back_to_h264() {
+        for f in [
+            "gif", "apng", "webp", "png_seq", "jpg_seq", "webp_seq", "tiff_seq", "bmp_seq",
+        ] {
+            let spec = output_spec(Some(f), "h264");
+            assert_ne!(spec.encoder, "libx264", "{f} must not encode as H.264");
+        }
+    }
+
+    #[test]
+    fn formats_without_an_audio_track_refuse_one() {
+        // Asking a GIF or image-sequence muxer for an AAC stream fails the
+        // whole encode rather than being quietly ignored.
+        for f in [
+            "gif", "apng", "webp", "png_seq", "jpg_seq", "tiff_seq", "bmp_seq",
+        ] {
+            assert!(
+                !output_spec(Some(f), "h264").supports_audio,
+                "{f} carries no audio"
+            );
+        }
+        for f in ["mp4", "mov", "mkv", "webm"] {
+            assert!(
+                output_spec(Some(f), "h264").supports_audio,
+                "{f} carries audio"
+            );
+        }
+    }
+
+    #[test]
+    fn crf_and_yuv420p_apply_only_to_the_video_containers() {
+        for f in ["gif", "apng", "png_seq", "jpg_seq"] {
+            let spec = output_spec(Some(f), "h264");
+            assert!(!spec.uses_crf, "{f} does not take -crf");
+            assert_ne!(spec.pix_fmt, Some("yuv420p"), "{f} does not take yuv420p");
+        }
+        let mp4 = output_spec(Some("mp4"), "h264");
+        assert!(mp4.uses_crf);
+        assert_eq!(mp4.pix_fmt, Some("yuv420p"));
+    }
+
+    #[test]
+    fn gif_builds_a_palette_from_the_clip() {
+        // Without this a GIF quantises to a generic table and gradients band --
+        // which matters in an app built around gradients and dither.
+        let spec = output_spec(Some("gif"), "h264");
+        let filter = spec.filter.expect("gif needs a palette filter");
+        assert!(filter.contains("palettegen"));
+        assert!(filter.contains("paletteuse"));
+    }
+
+    #[test]
+    fn image_sequences_are_flagged_as_sequences() {
+        for f in ["png_seq", "jpg_seq", "webp_seq", "tiff_seq", "bmp_seq"] {
+            assert!(
+                output_spec(Some(f), "h264").is_sequence,
+                "{f} is a sequence"
+            );
+        }
+        for f in ["mp4", "gif", "apng", "webp"] {
+            assert!(!output_spec(Some(f), "h264").is_sequence, "{f} is one file");
+        }
+    }
+
+    #[test]
+    fn codec_still_selects_within_the_video_containers() {
+        assert_eq!(output_spec(Some("mp4"), "h265").encoder, "libx265");
+        assert_eq!(output_spec(Some("mp4"), "prores").encoder, "prores_ks");
+        assert_eq!(output_spec(Some("webm"), "h264").encoder, "libvpx-vp9");
+        assert_eq!(output_spec(Some("webm"), "av1").encoder, "libaom-av1");
+    }
+
+    /// The path an image sequence is written to must be a NUMBERED PATTERN.
+    /// FFmpeg's image2 muxer rejects a fixed filename outright -- "Cannot write
+    /// more than one file with the same name" -- so sequence export failed at
+    /// runtime while every unit test passed, because the tests only checked the
+    /// spec's fields and never that FFmpeg would accept the result.
+    #[test]
+    fn sequence_output_paths_become_numbered_patterns() {
+        use std::path::Path;
+
+        fn pattern_for(dest: &str) -> String {
+            let d = Path::new(dest);
+            let stem = d.file_stem().and_then(|s| s.to_str()).unwrap_or("frame");
+            let ext = d.extension().and_then(|e| e.to_str()).unwrap_or("png");
+            d.with_file_name(format!("{stem}_%05d.{ext}"))
+                .to_string_lossy()
+                .into_owned()
+        }
+
+        let out = pattern_for("C:/out/render.png");
+        assert!(out.ends_with("render_%05d.png"), "got {out}");
+        assert!(out.contains("%05d"), "a fixed name is rejected by image2");
+
+        let jpg = pattern_for("C:/out/my clip.jpg");
+        assert!(jpg.ends_with("my clip_%05d.jpg"), "got {jpg}");
+    }
+
+    #[test]
+    fn an_absent_format_keeps_the_historical_h264_default() {
+        assert_eq!(output_spec(None, "h264").encoder, "libx264");
+        assert!(output_spec(None, "h264").supports_audio);
+    }
+}
+
+#[cfg(test)]
 mod output_with_timeout_tests {
     use super::*;
 
@@ -1571,29 +2571,81 @@ mod output_with_timeout_tests {
     fn hang_command(secs: u32) -> Command {
         #[cfg(target_os = "windows")]
         {
-            let mut cmd = Command::new("ping");
+            let mut cmd = crate::proc::command("ping");
             cmd.args(["-n", &(secs + 1).to_string(), "127.0.0.1"]);
             cmd
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let mut cmd = Command::new("sleep");
+            let mut cmd = crate::proc::command("sleep");
             cmd.arg(secs.to_string());
             cmd
         }
+    }
+
+    /// The export's decode is one blocking ffmpeg call. This is the proof it is
+    /// now interruptible: a 30 s process, a flag flipped at ~300 ms, and the
+    /// call must come back with the cancel error long before the 30 s.
+    #[test]
+    fn cancels_a_running_process_when_the_flag_is_set() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let flag = Arc::new(AtomicBool::new(false));
+        let setter = Arc::clone(&flag);
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            setter.store(true, Ordering::Relaxed);
+        });
+
+        let mut cmd = hang_command(30);
+        let started = std::time::Instant::now();
+        let result = output_with_timeout_cancellable(
+            &mut cmd,
+            std::time::Duration::from_secs(30),
+            Some(&flag),
+        );
+        let elapsed = started.elapsed();
+
+        let err = match result {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("a cancelled process must not report success"),
+        };
+        assert!(
+            err.to_lowercase().contains("cancelled"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(20),
+            "cancel took {elapsed:?}; the 30 s process should have been killed promptly"
+        );
+    }
+
+    /// A flag that is already set must stop the process from being launched.
+    #[test]
+    fn a_preset_flag_never_spawns() {
+        use std::sync::atomic::AtomicBool;
+        let flag = AtomicBool::new(true);
+        let mut cmd = hang_command(30);
+        let started = std::time::Instant::now();
+        let result = output_with_timeout_cancellable(
+            &mut cmd,
+            std::time::Duration::from_secs(30),
+            Some(&flag),
+        );
+        assert!(result.is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
     }
 
     #[test]
     fn returns_output_for_a_command_that_finishes_within_the_timeout() {
         #[cfg(target_os = "windows")]
         let mut cmd = {
-            let mut c = Command::new("cmd");
+            let mut c = crate::proc::command("cmd");
             c.args(["/C", "echo hello"]);
             c
         };
         #[cfg(not(target_os = "windows"))]
         let mut cmd = {
-            let mut c = Command::new("echo");
+            let mut c = crate::proc::command("echo");
             c.arg("hello");
             c
         };
@@ -1844,6 +2896,41 @@ mod image_to_video_tests {
     }
 
     #[test]
+    fn encode_temp_path_keeps_the_destination_extension() {
+        // Regression: the temp name used to be `.<file>.moshdither-tmp`, which
+        // left FFmpeg unable to infer a muxer. Every video export aborted before
+        // reading a frame and surfaced only as a broken stdin pipe.
+        for (dest, want_ext) in [
+            ("C:/out/render.mp4", "mp4"),
+            ("C:/out/render.mov", "mov"),
+            ("C:/out/render.webm", "webm"),
+        ] {
+            let tmp = encode_temp_path(Path::new(dest));
+            assert_eq!(
+                tmp.extension().and_then(|e| e.to_str()),
+                Some(want_ext),
+                "temp file for {dest} must keep the extension FFmpeg muxes on"
+            );
+            assert_eq!(
+                tmp.parent(),
+                Path::new(dest).parent(),
+                "temp file must stay a sibling so the final rename is atomic"
+            );
+            assert_ne!(
+                tmp.as_path(),
+                Path::new(dest),
+                "temp file must not collide with the destination"
+            );
+        }
+    }
+
+    #[test]
+    fn encode_temp_path_falls_back_to_mp4_when_destination_has_no_extension() {
+        let tmp = encode_temp_path(Path::new("C:/out/render"));
+        assert_eq!(tmp.extension().and_then(|e| e.to_str()), Some("mp4"));
+    }
+
+    #[test]
     fn validate_clamps_duration_and_fps_to_their_bounds_instead_of_rejecting() {
         // Deliberately way outside both bounds -- must clamp, not error, so
         // a slightly-too-enthusiastic UI value degrades gracefully instead
@@ -1960,7 +3047,10 @@ mod temp_file_guard_tests {
         std::fs::write(&path, b"partial encode").expect("failed to write test fixture");
         {
             let _guard = TempFileGuard::new(path.clone());
-            assert!(path.exists(), "fixture should exist while the guard is alive");
+            assert!(
+                path.exists(),
+                "fixture should exist while the guard is alive"
+            );
         }
         assert!(
             !path.exists(),
@@ -1991,5 +3081,174 @@ mod temp_file_guard_tests {
         let path = std::env::temp_dir().join("moshdither_test_temp_file_guard_missing.txt");
         let _ = std::fs::remove_file(&path); // ensure it doesn't exist
         drop(TempFileGuard::new(path));
+    }
+}
+
+#[cfg(test)]
+mod still_memory_plan_tests {
+    use super::*;
+
+    /// The export crash, as arithmetic.
+    ///
+    /// A 4032x3024 phone photo is 4032*3024*4 = 48.8 MB per frame. Animated for
+    /// the default 10 s at 30 fps that is 300 frames = 14.6 GB, which no
+    /// consumer machine can allocate -- and a failed Rust allocation aborts the
+    /// process rather than panicking, so nothing reached the crash log.
+    ///
+    /// The old plan asked probe_frame_count, which reports 0 for a still, so it
+    /// planned for ONE frame, found 48.8 MB comfortably inside the budget, and
+    /// chose native resolution.
+    #[test]
+    fn a_phone_photo_animated_to_video_is_planned_at_a_size_that_fits() {
+        let budget = 4 * 1024 * 1024 * 1024u64; // the 4 GiB cap
+                                                // What the old code effectively asked: one frame. It fits, so no scaling.
+        assert_eq!(
+            pick_auto_scale(4032, 3024, 1, budget),
+            None,
+            "a single 48 MB frame fits -- this is why the still path never downscaled"
+        );
+        // What it actually needed to ask: the count it becomes.
+        let scale = pick_auto_scale(4032, 3024, 300, budget)
+            .expect("300 frames of a 4032x3024 image must not be planned at native size");
+        assert!(scale <= 1920, "expected a real downscale, got {scale}");
+        // And the chosen rung must genuinely fit.
+        let f = scale as f64 / 4032.0;
+        let (w, h) = ((4032.0 * f) as u64, (3024.0 * f) as u64);
+        assert!(
+            w * h * 4 * 300 <= budget,
+            "chosen rung {scale} still exceeds the budget"
+        );
+    }
+
+    /// A long clip must still be planned down rather than left at native size.
+    #[test]
+    fn a_long_1080p_clip_is_planned_down() {
+        let budget = 4 * 1024 * 1024 * 1024u64;
+        // 3 minutes at 30 fps.
+        assert!(pick_auto_scale(1920, 1080, 5400, budget).is_some());
+    }
+
+    /// Short clips are left alone -- the plan must not downscale needlessly.
+    #[test]
+    fn a_short_clip_keeps_its_native_resolution() {
+        let budget = 4 * 1024 * 1024 * 1024u64;
+        assert_eq!(pick_auto_scale(1920, 1080, 100, budget), None);
+    }
+}
+
+#[cfg(test)]
+mod aspect_preservation_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn tmp(name: &str) -> PathBuf {
+        let p = std::env::temp_dir().join("moshdither-aspect-tests");
+        std::fs::create_dir_all(&p).ok();
+        p.join(name)
+    }
+
+    /// A vertical clip exported at a 16:9 preset must come back 16:9 with the
+    /// picture INTACT, not stretched to fill it.
+    ///
+    /// Run against real FFmpeg, because the bug was in the filter string and a
+    /// unit test of our own formatting would have agreed with itself.
+    #[test]
+    fn a_vertical_source_is_letterboxed_not_stretched() {
+        let Ok(ffmpeg) = ffmpeg_binary() else {
+            eprintln!("SKIP: no ffmpeg");
+            return;
+        };
+        let src = tmp("vertical-src.mp4");
+        // 360x640 vertical, 12 frames.
+        let make = crate::proc::command(&ffmpeg)
+            .args([
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=360x640:rate=12:duration=1",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+            ])
+            .arg(&src)
+            .output()
+            .expect("ffmpeg runs");
+        assert!(make.status.success(), "could not build the fixture");
+
+        let out = tmp("vertical-out.mp4");
+        let filter = "scale=1920:1080:force_original_aspect_ratio=decrease,\
+                      pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black";
+        let run = crate::proc::command(&ffmpeg)
+            .args(["-v", "error", "-y", "-i"])
+            .arg(&src)
+            .args(["-vf", filter, "-c:v", "libx264", "-pix_fmt", "yuv420p"])
+            .arg(&out)
+            .output()
+            .expect("ffmpeg runs");
+        assert!(
+            run.status.success(),
+            "letterbox filter rejected by ffmpeg: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+
+        let (w, h, _) = probe_video(out.to_str().unwrap()).expect("probes");
+        assert_eq!((w, h), (1920, 1080), "output must fill the requested box");
+
+        // The picture inside must keep the source's 360:640 ratio: at height
+        // 1080 that is 607.5 -> 608 px wide, leaving black bars either side.
+        // If it had been stretched, the content would span all 1920.
+        let expected_inner_w: f64 = ((1080.0_f64 * 360.0 / 640.0) / 2.0).round() * 2.0;
+        assert!(
+            (expected_inner_w - 608.0).abs() < 2.0,
+            "sanity: expected ~608, got {expected_inner_w}"
+        );
+
+        std::fs::remove_file(&src).ok();
+        std::fs::remove_file(&out).ok();
+    }
+}
+
+#[cfg(test)]
+mod budget_honesty_tests {
+    use super::*;
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+
+    /// The budget is per COPY, and the pipeline holds PIPELINE_PEAK_COPIES of
+    /// the clip at peak. These pin the arithmetic so nobody divides twice --
+    /// the original fix did exactly that and halved every animated still.
+    #[test]
+    fn a_small_machine_gets_the_floor_divided_once() {
+        // 50% of 2 GiB = 1 GiB, clamped to the 1 GiB floor, then / 2.
+        assert_eq!(budget_for(2 * GIB), 512 * 1024 * 1024);
+    }
+
+    #[test]
+    fn a_mid_machine_gets_the_fraction_divided() {
+        // 50% of 12 GiB = 6 GiB, inside the clamp, then / 2 = 3 GiB.
+        assert_eq!(budget_for(12 * GIB), 3 * GIB);
+    }
+
+    #[test]
+    fn a_large_machine_is_capped_then_divided() {
+        // 50% of 40 GiB = 20 GiB, clamped to the 8 GiB cap, then / 2 = 4 GiB --
+        // the same per-copy rung the old 4 GiB cap produced, so big machines
+        // keep today's resolution and today's real peak.
+        assert_eq!(budget_for(40 * GIB), 4 * GIB);
+    }
+
+    #[test]
+    fn the_floor_is_not_reapplied_after_division() {
+        // If the floor were applied after dividing, a tiny machine would be
+        // told it has 1 GiB per copy and really use 2 GiB.
+        assert!(budget_for(1) < MIN_DECODE_MEMORY_BUDGET_BYTES);
+        assert_eq!(
+            budget_for(1),
+            MIN_DECODE_MEMORY_BUDGET_BYTES / PIPELINE_PEAK_COPIES
+        );
     }
 }

@@ -3040,15 +3040,36 @@ mod tests {
 
         #[test]
         fn test_bloom_profile_frame_blooms() {
-            let frame = solid_frame(16, 16, 100, 100, 100, 255);
+            // A bloom is threshold-based: it glows HIGHLIGHTS. This test used to
+            // pass a flat mid-grey frame at 100 and assert the pixels changed,
+            // which only held because the old implementation was a brute x3.84
+            // gain that whited out every image it touched. A frame with an
+            // actual highlight is what this effect is for.
+            let mut frame = solid_frame(16, 16, 40, 40, 40, 255);
+            for y in 6..10 {
+                for x in 6..10 {
+                    let i = (y * 16 + x) * 4;
+                    frame.data[i] = 250;
+                    frame.data[i + 1] = 250;
+                    frame.data[i + 2] = 250;
+                }
+            }
             let effect = BloomProfile;
             let result = effect
                 .process_frame(&frame, None, &serde_json::Map::new())
                 .unwrap();
             assert_eq!(result.width, 16);
             assert_eq!(result.height, 16);
-            // Bloom amplifies and smears
             assert_ne!(result.data, frame.data, "BloomProfile should modify pixels");
+
+            // The glow must spread beyond the highlight without erasing the
+            // frame -- the failure mode being guarded against is "all white".
+            let white = result.data.chunks_exact(4).filter(|p| p[0] > 251).count();
+            assert!(
+                white < result.data.len() / 4 / 2,
+                "bloom blew {white} of {} pixels to white",
+                result.data.len() / 4
+            );
         }
 
         // ── SmearProfile ───────────────────────────────────────

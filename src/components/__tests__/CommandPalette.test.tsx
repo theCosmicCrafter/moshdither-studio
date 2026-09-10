@@ -266,11 +266,24 @@ describe("CommandPalette", () => {
       expect(useAppStore.getState().currentTime).toBe(0);
     });
 
-    it("Go to end sets currentTime to 300", () => {
+    // Previously asserted a literal 300, which pinned the bug rather than the
+    // behaviour: "Go to end" hard-coded 300 seconds regardless of the media, so
+    // on any real clip it jumped far past the end instead of to it.
+    it("Go to end moves the playhead to the clip duration", () => {
+      useAppStore.getState().setDuration(42);
       render(<CommandPalette />);
       fireEvent.keyDown(window, { key: "p", ctrlKey: true, shiftKey: true });
       fireEvent.click(screen.getByText("Go to end").closest("button")!);
-      expect(useAppStore.getState().currentTime).toBe(300);
+      expect(useAppStore.getState().currentTime).toBe(42);
+    });
+
+    it("Go to end tracks a duration change rather than a value captured at registration", () => {
+      useAppStore.getState().setDuration(10);
+      render(<CommandPalette />);
+      useAppStore.getState().setDuration(7.5);
+      fireEvent.keyDown(window, { key: "p", ctrlKey: true, shiftKey: true });
+      fireEvent.click(screen.getByText("Go to end").closest("button")!);
+      expect(useAppStore.getState().currentTime).toBe(7.5);
     });
 
     it("Clear effect stack clears the stack", () => {
@@ -285,20 +298,31 @@ describe("CommandPalette", () => {
       expect(useAppStore.getState().effectStack.length).toBe(0);
     });
 
-    it("Set in point sets inPoint", () => {
+    // Both used to assert the literal values the commands hard-coded (0 and
+    // 300) -- pinning the bug. They set the point at the PLAYHEAD, like I / O.
+    it("Set in point marks the playhead", () => {
+      useAppStore.getState().setCurrentTime(3.25);
       render(<CommandPalette />);
       fireEvent.keyDown(window, { key: "p", ctrlKey: true, shiftKey: true });
       fireEvent.click(screen.getByText("Set in point").closest("button")!);
-      expect(useAppStore.getState().inPoint).toBe(0);
+      expect(useAppStore.getState().inPoint).toBeCloseTo(3.25, 6);
     });
 
-    it("Set out point sets outPoint", () => {
-      useAppStore.getState().setDuration(300);
+    it("Set out point marks the playhead", () => {
+      useAppStore.getState().setCurrentTime(7.5);
       render(<CommandPalette />);
       fireEvent.keyDown(window, { key: "p", ctrlKey: true, shiftKey: true });
       fireEvent.click(screen.getByText("Set out point").closest("button")!);
-      // setOutPoint clamps to a maximum of duration (300)
-      expect(useAppStore.getState().outPoint).toBe(300);
+      expect(useAppStore.getState().outPoint).toBeCloseTo(7.5, 6);
+    });
+
+    it("Play / pause toggles the transport, not the audio", () => {
+      useAppStore.setState({ isPlaying: true, audioPlaying: false });
+      render(<CommandPalette />);
+      fireEvent.keyDown(window, { key: "p", ctrlKey: true, shiftKey: true });
+      fireEvent.click(screen.getByText("Play / pause").closest("button")!);
+      expect(useAppStore.getState().isPlaying).toBe(false);
+      expect(useAppStore.getState().audioPlaying).toBe(false);
     });
 
     it("Clear in/out points clears both", () => {

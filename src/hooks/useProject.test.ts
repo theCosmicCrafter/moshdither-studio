@@ -341,3 +341,303 @@ describe("openProject restores per-effect mask assignments", () => {
     expect(restored.maskId).toBe(null);
   });
 });
+
+/**
+ * Open Project must not destroy the open stack on the strength of a file it
+ * has not read yet. It used to clearStack() first and rebuild in a setTimeout
+ * with no shape check, so an old, truncated or unrelated .moshdither wiped the
+ * user's work, reported "Project loaded", and threw a tick later.
+ */
+describe("openProject validation", () => {
+  const openMock = vi.mocked(open);
+  const invokeMock = vi.mocked(invoke);
+
+  function stackOf(n: number): StackEntry[] {
+    return Array.from({ length: n }, (_, i) => ({
+      id: `s${i}`,
+      effectId: "dither.bayer",
+      effectName: "Bayer",
+      params: {},
+      enabled: true,
+      maskId: null,
+      maskB64: null,
+      maskMode: "inside" as const,
+    }));
+  }
+
+  beforeEach(() => {
+    useAppStore.setState(useAppStore.getInitialState());
+    useAppStore.setState({
+      effectStack: stackOf(2),
+      allEffects: [{ id: "dither.bayer", name: "Bayer", category: "Dither", params: [] }] as never,
+    });
+    openMock.mockReset().mockResolvedValue("C:/x/p.moshdither");
+    invokeMock.mockReset();
+  });
+
+  it.each([
+    ["an empty object", "{}"],
+    ["a version-only stub", '{"version":1}'],
+    ["an unrelated JSON array", "[1,2,3]"],
+    ["not JSON at all", "<html>nope</html>"],
+  ])("keeps the current stack when the file is %s", async (_label, raw) => {
+    invokeMock.mockResolvedValue(raw);
+    const { result } = renderHook(() => useProject());
+
+    let ok: boolean | undefined;
+    await act(async () => {
+      ok = await result.current.openProject();
+    });
+
+    expect(ok).toBe(false);
+    expect(useAppStore.getState().effectStack).toHaveLength(2);
+    expect(useAppStore.getState().statusMessage).toMatch(/could not open/i);
+  });
+
+  it("replaces the stack in one step when the file is valid", async () => {
+    invokeMock.mockResolvedValue(
+      JSON.stringify({
+        version: 1,
+        createdAt: "2026-01-01",
+        effectStack: [
+          {
+            effectId: "dither.bayer",
+            effectName: "Bayer",
+            params: { matrixSize: 8 },
+            enabled: true,
+            maskId: null,
+            maskMode: "inside",
+          },
+        ],
+        keyframes: {},
+        audioBindings: {},
+        mediaFilePath: null,
+        activeMask: null,
+      })
+    );
+    const { result } = renderHook(() => useProject());
+
+    let ok: boolean | undefined;
+    await act(async () => {
+      ok = await result.current.openProject();
+    });
+
+    expect(ok).toBe(true);
+    await waitFor(() => expect(useAppStore.getState().effectStack).toHaveLength(1));
+    expect(useAppStore.getState().effectStack[0].params).toEqual({ matrixSize: 8 });
+    // One undoable step, so loading over your work is recoverable with Ctrl+Z.
+    expect(useAppStore.getState().canUndo()).toBe(true);
+  });
+
+  it("says so when the file names effects this build does not have", async () => {
+    invokeMock.mockResolvedValue(
+      JSON.stringify({
+        version: 1,
+        createdAt: "2026-01-01",
+        effectStack: [
+          { effectId: "dither.bayer", effectName: "Bayer", params: {}, enabled: true, maskId: null, maskMode: "inside" },
+          { effectId: "gone.removed", effectName: "Gone", params: {}, enabled: true, maskId: null, maskMode: "inside" },
+        ],
+        keyframes: {},
+        audioBindings: {},
+        mediaFilePath: null,
+        activeMask: null,
+      })
+    );
+    const { result } = renderHook(() => useProject());
+    await act(async () => {
+      await result.current.openProject();
+    });
+    await waitFor(() => expect(useAppStore.getState().effectStack).toHaveLength(1));
+    expect(useAppStore.getState().statusMessage).toMatch(/not in this version/i);
+  });
+
+  it("serializes and restores full session settings (audio, in/out, ffglitch, export)", async () => {
+    (open as unknown as ReturnType<typeof vi.fn>).mockResolvedValue("C:/projects/full_session.moshdither");
+    invokeMock.mockResolvedValue(
+      JSON.stringify({
+        version: 1,
+        createdAt: "2026-09-09",
+        effectStack: [
+          {
+            effectId: "dither.bayer",
+            effectName: "Bayer",
+            params: {},
+            enabled: true,
+            maskId: null,
+            maskMode: "inside",
+          },
+        ],
+        keyframes: {},
+        audioBindings: {},
+        mediaFilePath: "C:/media/test.mp4",
+        activeMask: null,
+        audioFilePath: "C:/media/audio.wav",
+        inPoint: 1.5,
+        outPoint: 8.5,
+        ffglitchMode: "glide",
+        exportFormat: "gif",
+        exportQuality: "best",
+        viewportGuides: {
+          safeArea: true,
+          ruleOfThirds: true,
+          crosshairs: false,
+          pixelGrid: false,
+        },
+      })
+    );
+
+    const { result } = renderHook(() => useProject());
+    let ok: boolean | undefined;
+    await act(async () => {
+      ok = await result.current.openProject();
+    });
+
+    expect(ok).toBe(true);
+
+    // In/out wait for the media's real length before being clamped -- the probe
+    // is what AppLayout feeds to setDuration once the clip has loaded. Without
+    // this step they are still pending, which is the point: applying them
+    // against the PREVIOUS clip's duration is what clamped a 30 s out point
+    // down to the store default of 10.
+    act(() => useAppStore.getState().setDuration(12));
+
+    const store = useAppStore.getState();
+    expect(store.currentProjectPath).toBe("C:/projects/full_session.moshdither");
+    expect(store.audioFilePath).toBe("C:/media/audio.wav");
+    expect(store.inPoint).toBe(1.5);
+    expect(store.outPoint).toBe(8.5);
+    expect(store.ffglitchMode).toBe("glide");
+    expect(store.exportFormat).toBe("gif");
+    expect(store.exportQuality).toBe("best");
+    expect(store.viewportGuides.safeArea).toBe(true);
+  });
+});
+
+/**
+ * In/out points must survive a reopen.
+ *
+ * They are restored while `duration` still holds the PREVIOUS media's length
+ * (the real one arrives asynchronously, after `requestMediaReload`), and
+ * setInPoint/setOutPoint clamp against `duration`. So a 30 s out point saved
+ * against a 35 s clip came back clamped to the store default of 10 -- and the
+ * first export after reopening then cut the clip at ten seconds.
+ */
+describe("openProject in/out restoration", () => {
+  const openMock = vi.mocked(open);
+  const invokeMock = vi.mocked(invoke);
+
+  beforeEach(() => {
+    useAppStore.setState(useAppStore.getInitialState());
+    useAppStore.setState({
+      allEffects: [{ id: "dither.bayer", name: "Bayer", category: "Dither", params: [] }] as never,
+    });
+    openMock.mockReset().mockResolvedValue("C:/x/p.moshdither");
+    invokeMock.mockReset();
+  });
+
+  it("keeps an out point that is longer than the currently-loaded media", async () => {
+    // The store default before any media has loaded.
+    expect(useAppStore.getState().duration).toBe(10);
+
+    invokeMock.mockResolvedValue(
+      JSON.stringify({
+        version: 1,
+        createdAt: "2026-01-01",
+        effectStack: [],
+        keyframes: {},
+        audioBindings: {},
+        mediaFilePath: "C:/x/clip.mp4",
+        activeMask: null,
+        inPoint: 4,
+        outPoint: 30,
+      })
+    );
+
+    const { result } = renderHook(() => useProject());
+    await act(async () => {
+      await result.current.openProject();
+    });
+
+    // Held, not clamped, until the media's real length arrives...
+    expect(useAppStore.getState().pendingInOut).toEqual({ inPoint: 4, outPoint: 30 });
+    expect(useAppStore.getState().outPoint).toBeNull();
+
+    // ...which is what AppLayout does once ffprobe answers.
+    act(() => useAppStore.getState().setDuration(35));
+    expect(useAppStore.getState().inPoint).toBe(4);
+    expect(useAppStore.getState().outPoint).toBe(30);
+    expect(useAppStore.getState().pendingInOut).toBeNull();
+  });
+
+  it("clamps a restored range against a clip that turned out to be shorter", async () => {
+    invokeMock.mockResolvedValue(
+      JSON.stringify({
+        version: 1,
+        createdAt: "2026-01-01",
+        effectStack: [],
+        keyframes: {},
+        audioBindings: {},
+        mediaFilePath: "C:/x/short.mp4",
+        activeMask: null,
+        inPoint: 4,
+        outPoint: 30,
+      })
+    );
+    const { result } = renderHook(() => useProject());
+    await act(async () => {
+      await result.current.openProject();
+    });
+    act(() => useAppStore.getState().setDuration(3));
+    expect(useAppStore.getState().inPoint).toBe(3);
+    // The range collapsed, so the out point is dropped rather than left at or
+    // before the in point.
+    expect(useAppStore.getState().outPoint).toBeNull();
+  });
+
+  it("applies them immediately when the project carries no media", async () => {
+    invokeMock.mockResolvedValue(
+      JSON.stringify({
+        version: 1,
+        createdAt: "2026-01-01",
+        effectStack: [],
+        keyframes: {},
+        audioBindings: {},
+        mediaFilePath: null,
+        activeMask: null,
+        inPoint: 1,
+        outPoint: 5,
+      })
+    );
+    const { result } = renderHook(() => useProject());
+    await act(async () => {
+      await result.current.openProject();
+    });
+    expect(useAppStore.getState().inPoint).toBe(1);
+    expect(useAppStore.getState().outPoint).toBe(5);
+    expect(useAppStore.getState().pendingInOut).toBeNull();
+  });
+
+  it("does not let a project without a range inherit the last session's", async () => {
+    useAppStore.setState({ duration: 60 });
+    useAppStore.getState().setInPoint(2);
+    useAppStore.getState().setOutPoint(9);
+    invokeMock.mockResolvedValue(
+      JSON.stringify({
+        version: 1,
+        createdAt: "2026-01-01",
+        effectStack: [],
+        keyframes: {},
+        audioBindings: {},
+        mediaFilePath: null,
+        activeMask: null,
+      })
+    );
+    const { result } = renderHook(() => useProject());
+    await act(async () => {
+      await result.current.openProject();
+    });
+    expect(useAppStore.getState().inPoint).toBeNull();
+    expect(useAppStore.getState().outPoint).toBeNull();
+  });
+});

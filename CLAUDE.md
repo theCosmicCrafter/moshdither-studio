@@ -21,6 +21,7 @@ Python SAM3 bridge, FFmpeg/FFglitch sidecars.
 | Lint | `npm run lint` |
 | Secret scan | `npm run secret-scan` |
 | Checkpoint | `pwsh scripts/checkpoint.ps1` |
+| **All gates** | `npm run gate` (add `:quick` to skip the Rust release build) |
 | Regression | `pwsh evals/regression.ps1` |
 
 ## Before Coding

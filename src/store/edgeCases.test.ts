@@ -181,6 +181,40 @@ describe("Store Edge Cases", () => {
       expect(val).toBe(5); // between 0 and 10
     });
 
+    // getKeyframeValue divides by (k2.time - k1.time). Nothing stops two
+    // keyframes sharing a timestamp -- addKeyframe pushes and sorts without
+    // deduplicating -- so that denominator can be zero, and the query time
+    // itself is not validated. Both survive only because applyEasing clamps
+    // its input and maps NaN to 0, which is easy to "tidy away" later. These
+    // pin the behaviour so that removal shows up as a failure rather than as
+    // NaN reaching a shader uniform.
+    it("keyframes sharing a timestamp still interpolate to finite values", () => {
+      const id = addEffect();
+      useAppStore.getState().addKeyframe(id, "param", makeKf(1, 10));
+      useAppStore.getState().addKeyframe(id, "param", makeKf(1, 20));
+      useAppStore.getState().addKeyframe(id, "param", makeKf(2, 30));
+
+      for (const t of [0.5, 1, 1.5, 2, 2.5]) {
+        const val = useAppStore.getState().getKeyframeValue(id, "param", t);
+        expect(Number.isFinite(val as number), `t=${t} produced ${val}`).toBe(true);
+      }
+      // Landing exactly on the duplicate resolves to the first of the pair.
+      expect(useAppStore.getState().getKeyframeValue(id, "param", 1)).toBe(10);
+      // Past it, interpolation runs from the second (20) toward 30.
+      expect(useAppStore.getState().getKeyframeValue(id, "param", 1.5)).toBe(25);
+    });
+
+    it("non-finite query times clamp to the track ends instead of returning NaN", () => {
+      const id = addEffect();
+      useAppStore.getState().addKeyframe(id, "param", makeKf(0, 5));
+      useAppStore.getState().addKeyframe(id, "param", makeKf(10, 15));
+
+      expect(useAppStore.getState().getKeyframeValue(id, "param", NaN)).toBe(5);
+      expect(useAppStore.getState().getKeyframeValue(id, "param", Infinity)).toBe(15);
+      expect(useAppStore.getState().getKeyframeValue(id, "param", -Infinity)).toBe(5);
+      expect(useAppStore.getState().getKeyframeValue(id, "param", -5)).toBe(5);
+    });
+
     it("removeKeyframe on non-existent entry is a no-op", () => {
       const id = addEffect();
       useAppStore.getState().removeKeyframe(id, "param", "nonexistent");
@@ -225,6 +259,35 @@ describe("Store Edge Cases", () => {
       ]);
       // If sorted, value at 0.5 should be 5 (between 0 and 10)
       expect(useAppStore.getState().getKeyframeValue(id, "param", 0.5)).toBe(5);
+    });
+  });
+
+  describe("playhead (currentTime) edge cases", () => {
+    // currentTime is fed to shader uniforms as animTime and used to index
+    // shader time, so a non-finite value corrupts the render silently
+    // instead of throwing. setDuration/setInPoint/setOutPoint were already
+    // guarded; this one was not.
+    it("rejects non-finite times instead of storing them", () => {
+      const s = useAppStore.getState();
+      for (const bad of [NaN, Infinity, -Infinity]) {
+        s.setCurrentTime(bad);
+        expect(Number.isFinite(useAppStore.getState().currentTime)).toBe(true);
+      }
+    });
+
+    it("never stores a negative playhead", () => {
+      useAppStore.getState().setCurrentTime(-42);
+      expect(useAppStore.getState().currentTime).toBe(0);
+    });
+
+    // Deliberately NOT clamped to duration: duration arrives asynchronously as
+    // media loads, so clamping here would truncate a seek that lands first.
+    // The playback loop wraps to 0 before calling this, and the call sites that
+    // know the end (Go to end, frame-step) bound it themselves.
+    it("allows a time beyond the current duration, which loads may not have set yet", () => {
+      useAppStore.getState().setDuration(5);
+      useAppStore.getState().setCurrentTime(30);
+      expect(useAppStore.getState().currentTime).toBe(30);
     });
   });
 

@@ -1,6 +1,29 @@
 import { useAppStore, type AudioBinding } from "../../store";
+import { audioChannelName } from "../../engine/audio/channelName";
 import { PALETTE_PRESETS, fillPaletteParams } from "../../engine/palettePresets";
-import { isVideoOnlyEffect, VIDEO_ONLY_ON_IMAGE_WARNING } from "../../utils/effectConverter";
+
+import { isVideoOnlyEffect, VIDEO_ONLY_ON_IMAGE_WARNING, unsetSelectionWarning } from "../../utils/effectConverter";
+
+/**
+ * Parameters that a dedicated panel already picks better than a generic control
+ * can, and which are therefore hidden from the effect's parameter list.
+ *
+ * `color.lut_grading.lut_path` is a Select of ~35 bare filenames. The LUTs tab
+ * chooses the same value from a gallery of rendered thumbnails, so the dropdown
+ * was the worse of two pickers for the identical setting -- and a second way to
+ * change a value invites the two controls to disagree.
+ *
+ * The parameter itself is untouched: it stays in the Rust ParameterDef so
+ * clamping and export keep working, and the value still rides in the stack
+ * entry. Only the redundant control is hidden.
+ */
+const PICKED_ELSEWHERE: Record<string, readonly string[]> = {
+  "color.lut_grading": ["lut_path"],
+};
+
+function isPickedElsewhere(effectId: string, paramId: string): boolean {
+  return PICKED_ELSEWHERE[effectId]?.includes(paramId) ?? false;
+}
 
 const AUDIO_SOURCES = [
   { id: "bass", label: "Bass" },
@@ -115,7 +138,13 @@ function ParameterWheel({
           style={{ transform: `rotate(${angle}deg)`, boxShadow: "0 0 8px #ffade0" }}
         />
         <div className="w-6 h-6 rounded-full neo-pressed flex items-center justify-center">
-          <span className="font-data-micro text-data-micro text-accent-teal">{value.toFixed(0)}</span>
+          <span className="font-data-micro text-data-micro text-accent-teal">
+            {/* Precision follows the RANGE. A fixed 0 decimals read "0" for
+                every value below 0.5 on the 67 sliders whose whole range is
+                <= 2, so the face was blank of information exactly where fine
+                adjustment matters most. */}
+            {value.toFixed(max - min <= 2 ? 2 : max - min <= 20 ? 1 : 0)}
+          </span>
         </div>
       </div>
     </div>
@@ -157,11 +186,12 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
   if (!effectMeta) return null;
 
   const showVideoOnlyWarning = mediaLoaded && !isVideo && isVideoOnlyEffect(effectMeta);
+  const selectionWarning = unsetSelectionWarning(entry.effectId, entry.params);
 
   return (
     <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4 custom-scrollbar">
       <div
-        className="text-[13px] font-semibold filigree-header"
+        className="text-dense-lg font-semibold filigree-header"
         style={{ color: "var(--text-secondary)", fontFamily: "var(--font-hand)" }}
       >
         {entry.effectName} Parameters
@@ -186,6 +216,28 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
             warning
           </span>
           <span>{VIDEO_ONLY_ON_IMAGE_WARNING}</span>
+        </div>
+      )}
+
+      {selectionWarning && (
+        <div
+          role="alert"
+          style={{
+            padding: "6px 8px",
+            fontSize: 10,
+            borderRadius: 3,
+            background: "rgba(255, 180, 0, 0.15)",
+            border: "1px solid rgba(255, 180, 0, 0.4)",
+            color: "var(--accent-gold, #ffb400)",
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+          }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 12 }}>
+            warning
+          </span>
+          <span>{selectionWarning}</span>
         </div>
       )}
 
@@ -241,7 +293,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
         </div>
       )}
 
-      {effectMeta.parameters.map((param) => {
+      {effectMeta.parameters.filter((param) => !isPickedElsewhere(entry.effectId, param.id)).map((param) => {
         const value = entry.params[param.id] ?? param.default;
         return (
           <div key={param.id} className="space-y-1.5">
@@ -273,7 +325,22 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                     aria-label={param.name}
                     title={param.name}
                     placeholder="0"
-                    onChange={(e) => updateStackParams(entry.id, { [param.id]: parseFloat(e.target.value) || 0 })}
+                    min={param.min ?? undefined}
+                    max={param.max ?? undefined}
+                    step={param.step ?? undefined}
+                    onChange={(e) => {
+                      // Clamp to the declared range. The backend clamps too
+                      // (effects::params::clamp_params), so an out-of-range
+                      // entry was never destructive -- but without this the box
+                      // displayed a number the render was not using, which is a
+                      // worse failure than refusing the input.
+                      const raw = parseFloat(e.target.value);
+                      if (Number.isNaN(raw)) return;
+                      const lo = param.min ?? Number.NEGATIVE_INFINITY;
+                      const hi = param.max ?? Number.POSITIVE_INFINITY;
+                      const clamped = Math.min(hi, Math.max(lo, raw));
+                      updateStackParams(entry.id, { [param.id]: clamped });
+                    }}
                     className="param-readout bg-transparent border-b border-[var(--border-secondary)] px-1 w-12 text-right outline-none focus:border-[var(--accent)]"
                     style={{ color: "var(--text-primary)" }}
                   />
@@ -319,7 +386,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                   const idx = param.options!.indexOf(e.target.value);
                   updateStackParams(entry.id, { [param.id]: idx });
                 }}
-                className="w-full font-label-md text-label-md rounded px-2 py-1.5 outline-none"
+                className="w-full font-label-md text-label-md rounded px-2 py-1.5"
                 style={{
                   background: "var(--bg-input)",
                   border: "1px solid var(--border-secondary)",
@@ -344,7 +411,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                 onChange={(e) =>
                   updateStackParams(entry.id, { [param.id]: e.target.value })
                 }
-                className="w-full font-label-md text-label-md rounded px-2 py-1.5 outline-none"
+                className="w-full font-label-md text-label-md rounded px-2 py-1.5"
                 style={{
                   background: "var(--bg-input)",
                   border: "1px solid var(--border-secondary)",
@@ -363,7 +430,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                     [param.id]: !value,
                   })
                 }
-                className="w-10 h-5 rounded-full relative transition-all duration-300 shadow-inner"
+                className="w-10 h-5 rounded-full relative transition duration-300 shadow-inner"
                 style={{
                   background: value
                     ? "var(--accent)"
@@ -375,7 +442,12 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                 }}
               >
                 <div
-                  className="absolute top-[1px] w-4 h-4 rounded-full bg-white transition-all duration-300"
+                  // The knob slides via the inline `left` below, and `left` is
+                  // not in Tailwind's bare `transition` property list, so it
+                  // must be named explicitly or the switch snaps between its
+                  // two positions. `transition-all` would cover it but also
+                  // animates `outline`, suppressing the :focus-visible ring.
+                  className="absolute top-[1px] w-4 h-4 rounded-full bg-white transition-[left] duration-300"
                   style={{
                     left: value ? "calc(100% - 18px)" : "2px",
                     boxShadow: "0 1px 2px rgba(0,0,0,0.4)",
@@ -457,7 +529,10 @@ function AudioBindingControl({
   currentValue: Record<string, number>;
 }) {
   const isBound = !!binding;
-  const live = binding ? (currentValue[binding.source] ?? 0) : 0;
+  // Channels are keyed by `${stackId}.${paramId}`, not by the feature name,
+  // so this read `currentValue["bass"]`, found nothing, and displayed a
+  // confident 0.000 no matter what the audio was doing.
+  const live = binding ? (currentValue[audioChannelName(stackId, paramId)] ?? 0) : 0;
 
   const toggle = () => {
     if (isBound) {
@@ -504,7 +579,7 @@ function AudioBindingControl({
             color: isBound ? "var(--accent-teal, #6cf)" : "var(--text-muted, #888)",
           }}
         >
-          <span className="material-symbols-outlined" style={{ fontSize: 10 }}>audio</span>
+          <span className="material-symbols-outlined" style={{ fontSize: 10 }}>graphic_eq</span>
           {isBound ? "Audio Bound" : "Bind Audio"}
         </button>
         {isBound && (
@@ -522,7 +597,7 @@ function AudioBindingControl({
             onChange={(e) =>
               onSet(stackId, paramId, { ...binding, source: e.target.value })
             }
-            className="w-full font-label-md text-label-md rounded px-1 py-0.5 outline-none"
+            className="w-full font-label-md text-label-md rounded px-1 py-0.5"
             style={{
               background: "var(--bg-input)",
               border: "1px solid var(--border-secondary)",
@@ -546,7 +621,7 @@ function AudioBindingControl({
               onChange={(e) =>
                 onSet(stackId, paramId, { ...binding, inputMin: parseFloat(e.target.value) || 0 })
               }
-              className="w-10 font-code-sm text-code-sm px-1 py-0.5 rounded outline-none"
+              className="w-10 font-code-sm text-code-sm px-1 py-0.5 rounded"
               style={{
                 background: "var(--bg-input)",
                 border: "1px solid var(--border-secondary)",
@@ -562,7 +637,7 @@ function AudioBindingControl({
               onChange={(e) =>
                 onSet(stackId, paramId, { ...binding, inputMax: parseFloat(e.target.value) || 1 })
               }
-              className="w-10 font-code-sm text-code-sm px-1 py-0.5 rounded outline-none"
+              className="w-10 font-code-sm text-code-sm px-1 py-0.5 rounded"
               style={{
                 background: "var(--bg-input)",
                 border: "1px solid var(--border-secondary)",
@@ -581,7 +656,7 @@ function AudioBindingControl({
               onChange={(e) =>
                 onSet(stackId, paramId, { ...binding, outputMin: parseFloat(e.target.value) || 0 })
               }
-              className="w-10 font-code-sm text-code-sm px-1 py-0.5 rounded outline-none"
+              className="w-10 font-code-sm text-code-sm px-1 py-0.5 rounded"
               style={{
                 background: "var(--bg-input)",
                 border: "1px solid var(--border-secondary)",
@@ -597,7 +672,7 @@ function AudioBindingControl({
               onChange={(e) =>
                 onSet(stackId, paramId, { ...binding, outputMax: parseFloat(e.target.value) || 1 })
               }
-              className="w-10 font-code-sm text-code-sm px-1 py-0.5 rounded outline-none"
+              className="w-10 font-code-sm text-code-sm px-1 py-0.5 rounded"
               style={{
                 background: "var(--bg-input)",
                 border: "1px solid var(--border-secondary)",

@@ -25,10 +25,16 @@ mod tests {
     #[test]
     fn luminance_f32_matches_known_reference_values() {
         assert_eq!(luminance_f32(0, 0, 0), 0.0);
-        assert_eq!(luminance_f32(255, 255, 255), 0.299 * 255.0 + 0.587 * 255.0 + 0.114 * 255.0);
+        assert_eq!(
+            luminance_f32(255, 255, 255),
+            0.299 * 255.0 + 0.587 * 255.0 + 0.114 * 255.0
+        );
         assert_eq!(luminance_f32(255, 0, 0), 0.299 * 255.0);
         assert_eq!(luminance_f32(0, 255, 0), 0.587 * 255.0);
         assert_eq!(luminance_f32(0, 0, 255), 0.114 * 255.0);
-        assert_eq!(luminance_f32(50, 80, 100), 0.299 * 50.0 + 0.587 * 80.0 + 0.114 * 100.0);
+        assert_eq!(
+            luminance_f32(50, 80, 100),
+            0.299 * 50.0 + 0.587 * 80.0 + 0.114 * 100.0
+        );
     }
 }

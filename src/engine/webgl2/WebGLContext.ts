@@ -173,5 +173,22 @@ export class WebGLContext {
     this.programs.clear();
     this.textures.clear();
     this.framebuffers.clear();
+    // Deliberately NOT calling WEBGL_lose_context.loseContext() here.
+    //
+    // A canvas has exactly one WebGL context for its whole lifetime, and losing
+    // it is PERMANENT: a later canvas.getContext("webgl2") returns the same
+    // dead object rather than a fresh one. PreviewViewport's init effect re-runs
+    // against the same canvas element -- StrictMode double-invokes it in dev,
+    // and it re-runs whenever its dependencies change -- so cleanup would kill
+    // the context that the very next initialisation then picks up. That shipped
+    // briefly and blacked out the preview on every launch, which is far worse
+    // than the leak it was meant to fix.
+    //
+    // The underlying leak is real: a genuine unmount/remount builds a NEW canvas
+    // with a NEW context, browsers cap live contexts (16 in Chrome), and the
+    // oldest is force-lost past that cap. Fixing it needs a release that can
+    // tell "this canvas is being discarded" from "this canvas is being
+    // re-initialised", which destroy() alone cannot see. Left leaking until
+    // that distinction is implemented and verified in the running app.
   }
 }

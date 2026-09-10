@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use tauri::{AppHandle, Manager};
 
 const VENV_DIR_NAME: &str = "moshdither-env";
@@ -75,7 +75,7 @@ fn save_config(app: &AppHandle, mode: &str) {
 
 fn python_on_path() -> Option<String> {
     for name in ["python.exe", "python3.exe", "python"] {
-        if Command::new(name).arg("--version").output().is_ok() {
+        if crate::proc::command(name).arg("--version").output().is_ok() {
             return Some(name.to_string());
         }
     }
@@ -237,7 +237,7 @@ fn copy_bundled_ffglitch(app: &AppHandle) -> Result<(), String> {
 }
 
 fn run_command(cmd: &str, args: &[&str]) -> Result<(), String> {
-    let output = Command::new(cmd)
+    let output = crate::proc::command(cmd)
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -349,10 +349,7 @@ pub async fn install_local_environment(app: AppHandle) -> std::result::Result<En
     } else {
         // Minimal fallback set for mosh_cli.py (numpy/Pillow are transitive
         // deps of the DatamoshLib.FFG_effects modules it imports)
-        run_command(
-            &pip.to_string_lossy(),
-            &["install", "numpy", "Pillow"],
-        )?;
+        run_command(&pip.to_string_lossy(), &["install", "numpy", "Pillow"])?;
     }
 
     copy_bundled_ffmpeg(&app)?;

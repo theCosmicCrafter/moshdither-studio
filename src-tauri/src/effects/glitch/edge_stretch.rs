@@ -133,6 +133,22 @@ impl Effect for EdgeStretch {
             }
         }
 
+        // Re-normalise AFTER the blur.
+        //
+        // The map is normalised by its maximum, then box-blurred twice at
+        // radius 5 -- averaging a sparse edge map over ~11x11 divides typical
+        // values by around a hundred. The displacement below then truncates
+        // toward zero, so a sub-pixel result becomes NO displacement at all,
+        // and the effect moved 0.9% of pixels on a photograph and 2.7% on a
+        // hard-edged chart: invisible either way. The blur is meant to SMOOTH
+        // the displacement field, not attenuate it, so restore the range.
+        let max_blurred = edges.iter().cloned().fold(0.0f32, f32::max);
+        if max_blurred > 1e-6 {
+            for e in edges.iter_mut() {
+                *e /= max_blurred;
+            }
+        }
+
         // Step 4: Displace pixels horizontally based on blurred edge map
         let max_displacement = (amount * 20.0) as i32;
         let mut data = vec![0u8; w * h * 4];
@@ -179,6 +195,54 @@ impl Effect for EdgeStretch {
 
 #[cfg(test)]
 mod tests {
+    /// Regression: the displacement field was attenuated into nothing.
+    ///
+    /// The edge map is normalised by its max and then box-blurred twice, which
+    /// divides typical values by ~100. `(edges * max_displacement) as i32`
+    /// truncates toward zero, so sub-pixel displacements became NO displacement:
+    /// the effect moved 0.9% of pixels on a photograph and 2.7% on a hard-edged
+    /// image. Re-normalising after the blur restores the intended range.
+    #[test]
+    fn displaces_a_visible_share_of_an_edged_image() {
+        // Hard vertical bars: an edge-stretch effect has plenty to bite on.
+        let (w, h) = (96usize, 64usize);
+        let mut data = vec![255u8; w * h * 4];
+        for y in 0..h {
+            for x in 0..w {
+                let v = if (x / 8) % 2 == 0 { 30 } else { 220 };
+                let i = (y * w + x) * 4;
+                data[i] = v;
+                data[i + 1] = v;
+                data[i + 2] = v;
+            }
+        }
+        let input = Frame {
+            width: w as u32,
+            height: h as u32,
+            data,
+        };
+        let out = EdgeStretch
+            .process_frame(&input, None, &serde_json::Map::new())
+            .expect("renders");
+
+        let changed = (0..w * h)
+            .filter(|i| input.data[i * 4].abs_diff(out.data[i * 4]) > 3)
+            .count() as f64
+            / (w * h) as f64;
+        assert!(
+            changed > 0.02,
+            "edge stretch moved only {:.1}% of pixels -- invisible",
+            changed * 100.0
+        );
+        // And it must stay an EDGE effect: displacing the whole frame would be a
+        // different effect entirely.
+        assert!(
+            changed < 0.90,
+            "edge stretch displaced {:.0}% of the frame",
+            changed * 100.0
+        );
+    }
+
     use super::*;
 
     fn gray(w: u32, h: u32, g: u8) -> Frame {

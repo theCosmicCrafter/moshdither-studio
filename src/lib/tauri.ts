@@ -8,6 +8,43 @@ export { convertFileSrc };
 
 // ── SAM3 Segmentation ────────────────────────────────────────
 
+export interface Sam3AddonStatus {
+  ready: boolean;
+  sidecar_installed: boolean;
+  sidecar_path: string | null;
+  sidecar_bytes: number | null;
+  checkpoint_installed: boolean;
+  checkpoint_path: string | null;
+  checkpoint_bytes: number | null;
+  /** Set when a developer interpreter supersedes the add-on. */
+  dev_override: string | null;
+}
+
+const ADDON_UNAVAILABLE: Sam3AddonStatus = {
+  ready: false,
+  sidecar_installed: false,
+  sidecar_path: null,
+  sidecar_bytes: null,
+  checkpoint_installed: false,
+  checkpoint_path: null,
+  checkpoint_bytes: null,
+  dev_override: null,
+};
+
+export async function sam3AddonStatus(): Promise<Sam3AddonStatus> {
+  if (!isTauriAvailable()) return ADDON_UNAVAILABLE;
+  return invoke("sam3_addon_status");
+}
+
+export async function sam3AddonInstall(): Promise<Sam3AddonStatus> {
+  // No browser fallback: there is nothing meaningful to install into, and a
+  // silent no-op here would look like a successful install that did nothing.
+  if (!isTauriAvailable()) {
+    throw new Error("The SAM3 add-on can only be installed from the desktop app.");
+  }
+  return invoke("sam3_addon_install");
+}
+
 export async function sam3Init(): Promise<string> {
   if (!isTauriAvailable()) return "browser-fallback";
   return invoke("sam3_init");
@@ -76,18 +113,6 @@ export async function sam3Clear(): Promise<string> {
   return invoke("sam3_clear");
 }
 
-export async function sam3VideoPredictor(
-  frames: string[],
-  prompt?: string
-): Promise<{
-  status: string;
-  frame_masks: string[][];
-  frame_scores: number[][];
-}> {
-  if (!isTauriAvailable()) return { status: "browser-fallback", frame_masks: [], frame_scores: [] };
-  return invoke("sam3_video_predictor", { frames, prompt });
-}
-
 export async function sam3Shutdown(): Promise<string> {
   if (!isTauriAvailable()) return "ok";
   return invoke("sam3_shutdown");
@@ -125,6 +150,11 @@ export async function loadMediaFile(): Promise<string | null> {
     filters: [
       {
         name: "All Media",
+        // NOTE: avif and dds are deliberately absent. The `image` crate in
+        // this build has no DDS decoder at all, and its AVIF decoder needs
+        // the `avif-native` feature (dav1d, a C dependency). Offering an
+        // extension we cannot open only fails after the user picks a file.
+        // Pinned by every_offered_still_format_actually_decodes.
         extensions: [
           "png",
           "jpg",
@@ -133,10 +163,8 @@ export async function loadMediaFile(): Promise<string | null> {
           "bmp",
           "tiff",
           "webp",
-          "avif",
           "ico",
           "tga",
-          "dds",
           "qoi",
           "pnm",
           "mp4",
@@ -159,10 +187,8 @@ export async function loadMediaFile(): Promise<string | null> {
           "bmp",
           "tiff",
           "webp",
-          "avif",
           "ico",
           "tga",
-          "dds",
           "qoi",
           "pnm",
         ],
@@ -247,6 +273,15 @@ export async function listEffects(): Promise<EffectMeta[]> {
   return [...rustEffects, ...webglOnly];
 }
 
+export interface MediaMetadata extends Record<string, unknown> {
+  width?: number | null;
+  height?: number | null;
+  duration?: number | null;
+  fps?: number | null;
+  codec?: string | null;
+  bitrate?: number | null;
+}
+
 export async function getMediaInfo(): Promise<{ width: number; height: number; loaded: boolean }> {
   if (!isTauriAvailable()) {
     if (!browserMedia) return { width: 0, height: 0, loaded: false };
@@ -255,7 +290,17 @@ export async function getMediaInfo(): Promise<{ width: number; height: number; l
   return invoke("get_media_info");
 }
 
-export async function getMediaMetadata(path: string): Promise<Record<string, unknown>> {
+/**
+ * Full metadata for a media file, including its real DURATION.
+ *
+ * The duration was fetched here all along and only ever used for the metadata
+ * DISPLAY -- nothing fed it back to the timeline. So `duration` sat at its
+ * store default of 10 and every video, however long, scrubbed and EXPORTED as
+ * ten seconds. AppLayout's refreshPreview now sets it; that is the single
+ * funnel every "open a file" path goes through.
+ */
+export async function getMediaMetadata(path: string): Promise<MediaMetadata> {
+  if (!isTauriAvailable()) return {};
   return invoke("get_media_metadata", { path });
 }
 
@@ -364,18 +409,22 @@ export async function exportVideo(
      * memory budget). `number` = explicit cap (e.g. 1080 for 1080p).
      * Final encode still scales to `width`/`height`. */
     processingScale?: number;
+    /** Skip the Save dialog and write here instead. Used by the two-stage
+     *  FFglitch export, which prompts once and then renders to an intermediate
+     *  file before datamoshing it. */
+    outputPath?: string;
   } = {}
 ): Promise<string> {
-  const path = await save({
-    filters: [
-      { name: "MP4", extensions: ["mp4"] },
-      { name: "MOV", extensions: ["mov"] },
-      { name: "MKV", extensions: ["mkv"] },
-    ],
-  });
+  const path = options.outputPath ?? (await save({ filters: saveFiltersFor(options.format) }));
   if (!path || typeof path !== "string") {
     throw new Error("Export cancelled");
   }
+  // The extension the user actually chose wins over the panel's chip: the save
+  // dialog is where people expect to pick a format, and a mismatch would encode
+  // one format under another's file name.
+  const resolvedFormat = options.outputPath
+    ? options.format ?? null
+    : formatFromPath(path, options.format) ?? null;
   return invoke("export_video", {
     sourcePath,
     outputPath: path,
@@ -389,24 +438,123 @@ export async function exportVideo(
     watermark: options.watermark ?? null,
     trimStart: options.trimStart ?? null,
     trimEnd: options.trimEnd ?? null,
-    format: options.format ?? null,
+    format: resolvedFormat,
     quality: options.quality ?? null,
     includeAudio: options.includeAudio ?? null,
     processingScale: options.processingScale ?? null,
   });
 }
 
+/**
+ * Run a bitstream datamosh over `inputPath`.
+ *
+ * `outputPath` may be supplied by callers that have already asked the user
+ * where the result should go -- the two-stage export (render the effect stack,
+ * then datamosh that render) prompts once and then drives both steps, and must
+ * not raise a second Save dialog part-way through.
+ */
+/** Every export format, in the order the Save dialog should list them. */
+const EXPORT_FILTERS: { format: string; name: string; extensions: string[] }[] = [
+  { format: "mp4", name: "MP4", extensions: ["mp4"] },
+  { format: "mov", name: "QuickTime MOV", extensions: ["mov"] },
+  { format: "mkv", name: "Matroska MKV", extensions: ["mkv"] },
+  { format: "webm", name: "WebM", extensions: ["webm"] },
+  { format: "avi", name: "AVI", extensions: ["avi"] },
+  { format: "gif", name: "Animated GIF", extensions: ["gif"] },
+  { format: "apng", name: "Animated PNG", extensions: ["apng", "png"] },
+  { format: "webp", name: "Animated WebP", extensions: ["webp"] },
+  // Sequences write many files; the chosen name seeds the numbered pattern.
+  { format: "png_seq", name: "PNG sequence", extensions: ["png"] },
+  { format: "jpg_seq", name: "JPEG sequence", extensions: ["jpg", "jpeg"] },
+  { format: "webp_seq", name: "WebP sequence", extensions: ["webp"] },
+  { format: "tiff_seq", name: "TIFF sequence", extensions: ["tif", "tiff"] },
+  { format: "bmp_seq", name: "BMP sequence", extensions: ["bmp"] },
+];
+
+/**
+ * Save-dialog filters, listing EVERY format with the selected one first.
+ *
+ * This used to return only the selected format's filter, which meant the dialog
+ * showed MP4/MOV/MKV unless the user had already found and clicked the right
+ * chip in the export panel -- so the formats looked missing, and the only way
+ * to discover them was to notice a row of chips elsewhere in the UI. Every
+ * other application lets you choose the format in the save dialog itself, and
+ * now so does this one: `formatFromPath` reads the chosen extension back.
+ */
+export function saveFiltersFor(format?: string | null): { name: string; extensions: string[] }[] {
+  const selected = EXPORT_FILTERS.filter((f) => f.format === format);
+  const rest = EXPORT_FILTERS.filter((f) => f.format !== format);
+  return [...selected, ...rest].map(({ name, extensions }) => ({ name, extensions }));
+}
+
+/**
+ * How an extension written by more than one format resolves when the current
+ * selection does not already claim it. Explicit so the answer does not depend
+ * on the order the dialog happens to list filters in.
+ */
+const AMBIGUOUS_EXTENSION_DEFAULT: Record<string, string> = {
+  // APNG has its own .apng, so a bare .png reads as a sequence.
+  png: "png_seq",
+  // Animated WebP is one file, which is the likelier reading of a lone .webp.
+  webp: "webp",
+};
+
+/**
+ * The format implied by a chosen filename, or `fallback` when the extension
+ * does not decide it.
+ *
+ * The save dialog is the surface people expect to choose a format on, so the
+ * extension they picked wins over the chip. Two extensions are genuinely
+ * ambiguous -- `.png` is both a PNG sequence and an APNG, `.webp` is both an
+ * animated WebP and a WebP sequence -- so when the current selection already
+ * uses that extension it is kept, and otherwise the single-file reading wins
+ * for `.webp` and the sequence reading for `.png` (APNG has its own `.apng`).
+ */
+export function formatFromPath(path: string, fallback?: string | null): string | undefined {
+  const ext = path.split(".").pop()?.toLowerCase();
+  if (!ext) return fallback ?? undefined;
+
+  const candidates = EXPORT_FILTERS.filter((f) => f.extensions.includes(ext));
+  if (candidates.length === 0) return fallback ?? undefined;
+  // The current selection already writes this extension, so it is what the
+  // user meant -- picking APNG and naming the file .png should stay APNG.
+  if (candidates.some((c) => c.format === fallback)) return fallback ?? undefined;
+  // Otherwise resolve the genuinely ambiguous extensions explicitly, rather
+  // than letting the dialog's display order silently decide.
+  return AMBIGUOUS_EXTENSION_DEFAULT[ext] ?? candidates[0].format;
+}
+
+/**
+ * Mosh a couple of seconds of the source so a mode can be SEEN before committing.
+ *
+ * FFglitch corrupts the compressed bitstream, so unlike every other effect here
+ * it genuinely cannot render live -- there is nothing to show until the clip is
+ * re-encoded. That constraint is real; the modes being invisible until the user
+ * was already in the export dialog was not. Returns a path to a short clip.
+ */
+export async function previewFfglitch(
+  inputPath: string,
+  mode: string,
+  startSecs?: number,
+  durationSecs?: number,
+  params: Record<string, unknown> = {}
+): Promise<string> {
+  if (!isTauriAvailable()) throw new Error("Datamosh preview needs the desktop app.");
+  return invoke("preview_ffglitch", { inputPath, mode, startSecs, durationSecs, params });
+}
+
 export async function applyFfglitch(
   inputPath: string,
   mode: string,
-  params: Record<string, unknown> = {}
+  params: Record<string, unknown> = {},
+  outputPath?: string
 ): Promise<string> {
-  const path = await save({
+  const path = outputPath ?? (await save({
     filters: [
       { name: "MP4", extensions: ["mp4"] },
       { name: "AVI", extensions: ["avi"] },
     ],
-  });
+  }));
   if (!path || typeof path !== "string") {
     throw new Error("Export cancelled");
   }
@@ -416,6 +564,16 @@ export async function applyFfglitch(
     mode,
     params,
   });
+}
+
+/**
+ * Delete an intermediate render left by a two-stage export. The backend refuses
+ * anything that is not one of its own `.moshdither-fx-tmp.` files, so this
+ * cannot remove a user's media. Cleanup failure is not worth failing an
+ * otherwise-finished export over, so callers should ignore the rejection.
+ */
+export async function removeExportTemp(path: string): Promise<void> {
+  return invoke("remove_export_temp", { path });
 }
 
 /** Request cancellation of an in-progress export (real export or FFglitch --

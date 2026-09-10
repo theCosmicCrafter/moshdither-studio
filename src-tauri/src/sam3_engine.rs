@@ -5,7 +5,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{ChildStdin, Command, Stdio};
+use std::process::{ChildStdin, Stdio};
 use std::sync::mpsc::{channel, Receiver};
 use std::time::Duration;
 use sysinfo::{Pid, System};
@@ -137,7 +137,8 @@ fn cleanup_stale_sam3_bridge() {
         } else {
             tracing::debug!(
                 "Stale SAM3 PID file points to non-bridge process {} ({}), skipping",
-                pid, name
+                pid,
+                name
             );
         }
     }
@@ -146,6 +147,13 @@ fn cleanup_stale_sam3_bridge() {
 
 pub struct Sam3Engine {
     child: Mutex<Option<std::process::Child>>,
+    /// Kill-on-close job the bridge lives in, so shutting it down also takes
+    /// out the Python the PyInstaller bootloader spawned. Same --onefile
+    /// build as mosh-cli, same orphan otherwise: `child.kill()` reached the
+    /// bootloader and the 3.4 GB model process kept running. None where a
+    /// job could not be created or assigned (logged); then it is the old
+    /// single-child kill.
+    job: Mutex<Option<crate::proc::KillJob>>,
     stdin: Mutex<ChildStdin>,
     rx: Mutex<Receiver<String>>,
     /// Serializes the entire send→receive cycle so concurrent callers
@@ -158,7 +166,34 @@ pub struct Sam3Engine {
 /// when it bundles `externalBin` entries, so the production filename is just
 /// `sam3-bridge` (or `sam3-bridge.exe` on Windows). Dev builds can also pick up
 /// a target-prefixed binary from `src-tauri/bin`.
+/// Directory holding the downloadable SAM3 add-on: `~/.moshdither/sam3`.
+///
+/// The sidecar is ~2.9 GB, and neither Windows installer format will carry a
+/// file that large -- WiX rejects it outright (LGHT0263, 2 GiB limit) and NSIS
+/// fails to mmap it. Both were measured, not assumed. So the sidecar cannot
+/// ship inside the installer and is fetched after install instead, next to the
+/// checkpoint that already lives under `~/.moshdither/models`.
+pub fn sam3_addon_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)?;
+    Some(home.join(".moshdither").join("sam3"))
+}
+
 fn locate_sam3_binary() -> Option<PathBuf> {
+    // Installed add-on first. It wins over a bundled copy because it is the
+    // one the user explicitly chose to download, and because a future release
+    // that does manage to bundle a sidecar should not silently override a
+    // newer add-on the user already has.
+    if let Some(dir) = sam3_addon_dir() {
+        for name in ["sam3-bridge.exe", "sam3-bridge"] {
+            let candidate = dir.join(name);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(PathBuf::from))?;
@@ -187,6 +222,50 @@ fn locate_sam3_binary() -> Option<PathBuf> {
         }
     }
 
+    None
+}
+
+/// Locate the dev-mode SAM3 interpreter.
+///
+/// `sam3_env` is a multi-gigabyte gitignored virtualenv, so in practice it is
+/// created once per machine rather than once per checkout. Looking for it only
+/// directly under the resolved project root meant that running from a git
+/// worktree -- where the root is `<repo>/.claude/worktrees/<name>` and the venv
+/// lives back in the main checkout -- always failed with "SAM3 Python not
+/// found", even though a perfectly good interpreter existed a few directories
+/// up. Walking the ancestors finds it from a worktree, and also covers keeping
+/// one venv beside several sibling checkouts.
+///
+/// `MOSHDITHER_SAM3_PYTHON` overrides the search outright, for a venv kept
+/// somewhere unrelated to the source tree.
+fn locate_dev_python(root: &Path) -> Option<PathBuf> {
+    if let Ok(explicit) = std::env::var("MOSHDITHER_SAM3_PYTHON") {
+        let p = PathBuf::from(explicit);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+
+    let rel: &[&str] = if cfg!(windows) {
+        &["sam3_env", "Scripts", "python.exe"]
+    } else {
+        &["sam3_env", "bin", "python"]
+    };
+
+    let mut dir = Some(root);
+    // The worktree layout puts the main checkout three levels up; allow a
+    // little more headroom without wandering off toward the filesystem root.
+    for _ in 0..5 {
+        let current = dir?;
+        let mut candidate = current.to_path_buf();
+        for segment in rel {
+            candidate.push(segment);
+        }
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        dir = current.parent();
+    }
     None
 }
 
@@ -259,9 +338,51 @@ impl Sam3Engine {
         // start a new one and overwrite the PID file.
         cleanup_stale_sam3_bridge();
 
-        // Try the packaged sidecar first (production / Option A).
-        let mut command = if let Some(sidecar) = locate_sam3_binary() {
-            let mut cmd = Command::new(&sidecar);
+        // An explicit interpreter wins over the bundled sidecar. Without this the
+        // sidecar always won, so a user could not opt into their own CUDA
+        // environment -- which matters because a GPU-enabled sidecar carries
+        // ~3.5 GB of CUDA libraries, and shipping a smaller CPU-only build is
+        // only viable if the people with a GPU can still reach it.
+        let explicit_python = std::env::var_os("MOSHDITHER_SAM3_PYTHON")
+            .map(std::path::PathBuf::from)
+            .filter(|p| p.exists());
+
+        // A frozen PyInstaller onefile sidecar unpacks ~2.9 GB into %TEMP% on
+        // EVERY launch before it runs a line of Python, so its handshake is slow
+        // in a way a dev interpreter's never is. Measured here across three cold
+        // starts: 29.7 s, 33.8 s and 44.3 s -- against the 10 s budget this code
+        // used to hard-code, which therefore failed every single sidecar launch.
+        // SAM3 could not have worked in an installed app even with a perfect
+        // sidecar, so this flag picks a budget that matches what was launched.
+        let mut launched_sidecar = false;
+        let mut command = if let Some(python) = explicit_python {
+            let root = dev_project_root();
+            let bridge = root
+                .as_ref()
+                .map(|r| r.join("src-tauri").join("sam3_bridge.py"))
+                .filter(|b| b.exists());
+            let mut cmd = crate::proc::command(&python);
+            if let Some(bridge) = bridge {
+                cmd.arg(bridge);
+            }
+            if let Some(app_root) = root {
+                if let Some(repo) = resolve_sam3_repo(app).or_else(|| {
+                    let r = app_root
+                        .join("packages")
+                        .join("python-backend")
+                        .join("sam3_repo");
+                    r.exists().then_some(r)
+                }) {
+                    cmd.env("SAM3_REPO", repo.as_os_str());
+                }
+            }
+            if let Some(checkpoint) = resolve_checkpoint_path(app) {
+                cmd.env("SAM3_CHECKPOINT", checkpoint.as_os_str());
+            }
+            cmd
+        } else if let Some(sidecar) = locate_sam3_binary() {
+            launched_sidecar = true;
+            let mut cmd = crate::proc::command(&sidecar);
             // Point the sidecar at the Tauri resources for the model and the sam3 package.
             if let Some(repo) = resolve_sam3_repo(app) {
                 cmd.env("SAM3_REPO", repo.as_os_str());
@@ -277,25 +398,23 @@ impl Sam3Engine {
                     "Could not resolve project root for SAM3 dev environment.".into(),
                 )
             })?;
-            let python = if cfg!(windows) {
-                root.join("sam3_env").join("Scripts").join("python.exe")
-            } else {
-                root.join("sam3_env").join("bin").join("python")
-            };
             let bridge = root.join("src-tauri").join("sam3_bridge.py");
-            if !python.exists() {
-                return Err(crate::error::AppError::Generic(format!(
-                    "SAM3 Python not found at {}. Build the sidecar with `npm run build:sam3-sidecar` or create a sam3_env.",
-                    python.display()
-                )));
-            }
+            let python = locate_dev_python(&root).ok_or_else(|| {
+                crate::error::AppError::Generic(format!(
+                    "SAM3 Python not found. Looked for sam3_env/{} under {} and its parent directories. \
+                     Build the sidecar with `npm run build:sam3-sidecar`, create a sam3_env, or point \
+                     MOSHDITHER_SAM3_PYTHON at an existing interpreter.",
+                    if cfg!(windows) { "Scripts/python.exe" } else { "bin/python" },
+                    root.display()
+                ))
+            })?;
             if !bridge.exists() {
                 return Err(crate::error::AppError::Generic(format!(
                     "SAM3 bridge script not found at {}",
                     bridge.display()
                 )));
             }
-            let mut cmd = Command::new(&python);
+            let mut cmd = crate::proc::command(&python);
             cmd.arg(&bridge);
             if let Some(repo) = resolve_sam3_repo(app) {
                 cmd.env("SAM3_REPO", repo.as_os_str());
@@ -316,6 +435,7 @@ impl Sam3Engine {
             })?;
 
         write_sam3_pid(&child);
+        let job = crate::proc::KillJob::new().filter(|j| j.assign(&child));
 
         let mut stdin = child
             .stdin
@@ -399,11 +519,19 @@ impl Sam3Engine {
             stdin.write_all(&payload)?;
             stdin.flush()?;
 
-            const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
-            let auth_resp = rx.recv_timeout(AUTH_TIMEOUT).map_err(|e| {
+            // Deliberately generous. Waiting too long costs a slow failure that
+            // the log explains; waiting too little costs a feature that never
+            // works at all -- which is exactly what happened at 10 s.
+            let auth_timeout = Duration::from_secs(
+                std::env::var("MOSHDITHER_SAM3_AUTH_TIMEOUT_SECS")
+                    .ok()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(if launched_sidecar { 300 } else { 60 }),
+            );
+            let auth_resp = rx.recv_timeout(auth_timeout).map_err(|e| {
                 crate::error::AppError::Sam3Timeout(format!(
-                    "SAM3 auth handshake timed out after {:?}: {}",
-                    AUTH_TIMEOUT, e
+                    "SAM3 auth handshake timed out after {:?}: {}. A bundled sidecar                      unpacks several GB on first launch; set                      MOSHDITHER_SAM3_AUTH_TIMEOUT_SECS to raise this budget.",
+                    auth_timeout, e
                 ))
             })?;
             let resp: serde_json::Value = serde_json::from_str(&auth_resp)?;
@@ -417,6 +545,7 @@ impl Sam3Engine {
 
         Ok(Sam3Engine {
             child: Mutex::new(Some(child)),
+            job: Mutex::new(job),
             stdin: Mutex::new(stdin),
             rx: Mutex::new(rx),
             command_mutex: Mutex::new(()),
@@ -798,7 +927,10 @@ impl Sam3Engine {
             tracing::warn!("SAM3 graceful shutdown request failed: {}", e);
         }
         let mut child = self.child.lock().take();
-        Self::kill_child(&mut child)
+        let result = Self::kill_child(&mut child);
+        // Closing the job terminates whatever the bootloader spawned.
+        drop(self.job.lock().take());
+        result
     }
 
     /// Kill and reap the bridge child process with a bounded wait so we never
@@ -844,5 +976,71 @@ impl Drop for Sam3Engine {
     fn drop(&mut self) {
         let mut child = self.child.lock().take();
         let _ = Sam3Engine::kill_child(&mut child);
+        drop(self.job.lock().take());
+    }
+}
+
+#[cfg(test)]
+mod dev_python_tests {
+    use super::locate_dev_python;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn venv_rel() -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from("sam3_env").join("Scripts").join("python.exe")
+        } else {
+            PathBuf::from("sam3_env").join("bin").join("python")
+        }
+    }
+
+    /// Unique scratch root so parallel test runs cannot collide.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join("moshdither-sam3-tests")
+            .join(format!("{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn plant_venv(root: &Path) {
+        let python = root.join(venv_rel());
+        fs::create_dir_all(python.parent().unwrap()).unwrap();
+        fs::write(&python, b"stub").unwrap();
+    }
+
+    #[test]
+    fn finds_a_venv_directly_under_the_project_root() {
+        let root = scratch("direct");
+        plant_venv(&root);
+        assert_eq!(locate_dev_python(&root), Some(root.join(venv_rel())));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The case this function exists for: running from `.claude/worktrees/<name>`
+    /// while the venv lives back in the main checkout, four levels up.
+    #[test]
+    fn finds_a_venv_from_a_git_worktree_layout() {
+        let main = scratch("worktree");
+        plant_venv(&main);
+        let worktree = main.join(".claude").join("worktrees").join("some-branch");
+        fs::create_dir_all(&worktree).unwrap();
+
+        assert_eq!(
+            locate_dev_python(&worktree),
+            Some(main.join(venv_rel())),
+            "should walk up out of the worktree to the main checkout's venv"
+        );
+        let _ = fs::remove_dir_all(&main);
+    }
+
+    #[test]
+    fn returns_none_when_no_venv_exists_anywhere_above() {
+        let root = scratch("absent");
+        let deep = root.join("a").join("b");
+        fs::create_dir_all(&deep).unwrap();
+        assert_eq!(locate_dev_python(&deep), None);
+        let _ = fs::remove_dir_all(&root);
     }
 }

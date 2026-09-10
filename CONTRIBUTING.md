@@ -8,7 +8,7 @@ Thank you for your interest in contributing! This document will help you get sta
 2. **Install Node.js 18+**: [nodejs.org](https://nodejs.org/)
 3. **Clone the repository**:
    ```bash
-   git clone https://github.com/your-org/moshdither-studio.git
+   git clone https://github.com/theCosmicCrafter/moshdither-studio.git
    cd moshdither-studio
    ```
 4. **Install dependencies**:

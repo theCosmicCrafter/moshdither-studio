@@ -19,83 +19,69 @@ test.beforeEach(async ({ page }) => {
     .catch(() => {});
 });
 
-test("timeline panel renders", async ({ page }) => {
-  // Timeline should be visible somewhere in the UI
-  // Timeline may or may not be visible depending on layout — check app is responsive
-  const toolbar = page.locator("header").first();
-  void page.locator("text=Timeline, [data-testid*='timeline'], [class*='timeline']").first();
-  await expect(toolbar).toBeVisible();
+// The Timeline is docked into the layout's bottom tabset and defaultLayout
+// keeps it un-closable (enableClose: false), so its transport is present on
+// load without any navigation. It IS draggable -- the zone's enableDrag/
+// enableDrop/enableDivide locks were removed so panels can be rearranged --
+// but nothing here moves it, so it stays where the default layout puts it.
+const DURATION_INPUT = "input[type='number'][title='Animation length (seconds)']";
+
+test("timeline panel renders its transport controls", async ({ page }) => {
+  // Assert the timeline's own controls, not merely that the app survived —
+  // this test previously located a timeline selector, discarded it, and
+  // asserted the header was visible, so it passed with no Timeline at all.
+  await expect(page.getByTitle("Set in point (I)")).toBeVisible();
+  await expect(page.getByTitle("Set out point (O)")).toBeVisible();
+  await expect(page.getByTitle("Previous frame")).toBeVisible();
+  await expect(page.getByTitle("Next frame")).toBeVisible();
+  await expect(page.getByTitle("Playback speed")).toBeVisible();
+  await expect(page.locator(DURATION_INPUT)).toBeVisible();
 });
 
+// These three cover Timeline/index.tsx's `Math.max(0.1, val)` clamp. They used
+// to wrap every assertion in `if (await input.isVisible())`, so a missing or
+// renamed input turned each of them into a silent pass.
 test("duration input accepts valid values", async ({ page }) => {
-  // Find the duration input (has "s" suffix and timer icon)
-  const durationInput = page
-    .locator(
-      "input[type='number'][title*='Clip length'], input[type='number'][title*='duration'], input[type='number'][title*='Duration']"
-    )
-    .first();
+  const durationInput = page.locator(DURATION_INPUT);
+  await expect(durationInput).toBeVisible();
 
-  if (await durationInput.isVisible({ timeout: 5000 }).catch(() => false)) {
-    // Get current value, then set a new valid value
-    void (await durationInput.inputValue());
-    await durationInput.fill("5.5");
-    await page.waitForTimeout(300);
-    const newValue = await durationInput.inputValue();
-    expect(newValue).toBe("5.5");
-  }
+  await durationInput.fill("5.5");
+  await durationInput.blur();
+  await expect(durationInput).toHaveValue("5.5");
 });
 
-test("duration input rejects negative values", async ({ page }) => {
-  const durationInput = page
-    .locator(
-      "input[type='number'][title*='Clip length'], input[type='number'][title*='duration'], input[type='number'][title*='Duration']"
-    )
-    .first();
+test("duration input clamps negative values to the 0.1 floor", async ({ page }) => {
+  const durationInput = page.locator(DURATION_INPUT);
+  await expect(durationInput).toBeVisible();
 
-  if (await durationInput.isVisible({ timeout: 5000 }).catch(() => false)) {
-    // Try to set a negative value
-    await durationInput.fill("-5");
-    await page.waitForTimeout(300);
-    const value = parseFloat(await durationInput.inputValue());
-    // Should be clamped to >= 0.1
-    expect(value).toBeGreaterThanOrEqual(0.1);
-  }
+  await durationInput.fill("-5");
+  await durationInput.blur();
+  expect(parseFloat(await durationInput.inputValue())).toBeGreaterThanOrEqual(0.1);
 });
 
-test("duration input rejects zero", async ({ page }) => {
-  const durationInput = page
-    .locator(
-      "input[type='number'][title*='Clip length'], input[type='number'][title*='duration'], input[type='number'][title*='Duration']"
-    )
-    .first();
+test("duration input clamps zero to the 0.1 floor", async ({ page }) => {
+  const durationInput = page.locator(DURATION_INPUT);
+  await expect(durationInput).toBeVisible();
 
-  if (await durationInput.isVisible({ timeout: 5000 }).catch(() => false)) {
-    await durationInput.fill("0");
-    await page.waitForTimeout(300);
-    const value = parseFloat(await durationInput.inputValue());
-    // Should be clamped to >= 0.1
-    expect(value).toBeGreaterThanOrEqual(0.1);
-  }
+  await durationInput.fill("0");
+  await durationInput.blur();
+  expect(parseFloat(await durationInput.inputValue())).toBeGreaterThanOrEqual(0.1);
 });
 
-test("play/pause button toggles state", async ({ page }) => {
-  // Find play button
-  const playBtn = page
-    .locator("[title*='Play'], [title*='play'], [aria-label*='Play'], [aria-label*='play']")
-    .first();
+test("play/pause button toggles between Play and Pause", async ({ page }) => {
+  // Scope to the transport strip: the Audio Reactive panel has its own
+  // Play/Pause pair and flexlayout keeps opened tabs mounted, so an unscoped
+  // getByTitle("Play") is ambiguous. The strip is pinned under the dock, not
+  // inside a .flexlayout__tab, which is where this used to look.
+  const timeline = page.getByTestId("transport-strip");
+  const transport = timeline.getByTitle(/^(Play|Pause)$/);
+  await expect(transport).toBeVisible();
 
-  if (await playBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
-    await playBtn.click();
-    await page.waitForTimeout(300);
-    // Should now show pause or change state
-    // Click again to pause
-    await playBtn.click();
-    await page.waitForTimeout(300);
-  }
-
-  // App should still be responsive
-  const toolbar = page.locator("header").first();
-  await expect(toolbar).toBeVisible();
+  await expect(transport).toHaveAttribute("title", "Play");
+  await transport.click();
+  await expect(timeline.getByTitle(/^(Play|Pause)$/)).toHaveAttribute("title", "Pause");
+  await timeline.getByTitle(/^(Play|Pause)$/).click();
+  await expect(timeline.getByTitle(/^(Play|Pause)$/)).toHaveAttribute("title", "Play");
 });
 
 test("timeline scrubber doesn't crash with keyboard", async ({ page }) => {

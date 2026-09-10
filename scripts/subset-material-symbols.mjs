@@ -55,7 +55,13 @@ const EXTRA_ICONS = new Set([
   "drag_indicator",
   "image",
   "folder_open",
-  "movie_export",
+  // "movie_export" was pinned here, but no such glyph exists in Material
+  // Symbols (checked against all 4226 names in Google's icon metadata). The
+  // Fonts API silently ignores unknown names rather than erroring, so the
+  // subset was requested and built without it and the two call sites rendered
+  // the raw ligature text "movie_export" instead of an icon. Those now use
+  // "movie", which parallels the "image" glyph on the sibling Save Image item
+  // and is picked up from source automatically.
   "bug_report",
   "delete",
   "visibility",
@@ -64,7 +70,6 @@ const EXTRA_ICONS = new Set([
   "tune",
   "palette",
   "diamond",
-  "audio",
   "layers",
   "add_circle",
   "search",
@@ -106,7 +111,19 @@ const EXTRA_ICONS = new Set([
   "filter_none",
   "fullscreen_exit",
   "unfold_more",
-  "magnet"
+  // Neither "magnet" nor "audio" is a real Material Symbols name, so the Fonts
+  // API quietly built the subset without them and their call sites rendered the
+  // ligature text ("MAGNET" in the window toolbar). Replaced in source by
+  // border_outer (edge snapping) and graphic_eq (audio binding, matching the
+  // Audio Reactive panel's own icon).
+  "border_outer",
+  // Effect-stack context menu (StackContextMenu.tsx). Listed here rather than
+  // relying on extraction because they are supplied as data in a menu-item
+  // array rather than written as literal element children.
+  "file_copy",
+  "content_copy",
+  "content_paste",
+  "headphones"
 ]);
 
 async function* walk(dir) {
@@ -266,6 +283,31 @@ async function main() {
   if (isCssUpToDate(found)) {
     console.log(`[subset-material-symbols] Up-to-date for ${found.size} icons`);
     return;
+  }
+
+  // --check verifies the committed subset matches the icons referenced in
+  // source, without hitting the network. Adding or renaming a glyph without
+  // re-subsetting is invisible at build time -- the ligature simply fails to
+  // form and the raw name is painted into the UI -- and that has now happened
+  // twice, so `prebuild` runs this and fails loudly instead.
+  if (process.argv.includes("--check")) {
+    let manifest = { icons: "" };
+    try {
+      manifest = JSON.parse(readFileSync(iconsManifestPath, "utf8"));
+    } catch {
+      /* treated as empty below */
+    }
+    const have = new Set((manifest.icons || "").split(",").filter(Boolean));
+    const missing = [...found].filter((n) => !have.has(n)).sort();
+    const extra = [...have].filter((n) => !found.has(n)).sort();
+    console.error("[subset-material-symbols] Icon subset is stale.");
+    if (missing.length) {
+      console.error(`  Referenced in source but not in the font: ${missing.join(", ")}`);
+      console.error("  These render as their literal ligature name in the UI.");
+    }
+    if (extra.length) console.error(`  In the font but unreferenced: ${extra.join(", ")}`);
+    console.error("  Run `npm run subset:icons` and commit public/fonts/.");
+    process.exit(1);
   }
 
   console.log(`[subset-material-symbols] Generating subset for ${found.size} icons...`);

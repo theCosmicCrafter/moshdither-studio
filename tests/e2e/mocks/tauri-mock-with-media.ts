@@ -22,6 +22,9 @@ export const tauriMockWithMediaScript = `
   ];
 
   const mockResponses = {
+    // An empty library, as a string: the real command returns file text.
+    load_presets: '',
+    get_presets_path: 'C:/mock/presets.json',
     list_effects: [
       { id: "dithering.bayer", name: "Bayer Dither", category: "dithering", media_type: "image", parameters: bayerParameters },
       { id: "dithering.floyd_steinberg", name: "Floyd-Steinberg", category: "dithering", media_type: "image", parameters: [] },

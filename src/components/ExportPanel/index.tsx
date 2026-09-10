@@ -1,12 +1,23 @@
 import { useState, useEffect, useRef } from "react";
 import { useAppStore } from "../../store";
-import { exportVideo, applyFfglitch, cancelExport } from "../../lib/tauri";
+import { formatTimecode } from "../../utils/timecode";
+import { exportVideo, applyFfglitch, previewFfglitch, cancelExport, removeExportTemp } from "../../lib/tauri";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { stackToRustPayload } from "../../utils/effectConverter";
 import { useBatchQueue } from "../../hooks/useBatchQueue";
 import type { WatermarkSettings } from "../../utils/watermark";
 import { listen } from "@tauri-apps/api/event";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import ChipButton from "./ChipButton";
 import LabeledSlider from "../LabeledSlider";
+import { exportDimensions } from "../../utils/exportDimensions";
+import {
+  FFGLITCH_MODES,
+  FFGLITCH_GROUPS,
+  getFfglitchMode,
+  defaultFfglitchParams,
+  sanitizeFfglitchParams,
+} from "../../lib/ffglitchModes";
 
 const CODECS = [
   { id: "h264", label: "H.264", desc: "Best compatibility" },
@@ -37,21 +48,49 @@ const PROCESSING_SCALES = [
   { id: "480", label: "≤480p", scale: 480 },
 ];
 
-const FFGITCH_MODES = [
-  { id: "classic", label: "Classic" },
-  { id: "classic2", label: "Classic 2" },
-  { id: "bloom", label: "Bloom" },
-  { id: "pulse", label: "Pulse" },
-  { id: "void", label: "Void" },
-  { id: "fluid", label: "Fluid" },
-  { id: "stretch", label: "Stretch" },
-  { id: "shuffle_basic", label: "Shuffle" },
-  { id: "rise", label: "Rise" },
-  { id: "water_bloom", label: "Water Bloom" },
-  { id: "zoom", label: "Zoom" },
-  { id: "delay", label: "Delay" },
-  { id: "buffer", label: "Buffer" },
-];
+// Everything the bundled FFmpeg 8.0 can usefully write for a visual tool:
+// video containers, animated single-file images, and numbered image sequences.
+// (FFmpeg ships hundreds of muxers, but the rest are audio-only, subtitle or
+// streaming targets that have no meaning as an export here.)
+//
+// `gif` and `png_seq` were previously accepted by this list and then silently
+// encoded as H.264 MP4 -- the backend ignored `format` entirely. See
+// output_spec() in ffmpeg/mod.rs.
+const EXPORT_FORMATS = [
+  { id: "mp4", label: "MP4" },
+  { id: "mov", label: "MOV" },
+  { id: "mkv", label: "MKV" },
+  { id: "webm", label: "WEBM" },
+  { id: "avi", label: "AVI" },
+  { id: "gif", label: "GIF" },
+  { id: "apng", label: "APNG" },
+  { id: "webp", label: "WEBP" },
+  { id: "png_seq", label: "PNG SEQ" },
+  { id: "jpg_seq", label: "JPEG SEQ" },
+  { id: "webp_seq", label: "WEBP SEQ" },
+  { id: "tiff_seq", label: "TIFF SEQ" },
+  { id: "bmp_seq", label: "BMP SEQ" },
+] as const;
+
+/**
+ * The bitstream-datamosh modes offered to the user.
+ *
+ * The backend implements 33; this list had 13 -- and two of those thirteen
+ * (`bloom`, `void`) are among the seven that produce NOTHING on real footage,
+ * while 20 working ones including glide, sort, echo, noise, shift, sink, slice,
+ * mirror, shear, vibrate, stop and repeat were not offered at all. So the list
+ * was simultaneously too short and partly broken.
+ *
+ * Every mode below was run against real footage and verified to produce a
+ * playable file. Deliberately ABSENT:
+ *   * bloom, overlap, jiggle, void, reverse, invert, random -- the tomato
+ *     family. They corrupt the intermediate AVI so heavily that FFmpeg cannot
+ *     decode a frame, so the re-encode writes 0 bytes. `pulse` is the only one
+ *     of the eight that survives. Offering a mode that always fails is worse
+ *     than not offering it.
+ *   * combine, motion_transfer -- these need a second video / a motion source,
+ *     and there is no UI to supply one. They belong here once there is.
+ */
 
 export default function ExportPanel() {
   const effectStack = useAppStore((s) => s.effectStack);
@@ -67,6 +106,7 @@ export default function ExportPanel() {
   const setExportProgress = useAppStore((s) => s.setExportProgress);
   const resetExport = useAppStore((s) => s.resetExport);
   const requestExportCancel = useAppStore((s) => s.requestExportCancel);
+  const exportCancelRequested = useAppStore((s) => s.exportCancelRequested);
   const watermark = useAppStore((s) => s.watermark);
   const setWatermark = useAppStore((s) => s.setWatermark);
   const aspectRatioLock = useAppStore((s) => s.aspectRatioLock);
@@ -78,19 +118,43 @@ export default function ExportPanel() {
     useBatchQueue();
   const [showQueue, setShowQueue] = useState(false);
 
-  const [format, setFormat] = useState<"mp4" | "webm" | "gif" | "png_seq">("mp4");
-  const [codec, setCodec] = useState("h264");
-  const [resolutionId, setResolutionId] = useState("source");
-  const [processingScaleId, setProcessingScaleId] = useState("auto");
-  const [quality, setQuality] = useState<"draft" | "good" | "best">("good");
-  const [fps, setFps] = useState(30);
-  const [includeAudio, setIncludeAudio] = useState(true);
-  const [ffglitchMode, setFfglitchMode] = useState("classic");
+  const format = useAppStore((s) => s.exportFormat) as (typeof EXPORT_FORMATS)[number]["id"];
+  const setFormat = useAppStore((s) => s.setExportFormat);
+  const codec = useAppStore((s) => s.exportCodec);
+  const setCodec = useAppStore((s) => s.setExportCodec);
+  const resolutionId = useAppStore((s) => s.exportResolutionId);
+  const setResolutionId = useAppStore((s) => s.setExportResolutionId);
+  const processingScaleId = useAppStore((s) => s.exportProcessingScaleId);
+  const setProcessingScaleId = useAppStore((s) => s.setExportProcessingScaleId);
+  const quality = useAppStore((s) => s.exportQuality);
+  const setQuality = useAppStore((s) => s.setExportQuality);
+  const fps = useAppStore((s) => s.exportFps);
+  const setFps = useAppStore((s) => s.setExportFps);
+  const includeAudio = useAppStore((s) => s.exportIncludeAudio);
+  const setIncludeAudio = useAppStore((s) => s.setExportIncludeAudio);
+  const ffglitchMode = useAppStore((s) => s.ffglitchMode);
+  // Kept on screen after the run: a status line that scrolls past is not a
+  // warning about the file you just made.
+  const [exportWarning, setExportWarning] = useState<string | null>(null);
+  const [moshPreviewUrl, setMoshPreviewUrl] = useState<string | null>(null);
+  const [moshPreviewBusy, setMoshPreviewBusy] = useState(false);
+  const [moshPreviewError, setMoshPreviewError] = useState<string | null>(null);
+  const setFfglitchMode = useAppStore((s) => s.setFfglitchMode);
+  const ffglitchParams = useAppStore((s) => s.ffglitchParams);
+  const setFfglitchParam = useAppStore((s) => s.setFfglitchParam);
+  const resetFfglitchParams = useAppStore((s) => s.resetFfglitchParams);
+  const modeDef = getFfglitchMode(ffglitchMode);
+  // What actually gets sent: this mode's defaults with the user's changes on
+  // top, clamped. Before this the call site passed `{}` and no knob existed.
+  const activeFfglitchParams = sanitizeFfglitchParams(ffglitchMode, {
+    ...defaultFfglitchParams(ffglitchMode),
+    ...(ffglitchParams[ffglitchMode] ?? {}),
+  });
 
   const progressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const exportTriggerId = useAppStore((s) => s.exportTriggerId);
-  const lastTriggerId = useRef(0);
+  const lastTriggerId = useRef(exportTriggerId);
   const handleExportRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   const activeEffects = effectStack.filter((e) => e.enabled);
@@ -106,6 +170,23 @@ export default function ExportPanel() {
     };
   }, []);
 
+  const handleBrowseWatermarkImage = async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [
+          { name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] },
+          { name: "All Files", extensions: ["*"] },
+        ],
+      });
+      if (selected && typeof selected === "string") {
+        setWatermark({ imagePath: selected });
+      }
+    } catch {
+      // User cancelled dialog
+    }
+  };
+
   const handleExport = async () => {
     // Guards both call paths: the in-panel button (already unmounted while
     // exportIsRunning, but defense-in-depth) and the File-menu/triggerExport
@@ -116,23 +197,52 @@ export default function ExportPanel() {
       return;
     }
     if (!mediaInfo || !filePath) {
-      setStatusMessage("Load media before exporting");
+      // Distinguish "nothing open" from "the file behind this session is gone".
+      // A restored session can preview from its autosaved image while its
+      // original file has been moved or deleted; export needs the real file, so
+      // telling the user to "load media" when something is plainly on screen
+      // reads as a bug rather than an instruction.
+      setStatusMessage(
+        mediaInfo
+          ? "The original file is no longer available — reopen it (File ▸ Open) to export."
+          : "Load media before exporting",
+        "error"
+      );
       return;
     }
     if (activeEffects.length === 0) {
-      setStatusMessage("No effects enabled — export would be a copy");
+      setStatusMessage("No effects enabled — export would be a copy", "error");
       return;
     }
 
+    resetExport();
     setExportIsRunning(true);
     setExportProgress(0);
+    setExportWarning(null);
     setStatusMessage("Export started...");
 
     // Listen for real progress events from backend
-    const unlistenPromise = listen<{ stage: string; progress: number; message?: string }>(
+    // `warning` was emitted by the backend from the start and destructured by
+    // nobody: the export downscaled a clip to 480p, or cut it short, and told
+    // the user nothing. It is the only signal either of those happened.
+    const unlistenPromise = listen<{
+      stage: string;
+      progress: number;
+      message?: string;
+      warning?: string;
+      downscaled_to?: number;
+    }>(
       "export-progress",
       (event) => {
-        const { stage, progress, message } = event.payload;
+        const { stage, progress, message, warning } = event.payload;
+        // Once a cancel is pending the status line belongs to it; stage
+        // names and warnings still update their own state but do not
+        // overwrite "Cancelling…".
+        const cancelling = useAppStore.getState().exportCancelRequested;
+        if (warning) {
+          setExportWarning(warning);
+          if (!cancelling) setStatusMessage(warning);
+        }
         if (stage === "error") {
           if (progressTimerRef.current) {
             clearInterval(progressTimerRef.current);
@@ -143,6 +253,7 @@ export default function ExportPanel() {
           setStatusMessage(`Export failed: ${message ?? "unknown error"}`);
         } else {
           setExportProgress(progress);
+          if (cancelling) return;
           if (stage === "decoding") setStatusMessage("Decoding video...");
           else if (stage === "effects") setStatusMessage("Applying effects...");
           else if (stage === "encoding") setStatusMessage("Encoding video...");
@@ -155,11 +266,17 @@ export default function ExportPanel() {
     const stack = stackToRustPayload(
       activeEffects,
       state.activeMask,
-      state.sam3Masks
+      state.sam3Masks,
+      undefined,
+      state.keyframes,
+      state.audioBindings
     );
 
-    const width = resolution.w === 0 ? undefined : resolution.w;
-    const height = resolution.h === 0 ? undefined : resolution.h;
+    const { width, height } = exportDimensions(
+      resolution,
+      aspectRatioLock ? aspectRatio : null,
+      mediaInfo
+    );
     const processingScale = PROCESSING_SCALES.find(
       (s) => s.id === processingScaleId
     )?.scale;
@@ -171,12 +288,24 @@ export default function ExportPanel() {
 
     try {
       const outputPath = await exportVideo(filePath, stack, {
-        maskB64: state.activeMask ?? null,
+        // null, like the preview and Save Image (PreviewViewport.tsx,
+        // Toolbar.tsx) and like the batch queue. Rust falls back to this
+        // global mask for any effect that has none of its own, so passing the
+        // active mask here made every effect the user had deliberately set to
+        // "No mask" come out masked in the exported file and nowhere else.
+        // Per-effect masks are unaffected: they travel in each entry's mask_b64.
+        maskB64: null,
         codec,
         fps,
         width,
         height,
-        audioBakeJson: includeAudio ? audioBakeJson : null,
+        // Sent whenever a bake exists, independent of includeAudio. These are
+        // unrelated concerns: the bake is what makes audio-reactive effects
+        // respond to the track, while includeAudio decides whether that track
+        // is muxed into the output. Gating one on the other meant unticking
+        // "Include audio track" silently froze every audio-reactive effect,
+        // with nothing in the UI explaining why the export came out static.
+        audioBakeJson,
         watermark: watermark.enabled ? watermark : null,
         trimStart: typeof inPoint === "number" ? inPoint : undefined,
         trimEnd,
@@ -205,9 +334,17 @@ export default function ExportPanel() {
         clearInterval(progressTimerRef.current);
         progressTimerRef.current = null;
       }
-      setExportIsRunning(false);
-      setExportProgress(0);
-      setStatusMessage(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+      // Branch on the store flag, not on the message: exportVideo throws its
+      // own "Export cancelled" for a dismissed Save dialog with the flag
+      // unset, and that must keep reading as it does today.
+      if (useAppStore.getState().exportCancelRequested) {
+        resetExport();
+        setStatusMessage("Export cancelled");
+      } else {
+        setExportIsRunning(false);
+        setExportProgress(0);
+        setStatusMessage(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   };
 
@@ -221,21 +358,35 @@ export default function ExportPanel() {
   }, [exportTriggerId]);
 
   const handleCancel = () => {
+    // Cancel means REQUESTED, not done. This used to flip exportIsRunning
+    // off and announce "Export cancelled" on the spot, while the backend
+    // ran on for the rest of the decode or effects stage holding the export
+    // slot -- so the next Export click queued silently behind it. The
+    // running state now clears only when the backend actually returns
+    // (see the catch in handleExport), and the status says so.
+    if (!exportIsRunning || exportCancelRequested) return;
     requestExportCancel();
-    // requestExportCancel() only resets local UI state (progress bar,
-    // running flag) -- it never told the backend anything. Without this
-    // call, the actual ffmpeg/mosh_cli.py subprocess kept running untouched
-    // after the UI already claimed the export was cancelled.
     void cancelExport().catch((err) => {
       console.error("Failed to cancel export on the backend:", err);
     });
-    if (progressTimerRef.current) {
-      clearInterval(progressTimerRef.current);
-      progressTimerRef.current = null;
+    setStatusMessage("Cancelling… finishing the current step (a datamosh pass can take a while)");
+  };
+
+  const handleMoshPreview = async () => {
+    if (!filePath) return;
+    setMoshPreviewBusy(true);
+    setMoshPreviewError(null);
+    try {
+      // Start a little way in: the opening keyframe of a clip has no preceding
+      // motion to smear, so a mosh sampled at 0s under-sells every mode.
+      const path = await previewFfglitch(filePath, ffglitchMode, 1.0, 2.0, activeFfglitchParams);
+      setMoshPreviewUrl(convertFileSrc(path));
+    } catch (e) {
+      setMoshPreviewUrl(null);
+      setMoshPreviewError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setMoshPreviewBusy(false);
     }
-    setExportIsRunning(false);
-    setExportProgress(0);
-    setStatusMessage("Export cancelled");
   };
 
   const handleFfglitchExport = async () => {
@@ -243,17 +394,79 @@ export default function ExportPanel() {
       setStatusMessage("Load media before exporting");
       return;
     }
+    if (exportIsRunning) return;
+
+    // The effect stack is rendered FIRST, and the datamosh runs over that
+    // render. This used to pass `filePath` straight through, so the button
+    // silently discarded every effect, LUT and mask in the stack and moshed the
+    // untouched source -- the work was gone with no error to explain it.
+    //
+    // The two stages cannot be merged: the effects run on decoded RGBA frames,
+    // while a bitstream datamosh needs an ENCODED video to chew on. So the
+    // render has to be encoded to an intermediate file before FFglitch sees it.
+    const state = useAppStore.getState();
+    const stack = stackToRustPayload(activeEffects, state.activeMask, state.sam3Masks);
+    const willRenderEffects = activeEffects.length > 0;
+
+    const finalPath = await save({
+      filters: [
+        { name: "MP4", extensions: ["mp4"] },
+        { name: "AVI", extensions: ["avi"] },
+      ],
+    });
+    if (!finalPath || typeof finalPath !== "string") return;
+
+    // Sibling of the destination, so it lands on the same volume (a rename or a
+    // large write across drives is far slower) and inherits its writability.
+    const tempPath = finalPath.replace(/(\.[^.\\/]*)?$/, ".moshdither-fx-tmp.mp4");
+
+    resetExport();
     setExportIsRunning(true);
     setExportProgress(0);
-    setStatusMessage("FFglitch export started...");
+    let tempWritten = false;
     try {
-      const outputPath = await applyFfglitch(filePath, ffglitchMode, {});
+      let moshInput = filePath;
+      if (willRenderEffects) {
+        setStatusMessage(
+          `Rendering ${activeEffects.length} effect${activeEffects.length === 1 ? "" : "s"} before datamoshing...`
+        );
+        await exportVideo(filePath, stack, {
+          // See the note on the other export call: null, to match the preview.
+          maskB64: null,
+          codec,
+          fps,
+          audioBakeJson: audioBakeData ? JSON.stringify(audioBakeData) : null,
+          watermark: watermark.enabled ? watermark : null,
+          trimStart: inPoint ?? undefined,
+          trimEnd: typeof outPoint === "number" ? outPoint : state.duration,
+          includeAudio,
+          outputPath: tempPath,
+        });
+        tempWritten = true;
+        moshInput = tempPath;
+      }
+
+      setStatusMessage(`Datamoshing (${ffglitchMode})...`);
+      const outputPath = await applyFfglitch(moshInput, ffglitchMode, activeFfglitchParams, finalPath);
       setExportProgress(100);
-      setStatusMessage(`FFglitch exported: ${outputPath}`);
+      setStatusMessage(
+        willRenderEffects
+          ? `Exported with effects + ${ffglitchMode} datamosh: ${outputPath}`
+          : `FFglitch exported: ${outputPath}`
+      );
     } catch (err) {
-      setStatusMessage(`FFglitch export failed: ${err instanceof Error ? err.message : String(err)}`);
+      if (useAppStore.getState().exportCancelRequested) {
+        setStatusMessage("Export cancelled");
+      } else {
+        setStatusMessage(`FFglitch export failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     } finally {
-      setExportIsRunning(false);
+      // Best-effort: a stranded intermediate is untidy, not a failed export.
+      if (tempWritten) await removeExportTemp(tempPath).catch(() => {});
+      // resetExport, not just setExportIsRunning(false): a cancelled FFglitch
+      // run used to leave exportCancelRequested true forever, and the NEXT
+      // ordinary export's failure was then reported as a cancellation.
+      resetExport();
     }
   };
 
@@ -272,7 +485,7 @@ export default function ExportPanel() {
       <div className="space-y-1">
         <span style={{ fontSize: 10, color: "var(--text-muted)" }}>Format</span>
         <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
-          {(["mp4", "webm", "gif", "png_seq"] as const).map((f) => (
+          {EXPORT_FORMATS.map(({ id: f }) => (
             <ChipButton
               key={f}
               active={format === f}
@@ -281,7 +494,7 @@ export default function ExportPanel() {
               activeBackground="rgba(255, 173, 224, 0.25)"
               style={{ padding: "2px 8px" }}
             >
-              {f.toUpperCase().replace("_", "-")}
+              {EXPORT_FORMATS.find((x) => x.id === f)?.label ?? f}
             </ChipButton>
           ))}
         </div>
@@ -317,16 +530,22 @@ export default function ExportPanel() {
         onChange={setFps}
       />
 
-      {/* Include audio */}
+      {/* Include audio. Affects only whether the source track is muxed into the
+          output -- audio-reactive effects are driven by the bake below and work
+          either way. The title spells that out, because the previous coupling
+          taught the opposite. */}
       {audioEnabled && audioFilePath && (
-        <span style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 11 }}>
+        <label
+          style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 11 }}
+          title="Mux the source audio into the exported file. Audio-reactive effects respond to the track regardless of this setting."
+        >
           <input
             type="checkbox"
             checked={includeAudio}
             onChange={(e) => setIncludeAudio(e.target.checked)}
           />
           Include audio track
-        </span>
+        </label>
       )}
 
       {/* Audio bake status */}
@@ -512,7 +731,7 @@ export default function ExportPanel() {
               }}
             >
               <span className="material-symbols-outlined" style={{ fontSize: 10 }}>close</span>
-              Cancel
+              {exportCancelRequested ? "Cancelling…" : "Cancel"}
             </button>
           </div>
         </div>
@@ -525,12 +744,16 @@ export default function ExportPanel() {
           style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}
         >
           <span className="material-symbols-outlined" style={{ fontSize: 10 }}>bolt</span>
-          FFglitch Export
+          Bitstream datamosh — applied after your effects
         </label>
         <select
           id="ffglitch-mode"
           value={ffglitchMode}
-          onChange={(e) => setFfglitchMode(e.target.value)}
+          onChange={(e) => {
+            setFfglitchMode(e.target.value);
+            setMoshPreviewUrl(null);
+            setMoshPreviewError(null);
+          }}
           style={{
             width: "100%",
             padding: "4px 6px",
@@ -541,12 +764,119 @@ export default function ExportPanel() {
             color: "var(--text-primary)",
           }}
         >
-          {FFGITCH_MODES.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.label}
-            </option>
+          {FFGLITCH_GROUPS.map((g) => (
+            <optgroup key={g} label={g}>
+              {FFGLITCH_MODES.filter((m) => m.group === g).map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
+        {modeDef && (
+          <div data-testid="ffglitch-params" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <div style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", justifyContent: "space-between", gap: 8 }}>
+              <span>{modeDef.blurb}</span>
+              {modeDef.params.length > 0 && ffglitchParams[ffglitchMode] && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetFfglitchParams(ffglitchMode);
+                    setMoshPreviewUrl(null);
+                  }}
+                  title="Back to this mode's defaults"
+                  style={{ background: "none", border: "none", color: "var(--accent-teal)", cursor: "pointer", fontSize: 10, padding: 0, flexShrink: 0 }}
+                >
+                  Reset
+                </button>
+              )}
+            </div>
+            {modeDef.params.map((p) => {
+              const value = activeFfglitchParams[p.id];
+              const set = (v: number | boolean | string) => {
+                setFfglitchParam(ffglitchMode, p.id, v);
+                setMoshPreviewUrl(null);
+              };
+              if (p.type === "number") {
+                return (
+                  <LabeledSlider
+                    key={p.id}
+                    label={p.label}
+                    ariaLabel={p.label}
+                    title={p.hint}
+                    value={Number(value)}
+                    min={p.min ?? 0}
+                    max={p.max ?? 100}
+                    step={p.step ?? 1}
+                    onChange={set}
+                  />
+                );
+              }
+              if (p.type === "boolean") {
+                return (
+                  <label key={p.id} title={p.hint} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: "var(--text-secondary)", cursor: "pointer" }}>
+                    <input type="checkbox" checked={Boolean(value)} onChange={(e) => set(e.target.checked)} />
+                    {p.label}
+                  </label>
+                );
+              }
+              return (
+                <label key={p.id} title={p.hint} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, fontSize: 10, color: "var(--text-secondary)" }}>
+                  {p.label}
+                  <select
+                    aria-label={p.label}
+                    value={String(value)}
+                    onChange={(e) => set(e.target.value)}
+                    style={{ fontSize: 10, padding: "2px 4px", borderRadius: 3, border: "1px solid var(--outline-variant)", background: "var(--surface-container-low)", color: "var(--text-primary)" }}
+                  >
+                    {(p.options ?? []).map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              );
+            })}
+          </div>
+        )}
+        <button
+          onClick={() => void handleMoshPreview()}
+          disabled={moshPreviewBusy || !filePath}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+            padding: "5px 0",
+            fontSize: 11,
+            borderRadius: 3,
+            border: "1px solid var(--outline-variant)",
+            cursor: "pointer",
+            background: "var(--surface-container-low)",
+            color: "var(--text-primary)",
+            opacity: moshPreviewBusy || !filePath ? 0.5 : 1,
+          }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 12 }}>play_circle</span>
+          {moshPreviewBusy ? "Rendering preview…" : "Preview this mode (2s)"}
+        </button>
+        {moshPreviewUrl && (
+          <video
+            src={moshPreviewUrl}
+            autoPlay
+            loop
+            muted
+            playsInline
+            style={{ width: "100%", borderRadius: 3, border: "1px solid var(--outline-variant)" }}
+          />
+        )}
+        {moshPreviewError && (
+          <div style={{ fontSize: 10, color: "var(--error, #ff6b6b)", whiteSpace: "pre-wrap" }}>
+            {moshPreviewError}
+          </div>
+        )}
         <button
           onClick={handleFfglitchExport}
           disabled={exportIsRunning || !mediaInfo || !filePath}
@@ -641,21 +971,35 @@ export default function ExportPanel() {
               />
             )}
             {watermark.type === "image" && (
-              <input
-                type="text"
-                value={watermark.imagePath ?? ""}
-                onChange={(e) => setWatermark({ imagePath: e.target.value || null })}
-                placeholder="Image path"
-                style={{
-                  width: "100%",
-                  padding: "4px 6px",
-                  fontSize: 11,
-                  borderRadius: 3,
-                  border: "1px solid var(--outline-variant)",
-                  background: "var(--surface-container-low)",
-                  color: "var(--text-primary)",
-                }}
-              />
+              <div className="flex items-center gap-1">
+                <input
+                  type="text"
+                  value={watermark.imagePath ?? ""}
+                  onChange={(e) => setWatermark({ imagePath: e.target.value || null })}
+                  placeholder="Image path"
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    padding: "4px 6px",
+                    fontSize: 11,
+                    borderRadius: 3,
+                    border: "1px solid var(--outline-variant)",
+                    background: "var(--surface-container-low)",
+                    color: "var(--text-primary)",
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={handleBrowseWatermarkImage}
+                  title="Browse for watermark image"
+                  className="px-2 py-1 rounded bg-surface border border-outline-variant/30 hover:border-accent-teal hover:text-accent-teal transition-colors text-xs flex items-center justify-center shrink-0 neo-btn"
+                  style={{ height: 26 }}
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: 14 }}>
+                    folder_open
+                  </span>
+                </button>
+              </div>
             )}
             <span style={{ fontSize: 10, color: "var(--text-muted)", display: "block" }}>
               Position
@@ -705,12 +1049,56 @@ export default function ExportPanel() {
         </div>
         {inPoint !== null || outPoint !== null ? (
           <div style={{ fontSize: 10, display: "flex", gap: 8, color: "var(--text-secondary)" }}>
-            <span style={{ color: "var(--success)" }}>IN {inPoint ?? 0}s</span>
+            <span style={{ color: "var(--success)" }}>IN {formatTimecode(inPoint ?? 0)}</span>
             <span>→</span>
-            <span style={{ color: "var(--danger)" }}>OUT {outPoint ?? "end"}s</span>
+            <span style={{ color: "var(--danger)" }}>
+              OUT {outPoint === null ? "end" : formatTimecode(outPoint)}
+            </span>
           </div>
         ) : null}
       </div>
+
+      {/* A warning about the file you just made has to outlive the status line,
+          which the next message scrolls away. */}
+      {exportWarning && (
+        <div
+          data-testid="export-warning"
+          style={{
+            display: "flex",
+            gap: 6,
+            alignItems: "flex-start",
+            fontSize: 10,
+            lineHeight: 1.4,
+            padding: "6px 8px",
+            borderRadius: 3,
+            border: "1px solid var(--cat-analog, #d4a017)",
+            background: "rgba(212, 160, 23, 0.10)",
+            color: "var(--text-primary)",
+          }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 12, flexShrink: 0 }}>
+            warning
+          </span>
+          <span style={{ flex: 1 }}>{exportWarning}</span>
+          <button
+            type="button"
+            onClick={() => setExportWarning(null)}
+            title="Dismiss"
+            aria-label="Dismiss warning"
+            style={{
+              background: "none",
+              border: "none",
+              color: "var(--text-muted)",
+              cursor: "pointer",
+              fontSize: 12,
+              lineHeight: 1,
+              padding: 0,
+            }}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* Export button */}
       {!exportIsRunning && (
@@ -732,7 +1120,7 @@ export default function ExportPanel() {
             color: "var(--on-primary)",
           }}
         >
-          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>movie_export</span>
+          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>movie</span>
           Export Video
         </button>
       )}
@@ -741,15 +1129,32 @@ export default function ExportPanel() {
       <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
         <button
           onClick={() => {
+            const state = useAppStore.getState();
             const res = RESOLUTIONS.find((r) => r.id === resolutionId)!;
+            const { width: exportW, height: exportH } = exportDimensions(
+              res,
+              aspectRatioLock ? aspectRatio : null,
+              mediaInfo
+            );
+            const procScale = PROCESSING_SCALES.find(
+              (s) => s.id === processingScaleId
+            )?.scale;
+            const trimEnd = typeof outPoint === "number" ? outPoint : state.duration;
+            const trimStart = typeof inPoint === "number" ? inPoint : undefined;
+
             addJob({
               name: `${format} ${codec} ${resolutionId}`,
               format,
               codec,
-              resolutionW: res.w === 0 ? undefined : res.w,
-              resolutionH: res.h === 0 ? undefined : res.h,
+              resolutionW: exportW,
+              resolutionH: exportH,
               fps,
               quality,
+              trimStart,
+              trimEnd,
+              includeAudio,
+              watermark: watermark.enabled ? watermark : undefined,
+              processingScale: procScale,
             });
           }}
           disabled={!mediaInfo || !filePath}

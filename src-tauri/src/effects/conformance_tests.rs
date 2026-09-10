@@ -144,8 +144,13 @@ fn atkinson_discards_error_by_design() {
 /// * `mask_isolate` needs a mask.
 /// * `color.lift_gamma_gain` and `color.lut_grading` are identity at their
 ///   default parameters, which is correct.
-/// * `composite.overlay` is a known no-op pending real blend-mode compositing
-///   (see effectConverter.ts and HARDENING_PLAN).
+/// * `composite.overlay` is identity only because no overlay is selected by
+///   default (`overlay_path` is empty). Blend-mode compositing itself is
+///   implemented -- normal, screen, multiply and overlay -- and is covered by
+///   tests in composite/overlay.rs. This entry previously read "pending real
+///   blend-mode compositing", which was wrong: the blending existed but the
+///   bundled `overlays/*.mp4` paths never resolved, so the effect returned
+///   early and looked unimplemented.
 ///
 /// A new entry appearing here means an effect silently does nothing — the
 /// failure mode `verification`'s `non_empty_output` check records but does not
@@ -153,10 +158,23 @@ fn atkinson_discards_error_by_design() {
 const SINGLE_FRAME_NOOPS: &[&str] = &[
     "audio_reactive.bass_pulse",
     "audio_reactive.beat_glitch",
+    // Audio-reactive effects are driven entirely by the `_audio_*` params the
+    // export bake injects. With no audio loaded there is nothing to react to,
+    // so passing the frame through unchanged is the correct behaviour rather
+    // than a silent failure -- the same reason the three above are listed.
+    "audio_reactive.chromatic",
+    "audio_reactive.pixelate",
     "audio_reactive.spectral_shift",
+    "audio_reactive.spectrum",
+    "audio_reactive.waveform",
     "color.lift_gamma_gain",
     "color.lut_grading",
     "composite.overlay",
+    // Beat-synced effects are temporal and act on the beat timeline the export
+    // bake supplies; a lone frame carries neither, so identity is correct here
+    // in the same way it is for the frame_* entries below.
+    "datamoshing.beat_hold",
+    "datamoshing.beat_smear",
     "datamoshing.cross_video",
     "datamoshing.frame_hold",
     "datamoshing.frame_reverse",

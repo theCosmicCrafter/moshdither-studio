@@ -15,6 +15,22 @@ export default function ManualMaskEditor() {
   const width = mediaInfo?.width ?? 0;
   const height = mediaInfo?.height ?? 0;
 
+  // One-step undo for the whole-mask operations.
+  //
+  // Clear wiped a hand-painted mask instantly -- no confirmation, no undo, and
+  // the app's undo stack covers the effect stack, not mask painting. A detailed
+  // mask could be destroyed by one misclick with nothing to do about it. Undo
+  // is the right answer rather than a confirm dialog: creative tools let you
+  // take the action and take it back, they do not interrogate you first.
+  //
+  // The history lives in the store so the overlay's brush strokes -- the
+  // thing you do a hundred times -- go on the same stack as Clear and Invert.
+  // A single component-local snapshot covered only those two.
+  const maskHistory = useAppStore((s) => s.maskHistory);
+  const pushMaskHistory = useAppStore((s) => s.pushMaskHistory);
+  const undoMask = useAppStore((s) => s.undoMask);
+  const undoLabel = maskHistory.length > 0 ? maskHistory[maskHistory.length - 1].label : "";
+
   const invertGenerationRef = useRef(0);
   const invertImageRef = useRef<HTMLImageElement | null>(null);
   const activeMaskRef = useRef(activeMask);
@@ -42,6 +58,8 @@ export default function ManualMaskEditor() {
   }, [width, height]);
 
   const clearMask = useCallback(() => {
+    // Snapshot BEFORE destroying, so Undo has something to restore.
+    pushMaskHistory("Clear");
     const blank = createBlankMask();
     if (blank) {
       setActiveMask(blank);
@@ -50,10 +68,16 @@ export default function ManualMaskEditor() {
       setActiveMask(null);
       setStatusMessage("Mask cleared");
     }
-  }, [createBlankMask, setActiveMask, setStatusMessage]);
+  }, [createBlankMask, pushMaskHistory, setActiveMask, setStatusMessage]);
+
+  const undoMaskOp = useCallback(() => {
+    const label = undoMask();
+    if (label) setStatusMessage(`${label} undone`);
+  }, [undoMask, setStatusMessage]);
 
   const invertMask = useCallback(() => {
     if (width === 0 || height === 0) return;
+    pushMaskHistory("Invert");
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
@@ -90,7 +114,7 @@ export default function ManualMaskEditor() {
       setStatusMessage("Mask inverted");
     };
     img.src = source;
-  }, [activeMask, createBlankMask, setActiveMask, setStatusMessage, width, height]);
+  }, [activeMask, createBlankMask, pushMaskHistory, setActiveMask, setStatusMessage, width, height]);
 
   if (width === 0 || height === 0) {
     return (
@@ -147,6 +171,14 @@ export default function ManualMaskEditor() {
           active={false}
           onClick={clearMask}
         />
+        {undoLabel && (
+          <ToolButton
+            icon="undo"
+            label={`Undo ${undoLabel}`}
+            active={false}
+            onClick={undoMaskOp}
+          />
+        )}
       </div>
 
       {/* Brush size */}
@@ -206,7 +238,7 @@ function ToolButton({
           : "bg-surface-container-high text-on-surface-variant hover:text-on-surface"
       }`}
     >
-      <span className="material-symbols-outlined text-[14px]">{icon}</span>
+      <span className="material-symbols-outlined text-dense-xl">{icon}</span>
       {label}
     </button>
   );

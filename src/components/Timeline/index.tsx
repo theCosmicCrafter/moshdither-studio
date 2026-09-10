@@ -1,6 +1,40 @@
-import React, { useRef, useCallback } from "react";
-import { useAppStore } from "../../store";
+import React, { useRef, useCallback, useMemo, useState, useEffect } from "react";
+import { useAppStore, type EasingType } from "../../store";
 import { getFileName } from "../../utils/fileName";
+import { formatTimecode as formatTime } from "../../utils/timecode";
+import { playbackFps } from "../../hooks/usePlaybackEngine";
+
+/**
+ * The transport strip: one bar pinned under the preview that owns time.
+ *
+ * It used to be a dock panel -- the bottom 30 % of the centre column for
+ * ~55 px of controls, with a tab header above and an empty strip beneath.
+ * That is a DAW's information architecture for a tool whose loop is
+ * open -> stack -> tweak -> export. MoshPro, the stated benchmark, puts a
+ * scrubber and transport under the picture and nothing else; so does every
+ * NLE's source monitor. Now it is that.
+ *
+ * It also draws what the app already knew about time and never showed:
+ * every keyframe on every parameter (click to jump, right-click for easing
+ * and delete), and in/out handles you can DRAG instead of only stamping at
+ * the playhead.
+ */
+
+type DragTarget = "playhead" | "in" | "out";
+
+interface KeyframeMark {
+  time: number;
+  refs: { stackId: string; paramId: string; id: string; easing: EasingType }[];
+}
+
+/** Every easing a keyframe can have, in the order the menu lists them. */
+const EASINGS: { id: EasingType; label: string }[] = [
+  { id: "linear", label: "Linear" },
+  { id: "easeIn", label: "Ease in" },
+  { id: "easeOut", label: "Ease out" },
+  { id: "easeInOut", label: "Ease in-out" },
+  { id: "hold", label: "Hold" },
+];
 
 export default function Timeline() {
   const currentTime = useAppStore((s) => s.currentTime);
@@ -20,55 +54,136 @@ export default function Timeline() {
   const setInPoint = useAppStore((s) => s.setInPoint);
   const setOutPoint = useAppStore((s) => s.setOutPoint);
   const clearInOut = useAppStore((s) => s.clearInOut);
+  const isVideo = useAppStore((s) => s.isVideo);
+  const mediaFps = useAppStore((s) => s.mediaFps);
+  const animateFps = useAppStore((s) => s.animateFps);
+  const keyframes = useAppStore((s) => s.keyframes);
+  const removeKeyframe = useAppStore((s) => s.removeKeyframe);
+  const updateKeyframe = useAppStore((s) => s.updateKeyframe);
+
+  // The keyframe menu: which mark it is for and where on the bar it sits.
+  // Right-click used to delete outright, with no way to choose an easing --
+  // the store has had five easings since keyframes existed and nothing set
+  // any but linear.
+  const [menu, setMenu] = useState<{ mark: KeyframeMark; leftPct: number } | null>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [menu]);
 
   const scrubberRef = useRef<HTMLDivElement>(null);
-  const isDragging = useRef(false);
+  const dragTarget = useRef<DragTarget | null>(null);
 
-  const fps = 30;
-  const currentFrame = Math.floor(currentTime * fps);
+  // The clip's own rate for video, the animation's for a still. A hardcoded
+  // 30 here numbered frames that did not exist on a 24 fps clip.
+  const fps = playbackFps({ isVideo, mediaFps, animateFps });
+  const currentFrame = Math.floor(currentTime * fps + 1e-6);
+  const minGap = 1 / fps;
 
-  const handleScrub = useCallback(
-    (clientX: number) => {
+  // One diamond per distinct time, whatever it animates. The parameter panel
+  // can add a keyframe on any slider; until now nothing ever drew one, so the
+  // only way to find a keyframe was to land the playhead within 10 ms of it.
+  const keyframeMarks = useMemo<KeyframeMark[]>(() => {
+    const byTime = new Map<number, KeyframeMark["refs"]>();
+    for (const [stackId, tracks] of Object.entries(keyframes)) {
+      for (const [paramId, list] of Object.entries(tracks)) {
+        for (const k of list) {
+          const key = Math.round(k.time * 1000) / 1000;
+          const refs = byTime.get(key) ?? [];
+          refs.push({ stackId, paramId, id: k.id, easing: k.easing });
+          byTime.set(key, refs);
+        }
+      }
+    }
+    return [...byTime.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([time, refs]) => ({ time, refs }));
+  }, [keyframes]);
+
+  const timeAt = useCallback(
+    (clientX: number): number | null => {
       const el = scrubberRef.current;
-      if (!el) return;
+      if (!el) return null;
       const rect = el.getBoundingClientRect();
+      if (rect.width <= 0) return null;
       const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-      setCurrentTime(pct * duration);
+      return pct * duration;
     },
-    [duration, setCurrentTime]
+    [duration]
   );
 
-  const onMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      isDragging.current = true;
-      handleScrub(e.clientX);
+  const applyDrag = useCallback(
+    (target: DragTarget, t: number) => {
+      if (target === "playhead") {
+        setCurrentTime(t);
+      } else if (target === "in") {
+        // Never let the handles cross: the store nulls the other point when
+        // they do, which would make a drag past it silently drop the range.
+        setInPoint(Math.min(t, (outPoint ?? duration) - minGap));
+      } else {
+        setOutPoint(Math.max(t, (inPoint ?? 0) + minGap));
+      }
     },
-    [handleScrub]
+    [setCurrentTime, setInPoint, setOutPoint, inPoint, outPoint, duration, minGap]
   );
 
-  const onMouseMove = useCallback(
-    (e: React.MouseEvent) => {
-      if (!isDragging.current) return;
-      handleScrub(e.clientX);
+  // Pointer capture on the bar keeps every move flowing to one handler and
+  // keeps the drag alive when the pointer leaves a 16 px strip -- with mouse
+  // events the scrub stopped the moment the cursor strayed, which was always.
+  const startDrag = useCallback(
+    (target: DragTarget, e: React.PointerEvent) => {
+      dragTarget.current = target;
+      try {
+        scrubberRef.current?.setPointerCapture(e.pointerId);
+      } catch {
+        // jsdom has no pointer capture; the drag still works inside the bar
+      }
+      const t = timeAt(e.clientX);
+      if (t !== null) applyDrag(target, t);
     },
-    [handleScrub]
+    [timeAt, applyDrag]
   );
 
-  const onMouseUp = useCallback(() => {
-    isDragging.current = false;
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => startDrag("playhead", e),
+    [startDrag]
+  );
+
+  const onPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const target = dragTarget.current;
+      if (!target) return;
+      const t = timeAt(e.clientX);
+      if (t !== null) applyDrag(target, t);
+    },
+    [timeAt, applyDrag]
+  );
+
+  const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    dragTarget.current = null;
+    try {
+      scrubberRef.current?.releasePointerCapture(e.pointerId);
+    } catch {
+      // see above
+    }
   }, []);
 
-  const formatTime = (t: number) => {
-    const m = Math.floor(t / 60);
-    const s = Math.floor(t % 60);
-    const ms = Math.floor((t % 1) * 100);
-    return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}.${ms.toString().padStart(2, "0")}`;
-  };
+  const pct = (t: number) => `${(Math.max(0, Math.min(duration, t)) / duration) * 100}%`;
 
   return (
     <div
-      className="neo-flat rounded-lg mx-1 mb-1 bg-surface/80 backdrop-blur-xl flex flex-col gap-1 select-none"
-      style={{ padding: "6px 10px" }}
+      data-testid="transport-strip"
+      className="neo-flat rounded-lg mx-1 mb-1 bg-surface/80 backdrop-blur-xl flex flex-col gap-1 select-none flex-shrink-0"
+      style={{ padding: "4px 10px" }}
     >
       {/* Transport row */}
       <div className="flex items-center gap-2">
@@ -87,9 +202,9 @@ export default function Timeline() {
         {/* In/Out buttons */}
         <div className="flex gap-1 items-center">
           <button
-            onClick={() => setInPoint(Math.round(currentTime))}
+            onClick={() => setInPoint(currentTime)}
             title="Set in point (I)"
-            className="font-data-micro text-data-micro rounded px-1 cursor-pointer transition-all"
+            className="font-data-micro text-data-micro rounded px-1 cursor-pointer transition"
             style={{
               border: "1px solid var(--cat-analog)",
               background: inPoint !== null ? "rgba(255, 215, 0, 0.15)" : "transparent",
@@ -99,9 +214,9 @@ export default function Timeline() {
             IN
           </button>
           <button
-            onClick={() => setOutPoint(Math.round(currentTime))}
+            onClick={() => setOutPoint(currentTime)}
             title="Set out point (O)"
-            className="font-data-micro text-data-micro rounded px-1 cursor-pointer transition-all"
+            className="font-data-micro text-data-micro rounded px-1 cursor-pointer transition"
             style={{
               border: "1px solid var(--accent-pink)",
               background: outPoint !== null ? "rgba(255, 173, 224, 0.15)" : "transparent",
@@ -121,6 +236,16 @@ export default function Timeline() {
             </button>
           )}
         </div>
+
+        {/* Keyframe count -- the diamonds on the bar are the real UI */}
+        {keyframeMarks.length > 0 && (
+          <div
+            className="font-data-micro text-data-micro text-accent-teal"
+            title="Keyframes on the bar: click one to jump to it, right-click to delete it"
+          >
+            ◆ {keyframeMarks.length}
+          </div>
+        )}
 
         {/* BPM */}
         {audioBpm && (
@@ -162,25 +287,29 @@ export default function Timeline() {
             </select>
           </div>
 
-          {/* Clip length input */}
-          <div className="flex items-center gap-1 ml-1">
-            <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: 12 }}>
-              timer
-            </span>
-            <input
-              type="number"
-              min={0.1}
-              step={0.5}
-              value={duration}
-              onChange={(e) => {
-                const val = parseFloat(e.target.value);
-                setDuration(isNaN(val) ? 1 : Math.max(0.1, val));
-              }}
-              className="themed-select font-data-micro text-data-micro w-[60px] text-center"
-              title="Clip length (seconds)"
-            />
-            <span className="font-data-micro text-data-micro text-on-surface-variant">s</span>
-          </div>
+          {/* Animation length -- stills only. A video's length is the video's;
+              offering to edit it here just overwrote the probed duration with
+              whatever was typed and lied to the export. */}
+          {!isVideo && (
+            <div className="flex items-center gap-1 ml-1">
+              <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: 12 }}>
+                timer
+              </span>
+              <input
+                type="number"
+                min={0.1}
+                step={0.5}
+                value={duration}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value);
+                  setDuration(isNaN(val) ? 1 : Math.max(0.1, val));
+                }}
+                className="themed-select font-data-micro text-data-micro w-[60px] text-center"
+                title="Animation length (seconds)"
+              />
+              <span className="font-data-micro text-data-micro text-on-surface-variant">s</span>
+            </div>
+          )}
         </div>
 
         {/* Audio file name */}
@@ -197,61 +326,20 @@ export default function Timeline() {
       {/* Scrubber */}
       <div
         ref={scrubberRef}
-        onMouseDown={onMouseDown}
-        onMouseMove={onMouseMove}
-        onMouseUp={onMouseUp}
-        onMouseLeave={onMouseUp}
+        data-testid="timeline-scrubber"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
         className="neo-flat rounded relative cursor-pointer"
-        style={{ height: 16 }}
+        style={{ height: 16, touchAction: "none" }}
       >
         {/* Progress fill */}
         <div
           className="absolute left-0 top-0 bottom-0 rounded opacity-60"
           style={{
-            width: `${(currentTime / duration) * 100}%`,
+            width: pct(currentTime),
             background: "linear-gradient(90deg, var(--accent-pink), var(--accent-gold))",
-          }}
-        />
-
-        {/* In point marker */}
-        {inPoint !== null && (
-          <div
-            title={`In point: ${formatTime(inPoint)}`}
-            className="absolute top-[-2px] bottom-[-2px] rounded z-[2]"
-            style={{
-              left: `${(inPoint / duration) * 100}%`,
-              width: 2,
-              background: "var(--cat-analog)",
-              boxShadow: "0 0 4px var(--cat-analog)",
-              transform: "translateX(-50%)",
-            }}
-          />
-        )}
-
-        {/* Out point marker */}
-        {outPoint !== null && (
-          <div
-            title={`Out point: ${formatTime(outPoint)}`}
-            className="absolute top-[-2px] bottom-[-2px] rounded z-[2]"
-            style={{
-              left: `${(outPoint / duration) * 100}%`,
-              width: 2,
-              background: "var(--accent-pink)",
-              boxShadow: "0 0 4px var(--accent-pink)",
-              transform: "translateX(-50%)",
-            }}
-          />
-        )}
-
-        {/* Playhead */}
-        <div
-          className="absolute top-[-2px] bottom-[-2px] rounded z-[3]"
-          style={{
-            left: `${(currentTime / duration) * 100}%`,
-            width: 2,
-            background: "var(--on-surface)",
-            boxShadow: "0 0 4px var(--accent-pink)",
-            transform: "translateX(-50%)",
           }}
         />
 
@@ -267,6 +355,154 @@ export default function Timeline() {
             }}
           />
         ))}
+
+        {/* Trimmed-out range, dimmed */}
+        {inPoint !== null && (
+          <div className="absolute top-0 bottom-0 left-0 bg-black/40 rounded-l" style={{ width: pct(inPoint) }} />
+        )}
+        {outPoint !== null && (
+          <div className="absolute top-0 bottom-0 right-0 bg-black/40 rounded-r" style={{ left: pct(outPoint) }} />
+        )}
+
+        {/* Keyframe diamonds */}
+        {keyframeMarks.map((m) => {
+          const atPlayhead = Math.abs(m.time - currentTime) < 0.01;
+          const n = m.refs.length;
+          return (
+            <button
+              key={m.time}
+              type="button"
+              aria-label={`Keyframe at ${formatTime(m.time)}`}
+              title={`Keyframe at ${formatTime(m.time)} -- ${n} parameter${n === 1 ? "" : "s"}. Click to jump, right-click for easing and delete`}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                setCurrentTime(m.time);
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setMenu({ mark: m, leftPct: (m.time / duration) * 100 });
+              }}
+              className="absolute z-[4] p-0 cursor-pointer"
+              style={{
+                left: pct(m.time),
+                top: 4,
+                width: 8,
+                height: 8,
+                transform: "translateX(-50%) rotate(45deg)",
+                background: atPlayhead ? "var(--accent-gold)" : "var(--accent-teal)",
+                border: "1px solid var(--surface)",
+                boxShadow: atPlayhead ? "0 0 4px var(--accent-gold)" : "none",
+              }}
+            />
+          );
+        })}
+
+        {/* In point handle */}
+        {inPoint !== null && (
+          <div
+            data-testid="timeline-in-handle"
+            title={`In point ${formatTime(inPoint)} -- drag to move`}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              startDrag("in", e);
+            }}
+            className="absolute top-[-3px] bottom-[-3px] rounded-sm z-[5] cursor-ew-resize"
+            style={{
+              left: pct(inPoint),
+              width: 6,
+              background: "var(--cat-analog)",
+              boxShadow: "0 0 4px var(--cat-analog)",
+              transform: "translateX(-50%)",
+            }}
+          />
+        )}
+
+        {/* Out point handle */}
+        {outPoint !== null && (
+          <div
+            data-testid="timeline-out-handle"
+            title={`Out point ${formatTime(outPoint)} -- drag to move`}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              startDrag("out", e);
+            }}
+            className="absolute top-[-3px] bottom-[-3px] rounded-sm z-[5] cursor-ew-resize"
+            style={{
+              left: pct(outPoint),
+              width: 6,
+              background: "var(--accent-pink)",
+              boxShadow: "0 0 4px var(--accent-pink)",
+              transform: "translateX(-50%)",
+            }}
+          />
+        )}
+
+        {/* Keyframe menu */}
+        {menu && (
+          <div
+            role="menu"
+            aria-label={`Keyframe at ${formatTime(menu.mark.time)}`}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="absolute z-[10] neo-flat rounded-md bg-surface shadow-lg flex flex-col"
+            style={{
+              left: `${Math.min(92, Math.max(0, menu.leftPct))}%`,
+              bottom: 22,
+              minWidth: 150,
+              padding: 4,
+              border: "1px solid var(--outline-variant)",
+            }}
+          >
+            <div className="font-data-micro text-data-micro text-on-surface-variant px-2 py-1">
+              {formatTime(menu.mark.time)} · {menu.mark.refs.length} parameter{menu.mark.refs.length === 1 ? "" : "s"}
+            </div>
+            {EASINGS.map((ez) => {
+              const all = menu.mark.refs.every((r) => r.easing === ez.id);
+              const some = !all && menu.mark.refs.some((r) => r.easing === ez.id);
+              return (
+                <button
+                  key={ez.id}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={all}
+                  onClick={() => {
+                    for (const r of menu.mark.refs) updateKeyframe(r.stackId, r.paramId, r.id, { easing: ez.id });
+                    setMenu(null);
+                  }}
+                  className={`text-left font-label-sm text-label-sm rounded px-2 py-1 hover:bg-surface-variant/40 ${all ? "text-accent-teal" : "text-on-surface"}`}
+                >
+                  {all ? "● " : some ? "◐ " : "○ "}
+                  {ez.label}
+                </button>
+              );
+            })}
+            <div style={{ height: 1, background: "var(--outline-variant)", margin: "3px 4px" }} />
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                for (const r of menu.mark.refs) removeKeyframe(r.stackId, r.paramId, r.id);
+                setMenu(null);
+              }}
+              className="text-left font-label-sm text-label-sm rounded px-2 py-1 text-accent-pink hover:bg-surface-variant/40"
+            >
+              Delete keyframe{menu.mark.refs.length === 1 ? "" : "s"}
+            </button>
+          </div>
+        )}
+
+        {/* Playhead */}
+        <div
+          className="absolute top-[-2px] bottom-[-2px] rounded z-[3] pointer-events-none"
+          style={{
+            left: pct(currentTime),
+            width: 2,
+            background: "var(--on-surface)",
+            boxShadow: "0 0 4px var(--accent-pink)",
+            transform: "translateX(-50%)",
+          }}
+        />
       </div>
     </div>
   );

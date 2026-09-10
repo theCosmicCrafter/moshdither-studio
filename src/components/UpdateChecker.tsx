@@ -134,7 +134,7 @@ export default function UpdateChecker({ onClose }: UpdateCheckerProps) {
           {status === "available" && (
             <button
               onClick={handleInstall}
-              className="px-4 py-1.5 font-label-md text-label-md font-semibold rounded bg-accent-teal text-surface hover:brightness-110 transition-all shadow-md"
+              className="px-4 py-1.5 font-label-md text-label-md font-semibold rounded bg-accent-teal text-surface hover:brightness-110 transition shadow-md"
             >
               Install &amp; Restart
             </button>

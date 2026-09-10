@@ -2,18 +2,25 @@
 
 A unified desktop application for datamoshing, dithering, glitch art, and video effects. Combines the capabilities of 37+ existing tools into a single, modern, cross-platform creative suite.
 
-> **Status:** Early development. Not yet ready for production use.
+## System Requirements
+
+- **Operating System:** Windows 10/11 (64-bit)
+- **Memory (RAM):** 8 GB minimum, 16 GB+ recommended for long-form video exports
+- **Graphics (GPU):**
+  - WebGL2-compatible GPU for real-time interactive preview.
+  - **NVIDIA GPU with CUDA support (6 GB+ VRAM)** is required for AI Segmentation (SAM3 add-on). CPU-only/integrated graphics cannot run SAM3.
+- **Disk Space:** ~500 MB for core application; ~15 GB free disk space if installing the optional SAM3 add-on (download package and temporary model expansion).
 
 ## Features
 
-- **Datamoshing**: I-frame removal, frame reordering/repetition, motion transfer, cross-video mosh
+- **Datamoshing**: I-frame removal, frame reordering/repetition, motion transfer, cross-video mosh (25 verified FFglitch bitstream modes)
 - **Dithering**: 15+ algorithms (Bayer, Floyd-Steinberg, Atkinson, Blue Noise, and more)
 - **Glitch**: JPEG/PNG corruption, databending, byte-level manipulation
 - **Analog Effects**: VHS, scanlines, chromatic aberration, CRT simulation
 - **Pixel Geometry**: Pixel sorting, kaleidoscope, wave distortion
-- **Segmentation**: SAM3-powered mask generation (point, box, auto) for selective effects
+- **Segmentation**: SAM3-powered AI mask generation (point, box, auto) for selective effects
 - **Mask-Driven Pipeline**: Apply any effect inside, outside, or masked-to-alpha
-- **Linear Effect Stack**: Reorderable, previewable stack of effects
+- **Linear Effect Stack**: Reorderable, previewable stack of effects with keyframing and transport strip
 
 ## Tech Stack
 
@@ -25,7 +32,8 @@ A unified desktop application for datamoshing, dithering, glitch art, and video 
 | Styling       | Tailwind CSS                      |
 | State         | Zustand                           |
 | Video         | FFmpeg (sidecar)                  |
-| Segmentation  | ONNX Runtime (`ort` crate) + SAM3 |
+| Datamosh      | FFglitch + mosh-cli (sidecars)    |
+| Segmentation  | PyTorch / SAM3 (optional add-on)  |
 
 ## Development
 
@@ -33,7 +41,7 @@ A unified desktop application for datamoshing, dithering, glitch art, and video 
 
 - [Rust](https://rustup.rs/) (stable toolchain)
 - [Node.js](https://nodejs.org/) 18+ with npm or pnpm
-- FFmpeg binaries (downloaded automatically on first build)
+- External binaries (run `npm run fetch:external` to verify and download pinned sidecars)
 
 ### Setup
 
@@ -81,17 +89,51 @@ npm run tauri:build
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-## Production Release & Code Signing
-
-Before distributing MoshDither Studio, ensure you configure code signing for Windows (Authenticode) and macOS (Developer ID) in your environment variables before running the build command.
-
-1. **macOS**: Export `APPLE_SIGNING_IDENTITY` and `APPLE_CERTIFICATE_PASSWORD`
-2. **Windows**: Export `TAURI_SIGN_PFX_PATH` and `TAURI_SIGN_PFX_PASSWORD`
+## Production Release
 
 ```bash
-# Build the production release installers
+# Installers, with the SAM3 sidecar if one has been built
 npm run tauri:build
+
+# Installers without SAM3 (what public releases currently ship)
+npm run tauri:build:no-sam3
 ```
+
+Both produce an MSI and an NSIS installer under
+`src-tauri/target/release/bundle/`.
+
+### Code signing — not currently configured
+
+Releases are **unsigned**, so Windows SmartScreen will warn on first run until
+the download builds reputation. That is a real, user-visible cost and it is
+stated here rather than papered over.
+
+Earlier revisions of this file told you to export `TAURI_SIGN_PFX_PATH`,
+`TAURI_SIGN_PFX_PASSWORD`, `APPLE_SIGNING_IDENTITY` and
+`APPLE_CERTIFICATE_PASSWORD`. **Tauri v2 reads none of those** — they are
+electron-builder variables. Following those instructions produced a silently
+unsigned installer with no warning, which is worse than not trying.
+
+To actually sign on Windows, obtain an Authenticode certificate and set
+`bundle.windows.certificateThumbprint` (plus `digestAlgorithm` and
+`timestampUrl`) in `src-tauri/tauri.conf.json`, or provide
+`bundle.windows.signCommand`. Both are currently `null`.
+
+### Auto-updates — deliberately disabled
+
+The updater is switched off. It needs a published `latest.json` and a
+`TAURI_SIGNING_PRIVATE_KEY` to sign releases with, and neither exists; with the
+endpoint configured but nothing behind it, "Check for Updates" could only ever
+report a failure. `src/components/UpdateChecker.tsx` is intact — restore the
+`plugins.updater` block in `tauri.conf.json` and the menu entry in
+`src/components/Toolbar.tsx` together when there is something to update to.
+
+### Third-party licences
+
+The installer redistributes GPL binaries (FFmpeg, FFglitch). Before publishing,
+work through the release checklist in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) — it covers the licence texts
+and the corresponding-source obligation.
 
 ## License
 

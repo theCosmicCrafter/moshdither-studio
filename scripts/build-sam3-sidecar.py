@@ -50,20 +50,118 @@ def get_target(args: argparse.Namespace) -> str:
         return "x86_64-unknown-linux-gnu"
 
 
+def _candidate_roots() -> list[Path]:
+    """Directories that may hold a sam3_env, nearest first.
+
+    A git worktree lives at `<repo>/.claude/worktrees/<name>` and does not get
+    its own venv -- the one venv sits beside the primary checkout. Searching only
+    PROJECT_ROOT meant a worktree build silently fell through to system Python,
+    which has none of the SAM3 dependencies. PyInstaller then warned that it
+    could not import `sam3`, exited 0 anyway, and produced a 405 MB binary that
+    dies on `ModuleNotFoundError: No module named 'iopath'` at startup.
+    """
+    roots = [PROJECT_ROOT]
+    parent = PROJECT_ROOT
+    for _ in range(4):
+        parent = parent.parent
+        roots.append(parent)
+    return roots
+
+
+# Packages the frozen sidecar cannot run without. Checked against the chosen
+# interpreter before building, because PyInstaller treats a missing one as a
+# warning and still exits 0.
+REQUIRED_MODULES = ("torch", "iopath", "sam3")
+NL = chr(10)
+NLNL = chr(10) + chr(10)
+
+
 def find_python() -> Path:
-    """Locate the SAM3 Python interpreter."""
-    candidates = [
-        PROJECT_ROOT / "sam3_env" / "Scripts" / "python.exe",
-        PROJECT_ROOT / "sam3_env" / "bin" / "python",
-        Path("python"),
-        Path("python3"),
-    ]
+    """Locate the SAM3 Python interpreter, preferring an explicit override."""
+    override = os.environ.get("MOSHDITHER_SAM3_PYTHON")
+    if override:
+        p = Path(override)
+        if not p.exists():
+            raise RuntimeError(f"MOSHDITHER_SAM3_PYTHON points at a missing file: {p}")
+        return p
+
+    candidates: list[Path] = []
+    for root in _candidate_roots():
+        candidates.append(root / "sam3_env" / "Scripts" / "python.exe")
+        candidates.append(root / "sam3_env" / "bin" / "python")
     for candidate in candidates:
-        if shutil.which(str(candidate)) or candidate.exists():
-            return Path(shutil.which(str(candidate)) or candidate)
+        if candidate.exists():
+            return candidate
+
     raise RuntimeError(
-        "No Python interpreter found. Run `python scripts/setup-sam3-env.py` first."
+        "No sam3_env interpreter found.\n"
+        "Searched for sam3_env in:\n"
+        + "\n".join("  " + str(r) for r in _candidate_roots())
+        + "\n\nRun `npm run setup:sam3-env`, or set MOSHDITHER_SAM3_PYTHON to an\n"
+        "interpreter that has torch, iopath and sam3 installed.\n"
+        "\n"
+        "Refusing to fall back to system Python: it lacks the SAM3 dependencies,\n"
+        "and PyInstaller would still emit a binary that fails at startup."
     )
+
+
+def verify_interpreter(python: Path) -> None:
+    """Fail before a 15-minute build if the interpreter cannot import the deps."""
+    missing = []
+    for mod in REQUIRED_MODULES:
+        probe = subprocess.run(
+            [str(python), "-c", "import " + mod],
+            capture_output=True,
+            text=True,
+        )
+        if probe.returncode != 0:
+            missing.append(mod)
+    # A CPU-only torch yields a sidecar that builds, packages and starts -- and
+    # then cannot load the model at all. Upstream SAM3 is GPU-only by design: it
+    # hardcodes device="cuda" in 13 files (sam3/model/position_encoding.py:55,
+    # sam3/model/decoder.py:283, sam3/model/io_utils.py, ...). Worse, a bundled
+    # sidecar takes precedence over a working CUDA venv in sam3_engine.rs, so
+    # shipping a CPU build actively breaks SAM3 for users who already had it.
+    if not missing:
+        probe = subprocess.run(
+            [str(python), "-c", "import torch; print(torch.version.cuda or '')"],
+            capture_output=True,
+            text=True,
+        )
+        if probe.returncode == 0 and not probe.stdout.strip():
+            raise RuntimeError(
+                "This interpreter has a CPU-only torch build."
+                + NLNL
+                + "  interpreter: "
+                + str(python)
+                + NLNL
+                + 'SAM3 hardcodes device="cuda" in 13 upstream files, so a CPU sidecar'
+                + NL
+                + "starts and then fails with:"
+                + NL
+                + "  Model load failed: Torch not compiled with CUDA enabled"
+                + NLNL
+                + "A bundled sidecar also wins over a local CUDA venv, so shipping one"
+                + NL
+                + "would break SAM3 for users who already have it working."
+                + NLNL
+                + "Build against a CUDA environment, or skip the sidecar with"
+                + NL
+                + "`npm run tauri:build:no-sam3` and let users point"
+                + NL
+                + "MOSHDITHER_SAM3_PYTHON at their own CUDA interpreter."
+            )
+
+    if missing:
+        raise RuntimeError(
+            "Interpreter is missing modules the sidecar requires: "
+            + ", ".join(missing)
+            + "\n  interpreter: " + str(python)
+            + "\n\nPyInstaller only warns about these and still exits 0, so the\n"
+            "build would appear to succeed and produce a binary that dies on\n"
+            "startup with ModuleNotFoundError. Install them into that\n"
+            "environment, or run `npm run setup:sam3-env`."
+        )
 
 
 def copy_sam3_package(temp_dir: Path) -> Path:
@@ -154,6 +252,7 @@ def main() -> None:
     target = get_target(args)
     python = find_python()
     print(f"Using Python: {python}")
+    verify_interpreter(python)
     print(f"Target triple: {target}")
 
     build_root = PROJECT_ROOT / "build"

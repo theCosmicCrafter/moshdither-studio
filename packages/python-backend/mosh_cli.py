@@ -28,6 +28,19 @@ ffmpeg_path = os.environ.get(
 )
 
 from DatamoshLib.FFG_effects import basic_modes, external_script
+
+# Windows: keep child processes from flashing a console window.
+#
+# The app is a GUI. ffmpeg, ffgac and ffedit are console-subsystem programs, so
+# Windows allocates a console for each one and a black command-prompt window
+# appears -- and for a long convert, SITS there. Suppressing it on the Rust side
+# (crate::proc::command) only covers the processes RUST starts; every ffmpeg
+# this script spawns is a child of THIS process and needs its own flag.
+# CREATE_NO_WINDOW is 0x08000000. Output still pipes normally.
+_NO_WINDOW = {}
+if sys.platform == "win32":
+    _NO_WINDOW["creationflags"] = 0x08000000
+
 from DatamoshLib.Original import classic, classic_new, pymodes, repeat
 from DatamoshLib.Tomato import tomato
 
@@ -36,6 +49,48 @@ basic_modes.ffgac = ffgac_path
 basic_modes.ffedit = ffedit_path
 external_script.ffgac = ffgac_path
 external_script.ffedit = ffedit_path
+
+def _ffmpeg_error_summary(stderr, max_chars=600):
+    """Pull the part of ffmpeg's stderr that actually says what went wrong.
+
+    ffmpeg opens every run with a banner -- version line, build flags, then one
+    `lib*` line per linked library -- which on its own runs well past 500
+    characters. Reporting `stderr[:500]` therefore surfaced nothing but that
+    boilerplate and cut off before the real message, which ffmpeg prints last.
+    Errors that reached the UI looked like "ffmpeg failed: ffmpeg version
+    8.0-essentials_build ... --enable-gpl --enable-version3 ..." and were
+    impossible to act on.
+
+    Take the tail instead, after dropping the banner and progress spam.
+    """
+    if not stderr:
+        return "(no stderr)"
+    skip_prefixes = (
+        "ffmpeg version",
+        "built with",
+        "configuration:",
+        "lib",
+        "Press [q]",
+        "frame=",
+        "size=",
+        "video:",
+    )
+    lines = [ln.rstrip() for ln in stderr.splitlines() if ln.strip()]
+    meaningful = [ln for ln in lines if not ln.lstrip().startswith(skip_prefixes)]
+    # If filtering removed everything, the banner really was all there was.
+    tail = meaningful or lines
+    selected = tail[-12:]
+    # Drop whole lines to fit the budget rather than slicing characters, which
+    # left the message opening mid-token (".​..393733 (Error number ...").
+    while selected and len("\n".join(selected)) > max_chars and len(selected) > 1:
+        selected.pop(0)
+    summary = "\n".join(selected)
+    if len(summary) > max_chars:
+        # A single line longer than the budget: keep its end, where ffmpeg's
+        # reason sits, but say so rather than appearing to start mid-word.
+        summary = "(truncated) ..." + summary[-max_chars:]
+    return summary
+
 
 # Helper to run ffmpeg
 def ffmpeg_convert(input_path, output_path, extra_args=None):
@@ -71,13 +126,19 @@ def ffmpeg_convert(input_path, output_path, extra_args=None):
     try:
         # The marker must sit on the line immediately before the call.
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=1200, **_NO_WINDOW
+        )
     except subprocess.TimeoutExpired as e:
         raise RuntimeError(f"ffmpeg timed out after {e.timeout}s") from e
     if result.returncode != 0:
         print(f"ffmpeg failed with code {result.returncode}")
         print(f"stderr: {result.stderr}")
-        raise RuntimeError(f"ffmpeg failed: {result.stderr[:500]}")
+        raise RuntimeError(
+            f"ffmpeg failed (exit {result.returncode}) converting "
+            f"{os.path.basename(input_path)} -> {os.path.basename(output_path)}: "
+            f"{_ffmpeg_error_summary(result.stderr)}"
+        )
 
 def configure_js_script(effect_name, params):
     # Locate original JS file
@@ -163,7 +224,10 @@ def main():
     input_path = config["input"]
     output_path = config["output"]
     mode = config["mode"] # e.g. classic, shuffle, tomato-bloom, zoom, delay, etc.
-    params = config.get("params", {})
+    # `or {}`: a caller that writes "params": null must not crash the very
+    # first params.get() below. The Rust host normalises this too; both
+    # sides guard it because this script is also run by hand.
+    params = config.get("params") or {}
 
     # 1. Automosh (Tomato) Modes: Bloom, Pulse, Overlap, Jiggle, Void, Reverse, Invert, Random
     tomato_modes = ["bloom", "pulse", "overlap", "jiggle", "void", "reverse", "invert", "random"]
@@ -299,4 +363,36 @@ def main():
     print("Mosh pipeline completed successfully!")
 
 if __name__ == "__main__":
-    main()
+    # Fail with a SENTENCE, not a traceback.
+    #
+    # Every failure here reached the user as a raw Python traceback plus, in the
+    # frozen sidecar, "[PYI-nnnnn:ERROR] Failed to execute script 'mosh_cli' due
+    # to unhandled exception!". That is unreadable in a UI and says nothing
+    # about what to do. Some of these are ordinary, expected conditions --
+    # `combine` needs a second video, `motion_transfer` needs a motion source --
+    # and they should read as requirements, not as a crash.
+    try:
+        main()
+    except ValueError as exc:
+        # Caller error: a missing or wrong parameter.
+        print("Datamosh failed: " + str(exc), file=sys.stderr)
+        sys.exit(2)
+    except RuntimeError as exc:
+        # The pipeline ran and could not produce a file. The commonest cause is
+        # a mode whose corruption left nothing decodable -- the tomato family
+        # does this on some sources -- so say that rather than dumping FFmpeg's
+        # several hundred lines of banner.
+        msg = str(exc)
+        if "Could not open encoder" in msg or "Invalid data found" in msg:
+            print(
+                "Datamosh failed: this mode corrupted the clip so heavily that "
+                "nothing could be re-encoded from it. Try a different mode, a "
+                "longer clip, or a higher-bitrate source.",
+                file=sys.stderr,
+            )
+        else:
+            print("Datamosh failed: " + msg.splitlines()[0], file=sys.stderr)
+        sys.exit(3)
+    except Exception as exc:  # noqa: BLE001 - last resort, must not traceback
+        print(f"Datamosh failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        sys.exit(4)

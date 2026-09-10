@@ -20,34 +20,23 @@ export const DEFAULT_LAYOUT: IJsonModel = {
         ]
       },
       {
-        type: "row",
+        type: "tabset",
         weight: 60,
-        id: "center-column",
+        id: "center-zone",
+        // Drops, drags and divides are all allowed here. These were locked
+        // shut, which made the largest region of the window -- the obvious
+        // place to aim a panel at -- silently reject every drop: the drag
+        // started, the indicator appeared, and nothing happened.
+        // Preview keeps enableClose: false so it cannot be lost entirely,
+        // but it can be moved and stacked like any other panel.
+        //
+        // There is no bottom tabset any more. The Timeline is not a panel: it
+        // is the transport strip AppLayout pins under the whole workspace (see
+        // Timeline/index.tsx). As a panel it took 30 % of this column for
+        // ~55 px of controls, with a tab header above and empty space below.
+        enableClose: false,
         children: [
-          {
-            type: "tabset",
-            weight: 70,
-            id: "center-zone",
-            enableDrop: false,
-            enableDrag: false,
-            enableDivide: false,
-            enableClose: false,
-            children: [
-              { type: "tab", id: "preview", name: "Preview", component: "preview", enableClose: false, enableDrag: false }
-            ]
-          },
-          {
-            type: "tabset",
-            weight: 30,
-            id: "bottom-zone",
-            enableDrop: false,
-            enableDrag: false,
-            enableDivide: false,
-            enableClose: false,
-            children: [
-              { type: "tab", id: "timeline", name: "Timeline", component: "timeline", enableClose: false, enableDrag: false }
-            ]
-          }
+          { type: "tab", id: "preview", name: "Preview", component: "preview", enableClose: false }
         ]
       },
       {

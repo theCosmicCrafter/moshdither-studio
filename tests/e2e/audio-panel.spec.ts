@@ -19,12 +19,19 @@ test.beforeEach(async ({ page }) => {
     .catch(() => {});
 });
 
-test("audio panel renders", async ({ page }) => {
-  // Look for audio-related UI elements (kept as a smoke selector)
-  void page.locator("text=Audio, [title*='audio'], [aria-label*='audio']").first();
-  // App should be responsive
-  const toolbar = page.locator("header").first();
-  await expect(toolbar).toBeVisible();
+test("audio panel renders its engine controls", async ({ page }) => {
+  // Audio Reactive shares the right tabset with Mask (active on load), so the
+  // panel is not mounted until its tab is clicked. The old version located an
+  // audio selector, discarded it, and asserted <header> was visible.
+  await page.getByRole("tab", { name: "Audio Reactive" }).click();
+
+  const audio = page.locator(".flexlayout__tab").filter({ hasText: "Audio Engine" });
+  // The file input is display:none and driven by a styled label, so it can
+  // only be asserted as attached, not visible.
+  await expect(audio.getByLabel("Select audio file")).toBeAttached();
+  await expect(audio.getByRole("button", { name: "Use Microphone" })).toBeVisible();
+  await expect(audio.getByRole("button", { name: "Analyze Beats" })).toBeVisible();
+  await expect(audio.getByLabel("Volume")).toBeVisible();
 });
 
 test("audio enable toggle doesn't crash", async ({ page }) => {
@@ -40,13 +47,18 @@ test("audio enable toggle doesn't crash", async ({ page }) => {
   await expect(toolbar).toBeVisible();
 });
 
-test("audio frequency bands display when enabled", async ({ page }) => {
-  // Look for frequency band visualization (kept as a smoke selector)
-  void page
-    .locator("[class*='frequency'], [class*='Frequency'], [class*='audio-band'], canvas")
-    .first();
+test("audio panel exposes its enable toggle and transport", async ({ page }) => {
+  // Renamed from "audio frequency bands display when enabled": the bands only
+  // render once a real audio source is analysed, which the Tauri mock cannot
+  // provide, so the old name promised coverage that was never possible here.
+  // What is assertable without audio is the panel's own controls.
+  await page.getByRole("tab", { name: "Audio Reactive" }).click();
 
-  // App should be responsive regardless
+  const audio = page.locator(".flexlayout__tab").filter({ hasText: "Audio Engine" });
+  await expect(audio.locator("input[type='checkbox']").first()).toBeVisible();
+  for (const control of ["Play", "Pause", "Stop"]) {
+    await expect(audio.getByRole("button", { name: control, exact: true })).toBeVisible();
+  }
   const toolbar = page.locator("header").first();
   await expect(toolbar).toBeVisible();
 });

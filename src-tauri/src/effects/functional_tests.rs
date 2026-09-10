@@ -601,8 +601,45 @@ pub fn run_all_function_tests() -> FunctionTestReport {
     }));
 
     results.push(run_test("mosh_cli_check", "ffglitch", || {
-        // Check if mosh_cli.py exists
-        let candidates = [
+        // Datamoshing now prefers the bundled mosh-cli sidecar, which carries
+        // its own interpreter and numpy; mosh_cli.py plus a system Python is
+        // only the dev fallback. Checking for the script alone reported
+        // "FFglitch export will not work" on exactly the configuration where it
+        // works best -- and reported it as a PASS, which is worse than either
+        // answer on its own.
+        // Installed layout puts the sidecar beside the executable; a dev tree
+        // has the target-suffixed build under src-tauri/bin. Check both from
+        // the exe's own directory AND from the cwd, because this runs from
+        // mosh-verify (src-tauri/target/release) as well as from the app.
+        let mut roots: Vec<std::path::PathBuf> = vec![std::path::PathBuf::from(".")];
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(d) = exe.parent() {
+                roots.push(d.to_path_buf());
+                // src-tauri/target/release -> src-tauri
+                if let Some(p) = d.parent().and_then(|p| p.parent()) {
+                    roots.push(p.to_path_buf());
+                }
+            }
+        }
+        roots.push(std::path::PathBuf::from("src-tauri"));
+        let names = [
+            "mosh-cli.exe",
+            "mosh-cli",
+            "mosh-cli-x86_64-pc-windows-msvc.exe",
+        ];
+        for root in &roots {
+            for n in &names {
+                for cand in [root.join(n), root.join("bin").join(n)] {
+                    if cand.exists() {
+                        return Ok(format!("mosh-cli sidecar found at: {}", cand.display()));
+                    }
+                }
+            }
+        }
+        let scripts = [
+            std::path::Path::new("packages")
+                .join("python-backend")
+                .join("mosh_cli.py"),
             std::path::Path::new("..")
                 .join("..")
                 .join("packages")
@@ -613,12 +650,18 @@ pub fn run_all_function_tests() -> FunctionTestReport {
                 .join("python-backend")
                 .join("mosh_cli.py"),
         ];
-        for c in &candidates {
+        for c in &scripts {
             if c.exists() {
-                return Ok(format!("mosh_cli.py found at: {}", c.display()));
+                return Ok(format!(
+                    "no mosh-cli sidecar; falling back to {} plus a system Python",
+                    c.display()
+                ));
             }
         }
-        Ok("mosh_cli.py not found (FFglitch export will not work)".to_string())
+        // Genuinely broken: neither route exists. This must FAIL rather than
+        // pass with a sad message.
+        Err("no mosh-cli sidecar and no mosh_cli.py -- datamoshing cannot run.              Build it with `npm run build:mosh-sidecar`."
+            .to_string())
     }));
 
     // ── Summary ──────────────────────────────────────────────

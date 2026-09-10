@@ -1,6 +1,6 @@
 import { shaderRegistry } from "../engine/shaders";
 import { EffectShader, RenderPass } from "../engine/webgl2/types";
-import { EffectMeta, StackEntry } from "../store";
+import { EffectMeta, StackEntry, type Keyframe, type AudioBinding } from "../store";
 
 /** Maps a Rust effect ID to its WebGL shader preview equivalent. */
 export interface WebGLMapping {
@@ -585,6 +585,35 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   },
 
   // Audio-Reactive
+  // The four effects below pair with shaders that already existed but had no
+  // Rust counterpart, so nothing could reference them. The band/flux/energy
+  // uniforms they read are injected globally by PreviewViewport for every
+  // pass, so only each effect's own controls need mapping here.
+  //
+  // All are marked inaccurate: the CPU implementations are the export truth and
+  // the shaders approximate them (the waveform trace in particular is a
+  // different curve), so a stack containing one routes through the Rust path
+  // for a faithful preview.
+  "audio_reactive.spectrum": {
+    shaderId: "audioSpectrum",
+    paramMap: { intensity: "u_intensity", bar_count: "u_barCount" },
+    accurate: false,
+  },
+  "audio_reactive.waveform": {
+    shaderId: "audioWaveform",
+    paramMap: { amplitude: "u_amplitude", thickness: "u_thickness", glow: "u_glow" },
+    accurate: false,
+  },
+  "audio_reactive.chromatic": {
+    shaderId: "audioReactiveChromatic",
+    paramMap: { max_shift: "u_maxShift", direction: "u_direction" },
+    accurate: false,
+  },
+  "audio_reactive.pixelate": {
+    shaderId: "audioReactivePixelate",
+    paramMap: { min_block: "u_minBlock", max_block: "u_maxBlock" },
+    accurate: false,
+  },
   "audio_reactive.bass_pulse": {
     shaderId: "audioBassPulse",
     // Rust 'sensitivity' is a multiplier in [0.1, 5] and the shader's
@@ -832,6 +861,21 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
     paramMap: {},
     accurate: false,
   },
+  // Beat-driven siblings of frame_hold. Mapped to pass_through for the same
+  // reason: both need audio AND multiple frames, so there is nothing a
+  // single-frame shader can show. Without an entry at all they fell out of the
+  // conversion table entirely, which forced the whole stack onto the slow CPU
+  // preview path whenever one was present.
+  "datamoshing.beat_hold": {
+    shaderId: "pass_through",
+    paramMap: {},
+    accurate: false,
+  },
+  "datamoshing.beat_smear": {
+    shaderId: "pass_through",
+    paramMap: {},
+    accurate: false,
+  },
   "datamoshing.combine": {
     shaderId: "pass_through",
     paramMap: {},
@@ -1020,6 +1064,38 @@ export function isVideoOnlyEffect(meta: Pick<EffectMeta, "media_type">): boolean
  *  banner in the parameter panel (EffectStack/ParameterPanel.tsx) whenever
  *  `isVideoOnlyEffect` is true and the loaded media is a still image. Kept
  *  in one place so the two surfaces never drift out of sync. */
+/**
+ * Effects that render nothing until a file-valued Select parameter is chosen.
+ *
+ * Their defaults are deliberately empty -- there is no sensible default overlay
+ * or look -- so the effect sits in the stack behaving exactly like a disabled
+ * one, with no indication that it is waiting on a choice. `composite.overlay` is
+ * the obvious case; `color.lut_grading` hits it too whenever it is added from
+ * the effect browser rather than the LUTs tab, which is what fills lut_path in.
+ */
+export const REQUIRES_SELECTION: Record<string, { param: string; message: string }> = {
+  "composite.overlay": {
+    param: "overlay_path",
+    message: "Pick an overlay image — this effect does nothing until one is chosen.",
+  },
+  "color.lut_grading": {
+    param: "lut_path",
+    message: "Pick a look in the LUTs tab — this effect does nothing until one is chosen.",
+  },
+};
+
+/** Message to show when `entry` is waiting on a selection, else null. */
+export function unsetSelectionWarning(
+  effectId: string,
+  params: Record<string, unknown>
+): string | null {
+  const req = REQUIRES_SELECTION[effectId];
+  if (!req) return null;
+  const value = params[req.param];
+  const missing = value === undefined || value === null || value === "";
+  return missing ? req.message : null;
+}
+
 export const VIDEO_ONLY_ON_IMAGE_WARNING =
   "No visible effect on a still image — this effect requires video.";
 
@@ -1048,20 +1124,49 @@ export function stackToRustPayload(
   stack: StackEntry[],
   activeMask: string | null,
   sam3Masks: string[],
-  time?: number
+  time?: number,
+  /** Animated parameters, keyed by stack-entry id then parameter id.
+   *  Pass the store's `keyframes` when EXPORTING: without them the render
+   *  freezes every animated parameter at the playhead's value, which is
+   *  what the file used to contain. */
+  keyframes?: Record<string, Record<string, Keyframe[]>>,
+  /** Parameters driven by an audio feature, keyed by stack-entry id then
+   *  parameter id. Pass the store's `audioBindings` when EXPORTING; the
+   *  backend needs the baked audio too, which exportVideo already sends. */
+  audioBindings?: Record<string, Record<string, AudioBinding>>
 ): Array<{
   effect_id: string;
   params: Record<string, unknown>;
   mask_b64: string | null;
   mask_mode?: string;
+  keyframes?: Record<string, { time: number; value: number; easing: string }[]>;
+  audio_bindings?: Record<string, AudioBinding>;
 }> {
   return stack
     .filter((e) => e.enabled)
-    .map((e) => ({
-      effect_id: e.effectId,
-      params: { ...e.params, ...(time !== undefined ? { time } : {}) },
-      // Use snapshotted maskB64 if available; fall back to live resolution
-      mask_b64: e.maskB64 ?? resolveMaskId(e.maskId, activeMask, sam3Masks),
-      mask_mode: e.maskMode ?? "inside",
-    }));
+    .map((e) => {
+      const bound = audioBindings?.[e.id];
+      const tracks = keyframes?.[e.id];
+      const animated = tracks
+        ? Object.fromEntries(
+            Object.entries(tracks)
+              .filter(([, ks]) => ks.length > 0)
+              .map(([paramId, ks]) => [
+                paramId,
+                [...ks]
+                  .sort((a, b) => a.time - b.time)
+                  .map((k) => ({ time: k.time, value: k.value, easing: k.easing })),
+              ])
+          )
+        : undefined;
+      return {
+        effect_id: e.effectId,
+        params: { ...e.params, ...(time !== undefined ? { time } : {}) },
+        // Use snapshotted maskB64 if available; fall back to live resolution
+        mask_b64: e.maskB64 ?? resolveMaskId(e.maskId, activeMask, sam3Masks),
+        mask_mode: e.maskMode ?? "inside",
+        ...(animated && Object.keys(animated).length > 0 ? { keyframes: animated } : {}),
+        ...(bound && Object.keys(bound).length > 0 ? { audio_bindings: bound } : {}),
+      };
+    });
 }

@@ -47,6 +47,23 @@ export const LUT_PRESETS: LUTPreset[] = [
   { name: "Vintage Blockbuster", url: "/lut/vintage_blockbuster.png" },
 ];
 
+/**
+ * True only for an absolute URL on a different origin than the document.
+ *
+ * Relative paths, blob:, data: and same-origin absolute URLs are all
+ * same-origin and need no crossOrigin attribute.
+ */
+function isCrossOrigin(url: string): boolean {
+  if (/^(blob:|data:)/i.test(url)) return false;
+  try {
+    const base = typeof location !== "undefined" ? location.href : undefined;
+    return new URL(url, base).origin !== (base ? new URL(base).origin : "");
+  } catch {
+    // An unparseable URL is treated as relative, i.e. same-origin.
+    return false;
+  }
+}
+
 export class LUTLoader {
   private gl: WebGL2RenderingContext;
   // LRU-bounded cache of uploaded LUT textures, keyed by URL. Without
@@ -74,10 +91,23 @@ export class LUTLoader {
     }
 
     const img = new Image();
-    img.crossOrigin = "anonymous";
+    // Only request CORS for genuinely cross-origin URLs. Setting it
+    // unconditionally forces a CORS negotiation on every load, including for
+    // the bundled LUTs the packaged app serves from Tauri's custom protocol --
+    // a protocol under no obligation to answer with Access-Control-Allow-Origin.
+    // When that negotiation fails the image errors, loadLUT rejects, and the
+    // preview goes black. blob: and data: URLs are same-origin by definition
+    // and must not carry the attribute either.
+    if (isCrossOrigin(url)) {
+      img.crossOrigin = "anonymous";
+    }
     await new Promise<void>((resolve, reject) => {
       img.onload = () => resolve();
-      img.onerror = reject;
+      // Reject with something that names the URL. `onerror` receives a bare
+      // Event, so passing it straight to reject produced a console line with
+      // no indication of which image failed -- and a failed LUT load was, until
+      // now, the entire explanation for the preview going black.
+      img.onerror = () => reject(new Error(`Failed to load LUT image: ${url}`));
       img.src = url;
     });
 

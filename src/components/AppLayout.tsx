@@ -4,11 +4,15 @@ import {
   listEffects,
   getFrameData,
   getMediaInfo,
+  getMediaMetadata,
   loadMediaFromPath,
   convertFileSrc,
   generateProxy,
 } from "../lib/tauri";
+import { isTauriAvailable } from "../lib/browserFallback";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { useKeyframePlayback } from "../hooks/useKeyframePlayback";
 import { usePlaybackEngine } from "../hooks/usePlaybackEngine";
@@ -21,6 +25,7 @@ import { logger } from "../utils/logger";
 import DockLayout from "./DockSystem/DockLayout";
 import Toolbar from "./Toolbar";
 import StatusBar from "./StatusBar";
+import Timeline from "./Timeline";
 import CommandPalette from "./CommandPalette";
 import OnboardingModal from "./OnboardingModal";
 import CustomUiModal from "./CustomUiModal";
@@ -43,6 +48,8 @@ export default function AppLayout() {
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
   const setFilePath = useAppStore((s) => s.setFilePath);
   const setIsVideo = useAppStore((s) => s.setIsVideo);
+  const setDuration = useAppStore((s) => s.setDuration);
+  const setMediaFps = useAppStore((s) => s.setMediaFps);
   const setProxyUrl = useAppStore((s) => s.setProxyUrl);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const [isDropTarget, setIsDropTarget] = useState(false);
@@ -71,19 +78,65 @@ export default function AppLayout() {
     return cleanup;
   }, [attachSounds]);
 
-  // Guard window close with unsaved changes prompt
+  // Guard window close with an unsaved-changes prompt.
+  //
+  // `beforeunload` alone was INERT in the desktop app. The custom titlebar's
+  // close button calls appWindow.close(), a native window close, and the
+  // webview's beforeunload does not fire for that path -- so the guard worked
+  // in a browser and never once appeared in the app it was written for.
+  // Tauri's own onCloseRequested is the event that actually precedes a native
+  // close. beforeunload is kept for browser mode, where it is the only hook.
   const effectStackLength = useAppStore((s) => s.effectStack.length);
   const mediaLoaded = useAppStore((s) => s.mediaLoaded);
   useEffect(() => {
+    const hasWork = () =>
+      useAppStore.getState().mediaLoaded && useAppStore.getState().effectStack.length > 0;
+
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (mediaLoaded && effectStackLength > 0) {
+      if (hasWork()) {
         e.preventDefault();
         e.returnValue = "You have unsaved changes in your project session.";
         return e.returnValue;
       }
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
-    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+
+    let unlisten: (() => void) | undefined;
+    // try/catch, not just .catch(): getCurrentWindow() throws SYNCHRONOUSLY when
+    // __TAURI_INTERNALS__ is present but incomplete (it reads
+    // metadata.currentWindow). A synchronous throw inside useEffect is not
+    // caught by a promise handler -- React surfaces it to the ErrorBoundary and
+    // the whole UI goes down. That is exactly what happened under the E2E Tauri
+    // mock, which provides invoke() and no metadata, so this guard took the app
+    // out in every spec that used it.
+    try {
+      if (isTauriAvailable()) {
+        void getCurrentWindow()
+          .onCloseRequested(async (event) => {
+            if (!hasWork()) return;
+            // The session is autosaved every few seconds and offered back on
+            // the next launch, so this asks rather than warns of loss.
+            const leave = await confirm(
+              "Close MoshDither Studio? Your session is autosaved and will be offered back next time you open it.",
+              { title: "Close", kind: "warning" }
+            );
+            if (!leave) event.preventDefault();
+          })
+          .then((fn) => {
+            unlisten = fn;
+          })
+          .catch(() => {
+            /* no window handle: fall back to beforeunload alone */
+          });
+      }
+    } catch {
+      /* Tauri globals incomplete: beforeunload remains as the only guard */
+    }
+
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      unlisten?.();
+    };
   }, [mediaLoaded, effectStackLength]);
 
   // Load available effects on mount
@@ -119,21 +172,40 @@ export default function AppLayout() {
         setOriginalDataUrl(frame);
 
         if (isVideoFile && path) {
+          // The clip's real length. Without this `duration` stays at the store
+          // default of 10, so the timeline claims every video is ten seconds,
+          // playback stops there, and an export with no out-point set TRIMS
+          // there -- a 35-second clip exported as 10.
+          try {
+            const meta = await getMediaMetadata(path);
+            if (typeof meta.duration === "number" && meta.duration > 0) {
+              setDuration(meta.duration);
+            }
+            // The clip's real frame rate, so frame stepping and the frame
+            // counter land on actual frames. Everything assumed 30 before,
+            // so a 24 fps clip showed frame numbers that did not exist.
+            setMediaFps(typeof meta.fps === "number" && meta.fps > 0 ? meta.fps : 30);
+          } catch (err) {
+            // A probe failure must not block loading the media; the timeline
+            // just keeps whatever length it had.
+            logger.warn("metadata", "Could not read media duration", { err: String(err) });
+          }
           try {
             const proxy = await generateProxy(path, 1280, 28);
             setProxyUrl(convertFileSrc(proxy));
           } catch (err) {
-            console.warn("[AppLayout] Proxy generation failed:", err);
+            logger.warn("proxy", "Proxy generation failed", { err: String(err) });
             setProxyUrl(null);
           }
         } else {
           setProxyUrl(null);
+          setMediaFps(30);
         }
         return true;
       }
       return false;
     } catch (err) {
-      console.error("[AppLayout] refreshPreview failed:", err);
+      logger.error("preview", "refreshPreview failed", { err: String(err) });
       const msg = err instanceof Error ? err.message : String(err);
       setStatusMessage(`Preview refresh failed: ${msg}`);
       return false;
@@ -145,10 +217,56 @@ export default function AppLayout() {
     setOriginalDataUrl,
     setStatusMessage,
     setIsVideo,
+    setDuration,
+    setMediaFps,
     setProxyUrl,
   ]);
 
-  // Drag-and-drop file support via Tauri webview API
+  // Honour a reload request raised from anywhere in the app.
+  //
+  // openProject used to call setFilePath and report "Project loaded" without
+  // ever loading the media behind it, so the app kept showing the PREVIOUS
+  // file while filePath -- and therefore every export, effect render and SAM3
+  // call -- pointed somewhere else.
+  const mediaReloadToken = useAppStore((s) => s.mediaReloadToken);
+  useEffect(() => {
+    if (mediaReloadToken === 0) return;
+    const path = useAppStore.getState().filePath;
+    if (!path) return;
+    void (async () => {
+      try {
+        setStatusMessage(`Loading ${path}...`);
+        await loadMediaFromPath(path);
+        const synced = await refreshPreview();
+        setStatusMessage(
+          synced ? `Loaded: ${path}` : `Loaded ${path}, but the preview did not refresh`,
+          synced ? undefined : "error"
+        );
+      } catch (err) {
+        setStatusMessage(`Load error: ${err instanceof Error ? err.message : String(err)}`, "error");
+      }
+    })();
+  }, [mediaReloadToken, refreshPreview, setStatusMessage]);
+
+
+  // Drag-and-drop file support via Tauri webview API.
+  //
+  // INERT while tauri.conf.json sets `dragDropEnabled: false`, which it does so
+  // that flexlayout's panel dragging works: with the native handler enabled,
+  // WebView2 swallows drag operations before the page sees them, so HTML5
+  // drag-and-drop -- which is how flexlayout moves tabs between regions -- did
+  // nothing inside the app while working perfectly in a browser.
+  //
+  // Dropping files still works: PreviewViewport's HTML5 dropzone reads them via
+  // FileReader and loadMediaFromBase64. That route was previously dead code in
+  // the desktop app for the same reason. It does mean a dropped file travels
+  // through the webview as base64 rather than as a path, which is heavy for
+  // large videos -- File > Open still passes a path directly and is the better
+  // route for those.
+  //
+  // This listener is kept rather than deleted: re-enabling dragDropEnabled is a
+  // one-line change if the trade-off ever needs revisiting, and the registration
+  // is harmless when the events never arrive.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
 
@@ -179,7 +297,11 @@ export default function AppLayout() {
                 try {
                   await loadMediaFromPath(path);
                   const synced = await refreshPreview();
-                  setStatusMessage(synced ? `Loaded: ${path}` : `Loaded: ${path} (preview sync pending)`);
+                  if (synced) {
+                    setStatusMessage(`Loaded: ${path}`);
+                  } else {
+                    setStatusMessage(`Loaded ${path}, but the preview did not refresh`, "error");
+                  }
                 } catch (err: unknown) {
                   const msg = err instanceof Error ? err.message : String(err);
                   setStatusMessage(`Load error: ${msg}`);
@@ -217,6 +339,10 @@ export default function AppLayout() {
       <div ref={workspaceRef} className="flex-1 relative min-h-0 overflow-hidden">
         <DockLayout isDropTarget={isDropTarget} />
       </div>
+
+      {/* Transport strip -- time lives here, under the whole workspace,
+          not in a dock panel. See Timeline/index.tsx. */}
+      <Timeline />
 
       {/* Bottom Status */}
       <StatusBar />

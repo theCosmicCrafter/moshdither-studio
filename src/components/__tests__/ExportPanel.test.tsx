@@ -4,7 +4,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { useAppStore, type EffectMeta } from "../../store";
-import { cancelExport } from "../../lib/tauri";
+import { cancelExport, exportVideo } from "../../lib/tauri";
+import { save } from "@tauri-apps/plugin-dialog";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(() => Promise.resolve({})),
@@ -51,6 +52,7 @@ vi.mock("../../hooks/useBatchQueue", () => ({
 }));
 
 import ExportPanel from "../ExportPanel";
+import { exportDimensions } from "../../utils/exportDimensions";
 
 function mockEffectMeta(id: string, name: string, category: string): EffectMeta {
   return {
@@ -96,6 +98,8 @@ describe("ExportPanel", () => {
   beforeEach(() => {
     resetStore();
     localStorage.clear();
+    // Call counts must not leak between tests; implementations are kept.
+    vi.mocked(cancelExport).mockClear();
   });
 
   afterEach(() => {
@@ -239,12 +243,41 @@ describe("ExportPanel", () => {
     expect(screen.getByText("1:1")).toBeInTheDocument();
   });
 
+  // The mode dropdown used to be the whole UI: every mode ran on its script's
+  // baked-in constants and applyFfglitch was called with `{}`.
+  describe("datamosh mode knobs", () => {
+    it("renders the selected mode's knobs and sends changes to the store", () => {
+      useAppStore.setState({ ffglitchMode: "zoom", ffglitchParams: {} });
+      render(<ExportPanel />);
+      const slider = screen.getByLabelText("Zoom");
+      fireEvent.change(slider, { target: { value: "55" } });
+      expect(useAppStore.getState().ffglitchParams.zoom).toEqual({ zoom: 55 });
+    });
+
+    it("switching mode shows that mode's knobs", () => {
+      useAppStore.setState({ ffglitchMode: "zoom", ffglitchParams: {} });
+      render(<ExportPanel />);
+      fireEvent.change(screen.getByLabelText(/Bitstream datamosh/), { target: { value: "sort" } });
+      expect(screen.getByLabelText("Keep the first frame")).toBeInTheDocument();
+      expect(screen.queryByLabelText("Zoom")).not.toBeInTheDocument();
+    });
+
+    it("Reset returns a mode to its defaults", () => {
+      useAppStore.setState({ ffglitchMode: "zoom", ffglitchParams: { zoom: { zoom: 5 } } });
+      render(<ExportPanel />);
+      fireEvent.click(screen.getByTitle("Back to this mode's defaults"));
+      expect(useAppStore.getState().ffglitchParams.zoom).toBeUndefined();
+    });
+  });
+
   it("shows in/out range when set", () => {
     useAppStore.getState().setInPoint(2);
     useAppStore.getState().setOutPoint(8);
     render(<ExportPanel />);
-    expect(screen.getByText(/IN 2s/)).toBeInTheDocument();
-    expect(screen.getByText(/OUT 8s/)).toBeInTheDocument();
+    // Timecode, not bare seconds: in/out are frame-accurate now, and "2.4999s"
+    // is not a readout anyone wants.
+    expect(screen.getByText(/IN 00:02\.00/)).toBeInTheDocument();
+    expect(screen.getByText(/OUT 00:08\.00/)).toBeInTheDocument();
   });
 
   it("does not show export button when export is running", () => {
@@ -259,13 +292,89 @@ describe("ExportPanel", () => {
     expect(screen.getByText("Cancel")).toBeInTheDocument();
   });
 
-  it("cancel button resets export state", () => {
+  // This used to assert exportIsRunning === false and progress === 0 the
+  // instant Cancel was clicked -- which was the lie being removed: the backend
+  // ran on for the rest of the decode or effects stage, holding the export
+  // slot, while the UI claimed it was done. Cancel now means REQUESTED.
+  it("cancel button requests cancellation and says so, without pretending it is done", () => {
     useAppStore.getState().setExportIsRunning(true);
     useAppStore.getState().setExportProgress(50);
     render(<ExportPanel />);
     fireEvent.click(screen.getByText("Cancel"));
+    expect(useAppStore.getState().exportIsRunning).toBe(true);
+    expect(useAppStore.getState().exportCancelRequested).toBe(true);
+    expect(useAppStore.getState().statusMessage).toContain("Cancelling");
+    expect(screen.getByText("Cancelling…")).toBeInTheDocument();
+  });
+
+  it("a second click while cancelling does not re-notify the backend", () => {
+    useAppStore.getState().setExportIsRunning(true);
+    render(<ExportPanel />);
+    fireEvent.click(screen.getByText("Cancel"));
+    fireEvent.click(screen.getByText("Cancelling…"));
+    expect(vi.mocked(cancelExport)).toHaveBeenCalledTimes(1);
+  });
+
+  it("a cancelled export ends when the backend returns, and reads as cancelled, not failed", async () => {
+    let rejectRun: ((e: Error) => void) | undefined;
+    vi.mocked(exportVideo).mockImplementationOnce(
+      () => new Promise((_, reject) => { rejectRun = reject; })
+    );
+    useAppStore.getState().setMediaLoaded(true);
+    useAppStore.getState().setMediaInfo({ width: 1920, height: 1080 });
+    useAppStore.getState().setFilePath("/test/video.mp4");
+    useAppStore.getState().addToStack(mockEffectMeta("dithering.bayer", "Bayer", "dithering"));
+    render(<ExportPanel />);
+
+    fireEvent.click(screen.getByText("Export Video"));
+    await waitFor(() => expect(useAppStore.getState().exportIsRunning).toBe(true));
+
+    fireEvent.click(screen.getByText("Cancel"));
+    expect(vi.mocked(cancelExport)).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().exportIsRunning).toBe(true);
+    expect(screen.getByText("Cancelling…")).toBeInTheDocument();
+
+    // The backend noticed the flag and came back with its cancel error.
+    rejectRun!(new Error("Export cancelled by user"));
+    await waitFor(() => expect(useAppStore.getState().statusMessage).toBe("Export cancelled"));
     expect(useAppStore.getState().exportIsRunning).toBe(false);
-    expect(useAppStore.getState().exportProgress).toBe(0);
+    expect(useAppStore.getState().exportCancelRequested).toBe(false);
+  });
+
+  it("a failure with no cancel pending still reads as a failure", async () => {
+    vi.mocked(exportVideo).mockRejectedValueOnce(new Error("disk full"));
+    useAppStore.getState().setMediaLoaded(true);
+    useAppStore.getState().setMediaInfo({ width: 1920, height: 1080 });
+    useAppStore.getState().setFilePath("/test/video.mp4");
+    useAppStore.getState().addToStack(mockEffectMeta("dithering.bayer", "Bayer", "dithering"));
+    render(<ExportPanel />);
+    fireEvent.click(screen.getByText("Export Video"));
+    await waitFor(() => expect(useAppStore.getState().statusMessage).toContain("Export failed: disk full"));
+    expect(useAppStore.getState().exportIsRunning).toBe(false);
+  });
+
+  // A cancelled FFglitch run used to leave exportCancelRequested true forever,
+  // so the NEXT ordinary export's failure was reported as a cancellation.
+  it("a cancelled FFglitch export clears the cancel flag when it ends", async () => {
+    vi.mocked(save).mockResolvedValueOnce("/out/x.mp4");
+    let rejectRun: ((e: Error) => void) | undefined;
+    vi.mocked(exportVideo).mockImplementationOnce(
+      () => new Promise((_, reject) => { rejectRun = reject; })
+    );
+    useAppStore.getState().setMediaLoaded(true);
+    useAppStore.getState().setMediaInfo({ width: 1920, height: 1080 });
+    useAppStore.getState().setFilePath("/test/video.mp4");
+    useAppStore.getState().addToStack(mockEffectMeta("dithering.bayer", "Bayer", "dithering"));
+    render(<ExportPanel />);
+
+    fireEvent.click(screen.getByText(/Export FFglitch/));
+    await waitFor(() => expect(useAppStore.getState().exportIsRunning).toBe(true));
+    fireEvent.click(screen.getByText("Cancel"));
+    // Reject before the intermediate is written, so no temp cleanup is reached.
+    rejectRun!(new Error("Export cancelled by user"));
+    await waitFor(() => expect(useAppStore.getState().statusMessage).toBe("Export cancelled"));
+    expect(useAppStore.getState().exportIsRunning).toBe(false);
+    expect(useAppStore.getState().exportCancelRequested).toBe(false);
   });
 
   it("cancel button notifies the backend, not just local UI state", () => {
@@ -279,5 +388,51 @@ describe("ExportPanel", () => {
     render(<ExportPanel />);
     fireEvent.click(screen.getByText("Cancel"));
     expect(cancelExport).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * "Lock Aspect Ratio" and its six ratio chips wrote to the store and nothing
+ * read them; the control had no effect on any export.
+ */
+describe("exportDimensions", () => {
+  const src = { width: 640, height: 1146 }; // the vertical test clip
+  const p1080 = { w: 1920, h: 1080 };
+  const source = { w: 0, h: 0 };
+
+  it("passes the preset through untouched when nothing is locked", () => {
+    expect(exportDimensions(p1080, null, src)).toEqual({ width: 1920, height: 1080 });
+  });
+
+  it("lets 'Source' mean source when nothing is locked", () => {
+    expect(exportDimensions(source, null, src)).toEqual({ width: undefined, height: undefined });
+  });
+
+  it("reshapes a preset to the locked ratio without growing it", () => {
+    // 1920x1080 locked to 1:1 -> the 1080 side is kept.
+    expect(exportDimensions(p1080, 1, src)).toEqual({ width: 1080, height: 1080 });
+    // ...and to 9:16 -> still bounded by 1080 tall.
+    const portrait = exportDimensions(p1080, 9 / 16, src);
+    expect(portrait.height).toBe(1080);
+    expect(portrait.width).toBe(608);
+  });
+
+  it("derives the box from the media when the resolution is 'Source'", () => {
+    const r = exportDimensions(source, 16 / 9, src);
+    expect(r.width).toBe(640);
+    expect(r.height).toBe(360);
+  });
+
+  it("always returns even dimensions, which yuv420p requires", () => {
+    for (const ratio of [16 / 9, 4 / 3, 1, 9 / 16, 21 / 9, 3 / 2]) {
+      const r = exportDimensions(p1080, ratio, src);
+      expect(r.width! % 2, `width for ${ratio}`).toBe(0);
+      expect(r.height! % 2, `height for ${ratio}`).toBe(0);
+    }
+  });
+
+  it("falls back to no override when a lock has nothing to work from", () => {
+    expect(exportDimensions(source, 16 / 9, null)).toEqual({ width: undefined, height: undefined });
+    expect(exportDimensions(p1080, Number.NaN, src)).toEqual({ width: 1920, height: 1080 });
   });
 });

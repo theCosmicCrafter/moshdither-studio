@@ -104,6 +104,8 @@ impl EffectRegistry {
         self.register(super::artistic::Grayscale::default());
 
         // Datamoshing
+        self.register(super::datamoshing::beat_sync::BeatHold);
+        self.register(super::datamoshing::beat_sync::BeatSmear);
         self.register(super::datamoshing::IFrameRemoval::default());
         self.register(super::datamoshing::IFrameRemovalAdvanced);
         self.register(super::datamoshing::ClassicDatamosh::default());
@@ -138,6 +140,10 @@ impl EffectRegistry {
         self.register(super::audio_reactive::BeatGlitch);
         self.register(super::audio_reactive::SpectralShift);
         self.register(super::audio_reactive::AudioDither);
+        self.register(super::audio_visual::AudioSpectrum);
+        self.register(super::audio_visual::AudioWaveform);
+        self.register(super::audio_visual::AudioChromatic);
+        self.register(super::audio_visual::AudioPixelate);
     }
 
     /// Retired effect IDs and what they now resolve to.

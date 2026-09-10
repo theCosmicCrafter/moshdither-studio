@@ -50,6 +50,14 @@ function saveAutoSave(session: ProjectSession) {
   }
 }
 
+export function clearAutoSave() {
+  try {
+    localStorage.removeItem(AUTO_SAVE_KEY);
+  } catch {
+    // Ignore storage errors
+  }
+}
+
 function loadRecentProjects(): RecentProject[] {
   try {
     const raw = localStorage.getItem(RECENT_PROJECTS_KEY);
@@ -169,22 +177,29 @@ export function useProjectSession() {
         store.setFilePath(session.filePath);
         try {
           await loadMediaFromPath(session.filePath);
-          if (onRefreshPreview) {
-            await onRefreshPreview();
-          }
-          mediaRestored = true;
+          // Honour what the refresh reports. It returns false when the backend
+          // says the media is not loaded yet, and it is the call that populates
+          // originalDataUrl -- which PreviewViewport requires before it will
+          // render the WebGL preview at all. Treating a failed refresh as
+          // success meant the status bar claimed "Session restored (N effects)"
+          // while the preview stayed black, with no error anywhere.
+          mediaRestored = onRefreshPreview ? await onRefreshPreview() : true;
         } catch (err) {
           console.error("[useProjectSession] Failed to load media from filePath:", err);
+          // The file has moved or been deleted since the session was saved.
+          // Drop the path: the base64 fallback below can still restore what the
+          // preview shows, but EXPORT reads filePath, so leaving a dead one set
+          // meant a session that previewed perfectly failed at export with
+          // "Path does not exist ... (os error 2)" -- naming a file the user had
+          // not touched since, at the end of the one operation that mattered.
+          store.setFilePath(null);
         }
       }
 
       if (!mediaRestored && session.mediaDataUrl) {
         try {
           await loadMediaFromBase64(session.mediaDataUrl);
-          if (onRefreshPreview) {
-            await onRefreshPreview();
-          }
-          mediaRestored = true;
+          mediaRestored = onRefreshPreview ? await onRefreshPreview() : true;
         } catch (err) {
           console.error("[useProjectSession] Failed to load media from base64:", err);
         }
@@ -193,7 +208,7 @@ export function useProjectSession() {
       setStatusMessage(
         mediaRestored
           ? `Session restored (${session.effectStack?.length ?? 0} effects)`
-          : "Session restored"
+          : "Session restored, but the media could not be reloaded - reopen the file"
       );
     },
     [setStatusMessage]

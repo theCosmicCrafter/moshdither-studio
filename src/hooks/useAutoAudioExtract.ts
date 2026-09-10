@@ -1,4 +1,5 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { logger } from "../utils/logger";
 import { useEffect, useRef } from "react";
 import { AudioFeatureExtractor } from "../engine/audio/AudioFeatureExtractor";
 import { extractAudioFromVideo } from "../lib/tauri";
@@ -130,10 +131,15 @@ export function useAutoAudioExtract() {
             "Video has no audio track — load a separate audio file for audio-reactive effects"
           );
         } else {
-          // Don't spam the status bar on every load failure — log to console
-          // and set a muted status. The user can still load audio manually.
-          console.warn("[useAutoAudioExtract] Auto-extract failed:", msg);
-          setStatusMessage("Audio auto-extract failed (see console)");
+          // Don't spam the status bar on every load failure -- record the
+          // cause in the log and set a muted status. The user can still load
+          // audio manually.
+          //
+          // This used to say "see console" while writing to console.warn, in a
+          // release build that has no console: it directed the user to a place
+          // that does not exist, for information that was never written down.
+          logger.warn("audio", "Auto-extract failed", { err: msg });
+          setStatusMessage("Audio auto-extract failed — details are in the log file");
         }
         setAudioManifestProgress(0, "");
       } finally {

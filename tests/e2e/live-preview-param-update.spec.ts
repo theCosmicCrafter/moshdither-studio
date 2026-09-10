@@ -60,12 +60,18 @@ test("changing a static effect's parameter updates the WebGL live preview canvas
     page.locator('[data-testid="preview-viewport"] span', { hasText: /test_image\.png/i }).first()
   ).toBeVisible({ timeout: 10000 });
 
-  // isPlaying defaults to true app-wide (store/index.ts), which alone
-  // satisfies the render loop's `hasAnimatedEffect || audioEnabled ||
-  // isPlaying` condition and keeps it looping regardless of the bug under
-  // test -- pause explicitly so the loop only continues if something in the
-  // stack is actually animated (it isn't, for Bayer).
-  await page.getByRole("button", { name: "Pause playback" }).click();
+  // The render loop must not be running for its own reasons, or it would mask
+  // the bug under test: a parameter change has to be what redraws the canvas.
+  //
+  // isPlaying now defaults to FALSE, so the app already starts stopped and the
+  // Timeline button reads "Play". It used to default to true, which is why this
+  // step existed at all. Clicking whichever button is present keeps the test
+  // honest either way rather than encoding today's default.
+  const pause = page.getByTitle("Pause");
+  if (await pause.count()) {
+    await pause.click();
+  }
+  await expect(page.getByTitle("Play").first()).toBeVisible();
 
   // Add Bayer Dither -- a static effect (no animated shader), previewed via
   // an accurate WebGL shader (not routed to the CPU backend), exactly the

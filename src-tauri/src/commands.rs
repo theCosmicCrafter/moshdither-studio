@@ -1,8 +1,8 @@
 #![allow(clippy::too_many_arguments)]
 
 use crate::effects::{
-    blend_mask, functional_tests::run_all_function_tests, verification::verify_all_effects,
-    Effect, EffectCategory, EffectMeta, EffectRegistry, Frame, Mask,
+    blend_mask, functional_tests::run_all_function_tests, verification::verify_all_effects, Effect,
+    EffectCategory, EffectMeta, EffectRegistry, Frame, Mask,
 };
 use crate::ffmpeg::{
     decode_video, encode_video, extract_audio_to_wav, ffedit_binary, ffgac_binary, ffmpeg_binary,
@@ -15,7 +15,7 @@ use image::ImageFormat;
 use rayon::prelude::*;
 use serde_json::json;
 use std::io::Cursor;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -300,24 +300,77 @@ fn process_frame_with_mask(
     mode: &str,
 ) -> std::result::Result<Frame, String> {
     let blend_needed = needs_mask_blend(effect, mask);
-    let previous = if blend_needed {
-        Some(working.clone())
-    } else {
-        None
-    };
 
     let clamped_params = crate::effects::clamp_for_effect(effect, params);
     let mut result = effect
         .process_frame(working, mask, &clamped_params)
         .map_err(|e| e.to_string())?;
 
+    // `working` is borrowed for the whole call and process_frame returns an
+    // owned Frame, so the blend can read the caller's frame directly. This
+    // used to clone it first -- a full frame per call, for nothing.
     if blend_needed {
-        if let (Some(previous), Some(m)) = (previous.as_ref(), mask) {
-            blend_mask(&mut result, previous, m, mode).map_err(|e| e.to_string())?;
+        if let Some(m) = mask {
+            blend_mask(&mut result, working, m, mode).map_err(|e| e.to_string())?;
         }
     }
 
     Ok(result)
+}
+
+/// Process one frame IN PLACE, blending the mask against the frame's own
+/// previous contents.
+///
+/// The export loop used to `collect()` every effect's output into a second
+/// Vec while the input Vec was still alive, and to clone the whole sequence
+/// beforehand for the mask blend -- three copies of the clip for one masked
+/// effect. Writing each frame back where it came from drops the input the
+/// instant the output replaces it, so the extra memory is one frame per
+/// rayon worker instead of one more copy of the clip.
+///
+/// No clamp here: the export loop clamps the static map once and re-clamps
+/// after keyframe/audio injection; a third pass per frame would be waste.
+fn apply_frame_in_place(
+    effect: &dyn Effect,
+    frame: &mut Frame,
+    mask: Option<&Mask>,
+    params: &serde_json::Map<String, serde_json::Value>,
+    blend: bool,
+    mode: &str,
+) -> std::result::Result<(), String> {
+    let mut out = effect
+        .process_frame(&*frame, mask, params)
+        .map_err(|e| e.to_string())?;
+    if let (true, Some(m)) = (blend, mask) {
+        blend_mask(&mut out, &*frame, m, mode).map_err(|e| e.to_string())?;
+    }
+    *frame = out;
+    Ok(())
+}
+
+/// Blend a mask into `frames` against the matching frame of `previous`.
+///
+/// For the temporal branch only: a temporal effect returns an owned segment,
+/// so the input survives as `previous` anyway and can be the blend source.
+/// Zip semantics -- the caller checks the lengths match first; a
+/// frame-repeating datamosh returns MORE frames than it was given, and the
+/// old `prev[i]` indexed straight past the end and panicked.
+fn blend_segment_against(
+    previous: &[Frame],
+    frames: &mut [Frame],
+    mask: &Mask,
+    mode: &str,
+    cancel: &AtomicBool,
+) -> std::result::Result<(), String> {
+    frames
+        .par_iter_mut()
+        .zip(previous.par_iter())
+        .try_for_each(|(f, p)| {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
+            }
+            blend_mask(f, p, mask, mode).map_err(|e| e.to_string())
+        })
 }
 
 #[derive(serde::Deserialize)]
@@ -327,6 +380,204 @@ pub struct EffectCall {
     pub mask_b64: Option<String>,
     #[serde(default)]
     pub mask_mode: Option<String>,
+    /// Animated parameters, keyed by parameter id.
+    ///
+    /// The UI has offered a keyframe diamond on every numeric parameter for
+    /// a long time, and the preview honoured them -- but the export payload
+    /// carried one static params map per effect, so the rendered file froze
+    /// every animated parameter at whatever the playhead happened to hold
+    /// when Export was clicked. The animation was visible and unexportable.
+    #[serde(default)]
+    pub keyframes: Option<std::collections::HashMap<String, Vec<KeyframePoint>>>,
+    /// Parameters driven by an audio feature, keyed by parameter id.
+    ///
+    /// "Bind Audio" wrote one of these for any parameter and nothing ever
+    /// applied it -- not in the preview, not here. The control said "Audio
+    /// Bound", offered source/range/attack/decay editors, and the parameter
+    /// never moved.
+    #[serde(default)]
+    pub audio_bindings: Option<std::collections::HashMap<String, AudioBindingSpec>>,
+}
+
+/// One audio binding, as the frontend stores it (`AudioBinding` in
+/// src/store/index.ts).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioBindingSpec {
+    pub source: String,
+    pub input_min: f64,
+    pub input_max: f64,
+    pub output_min: f64,
+    pub output_max: f64,
+    pub attack: f64,
+    pub decay: f64,
+    #[serde(default)]
+    pub gate_enabled: bool,
+    #[serde(default)]
+    pub gate_threshold: f64,
+    #[serde(default)]
+    pub invert: bool,
+}
+
+/// Smooths audio-driven parameters across an export, one channel per
+/// parameter.
+///
+/// Attack/decay are stateful -- the value chases its target frame by frame --
+/// so this has to walk the clip in order and carry state, exactly as
+/// AudioParameterMapper does for the preview. The arithmetic below is a
+/// deliberate mirror of `processChannel` in
+/// src/engine/audio/AudioParameterMapper.ts; if they drift, an export stops
+/// matching the preview it was approved from.
+#[derive(Default)]
+struct AudioBindingSmoother {
+    state: std::collections::HashMap<String, f64>,
+}
+
+impl AudioBindingSmoother {
+    fn value(
+        &mut self,
+        param_id: &str,
+        binding: &AudioBindingSpec,
+        features: &crate::audio::FrameAudioFeatures,
+        dt: f64,
+    ) -> f64 {
+        let raw = features.by_binding_source(&binding.source).unwrap_or(0.0);
+        let range = binding.input_max - binding.input_min;
+        let normalized = if range > 0.0 {
+            (raw - binding.input_min) / range
+        } else {
+            0.0
+        };
+        let clamped = normalized.clamp(0.0, 1.0);
+        let gated = if binding.gate_enabled && clamped < binding.gate_threshold {
+            0.0
+        } else {
+            clamped
+        };
+        let target = gated * (binding.output_max - binding.output_min) + binding.output_min;
+
+        let current = *self.state.get(param_id).unwrap_or(&0.0);
+        let attack_factor = 1.0 - (-dt * (binding.attack * 20.0 + 1.0)).exp();
+        let decay_factor = 1.0 - (-dt * (binding.decay * 10.0 + 0.5)).exp();
+        let factor = if target > current {
+            attack_factor
+        } else {
+            decay_factor
+        };
+        let next = current + (target - current) * factor;
+        self.state.insert(param_id.to_string(), next);
+
+        if binding.invert {
+            binding.output_max - (next - binding.output_min)
+        } else {
+            next
+        }
+    }
+
+    /// Apply every binding for one frame. Returns true if anything changed.
+    fn inject(
+        &mut self,
+        bindings: Option<&std::collections::HashMap<String, AudioBindingSpec>>,
+        params: &mut serde_json::Map<String, serde_json::Value>,
+        features: Option<&crate::audio::FrameAudioFeatures>,
+        dt: f64,
+    ) -> bool {
+        let (Some(bindings), Some(features)) = (bindings, features) else {
+            return false;
+        };
+        let mut touched = false;
+        for (param_id, binding) in bindings {
+            let v = self.value(param_id, binding, features, dt);
+            params.insert(param_id.clone(), serde_json::Value::from(v));
+            touched = true;
+        }
+        touched
+    }
+}
+
+/// One keyframe, as the frontend stores it (`src/store/index.ts`).
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct KeyframePoint {
+    pub time: f64,
+    pub value: f64,
+    #[serde(default)]
+    pub easing: Option<String>,
+}
+
+/// Mirror of `applyEasing` in `src/store/index.ts`. The two must agree or
+/// the exported file will not match the preview the user approved.
+fn apply_easing(t: f64, easing: &str) -> f64 {
+    if easing == "hold" {
+        return 0.0;
+    }
+    let tc = if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) };
+    match easing {
+        "easeIn" => tc * tc,
+        "easeOut" => 1.0 - (1.0 - tc) * (1.0 - tc),
+        "easeInOut" => {
+            if tc < 0.5 {
+                2.0 * tc * tc
+            } else {
+                1.0 - (-2.0 * tc + 2.0).powi(2) / 2.0
+            }
+        }
+        // "linear" and anything unrecognised
+        _ => tc,
+    }
+}
+
+/// Value of one animated parameter at `time`, or None if the track is empty.
+///
+/// Mirror of `getKeyframeValue` in the store: hold before the first key and
+/// after the last, interpolate between neighbours with the LEFT key's easing.
+fn keyframe_value_at(track: &[KeyframePoint], time: f64) -> Option<f64> {
+    if track.is_empty() {
+        return None;
+    }
+    // The frontend keeps tracks sorted by time; do not assume it.
+    let mut idx = 0usize;
+    while idx < track.len() && track[idx].time < time {
+        idx += 1;
+    }
+    if idx < track.len() && (track[idx].time - time).abs() < f64::EPSILON {
+        return Some(track[idx].value);
+    }
+    if idx == 0 {
+        return Some(track[0].value);
+    }
+    if idx >= track.len() {
+        return Some(track[track.len() - 1].value);
+    }
+    let k1 = &track[idx - 1];
+    let k2 = &track[idx];
+    let span = k2.time - k1.time;
+    if span <= 0.0 {
+        return Some(k2.value);
+    }
+    let eased = apply_easing(
+        (time - k1.time) / span,
+        k1.easing.as_deref().unwrap_or("linear"),
+    );
+    Some(k1.value + (k2.value - k1.value) * eased)
+}
+
+/// Overwrite animated parameters with their value at `time`.
+fn inject_keyframe_params(
+    keyframes: Option<&std::collections::HashMap<String, Vec<KeyframePoint>>>,
+    params: &mut serde_json::Map<String, serde_json::Value>,
+    time: f64,
+) -> bool {
+    let Some(tracks) = keyframes else {
+        return false;
+    };
+    let mut touched = false;
+    for (param_id, track) in tracks {
+        if let Some(v) = keyframe_value_at(track, time) {
+            params.insert(param_id.clone(), serde_json::Value::from(v));
+            touched = true;
+        }
+    }
+    touched
 }
 
 /// Compares two effect-call params maps for cache-hit purposes. Effects
@@ -645,6 +896,13 @@ pub fn save_processed_image(
 /// final encode is scaled to `width`/`height` (or source dimensions if
 /// unspecified) regardless of the processing scale, so a 4K export can
 /// still process at 1080p internally and upscale on output.
+/// Hard ceiling on frames in one export, whatever the duration box says.
+///
+/// 30 minutes at 60 fps. The animation-length control clamps to 120 s, but the
+/// transport's duration box does not, and it is what an export without an out
+/// point uses -- so a typo of 12000 in that box asked for 360 000 frames.
+const MAX_EXPORT_FRAMES: usize = 108_000;
+
 #[tauri::command]
 pub async fn export_video(
     state: State<'_, AppState>,
@@ -666,8 +924,17 @@ pub async fn export_video(
     include_audio: Option<bool>,
     processing_scale: Option<usize>,
 ) -> std::result::Result<String, String> {
-    let validated_source = validate_io_path(&source_path, true)?;
-    let validated_output = validate_io_path(&output_path, false)?;
+    // Logged BEFORE validation, which is the first thing that can fail. A
+    // missing source returned here with no trace at all: the log showed a clean
+    // startup and nothing else, so an export that died on its first line looked
+    // identical to an export that was never attempted.
+    tracing::info!("export_video requested: source={source_path} output={output_path}");
+    let validated_source = validate_io_path(&source_path, true).inspect_err(|e| {
+        tracing::error!("export_video rejected source {source_path}: {e}");
+    })?;
+    let validated_output = validate_io_path(&output_path, false).inspect_err(|e| {
+        tracing::error!("export_video rejected output {output_path}: {e}");
+    })?;
     let registry = state.registry.clone();
     let cancel = state.export_cancel.clone();
 
@@ -785,18 +1052,32 @@ fn export_video_blocking(
     // chose n px on the longest side.
     tracing::info!(
         "Planning export decode for source: {} (preferred scale: {:?})",
-        source_path, processing_scale
+        source_path,
+        processing_scale
     );
     let _ = app_handle.emit(
         "export-progress",
         serde_json::json!({"stage": "planning", "progress": 0}),
     );
-    let (decode_scale, budget_bytes) =
-        crate::ffmpeg::plan_decode(&source_path, processing_scale).map_err(|e| e.to_string())?;
+    // A still image is decoded as ONE frame and then multiplied to fill the
+    // requested duration, so the memory plan has to be made against the count
+    // it will become. See plan_decode_for_frames.
+    let still_target_frames = if crate::ffmpeg::probe_frame_count(&source_path).unwrap_or(0) <= 1 {
+        let n = (trim_end.unwrap_or(10.0).max(0.0) * fps.unwrap_or(30.0)).round();
+        Some((n.max(1.0) as usize).min(MAX_EXPORT_FRAMES))
+    } else {
+        None
+    };
+    let (decode_scale, budget_bytes) = match still_target_frames {
+        Some(n) => crate::ffmpeg::plan_decode_for_frames(&source_path, processing_scale, n),
+        None => crate::ffmpeg::plan_decode(&source_path, processing_scale),
+    }
+    .map_err(|e| e.to_string())?;
     let budget_mb = budget_bytes as f64 / (1024.0 * 1024.0);
     tracing::info!(
         "Export decode plan: scale={:?}, memory budget={:.0} MB",
-        decode_scale, budget_mb
+        decode_scale,
+        budget_mb
     );
     if let Some(s) = decode_scale {
         let message = format!(
@@ -822,8 +1103,13 @@ fn export_video_blocking(
         "export-progress",
         serde_json::json!({"stage": "decoding", "progress": 0}),
     );
-    let mut segment = crate::ffmpeg::decode_video_with_options(&source_path, None, decode_scale)
-        .map_err(|e| e.to_string())?;
+    let mut segment = crate::ffmpeg::decode_video_cancellable(
+        &source_path,
+        None,
+        decode_scale,
+        Some(cancel.as_ref()),
+    )
+    .map_err(|e| e.to_string())?;
     tracing::info!(
         "Decoded {} frames, {}x{}, fps={}",
         segment.frames.len(),
@@ -854,11 +1140,71 @@ fn export_video_blocking(
         }
     }
 
-    // If the source is a still image (1 frame), duplicate it to fill the desired duration
+    // Say so when the clip came back short. The decode caps frames to fit the
+    // budget and logged a tracing::warn about it -- which no user ever sees, so
+    // a five-minute source silently exported as four and the file just ended.
+    if still_target_frames.is_none() {
+        let probed = crate::ffmpeg::probe_frame_count(&source_path).unwrap_or(0);
+        let decoded = segment.frames.len();
+        // 2% slack: the probe is duration x fps, which is an estimate.
+        if probed > 0 && decoded > 0 && (decoded as f64) < (probed as f64) * 0.98 {
+            let secs = decoded as f64 / (segment.fps as f64).max(1.0);
+            let message = format!(
+                "This clip is too long to process at this resolution: exporting the \
+                 first {:.0}s of it. Lower the processing resolution in Export \
+                 settings, or set an in/out range, to cover the whole clip.",
+                secs
+            );
+            tracing::warn!("{}", message);
+            let _ = app_handle.emit(
+                "export-progress",
+                serde_json::json!({
+                    "stage": "decoding",
+                    "progress": 0,
+                    "warning": message
+                }),
+            );
+        }
+    }
+
+    // If the source is a still image (1 frame), duplicate it to fill the desired
+    // duration.
+    //
+    // Bounded twice. The decode plan above already picked a resolution at which
+    // the whole duration fits, but a user who forces a processing scale bypasses
+    // that, and the duration box has no upper limit -- so the clone itself is
+    // capped against the same budget here. Unbounded, this was the export crash:
+    // `vec![single; 300]` of a 48 MB frame is 14.6 GB, and a failed Rust
+    // allocation ABORTS rather than panicking, so nothing reached the log.
     if segment.frames.len() == 1 {
         let effective_fps = fps.unwrap_or(30.0);
         let target_duration = trim_end.unwrap_or(10.0);
-        let target_frames = (target_duration * effective_fps).round() as usize;
+        let requested_frames =
+            ((target_duration * effective_fps).round().max(1.0) as usize).min(MAX_EXPORT_FRAMES);
+        let frame_bytes = segment.frames[0].data.len().max(1);
+        // The budget is already per-copy: adaptive_decode_memory_budget divides
+        // by PIPELINE_PEAK_COPIES. Dividing again here (as this once did) was a
+        // double division that halved every animated still for nothing.
+        let max_by_budget = ((budget_bytes as usize) / frame_bytes).max(1);
+        let target_frames = requested_frames.min(max_by_budget);
+        if target_frames < requested_frames {
+            let secs = target_frames as f64 / effective_fps.max(1.0);
+            let message = format!(
+                "This image is too large to animate for {:.1}s at its full size. \
+                 Exporting {:.1}s instead -- lower the processing resolution in \
+                 Export settings, or shorten the animation, to get the full length.",
+                target_duration, secs
+            );
+            tracing::warn!("{}", message);
+            let _ = app_handle.emit(
+                "export-progress",
+                serde_json::json!({
+                    "stage": "decoding",
+                    "progress": 0,
+                    "warning": message
+                }),
+            );
+        }
         if target_frames > 1 {
             let single = segment.frames[0].clone();
             segment.frames = vec![single; target_frames];
@@ -892,9 +1238,6 @@ fn export_video_blocking(
 
     let global_mask = decode_mask_b64(mask_b64.as_deref())?;
 
-    // Track whether audio bake data was provided (before it's consumed)
-    let has_audio_bake = audio_bake_json.is_some();
-
     // Deserialize audio bake data if provided
     let audio_data: Option<crate::audio::AudioBakeData> =
         audio_bake_json.and_then(|json| serde_json::from_str(&json).ok());
@@ -908,7 +1251,22 @@ fn export_video_blocking(
     let registry = registry
         .lock()
         .map_err(|e| format!("registry lock poisoned: {e}"))?;
+    // The instant a frame represents on the TRANSPORT, not its index in the
+    // trimmed segment. Trimming happened above, so frame 0 here is
+    // `trim_start` seconds into the clip -- and keyframes are stored at
+    // absolute transport time, the audio bake runs from the audio file's
+    // start, and the preview passes the absolute time to shaders. Counting
+    // from 0 shifted every one of them early by the in-point in the export.
+    let time_offset = trim_start.unwrap_or(0.0).max(0.0);
+
     for (effect_idx, call) in stack.iter().enumerate() {
+        // Cancel is polled between effects, and per frame inside the two
+        // non-temporal branches below. It used to be read only inside the
+        // encoder's write loop -- the last 15% of an export -- so "Cancel"
+        // during decode or effects changed nothing but the status text.
+        if cancel.load(Ordering::Relaxed) {
+            return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
+        }
         let effect = registry
             .get(&call.effect_id)
             .ok_or_else(|| format!("Effect '{}' not found", call.effect_id))?;
@@ -933,78 +1291,153 @@ fn export_video_blocking(
 
         // Check if mask blending is needed (avoids expensive clone)
         let needs_mask_blend = !effect.handles_masking() && active_mask.is_some();
+        let mode = call.mask_mode.as_deref().unwrap_or("inside");
 
-        // Store previous frames only if needed for mask blending
-        let previous_frames: Option<Vec<crate::effects::Frame>> = if needs_mask_blend {
-            Some(segment.frames.clone())
-        } else {
-            None
-        };
+        // Memory. Every branch below writes its result back into `segment`
+        // rather than building a second sequence beside it, and the mask is
+        // blended per frame against that frame's own previous contents. The
+        // old shape cloned the whole clip for the blend, collected a whole new
+        // clip per effect, and then blended the two -- three copies of the
+        // clip in flight for one masked effect, against a budget that only
+        // ever counted one. The temporal branch is the exception: a temporal
+        // effect returns an owned segment, so its input necessarily survives
+        // until the swap. That 2x is structural and PIPELINE_PEAK_COPIES in
+        // ffmpeg/mod.rs is what the memory plan divides by to allow for it.
+        //
+        // On an Err the segment may be half-processed in place. Nothing reads
+        // it after that -- the export bails -- so do not add a retry on top.
 
+        // A temporal effect takes the whole segment through one
+        // `Effect::process_video` call with no cancel hook, so a cancel during
+        // it lands between effects: the pass runs to completion first. That
+        // is seconds to tens of seconds on a long clip, with the progress bar
+        // still. The UI says "Cancelling..." rather than "cancelled" for
+        // exactly this reason.
         if effect.is_temporal() {
-            // Temporal effects: must use sequential process_video for cross-frame correctness
-            segment = effect
-                .process_video(&segment, active_mask, &params)
+            // Temporal effects: must use sequential process_video for cross-frame correctness.
+            // Per-frame audio injection is meaningless here -- the effect gets the
+            // whole segment at once -- so hand it the beat timeline instead, which
+            // is what lets a datamosh cut on the beat rather than on a clock.
+            let mut temporal_params = params.clone();
+            // A temporal effect is handed the whole segment at once, so it has
+            // no per-frame parameter hook. Animated parameters take their value
+            // at the START of the clip rather than being ignored outright.
+            if inject_keyframe_params(call.keyframes.as_ref(), &mut temporal_params, time_offset) {
+                temporal_params = crate::effects::clamp_for_effect(effect, &temporal_params);
+            }
+            if let Some(ref audio) = audio_data {
+                audio.inject_timeline_params(&mut temporal_params);
+            }
+            let processed = effect
+                .process_video(&segment, active_mask, &temporal_params)
                 .map_err(|e| e.to_string())?;
+            let previous = std::mem::replace(&mut segment, processed);
+            if needs_mask_blend {
+                if let Some(m) = active_mask {
+                    if previous.frames.len() == segment.frames.len() {
+                        blend_segment_against(
+                            &previous.frames,
+                            &mut segment.frames,
+                            m,
+                            mode,
+                            &cancel,
+                        )?;
+                    } else {
+                        // A frame-repeating datamosh returns more frames than it
+                        // was given, so there is no one-to-one "before" frame to
+                        // blend against. This used to index `prev[i]` past the
+                        // end and PANIC: every masked export with Frame Stutter
+                        // failed. Skipping the blend and saying so is the honest
+                        // result; zipping would blend the wrong frames and leave
+                        // the tail unmasked.
+                        let message = format!(
+                            "{} changes the clip length, so the mask could not be \
+                             applied to it. The effect still ran on the whole frame.",
+                            call.effect_id
+                        );
+                        tracing::warn!("{}", message);
+                        let pct = 5 + ((effect_idx + 1) as f64 / stack.len() as f64 * 80.0) as u32;
+                        let _ = app_handle.emit(
+                            "export-progress",
+                            serde_json::json!({
+                                "stage": "effects",
+                                "progress": pct,
+                                "warning": message
+                            }),
+                        );
+                    }
+                }
+            }
+            // `previous` drops here: the input copy is gone before the next effect.
         } else if audio_data.is_none() {
-            // Non-temporal, no audio: parallelize frame processing with rayon
+            // Non-temporal, no audio: parallelize frame processing with rayon,
+            // in place.
             let mask_ref = active_mask;
             let params_ref = &params;
+            let keyframes_ref = call.keyframes.as_ref();
             let fps_val = segment.fps;
-            let results: std::result::Result<Vec<_>, _> = segment
-                .frames
-                .par_iter()
-                .enumerate()
-                .map(|(idx, frame)| {
+            segment.frames.par_iter_mut().enumerate().try_for_each(
+                |(idx, frame)| -> std::result::Result<(), String> {
+                    if cancel.load(Ordering::Relaxed) {
+                        return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
+                    }
+                    let t = time_offset + idx as f64 / fps_val;
                     let mut frame_params = params_ref.clone();
-                    frame_params.insert(
-                        "time".to_string(),
-                        serde_json::Value::from(idx as f64 / fps_val),
-                    );
-                    effect.process_frame(frame, mask_ref, &frame_params)
-                })
-                .collect();
-            segment.frames = results.map_err(|e| e.to_string())?;
+                    frame_params.insert("time".to_string(), serde_json::Value::from(t));
+                    // Re-clamp after injection: the clamp above ran on the static
+                    // map, and a keyframe can name any value the user dragged to.
+                    if inject_keyframe_params(keyframes_ref, &mut frame_params, t) {
+                        frame_params = crate::effects::clamp_for_effect(effect, &frame_params);
+                    }
+                    apply_frame_in_place(
+                        effect,
+                        frame,
+                        mask_ref,
+                        &frame_params,
+                        needs_mask_blend,
+                        mode,
+                    )
+                },
+            )?;
         } else {
-            // Non-temporal with audio: process frame-by-frame with per-frame audio params
-            let mut frames = Vec::with_capacity(segment.frames.len());
+            // Non-temporal with audio: sequential, because AudioBindingSmoother
+            // carries state from frame to frame. Still in place.
             let fps_val = segment.fps;
-            for (frame_idx, frame) in segment.frames.iter().enumerate() {
-                let mut frame_params = params.clone();
-                frame_params.insert(
-                    "time".to_string(),
-                    serde_json::Value::from(frame_idx as f64 / fps_val),
-                );
-                if let Some(ref audio) = audio_data {
-                    audio.inject_params(&mut frame_params, frame_idx);
+            let mut smoother = AudioBindingSmoother::default();
+            let dt = 1.0 / (fps_val as f64).max(1.0);
+            for (frame_idx, frame) in segment.frames.iter_mut().enumerate() {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
                 }
-                frames.push(
-                    effect
-                        .process_frame(frame, active_mask, &frame_params)
-                        .map_err(|e| e.to_string())?,
-                );
+                let t = time_offset + frame_idx as f64 / fps_val;
+                let mut frame_params = params.clone();
+                frame_params.insert("time".to_string(), serde_json::Value::from(t));
+                if inject_keyframe_params(call.keyframes.as_ref(), &mut frame_params, t) {
+                    frame_params = crate::effects::clamp_for_effect(effect, &frame_params);
+                }
+                if let Some(ref audio) = audio_data {
+                    audio.inject_params_at_time(&mut frame_params, t);
+                    // After the keyframes above: binding a parameter to audio is
+                    // the more explicit instruction, so it wins when both name
+                    // the same parameter.
+                    if smoother.inject(
+                        call.audio_bindings.as_ref(),
+                        &mut frame_params,
+                        audio.frame_at_time(t),
+                        dt,
+                    ) {
+                        frame_params = crate::effects::clamp_for_effect(effect, &frame_params);
+                    }
+                }
+                apply_frame_in_place(
+                    effect,
+                    frame,
+                    active_mask,
+                    &frame_params,
+                    needs_mask_blend,
+                    mode,
+                )?;
             }
-            segment = crate::effects::VideoSegment {
-                frames,
-                fps: segment.fps,
-            };
-        }
-
-        // Post-process mask blend for effects that don't handle masking internally
-        if let (Some(prev), Some(m)) = (previous_frames, active_mask) {
-            let mode = call.mask_mode.as_deref().unwrap_or("inside");
-            tracing::debug!(
-                "Blending mask (mode={}) for {} frames",
-                mode,
-                segment.frames.len()
-            );
-            segment
-                .frames
-                .par_iter_mut()
-                .enumerate()
-                .try_for_each(|(i, frame)| {
-                    blend_mask(frame, &prev[i], m, mode).map_err(|e| e.to_string())
-                })?;
         }
 
         tracing::debug!("Export effect {}/{} done", effect_idx + 1, stack.len());
@@ -1022,13 +1455,20 @@ fn export_video_blocking(
     let codec_str = codec.as_deref().unwrap_or({
         match format.as_deref() {
             Some("webm") => "vp9",
-            Some("gif") | Some("png_seq") => "libx264", // container is still mp4 for gif/png_seq
+            // gif / apng / webp / *_seq pick their own encoder in output_spec();
+            // the value here is only a fallback for the video containers.
             _ => "libx264",
         }
     });
 
-    // If include_audio is set, skip audio bake (we'll copy source audio directly)
-    let effective_include_audio = include_audio.unwrap_or(false) && !has_audio_bake;
+    // Muxing the source audio track is independent of whether an audio bake was
+    // supplied. This previously read `include_audio && !has_audio_bake`, which
+    // made the two mutually exclusive: a bake is only produced for
+    // audio-reactive work, so exactly the exports that wanted the track lost it,
+    // and no combination of settings could produce reactive visuals *and* audio.
+    // The bake drives per-frame effect params; this only decides whether a
+    // second input is mapped in at encode time.
+    let effective_include_audio = include_audio.unwrap_or(false);
 
     // Cap a single encode at 30 minutes. This is generous for high-resolution
     // exports while preventing a hung FFmpeg process from blocking indefinitely.
@@ -1049,6 +1489,7 @@ fn export_video_blocking(
         height,
         Some(cancel.as_ref()),
         Some(ENCODE_TIMEOUT),
+        format.as_deref(),
     )
     .map_err(|e| e.to_string())?;
     let _ = app_handle.emit(
@@ -1059,8 +1500,11 @@ fn export_video_blocking(
     Ok(output_path)
 }
 
-/// Request cancellation of an in-progress export. The export command polls
-/// this flag while feeding frames to FFmpeg and aborts early if it is set.
+/// Request cancellation of an in-progress export. The export polls this flag
+/// during the decode (killing the ffmpeg child), between effects, per frame
+/// inside non-temporal effects, and while feeding frames to the encoder.
+/// A temporal effect's single process_video pass is the one stretch it
+/// cannot interrupt.
 #[tauri::command]
 pub fn cancel_export(state: State<'_, AppState>) -> std::result::Result<(), String> {
     state.export_cancel.store(true, Ordering::Relaxed);
@@ -1632,6 +2076,8 @@ mod integration_tests {
             params: serde_json::Map::new(),
             mask_b64: None,
             mask_mode: None,
+            keyframes: None,
+            audio_bindings: None,
         }];
 
         let result = apply_stack_to_frame(&reg, frame.clone(), &stack, None)
@@ -1663,9 +2109,14 @@ mod integration_tests {
             params: serde_json::Map::new(),
             mask_b64: None,
             mask_mode: None,
+            keyframes: None,
+            audio_bindings: None,
         }];
         let result = apply_stack_to_frame(&reg, frame, &stack, None);
-        assert!(result.is_err(), "an unknown effect id must error, not panic");
+        assert!(
+            result.is_err(),
+            "an unknown effect id must error, not panic"
+        );
     }
 
     #[test]
@@ -2271,6 +2722,40 @@ fn locate_mosh_cli() -> Option<std::path::PathBuf> {
     None
 }
 
+/// Locate the bundled datamosh sidecar. Tauri strips the target-triple suffix
+/// from `externalBin` entries, so in a real install it sits next to the app as
+/// `mosh-cli.exe`; a dev checkout has the suffixed build in `src-tauri/bin`.
+///
+/// This exists because datamoshing used to need a Python interpreter AND numpy
+/// on the user's machine, and the installer shipped neither -- so the app's
+/// signature feature worked for developers and failed for everyone else.
+fn locate_mosh_sidecar() -> Option<PathBuf> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            for name in ["mosh-cli.exe", "mosh-cli"] {
+                let candidate = dir.join(name);
+                if candidate.exists() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    for name in [
+        "mosh-cli-x86_64-pc-windows-msvc.exe",
+        "mosh-cli-aarch64-apple-darwin",
+        "mosh-cli-x86_64-apple-darwin",
+        "mosh-cli-x86_64-unknown-linux-gnu",
+        "mosh-cli.exe",
+        "mosh-cli",
+    ] {
+        let candidate = Path::new("bin").join(name);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 /// Locate a Python interpreter for running the FFglitch bridge script.
 /// Prefers the bundled sam3_env venv, then system PATH.
 fn find_python() -> Option<String> {
@@ -2285,7 +2770,7 @@ fn find_python() -> Option<String> {
         }
     }
     for name in ["python.exe", "python3.exe", "python"] {
-        if Command::new(name).arg("--version").output().is_ok() {
+        if crate::proc::command(name).arg("--version").output().is_ok() {
             return Some(name.to_string());
         }
     }
@@ -2303,6 +2788,11 @@ fn find_python() -> Option<String> {
 /// process cannot deadlock on a full pipe buffer) with the addition of the
 /// cancel check, since this is the one subprocess path in the app a user
 /// can proactively cancel mid-run rather than only time out.
+///
+/// On Windows the child is placed in a kill-on-close Job Object, so a cancel
+/// or timeout takes down the whole process tree -- the PyInstaller bootloader,
+/// the Python it spawns and the ffmpeg that spawns -- not just the direct
+/// child. See `proc::KillJob`.
 fn run_cancellable(
     cmd: &mut Command,
     cancel: &AtomicBool,
@@ -2317,6 +2807,10 @@ fn run_cancellable(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("Failed to spawn process: {}", e))?;
+
+    // Put the child -- and everything it goes on to spawn -- in a job that
+    // dies when `_job` drops, i.e. on every return path below. See KillJob.
+    let _job = crate::proc::KillJob::new().filter(|j| j.assign(&child));
 
     let stdout = child
         .stdout
@@ -2361,13 +2855,21 @@ fn run_cancellable(
         if cancel.load(Ordering::Relaxed) {
             let _ = child.kill();
             let _ = child.wait_timeout(Duration::from_secs(10));
-            join_readers(stdout_thread, stderr_thread);
+            // Do NOT join the readers here. The job is dropped at `return`,
+            // AFTER a join -- and the join cannot finish while a surviving
+            // grandchild holds the inherited pipe handles. Joining first meant
+            // the tree died only when the orphan finished on its own. The
+            // JoinHandles detach at return instead.
             return Err("Cancelled by user".to_string());
         }
         if started.elapsed() > timeout {
             let _ = child.kill();
             let _ = child.wait_timeout(Duration::from_secs(10));
-            join_readers(stdout_thread, stderr_thread);
+            // Do NOT join the readers here. The job is dropped at `return`,
+            // AFTER a join -- and the join cannot finish while a surviving
+            // grandchild holds the inherited pipe handles. Joining first meant
+            // the tree died only when the orphan finished on its own. The
+            // JoinHandles detach at return instead.
             return Err(format!("Process timed out after {:?}", timeout));
         }
         match child.wait_timeout(poll_interval) {
@@ -2375,7 +2877,11 @@ fn run_cancellable(
             Err(e) if e.kind() == ErrorKind::TimedOut => continue,
             Err(e) => {
                 let _ = child.kill();
-                join_readers(stdout_thread, stderr_thread);
+                // Do NOT join the readers here. The job is dropped at `return`,
+                // AFTER a join -- and the join cannot finish while a surviving
+                // grandchild holds the inherited pipe handles. Joining first meant
+                // the tree died only when the orphan finished on its own. The
+                // JoinHandles detach at return instead.
                 return Err(format!("Failed to wait for process: {}", e));
             }
         }
@@ -2400,9 +2906,12 @@ fn run_cancellable(
 /// same "await that can never resolve" defect class as the mask-texture
 /// freeze already fixed, plus a Cancel button with no actual path to the
 /// subprocess it claimed to cancel.
+/// `program` is either the bundled `mosh-cli` sidecar (in which case `script` is
+/// None, because the entry point is compiled in) or a Python interpreter (in
+/// which case `script` is `mosh_cli.py`).
 fn run_ffglitch_subprocess(
-    python: &str,
-    mosh_cli: &Path,
+    program: &str,
+    script: Option<&Path>,
     temp_config_path: &str,
     ffgac: &str,
     ffedit: &str,
@@ -2416,9 +2925,12 @@ fn run_ffglitch_subprocess(
     const FFGLITCH_TIMEOUT: Duration = Duration::from_secs(3600);
     const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
+    let mut command = crate::proc::command(program);
+    if let Some(script) = script {
+        command.arg(script);
+    }
     run_cancellable(
-        Command::new(python)
-            .arg(mosh_cli)
+        command
             .arg(temp_config_path)
             .env("MOSHDITHER_FFGAC_PATH", ffgac)
             .env("MOSHDITHER_FFEDIT_PATH", ffedit)
@@ -2428,6 +2940,18 @@ fn run_ffglitch_subprocess(
         POLL_INTERVAL,
     )
     .map_err(|e| format!("FFglitch: {e}"))
+}
+
+/// `"params": null` reaches mosh_cli.py as `None`, and its very first
+/// `params.get(...)` raises `'NoneType' object has no attribute 'get'`. The
+/// preview command passed exactly that for every mode, so "Preview this
+/// mode" failed on all of them. An object -- empty or not -- is what the
+/// script expects, and an empty one means "every knob at its default".
+fn ffglitch_params_or_empty(params: serde_json::Value) -> serde_json::Value {
+    match params {
+        serde_json::Value::Object(_) => params,
+        _ => serde_json::json!({}),
+    }
 }
 
 /// Validates the extra file-path parameters that the motion_transfer/combine
@@ -2466,7 +2990,158 @@ fn validate_ffglitch_extra_paths(
     Ok(())
 }
 
+/// Longest frontend log line accepted, so a runaway loop in the webview cannot
+/// fill the disk through this command.
+const MAX_FRONTEND_LOG_LEN: usize = 4096;
+
+/// Record a message from the frontend in the app's log file.
+///
+/// Release builds detach the console and ship no devtools, so anything the
+/// webview logged went nowhere: an export that failed in the frontend -- before
+/// it ever reached a Rust command -- left the log file showing only a clean
+/// startup, which is exactly the state that made one such failure impossible to
+/// investigate. Warnings and errors are forwarded here so both halves of the app
+/// leave evidence in the same place.
+#[tauri::command]
+pub fn log_frontend(level: String, message: String) {
+    let msg: String = message.chars().take(MAX_FRONTEND_LOG_LEN).collect();
+    match level.as_str() {
+        "error" => tracing::error!(target: "frontend", "{msg}"),
+        "warn" => tracing::warn!(target: "frontend", "{msg}"),
+        _ => tracing::info!(target: "frontend", "{msg}"),
+    }
+}
+
+/// Marks the intermediate file written by a two-stage export (render the effect
+/// stack, then datamosh the result). The name is checked before deletion, so
+/// this command cannot be turned into an arbitrary file remover.
+pub const EXPORT_TEMP_MARKER: &str = ".moshdither-fx-tmp.";
+
+/// Delete an intermediate file produced by a two-stage export.
+///
+/// Deliberately narrow: it refuses any path whose file name does not carry
+/// `EXPORT_TEMP_MARKER`, so a bug or a compromised webview cannot use it to
+/// delete a user's media. Failure to clean up is not fatal to an export, so the
+/// caller is expected to ignore the error rather than fail the job over it.
+#[tauri::command]
+pub fn remove_export_temp(path: String) -> std::result::Result<(), String> {
+    let validated = validate_io_path(&path, true)?;
+    let name = validated
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    if !name.contains(EXPORT_TEMP_MARKER) {
+        return Err(format!(
+            "Refusing to remove {name}: not a MoshDither export intermediate"
+        ));
+    }
+    std::fs::remove_file(&validated).map_err(|e| e.to_string())
+}
+
 /// Apply an FFglitch datamoshing effect by delegating to the Python mosh_cli.py.
+/// Render a SHORT moshed clip so a datamosh mode can be seen before committing.
+///
+/// FFglitch modes corrupt the compressed bitstream, so unlike every other effect
+/// in this app they genuinely cannot be shown live -- there is nothing to
+/// display until the file is re-encoded. That constraint is real. What did NOT
+/// follow from it, and was simply a bad choice, is that the 34 modes were
+/// therefore invisible until the user was already in the Export dialog: you met
+/// them at save time or never.
+///
+/// This trims a couple of seconds out of the source and moshes only that, which
+/// takes seconds instead of minutes and makes the modes browsable. The result
+/// is cached per (source, mode, seconds) so flicking back and forth through the
+/// list is instant after the first look.
+#[tauri::command]
+pub async fn preview_ffglitch(
+    state: State<'_, AppState>,
+    input_path: String,
+    mode: String,
+    start_secs: Option<f64>,
+    duration_secs: Option<f64>,
+    params: Option<serde_json::Value>,
+) -> std::result::Result<String, String> {
+    let validated = validate_io_path(&input_path, true)?;
+    let source = validated.to_string_lossy().into_owned();
+    let params = ffglitch_params_or_empty(params.unwrap_or(serde_json::Value::Null));
+    let params_key = params.to_string();
+    // Two seconds is enough to read a datamosh -- the smear needs a handful of
+    // P-frames, not a whole clip -- and short enough that browsing modes stays
+    // interactive.
+    let seconds = duration_secs.unwrap_or(2.0).clamp(0.5, 10.0);
+    let start = start_secs.unwrap_or(0.0).max(0.0);
+
+    let dir = std::env::temp_dir()
+        .join("moshdither-studio")
+        .join("mosh-preview");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create preview dir: {e}"))?;
+
+    // Keyed by everything that changes the result, so a cache hit is always the
+    // right clip. The source path is hashed rather than embedded: it can be long,
+    // and it can contain characters a filename cannot.
+    let key = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        source.hash(&mut h);
+        mode.hash(&mut h);
+        format!("{start:.2}").hash(&mut h);
+        format!("{seconds:.2}").hash(&mut h);
+        // The knobs change the picture as much as the mode does.
+        params_key.hash(&mut h);
+        h.finish()
+    };
+    let out = dir.join(format!("mosh-preview-{key:016x}.mp4"));
+    if out.exists() {
+        if let Ok(m) = std::fs::metadata(&out) {
+            if m.len() > 0 {
+                return Ok(out.to_string_lossy().into_owned());
+            }
+        }
+    }
+
+    // Trim first. Moshing two seconds instead of the whole clip is the entire
+    // point; handing the full source to the datamosher would be as slow as a
+    // real export.
+    let ffmpeg = ffmpeg_binary().map_err(|e| e.to_string())?;
+    let trimmed = dir.join(format!("src-{key:016x}.mp4"));
+    let trim = crate::proc::command(&ffmpeg)
+        .args(["-v", "error", "-y", "-ss"])
+        .arg(start.to_string())
+        .arg("-i")
+        .arg(&source)
+        .args(["-t"])
+        .arg(seconds.to_string())
+        // Re-encode rather than stream-copy: a copy starts at the previous
+        // keyframe and can hand the datamosher a clip with no P-frames to work
+        // with, which is exactly the input that makes a mode produce nothing.
+        .args([
+            "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-an",
+        ])
+        .arg(&trimmed)
+        .output()
+        .map_err(|e| format!("Could not run ffmpeg for the preview trim: {e}"))?;
+    if !trim.status.success() {
+        return Err(format!(
+            "Could not trim a preview segment: {}",
+            String::from_utf8_lossy(&trim.stderr)
+                .lines()
+                .last()
+                .unwrap_or("unknown error")
+        ));
+    }
+
+    let result = apply_ffglitch(
+        state,
+        trimmed.to_string_lossy().into_owned(),
+        out.to_string_lossy().into_owned(),
+        mode,
+        params,
+    )
+    .await;
+    let _ = std::fs::remove_file(&trimmed);
+    result
+}
+
 #[tauri::command]
 pub async fn apply_ffglitch(
     state: State<'_, AppState>,
@@ -2479,11 +3154,28 @@ pub async fn apply_ffglitch(
     let validated_output = validate_io_path(&output_path, false)?;
     let input_path = validated_input.to_string_lossy().into_owned();
     let output_path = validated_output.to_string_lossy().into_owned();
+    let params = ffglitch_params_or_empty(params);
 
     validate_ffglitch_extra_paths(&mode, &params)?;
 
-    let python = find_python()
-        .ok_or("Python interpreter not found. Install sam3_env or add python to PATH")?;
+    // Prefer the bundled sidecar: it carries its own interpreter and numpy, so
+    // datamoshing works on a machine with no Python at all. The interpreter
+    // path stays as the dev fallback (and as an escape hatch if someone wants
+    // to run a modified mosh_cli.py).
+    let sidecar = locate_mosh_sidecar();
+    let (program, script) = match &sidecar {
+        Some(exe) => (exe.to_string_lossy().into_owned(), None),
+        None => {
+            let python = find_python().ok_or(
+                "Datamoshing is unavailable: the datamosh component (mosh-cli) is missing and no \
+                 compatible Python interpreter was found. Please reinstall the application.",
+            )?;
+            let cli = locate_mosh_cli().ok_or(
+                "mosh_cli.py not found. Expected at ./packages/python-backend/mosh_cli.py",
+            )?;
+            (python, Some(cli))
+        }
+    };
 
     let ffgac = ffgac_binary().map_err(|e| e.to_string())?;
     let ffedit = ffedit_binary().map_err(|e| e.to_string())?;
@@ -2492,9 +3184,6 @@ pub async fn apply_ffglitch(
     }
 
     let ffmpeg = ffmpeg_binary().map_err(|e| e.to_string())?;
-
-    let mosh_cli = locate_mosh_cli()
-        .ok_or("mosh_cli.py not found. Expected at ./packages/python-backend/mosh_cli.py")?;
 
     let config = serde_json::json!({
         "input": input_path,
@@ -2538,8 +3227,8 @@ pub async fn apply_ffglitch(
     let result = tauri::async_runtime::spawn_blocking(move || {
         let _permit = permit;
         run_ffglitch_subprocess(
-            &python,
-            &mosh_cli,
+            &program,
+            script.as_deref(),
             &temp_config_path,
             &ffgac,
             &ffedit,
@@ -2741,13 +3430,13 @@ mod run_cancellable_tests {
     fn hang_command(secs: u32) -> Command {
         #[cfg(target_os = "windows")]
         {
-            let mut cmd = Command::new("ping");
+            let mut cmd = crate::proc::command("ping");
             cmd.args(["-n", &(secs + 1).to_string(), "127.0.0.1"]);
             cmd
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let mut cmd = Command::new("sleep");
+            let mut cmd = crate::proc::command("sleep");
             cmd.arg(secs.to_string());
             cmd
         }
@@ -2756,16 +3445,107 @@ mod run_cancellable_tests {
     fn fast_command() -> Command {
         #[cfg(target_os = "windows")]
         {
-            let mut c = Command::new("cmd");
+            let mut c = crate::proc::command("cmd");
             c.args(["/C", "echo hello"]);
             c
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let mut c = Command::new("echo");
+            let mut c = crate::proc::command("echo");
             c.arg("hello");
             c
         }
+    }
+
+    /// Cancelling must kill the WHOLE process tree, not just the direct child.
+    ///
+    /// mosh-cli is a PyInstaller --onefile bundle: the exe Rust spawns is a
+    /// bootloader that spawns the real Python as a SEPARATE process, which
+    /// then spawns ffmpeg/ffgac/ffedit. `child.kill()` reached only the
+    /// bootloader; measured on the dev machine, killing it left the Python
+    /// child and its ffmpeg running (IsProcessInJob = false on all three).
+    /// A cancelled datamosh kept encoding at full CPU, invisibly.
+    ///
+    /// The tree depth is arbitrary -- dev mode runs `python.exe mosh_cli.py`
+    /// directly with no bootloader, and python still spawns ffmpeg
+    /// grandchildren -- so the test builds a two-level tree of its own:
+    /// cmd (direct child) -> ping (grandchild) holding a redirected file.
+    /// Windows refuses to delete a file with an open handle, so being able
+    /// to delete the marker afterwards is direct proof the grandchild died.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn cancel_kills_the_whole_tree_not_just_the_direct_child() {
+        use std::sync::atomic::AtomicUsize;
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        // Relative and quote-free: cmd /C strips a quoted absolute path's
+        // outer quotes and the redirect then fails to create the file.
+        let marker = format!(
+            "moshdither-tree-{}-{}.marker",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        let marker_path = std::env::temp_dir().join(&marker);
+        let _ = std::fs::remove_file(&marker_path);
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_setter = Arc::clone(&cancel);
+        let watch = marker_path.clone();
+        // Flip cancel only once the grandchild is provably running (it has
+        // created the file), so the ordering is deterministic on a loaded
+        // gate machine rather than a fixed timer.
+        std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while !watch.exists() && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            cancel_setter.store(true, Ordering::Relaxed);
+        });
+
+        let mut cmd = crate::proc::command("cmd");
+        cmd.args(["/C", &format!("ping -n 30 127.0.0.1 > {marker}")])
+            .current_dir(std::env::temp_dir());
+        let started = std::time::Instant::now();
+        let result = run_cancellable(
+            &mut cmd,
+            &cancel,
+            Duration::from_secs(30),
+            Duration::from_millis(50),
+        );
+        let elapsed = started.elapsed();
+
+        // (a) The call returns promptly with the cancel error, rather than
+        // blocking on pipe readers the orphan still holds open.
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("cancelled run must not report success"),
+        };
+        assert!(err.contains("Cancelled"), "unexpected error: {err}");
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "cancel took {elapsed:?}; it should return well under the 30 s hang"
+        );
+
+        // (b) The grandchild is dead: the marker it held open can be deleted.
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let mut deleted = false;
+        while std::time::Instant::now() < deadline {
+            if std::fs::remove_file(&marker_path).is_ok() {
+                deleted = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        if !deleted {
+            // Do not leave a ping running for 30 s on a failed assertion.
+            let _ = crate::proc::command("taskkill")
+                .args(["/F", "/IM", "ping.exe"])
+                .output();
+            let _ = std::fs::remove_file(&marker_path);
+        }
+        assert!(
+            deleted,
+            "the grandchild (ping) still held the marker open after cancel: the tree survived"
+        );
     }
 
     #[test]
@@ -2864,7 +3644,10 @@ mod ffglitch_extra_path_tests {
         let params = serde_json::json!({ "motionUrl": p.to_string_lossy() });
         let result = validate_ffglitch_extra_paths("motion_transfer", &params);
         let _ = fs::remove_file(&p);
-        assert!(result.is_ok(), "existing motionUrl should be accepted: {result:?}");
+        assert!(
+            result.is_ok(),
+            "existing motionUrl should be accepted: {result:?}"
+        );
     }
 
     #[test]
@@ -2898,8 +3681,7 @@ mod ffglitch_extra_path_tests {
     fn combine_rejects_a_video_that_does_not_exist() {
         let a = temp_media("mosh_ffglitch_guard_combine_real.mp4");
         let missing = std::env::temp_dir().join("mosh_ffglitch_guard_combine_missing.mp4");
-        let params =
-            serde_json::json!({ "combineVideos": [a.to_string_lossy(), missing.to_string_lossy()] });
+        let params = serde_json::json!({ "combineVideos": [a.to_string_lossy(), missing.to_string_lossy()] });
         let result = validate_ffglitch_extra_paths("combine", &params);
         let _ = fs::remove_file(&a);
         assert!(
@@ -2919,5 +3701,504 @@ mod ffglitch_extra_path_tests {
             result.is_ok(),
             "modes without file-path params must not validate unrelated fields: {result:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod ffglitch_params_tests {
+    use super::ffglitch_params_or_empty;
+
+    /// Null is what the preview used to send; a bare number or string is what a
+    /// hand-edited preset could send. All of them must become an object,
+    /// because mosh_cli.py calls .get() on it before anything else.
+    #[test]
+    fn non_objects_become_an_empty_object() {
+        for bad in [
+            serde_json::Value::Null,
+            serde_json::json!(3),
+            serde_json::json!("zoom"),
+            serde_json::json!([1, 2]),
+        ] {
+            assert_eq!(ffglitch_params_or_empty(bad), serde_json::json!({}));
+        }
+    }
+
+    #[test]
+    fn objects_pass_through_untouched() {
+        let p = serde_json::json!({ "zoom": 80, "keepFirst": false });
+        assert_eq!(ffglitch_params_or_empty(p.clone()), p);
+    }
+}
+
+#[cfg(test)]
+mod keyframe_export_tests {
+    use super::*;
+
+    fn kf(time: f64, value: f64, easing: &str) -> KeyframePoint {
+        KeyframePoint {
+            time,
+            value,
+            easing: Some(easing.to_string()),
+        }
+    }
+
+    /// These numbers come from the TypeScript the preview uses
+    /// (`applyEasing` / `getKeyframeValue` in src/store/index.ts). If the two
+    /// implementations drift, the exported file stops matching the preview the
+    /// user approved -- which is the whole point of exporting keyframes at all.
+    #[test]
+    fn easing_curves_match_the_frontend() {
+        for (name, t, expected) in [
+            ("linear", 0.25, 0.25),
+            ("easeIn", 0.5, 0.25),
+            ("easeOut", 0.5, 0.75),
+            ("easeInOut", 0.25, 0.125),
+            ("easeInOut", 0.75, 0.875),
+            ("hold", 0.99, 0.0),
+        ] {
+            assert!(
+                (apply_easing(t, name) - expected).abs() < 1e-9,
+                "{name} at {t}: expected {expected}, got {}",
+                apply_easing(t, name)
+            );
+        }
+    }
+
+    #[test]
+    fn easing_clamps_out_of_range_and_nan_like_the_frontend() {
+        assert_eq!(apply_easing(-5.0, "linear"), 0.0);
+        assert_eq!(apply_easing(5.0, "linear"), 1.0);
+        assert_eq!(apply_easing(f64::NAN, "linear"), 0.0);
+        // An easing name this build does not know must behave as linear, not panic.
+        assert!((apply_easing(0.4, "bounce-out-elastic") - 0.4).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_value_is_held_before_the_first_key_and_after_the_last() {
+        let track = [kf(1.0, 10.0, "linear"), kf(3.0, 30.0, "linear")];
+        assert_eq!(keyframe_value_at(&track, 0.0), Some(10.0));
+        assert_eq!(keyframe_value_at(&track, 99.0), Some(30.0));
+        assert_eq!(keyframe_value_at(&track, 1.0), Some(10.0));
+        assert_eq!(keyframe_value_at(&track, 3.0), Some(30.0));
+    }
+
+    #[test]
+    fn a_value_interpolates_between_neighbours_with_the_left_keys_easing() {
+        let track = [kf(0.0, 0.0, "linear"), kf(2.0, 100.0, "linear")];
+        assert_eq!(keyframe_value_at(&track, 1.0), Some(50.0));
+
+        // "hold" on the LEFT key freezes it until the right key is reached.
+        let held = [kf(0.0, 0.0, "hold"), kf(2.0, 100.0, "linear")];
+        assert_eq!(keyframe_value_at(&held, 1.9), Some(0.0));
+        assert_eq!(keyframe_value_at(&held, 2.0), Some(100.0));
+    }
+
+    #[test]
+    fn an_empty_or_degenerate_track_is_survivable() {
+        assert_eq!(keyframe_value_at(&[], 1.0), None);
+        // Two keys at the same instant must not divide by zero.
+        let same = [kf(1.0, 5.0, "linear"), kf(1.0, 9.0, "linear")];
+        assert!(keyframe_value_at(&same, 1.0).is_some());
+    }
+
+    #[test]
+    fn injection_overwrites_only_the_animated_parameters() {
+        let mut tracks = std::collections::HashMap::new();
+        tracks.insert(
+            "amount".to_string(),
+            vec![kf(0.0, 0.0, "linear"), kf(2.0, 100.0, "linear")],
+        );
+        let mut params = serde_json::Map::new();
+        params.insert("amount".to_string(), serde_json::Value::from(7.0));
+        params.insert("other".to_string(), serde_json::Value::from(3.0));
+
+        assert!(inject_keyframe_params(Some(&tracks), &mut params, 1.0));
+        assert_eq!(params["amount"], serde_json::Value::from(50.0));
+        assert_eq!(
+            params["other"],
+            serde_json::Value::from(3.0),
+            "an un-keyframed parameter must be left alone"
+        );
+
+        // No keyframes at all: nothing touched, and the caller can skip re-clamping.
+        let mut untouched = serde_json::Map::new();
+        untouched.insert("amount".to_string(), serde_json::Value::from(7.0));
+        assert!(!inject_keyframe_params(None, &mut untouched, 1.0));
+        assert_eq!(untouched["amount"], serde_json::Value::from(7.0));
+    }
+
+    /// The payload must survive a frontend that sends no `keyframes` key at all
+    /// -- every preview call still does.
+    #[test]
+    fn an_effect_call_without_keyframes_still_deserializes() {
+        let call: EffectCall =
+            serde_json::from_str(r#"{"effect_id":"dithering.bayer","params":{},"mask_b64":null}"#)
+                .expect("payloads without keyframes must still parse");
+        assert!(call.keyframes.is_none());
+    }
+
+    #[test]
+    fn an_effect_call_with_keyframes_deserializes() {
+        let call: EffectCall = serde_json::from_str(
+            r#"{"effect_id":"dithering.bayer","params":{},"mask_b64":null,
+                "keyframes":{"amount":[{"time":0,"value":1,"easing":"linear"},
+                                       {"time":2,"value":9,"easing":"easeIn"}]}}"#,
+        )
+        .expect("parses");
+        let tracks = call.keyframes.expect("present");
+        assert_eq!(tracks["amount"].len(), 2);
+        assert_eq!(keyframe_value_at(&tracks["amount"], 0.0), Some(1.0));
+    }
+}
+
+#[cfg(test)]
+mod audio_binding_tests {
+    use super::*;
+    use crate::audio::FrameAudioFeatures;
+
+    fn features(bass: f64) -> FrameAudioFeatures {
+        FrameAudioFeatures {
+            frame: 0,
+            time: 0.0,
+            rms: 0.0,
+            energy: 0.0,
+            spectral_centroid: 0.0,
+            spectral_flatness: 0.0,
+            spectral_rolloff: 0.0,
+            spectral_flux: 0.0,
+            zcr: 0.0,
+            volume: 0.0,
+            sub_bass: 0.0,
+            bass,
+            low_mid: 0.0,
+            mid: 0.0,
+            high_mid: 0.0,
+            presence: 0.0,
+            brilliance: 0.0,
+            beat_bass: true,
+            beat_mid: false,
+            beat_treble: false,
+            beat_energy: 0.25,
+        }
+    }
+
+    fn binding(source: &str) -> AudioBindingSpec {
+        AudioBindingSpec {
+            source: source.to_string(),
+            input_min: 0.0,
+            input_max: 1.0,
+            output_min: 0.0,
+            output_max: 10.0,
+            attack: 1.0,
+            decay: 1.0,
+            gate_enabled: false,
+            gate_threshold: 0.0,
+            invert: false,
+        }
+    }
+
+    /// The UI writes camelCase feature names; the struct is snake_case. A name
+    /// that resolves to nothing would silently pin the parameter at its
+    /// output_min forever, which is indistinguishable from "audio does nothing".
+    #[test]
+    fn every_source_the_ui_offers_resolves() {
+        let f = features(0.5);
+        for name in [
+            "rms",
+            "energy",
+            "spectralCentroid",
+            "spectralFlatness",
+            "spectralRolloff",
+            "spectralFlux",
+            "zcr",
+            "volume",
+            "subBass",
+            "bass",
+            "lowMid",
+            "mid",
+            "highMid",
+            "presence",
+            "brilliance",
+            "beatBass",
+            "beatMid",
+            "beatTreble",
+            "beatEnergy",
+        ] {
+            assert!(
+                f.by_binding_source(name).is_some(),
+                "binding source {name} does not resolve"
+            );
+        }
+        assert_eq!(f.by_binding_source("bass"), Some(0.5));
+        // Booleans come through as 1.0 / 0.0 so they can drive a numeric param.
+        assert_eq!(f.by_binding_source("beatBass"), Some(1.0));
+        assert_eq!(f.by_binding_source("beatMid"), Some(0.0));
+        assert_eq!(f.by_binding_source("nonsense"), None);
+    }
+
+    /// The same arithmetic as processChannel in AudioParameterMapper.ts. With
+    /// dt large enough that the smoothing factor is ~1, one step should land
+    /// essentially on the mapped target.
+    #[test]
+    fn a_binding_maps_its_range_onto_the_output_range() {
+        let mut s = AudioBindingSmoother::default();
+        let b = binding("bass");
+        // dt = 1s, attack = 1 -> factor = 1 - e^-21, i.e. ~1.0
+        let v = s.value("amount", &b, &features(0.5), 1.0);
+        assert!((v - 5.0).abs() < 1e-6, "expected ~5.0, got {v}");
+    }
+
+    #[test]
+    fn smoothing_carries_state_between_frames() {
+        let mut s = AudioBindingSmoother::default();
+        let mut b = binding("bass");
+        b.attack = 0.0; // slowest rise
+        let dt = 1.0 / 30.0;
+        let first = s.value("amount", &b, &features(1.0), dt);
+        let second = s.value("amount", &b, &features(1.0), dt);
+        assert!(
+            first > 0.0 && first < 10.0,
+            "first step should be partial: {first}"
+        );
+        assert!(second > first, "the value must keep chasing its target");
+        assert!(second < 10.0);
+    }
+
+    #[test]
+    fn a_gate_below_threshold_pulls_the_output_to_its_floor() {
+        let mut s = AudioBindingSmoother::default();
+        let mut b = binding("bass");
+        b.gate_enabled = true;
+        b.gate_threshold = 0.8;
+        let v = s.value("amount", &b, &features(0.2), 1.0);
+        assert!(
+            v.abs() < 1e-6,
+            "gated below threshold should map to output_min: {v}"
+        );
+    }
+
+    #[test]
+    fn invert_mirrors_within_the_output_range() {
+        let mut s = AudioBindingSmoother::default();
+        let mut b = binding("bass");
+        b.invert = true;
+        let v = s.value("amount", &b, &features(1.0), 1.0);
+        // Un-inverted this is ~10; inverted it must be ~0.
+        assert!(v.abs() < 1e-3, "expected ~0 after inversion, got {v}");
+    }
+
+    #[test]
+    fn injection_writes_only_bound_parameters_and_needs_both_halves() {
+        let mut s = AudioBindingSmoother::default();
+        let mut bindings = std::collections::HashMap::new();
+        bindings.insert("amount".to_string(), binding("bass"));
+
+        let mut params = serde_json::Map::new();
+        params.insert("amount".to_string(), serde_json::Value::from(1.0));
+        params.insert("other".to_string(), serde_json::Value::from(2.0));
+
+        let f = features(1.0);
+        assert!(s.inject(Some(&bindings), &mut params, Some(&f), 1.0));
+        assert!(params["amount"].as_f64().unwrap() > 9.0);
+        assert_eq!(params["other"], serde_json::Value::from(2.0));
+
+        // No bake data -> nothing to drive them with, so nothing is touched.
+        let mut untouched = serde_json::Map::new();
+        untouched.insert("amount".to_string(), serde_json::Value::from(1.0));
+        assert!(!s.inject(Some(&bindings), &mut untouched, None, 1.0));
+        assert_eq!(untouched["amount"], serde_json::Value::from(1.0));
+    }
+
+    #[test]
+    fn an_effect_call_without_audio_bindings_still_deserializes() {
+        let call: EffectCall =
+            serde_json::from_str(r#"{"effect_id":"x","params":{},"mask_b64":null}"#).unwrap();
+        assert!(call.audio_bindings.is_none());
+    }
+
+    /// The frontend serialises AudioBinding in camelCase.
+    #[test]
+    fn a_frontend_binding_deserializes() {
+        let call: EffectCall = serde_json::from_str(
+            r#"{"effect_id":"x","params":{},"mask_b64":null,
+                "audio_bindings":{"amount":{"source":"bass","inputMin":0,"inputMax":1,
+                "outputMin":2,"outputMax":8,"attack":0.05,"decay":0.2,
+                "gateEnabled":false,"gateThreshold":0,"invert":false}}}"#,
+        )
+        .expect("camelCase bindings must parse");
+        let b = &call.audio_bindings.unwrap()["amount"];
+        assert_eq!(b.source, "bass");
+        assert_eq!(b.output_max, 8.0);
+    }
+}
+
+#[cfg(test)]
+mod in_place_mask_tests {
+    use super::*;
+    use crate::effects::EffectRegistry;
+
+    fn grey(width: u32, height: u32) -> Frame {
+        let mut data = Vec::with_capacity((width * height * 4) as usize);
+        for _ in 0..(width * height) {
+            data.extend_from_slice(&[128, 128, 128, 255]);
+        }
+        Frame {
+            width,
+            height,
+            data,
+        }
+    }
+
+    /// Left half masked OUT (0), right half masked IN (255).
+    fn half_mask(width: u32, height: u32) -> Mask {
+        let mut data = Vec::with_capacity((width * height) as usize);
+        for _y in 0..height {
+            for x in 0..width {
+                data.push(if x < width / 2 { 0 } else { 255 });
+            }
+        }
+        Mask {
+            width,
+            height,
+            data,
+        }
+    }
+
+    fn left_right(frame: &Frame) -> (Vec<u8>, Vec<u8>) {
+        let w = frame.width as usize;
+        let mut left = Vec::new();
+        let mut right = Vec::new();
+        for y in 0..frame.height as usize {
+            for x in 0..w {
+                let i = (y * w + x) * 4;
+                let px = &frame.data[i..i + 4];
+                if x < w / 2 {
+                    left.extend_from_slice(px);
+                } else {
+                    right.extend_from_slice(px);
+                }
+            }
+        }
+        (left, right)
+    }
+
+    /// The regression test for deleting the clone in process_frame_with_mask:
+    /// the masked-out half must be BYTE-IDENTICAL to the input, and the other
+    /// half must have changed.
+    #[test]
+    fn process_frame_with_mask_leaves_the_masked_out_half_untouched() {
+        let reg = EffectRegistry::new();
+        let invert = reg.get("color.invert").expect("color.invert is registered");
+        let input = grey(8, 4);
+        let mask = half_mask(8, 4);
+        let (in_left, in_right) = left_right(&input);
+
+        let out = process_frame_with_mask(
+            invert,
+            &input,
+            Some(&mask),
+            &serde_json::Map::new(),
+            "inside",
+        )
+        .expect("processes");
+        let (out_left, out_right) = left_right(&out);
+
+        assert_eq!(out_left, in_left, "masked-out half must be byte-identical");
+        assert_ne!(
+            out_right, in_right,
+            "masked-in half must have been inverted"
+        );
+        assert_eq!(out_right[0], 127, "128 inverted is 127");
+    }
+
+    /// Same contract for the in-place path the export loop uses.
+    #[test]
+    fn apply_frame_in_place_mutates_only_the_masked_in_half() {
+        let reg = EffectRegistry::new();
+        let invert = reg.get("color.invert").expect("registered");
+        let mut frame = grey(8, 4);
+        let (in_left, in_right) = left_right(&frame);
+        let mask = half_mask(8, 4);
+
+        apply_frame_in_place(
+            invert,
+            &mut frame,
+            Some(&mask),
+            &serde_json::Map::new(),
+            true,
+            "inside",
+        )
+        .expect("processes in place");
+        let (out_left, out_right) = left_right(&frame);
+
+        assert_eq!(out_left, in_left);
+        assert_ne!(out_right, in_right);
+    }
+
+    /// With blend off, the whole frame changes -- proves `blend` is honoured.
+    #[test]
+    fn apply_frame_in_place_without_blend_changes_everything() {
+        let reg = EffectRegistry::new();
+        let invert = reg.get("color.invert").expect("registered");
+        let mut frame = grey(8, 4);
+        let (in_left, _) = left_right(&frame);
+        let mask = half_mask(8, 4);
+
+        apply_frame_in_place(
+            invert,
+            &mut frame,
+            Some(&mask),
+            &serde_json::Map::new(),
+            false,
+            "inside",
+        )
+        .expect("processes");
+        let (out_left, _) = left_right(&frame);
+        // color.invert handles no masking itself and is told not to blend, so
+        // the masked-out half is inverted too.
+        assert_ne!(out_left, in_left);
+    }
+
+    /// Zip semantics: a previous shorter than frames must not panic. The
+    /// old `prev[i]` did, on every masked Frame Stutter export.
+    #[test]
+    fn blend_segment_against_never_indexes_past_previous() {
+        let previous: Vec<Frame> = (0..3).map(|_| grey(4, 4)).collect();
+        let mut frames: Vec<Frame> = (0..9).map(|_| grey(4, 4)).collect();
+        let mask = half_mask(4, 4);
+        let cancel = AtomicBool::new(false);
+        blend_segment_against(&previous, &mut frames, &mask, "inside", &cancel)
+            .expect("zip must stop at the shorter side, not panic");
+    }
+
+    #[test]
+    fn blend_segment_against_blends_equal_length_sequences() {
+        let previous: Vec<Frame> = (0..2).map(|_| grey(4, 4)).collect();
+        // "processed" frames: all white. After the blend the masked-out left
+        // half must be grey again (previous) and the right half stay white.
+        let mut frames: Vec<Frame> = (0..2)
+            .map(|_| Frame {
+                width: 4,
+                height: 4,
+                data: vec![255u8; 4 * 4 * 4],
+            })
+            .collect();
+        let mask = half_mask(4, 4);
+        let cancel = AtomicBool::new(false);
+        blend_segment_against(&previous, &mut frames, &mask, "inside", &cancel).expect("blends");
+        let (left, right) = left_right(&frames[1]);
+        assert_eq!(left[0], 128);
+        assert_eq!(right[0], 255);
+    }
+
+    #[test]
+    fn blend_segment_against_honours_cancel() {
+        let previous: Vec<Frame> = (0..4).map(|_| grey(4, 4)).collect();
+        let mut frames: Vec<Frame> = (0..4).map(|_| grey(4, 4)).collect();
+        let mask = half_mask(4, 4);
+        let cancel = AtomicBool::new(true);
+        let err = blend_segment_against(&previous, &mut frames, &mask, "inside", &cancel)
+            .expect_err("a set cancel flag must abort");
+        assert!(err.contains("cancelled"));
     }
 }

@@ -1,7 +1,29 @@
 #!/bin/sh
-. "$(dirname "$0")/_/husky.sh"
+# Secret scan before every commit.
+#
+# Two lines used to sit above this and made the hook abort on every commit,
+# for every developer:
+#
+#   . "$(dirname "$0")/_/husky.sh"
+#   cd packages/desktop-gui
+#
+# `husky` is not a dependency of this project, so the `_/husky.sh` bootstrap it
+# sourced is never generated. Sourcing a missing file is a special-builtin
+# failure in POSIX sh, which exits the hook non-zero -- so the commit aborted
+# before the scan was ever reached. The `cd` then pointed at a monorepo path
+# that does not exist in this repository; package.json is at the root.
+#
+# Modern husky (v9+) does not need the bootstrap line anyway, so this runs as a
+# plain git hook and needs no husky install.
+#
+# Git only looks in .git/hooks unless core.hooksPath says otherwise, and that
+# setting is per-clone local config -- it cannot be committed. The `prepare`
+# script in package.json points it at this directory, and npm runs `prepare`
+# automatically after `npm install`, so a fresh clone gets the gate wired up
+# without anyone remembering to do it. To enable it by hand:
+#
+#     git config core.hooksPath .husky
 
-# Secret scan before every commit
 echo "Running secret scan..."
 npm run secret-scan
 if [ $? -ne 0 ]; then

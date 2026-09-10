@@ -42,8 +42,15 @@ class FakeImage {
   width = 512;
   height = 512;
   crossOrigin = "";
+  /** Set by a test to make the next load fail, as a blocked CORS fetch would. */
+  static failNext = false;
+  /** Records what crossOrigin was set to for the most recent load. */
+  static lastCrossOrigin: string | null = null;
   set src(_v: string) {
-    queueMicrotask(() => this.onload?.());
+    FakeImage.lastCrossOrigin = this.crossOrigin;
+    const shouldFail = FakeImage.failNext;
+    FakeImage.failNext = false;
+    queueMicrotask(() => (shouldFail ? this.onerror?.() : this.onload?.()));
   }
 }
 
@@ -160,5 +167,50 @@ describe("LUTLoader", () => {
     expect(revokeSpy).toHaveBeenCalledWith("blob:http://localhost/custom-lut-b");
 
     revokeSpy.mockRestore();
+  });
+
+  it("does not set crossOrigin for a relative URL", async () => {
+    // The packaged app serves bundled LUTs from Tauri's custom protocol.
+    // Requesting CORS there made the image error, which rejected loadLUT and
+    // blacked out the preview the moment a LUT was applied.
+    const { gl } = createFakeGl();
+    const loader = new LUTLoader({ getGL: () => gl } as unknown as WebGLContext);
+    FakeImage.lastCrossOrigin = null;
+    await loader.loadLUT("/lut/amatorka.png");
+    expect(FakeImage.lastCrossOrigin).toBe("");
+  });
+
+  it("does not set crossOrigin for a blob: URL", async () => {
+    const { gl } = createFakeGl();
+    const loader = new LUTLoader({ getGL: () => gl } as unknown as WebGLContext);
+    FakeImage.lastCrossOrigin = null;
+    await loader.loadLUT("blob:abc-123");
+    expect(FakeImage.lastCrossOrigin).toBe("");
+  });
+
+  it("sets crossOrigin only for a genuinely cross-origin URL", async () => {
+    const { gl } = createFakeGl();
+    const loader = new LUTLoader({ getGL: () => gl } as unknown as WebGLContext);
+    FakeImage.lastCrossOrigin = null;
+    await loader.loadLUT("https://cdn.example.com/lut/x.png");
+    expect(FakeImage.lastCrossOrigin).toBe("anonymous");
+  });
+
+  it("rejects when the image fails to load", async () => {
+    const { gl } = createFakeGl();
+    const loader = new LUTLoader({ getGL: () => gl } as unknown as WebGLContext);
+    FakeImage.failNext = true;
+    await expect(loader.loadLUT("/lut/broken.png")).rejects.toThrow(/lut\/broken\.png/);
+  });
+
+  it("does not cache a texture for a failed load", async () => {
+    // A rejected load must not poison the cache, or the retry after a
+    // transient failure would return a texture that was never created.
+    const { gl, deleteTexture } = createFakeGl();
+    const loader = new LUTLoader({ getGL: () => gl } as unknown as WebGLContext);
+    FakeImage.failNext = true;
+    await expect(loader.loadLUT("/lut/retry.png")).rejects.toBeDefined();
+    await loader.loadLUT("/lut/retry.png");
+    expect(deleteTexture).not.toHaveBeenCalled();
   });
 });

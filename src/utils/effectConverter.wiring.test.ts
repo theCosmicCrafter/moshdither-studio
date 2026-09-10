@@ -17,7 +17,8 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { rustToWebGL } from "./effectConverter";
+import { rustToWebGL, stackToRustPayload } from "./effectConverter";
+import type { StackEntry, Keyframe } from "../store";
 import { shaderRegistry } from "../engine/shaders";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -156,5 +157,74 @@ describe("effect parameter wiring (Rust <-> WebGL preview)", () => {
     // pass_through renders the source unchanged. Claiming that is an accurate
     // preview tells the user the effect is doing nothing.
     expect(lying).toEqual([]);
+  });
+});
+
+/**
+ * Keyframes have to reach the exporter. The UI has offered a diamond on every
+ * numeric parameter for a long time and the preview honoured them, but the
+ * export payload carried one static params map per effect -- so a rendered file
+ * froze every animated parameter at whatever the playhead held when Export was
+ * clicked.
+ */
+describe("stackToRustPayload keyframes", () => {
+  const entry = (id: string): StackEntry => ({
+    id,
+    effectId: "dither.bayer",
+    effectName: "Bayer",
+    params: { amount: 5 },
+    enabled: true,
+    maskId: null,
+    maskB64: null,
+    maskMode: "inside",
+  });
+
+  const kf = (time: number, value: number, easing: Keyframe["easing"] = "linear"): Keyframe => ({
+    id: `k${time}`,
+    time,
+    value,
+    easing,
+  });
+
+  it("omits the field entirely when nothing is animated", () => {
+    const out = stackToRustPayload([entry("s1")], null, []);
+    expect(out[0]).not.toHaveProperty("keyframes");
+    const withEmpty = stackToRustPayload([entry("s1")], null, [], undefined, { s1: { amount: [] } });
+    expect(withEmpty[0]).not.toHaveProperty("keyframes");
+  });
+
+  it("carries a track for the matching stack entry only", () => {
+    const out = stackToRustPayload([entry("s1"), entry("s2")], null, [], undefined, {
+      s1: { amount: [kf(0, 1), kf(2, 9)] },
+    });
+    expect(out[0].keyframes).toEqual({
+      amount: [
+        { time: 0, value: 1, easing: "linear" },
+        { time: 2, value: 9, easing: "linear" },
+      ],
+    });
+    expect(out[1]).not.toHaveProperty("keyframes");
+  });
+
+  it("sorts a track by time, because the Rust side walks it in order", () => {
+    const out = stackToRustPayload([entry("s1")], null, [], undefined, {
+      s1: { amount: [kf(5, 50), kf(1, 10), kf(3, 30)] },
+    });
+    expect(out[0].keyframes!.amount.map((k) => k.time)).toEqual([1, 3, 5]);
+  });
+
+  it("preserves the easing of each key", () => {
+    const out = stackToRustPayload([entry("s1")], null, [], undefined, {
+      s1: { amount: [kf(0, 1, "hold"), kf(2, 9, "easeInOut")] },
+    });
+    expect(out[0].keyframes!.amount.map((k) => k.easing)).toEqual(["hold", "easeInOut"]);
+  });
+
+  it("leaves a disabled effect out, keyframes and all", () => {
+    const disabled = { ...entry("s1"), enabled: false };
+    const out = stackToRustPayload([disabled], null, [], undefined, {
+      s1: { amount: [kf(0, 1), kf(2, 9)] },
+    });
+    expect(out).toHaveLength(0);
   });
 });

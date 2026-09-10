@@ -57,26 +57,23 @@ test("effect stack shows parameter controls", async ({ page }) => {
 
 test("removing effect from stack", async ({ page }) => {
   // Add an effect
-  const ditheringTab = page.locator("text=Dither").first();
-  await ditheringTab.click();
-  await page.waitForTimeout(500);
+  // Clicking an effect row in the browser calls addToStack
+  // (CategoryAccordion.tsx:168), so add one before trying to remove it -- the
+  // stack starts empty on a fresh profile. The old version clicked
+  // `text=Dither` and `text=Bayer`, neither of which targets the row button,
+  // then guarded the remove click and asserted the header was visible.
+  await page.getByRole("button", { name: /Bayer Dither/ }).click();
 
-  const bayerEffect = page.locator("text=Bayer").first();
-  await bayerEffect.click();
-  await page.waitForTimeout(1000);
+  // The Stack shares the left tabset with Effects, so its Inspector is not
+  // mounted until the tab is opened.
+  await page.getByRole("tab", { name: "Stack" }).click();
+  const stack = page.locator(".flexlayout__tab").filter({ hasText: "Inspector" });
 
-  // Try to find and click a remove/delete button on the effect
-  const removeBtn = page
-    .locator("[title*='remove'], [title*='delete'], [title*='Remove'], [title*='Delete'], [aria-label*='remove']")
-    .first();
-  if (await removeBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await removeBtn.click();
-    await page.waitForTimeout(500);
-  }
+  const removeButtons = stack.getByTitle("Remove");
+  await expect(removeButtons).toHaveCount(1);
 
-  // App should still be responsive
-  const toolbar = page.locator("header").first();
-  await expect(toolbar).toBeVisible();
+  await removeButtons.first().click();
+  await expect(removeButtons).toHaveCount(0);
 });
 
 test("effect toggle (enable/disable) doesn't crash", async ({ page }) => {

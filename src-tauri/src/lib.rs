@@ -1,6 +1,7 @@
 pub mod audio;
 pub mod commands;
 pub mod config;
+pub mod crash;
 pub mod error;
 pub mod window_commands;
 
@@ -10,16 +11,18 @@ pub mod environment;
 pub mod ffmpeg;
 pub mod path_guard;
 pub mod presets;
+pub mod proc;
+pub mod sam3_addon;
 pub mod sam3_engine;
 pub mod utils;
 
 use commands::{
     animate_still_as_video, apply_effect_stack, apply_ffglitch, cancel_export, check_update,
-    export_video, extract_audio_from_video, generate_proxy_command, get_frame_data,
-    get_media_info, get_media_metadata, install_update, list_effects, list_effects_by_category,
-    load_media, load_media_from_base64, prepare_custom_lut, read_file, sam3_auto_mask,
-    sam3_box_prompt, sam3_clear, sam3_init, sam3_load_image, sam3_point_prompt,
-    sam3_postprocess_mask, sam3_refine_mask, sam3_shutdown, sam3_text_prompt,
+    export_video, extract_audio_from_video, generate_proxy_command, get_frame_data, get_media_info,
+    get_media_metadata, install_update, list_effects, list_effects_by_category, load_media,
+    load_media_from_base64, log_frontend, prepare_custom_lut, preview_ffglitch, read_file,
+    remove_export_temp, sam3_auto_mask, sam3_box_prompt, sam3_clear, sam3_init, sam3_load_image,
+    sam3_point_prompt, sam3_postprocess_mask, sam3_refine_mask, sam3_shutdown, sam3_text_prompt,
     sam3_video_predictor, save_file, save_media, save_processed_image, test_all_functions,
     verify_effects, AppState,
 };
@@ -41,7 +44,12 @@ pub fn run() {
     tracing::info!("Initializing Tauri Builder...");
     tauri::Builder::default()
         .setup(|app| {
-            tracing::info!("Tauri setup complete.");
+            // Report which webviews actually exist. wry logs
+            // "failed to create webview: 0x80070002" on this machine at startup
+            // while the app goes on working, and the only way to tell a real
+            // missing webview from a spurious error is to ask what survived.
+            let labels: Vec<String> = app.webview_windows().keys().cloned().collect();
+            tracing::info!("Tauri setup complete. webviews: {:?}", labels);
             // `app` is only read inside the macOS/Windows-gated block below; on
             // every other target that block is stripped entirely, which would
             // otherwise leave the closure's `app` parameter unused under
@@ -68,7 +76,12 @@ pub fn run() {
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        // The updater plugin is NOT registered, and must not be while
+        // `plugins.updater` is absent from tauri.conf.json: it deserialises its
+        // config at init and panics the whole app with
+        //   PluginInitialization("updater", "invalid type: null, expected struct Config")
+        // before a window ever opens. Restore this line and the config block
+        // together, never one alone.
         .manage(AppState::default())
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
@@ -81,6 +94,38 @@ pub fn run() {
                 };
             }
         })
+        // Seven of these are registered but never invoked from the frontend.
+        // They are recorded here so a later audit does not mistake them for
+        // broken wiring, and so nobody adopts one expecting it to be the
+        // established path:
+        //
+        //   get_environment_status / install_local_environment
+        //       A Python-environment setup flow that was never built a UI. The
+        //       need is real -- SAM3 and the FFglitch export both require Python
+        //       and neither tells the user when it is missing -- but wiring it
+        //       means designing that flow, not just calling these.
+        //   get_monitor_info
+        //       Exists so edge-snapping can compute proximity locally instead of
+        //       an IPC round-trip per move event. useWindowEdgeSnap never
+        //       adopted it. A perf refinement, not a fault.
+        //   list_effects_by_category
+        //       Superseded: the UI fetches list_effects once and filters
+        //       client-side.
+        //   sam3_refine_mask
+        //       A genuine SAM3 capability (refine an existing mask with new
+        //       points) that MaskPanel does not expose yet.
+        //   save_media
+        //       Saves the CURRENT frame. The frontend wants the PROCESSED frame
+        //       and calls save_processed_image instead. Not a duplicate, just
+        //       rarely what anyone wants.
+        //   test_all_functions
+        //       Development diagnostic, driven from mosh-verify rather than the
+        //       app.
+        //
+        // Every registered command is callable from the webview, so unused ones
+        // are IPC surface for no benefit. They are kept rather than removed
+        // because each represents intended functionality; drop the registration
+        // (not the function) if that trade stops being worth it.
         .invoke_handler(tauri::generate_handler![
             presets::get_presets_path,
             presets::load_presets,
@@ -91,6 +136,10 @@ pub fn run() {
             list_effects_by_category,
             apply_effect_stack,
             apply_ffglitch,
+            preview_ffglitch,
+            remove_export_temp,
+            log_frontend,
+            crash::get_log_path,
             cancel_export,
             check_update,
             install_update,
@@ -102,6 +151,8 @@ pub fn run() {
             get_media_info,
             get_media_metadata,
             extract_audio_from_video,
+            sam3_addon::sam3_addon_status,
+            sam3_addon::sam3_addon_install,
             sam3_init,
             sam3_load_image,
             sam3_text_prompt,

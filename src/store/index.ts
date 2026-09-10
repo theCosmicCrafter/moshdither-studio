@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { logger } from "../utils/logger";
 import type { AudioBakeData, AudioManifest } from "../engine/audio/types";
 import { type WatermarkSettings, DEFAULT_WATERMARK } from "../utils/watermark";
 
@@ -107,8 +108,12 @@ export interface AppState {
   duration: number;
   setDuration: (d: number) => void;
   inPoint: number | null;
+  /** In/out points restored from a project, waiting for the media's real
+   *  length before they can be clamped. See setDuration. */
+  pendingInOut: { inPoint: number | null; outPoint: number | null } | null;
   outPoint: number | null;
   setInPoint: (t: number | null) => void;
+  setPendingInOut: (v: { inPoint: number | null; outPoint: number | null } | null) => void;
   setOutPoint: (t: number | null) => void;
   clearInOut: () => void;
 
@@ -121,10 +126,42 @@ export interface AppState {
   filePath: string | null;
   proxyUrl: string | null;
   isVideo: boolean;
+  /** Native frame rate of the loaded video (from ffprobe). Stills use animateFps. */
+  mediaFps: number;
   /** When true, preview uses CPU (Rust backend) instead of WebGL shaders.
    *  Set when the stack contains effects without accurate WebGL implementations
    *  (e.g. error diffusion dithering algorithms). */
   useCpuPreview: boolean;
+  /** Auto-upgrade the preview to the exact CPU render once the user stops
+   *  interacting. On by default: a fast approximation while you work and the
+   *  real thing when you pause is what every NLE and compositor does, and it
+   *  removes a choice the user should never have had to make. */
+  previewAutoExact: boolean;
+  /** The FFglitch bitstream-datamosh mode chosen for export.
+   *  Lived as component-local useState in ExportPanel, so it could not be
+   *  saved in a preset, did not survive the panel unmounting, and reset to
+   *  "classic" on every launch -- for what is arguably the app's signature
+   *  capability. */
+  /** Bumped to ask AppLayout to (re)load the media at the current filePath.
+   *  `refreshPreview` lives in AppLayout, so code elsewhere -- openProject, for
+   *  one -- had no way to ask for it and simply set filePath and moved on,
+   *  leaving the app showing one file while every operation targeted another. */
+  mediaReloadToken: number;
+  ffglitchMode: string;
+  /** Per-mode knobs for the bitstream datamosh, keyed by mode so switching
+   *  away and back keeps what was set. Only modes the user touched have an
+   *  entry; everything else runs on the defaults in lib/ffglitchModes.ts. */
+  ffglitchParams: Record<string, Record<string, number | boolean | string>>;
+  /** Export settings. These were component-local useState in ExportPanel, the
+   *  same fallacy as ffglitchMode one line below them: undocking or closing the
+   *  panel silently reset every one of a user's export choices. */
+  exportFormat: string;
+  exportCodec: string;
+  exportResolutionId: string;
+  exportProcessingScaleId: string;
+  exportQuality: "draft" | "good" | "best";
+  exportFps: number;
+  exportIncludeAudio: boolean;
 
   // Effects
   allEffects: EffectMeta[];
@@ -171,6 +208,10 @@ export interface AppState {
 
   // Mask / Segmentation
   activeMask: string | null; // base64 PNG of current mask
+  /** Previous masks, oldest first, so a brush stroke, shape, Clear or Invert
+   *  can be taken back. Capped at MASK_HISTORY_LIMIT. The main undo stack
+   *  covers the effect stack, not painting; this is the mask's own. */
+  maskHistory: { mask: string | null; label: string }[];
   maskRevision: number;
   maskVisible: boolean;
   maskTab: "sam3" | "manual";
@@ -197,10 +238,12 @@ export interface AppState {
   sam3Masks: string[]; // base64 PNG masks
   sam3MaskScores: number[]; // confidence scores
   sam3MaskIndex: number; // which of the 3 masks is currently selected
-  sam3FrameMasks: Record<number, string>; // per-frame masks
 
   // Keyframes
   keyframes: Record<string, KeyframeTrack>;
+
+  // Project
+  currentProjectPath: string | null;
 
   // UI
   isProcessing: boolean;
@@ -234,6 +277,21 @@ export interface AppState {
   customBg: string;
   customUiModalOpen: boolean;
   setCustomThemeColors: (primary: string, secondary: string, bg: string) => void;
+
+  // Animate-as-video. Length and frame rate used when turning a still into a
+  // clip. Clip length is a creative parameter for datamoshing -- how long an
+  // I-frame's corruption smears for is a function of how many frames follow it
+  // -- so these are user settings rather than the constants they used to be.
+  // The still's path is kept so the conversion can be undone in-app; the file
+  // itself is untouched, but without this the only way back was reopening it.
+  animateDurationSecs: number;
+  animateFps: number;
+  animateSourceStillPath: string | null;
+  animateDialogOpen: boolean;
+  setAnimateDurationSecs: (v: number) => void;
+  setAnimateFps: (v: number) => void;
+  setAnimateSourceStillPath: (p: string | null) => void;
+  setAnimateDialogOpen: (open: boolean) => void;
   setCustomUiModalOpen: (open: boolean) => void;
 
   // Output sizing
@@ -247,7 +305,13 @@ export interface AppState {
   proxyCrf: number;
   proxyGenerating: boolean;
 
-  // Multi-Track Layering
+  // Multi-Track Layering.
+  //
+  // The Tracks PANEL is retired (recycling/2026-09-09_tracks-panel-wired-to-
+  // nothing): it created entries that no renderer, preview or export ever
+  // read, so to a user it was a list that did nothing. The state stays so
+  // project files that carry `tracks` still load, and so the feature can be
+  // brought back with a renderer behind it.
   tracks: Track[];
   activeTrackId: string | null;
 
@@ -265,9 +329,23 @@ export interface AppState {
   setPreviewDataUrl: (url: string | null) => void;
   setOriginalDataUrl: (url: string | null) => void;
   setFilePath: (path: string | null) => void;
+  setCurrentProjectPath: (path: string | null) => void;
   setProxyUrl: (url: string | null) => void;
   setIsVideo: (isVideo: boolean) => void;
+  setMediaFps: (fps: number) => void;
   setUseCpuPreview: (v: boolean) => void;
+  setPreviewAutoExact: (v: boolean) => void;
+  requestMediaReload: () => void;
+  setFfglitchMode: (v: string) => void;
+  setFfglitchParam: (mode: string, id: string, value: number | boolean | string) => void;
+  resetFfglitchParams: (mode: string) => void;
+  setExportFormat: (v: string) => void;
+  setExportCodec: (v: string) => void;
+  setExportResolutionId: (v: string) => void;
+  setExportProcessingScaleId: (v: string) => void;
+  setExportQuality: (v: "draft" | "good" | "best") => void;
+  setExportFps: (v: number) => void;
+  setExportIncludeAudio: (v: boolean) => void;
   setAllEffects: (effects: EffectMeta[]) => void;
   setActiveCategory: (cat: string) => void;
   setSearchQuery: (q: string) => void;
@@ -283,10 +361,26 @@ export interface AppState {
   setStackItemMaskMode: (id: string, mode: "inside" | "outside" | "alpha") => void;
   toggleStackItem: (id: string) => void;
   selectStackItem: (id: string | null) => void;
+
+  /** Insert a copy of an entry directly above it, params and mask included. */
+  duplicateStackItem: (id: string) => void;
+  /**
+   * Isolate one entry: disable every other entry, or restore them if this
+   * entry is already the only one enabled. Soloing is a view state expressed
+   * through `enabled`, so it survives export exactly as it previews.
+   */
+  soloStackItem: (id: string) => void;
+  /** Clipboard holding a detached copy of an entry, or null. */
+  copiedStackEntry: StackEntry | null;
+  copyStackItem: (id: string) => void;
+  /** Append the clipboard entry with a fresh instance id. No-op when empty. */
+  pasteStackItem: () => void;
   setIsProcessing: (v: boolean) => void;
   setShowBeforeAfter: (v: boolean) => void;
   setZoom: (z: number) => void;
-  setStatusMessage: (msg: string) => void;
+  /** `level: "error"` logs the message to the app log file regardless of its
+   *  wording. Prefer it over relying on the prose heuristic below. */
+  setStatusMessage: (msg: string, level?: "info" | "error") => void;
   setPlaybackSpeed: (speed: number) => void;
   setScopeMode: (mode: "none" | "histogram" | "waveform" | "rgb_parade") => void;
   setScopesVisible: (v: boolean) => void;
@@ -342,6 +436,10 @@ export interface AppState {
 
   // Mask actions
   setActiveMask: (maskB64: string | null) => void;
+  /** Record the CURRENT mask before an action replaces it. */
+  pushMaskHistory: (label: string) => void;
+  /** Restore the previous mask; returns its label, or null if there was none. */
+  undoMask: () => string | null;
   setMaskVisible: (v: boolean) => void;
   toggleViewportGuide: (guide: keyof ViewportGuides) => void;
   setViewportGuides: (guides: Partial<ViewportGuides>) => void;
@@ -364,8 +462,6 @@ export interface AppState {
   // Multi-mask actions
   setSam3Masks: (masks: string[], scores: number[]) => void;
   setSam3MaskIndex: (index: number) => void;
-  setSam3FrameMasks: (masks: Record<number, string>) => void;
-  clearSam3FrameMasks: () => void;
 
   // Proxy actions
   setProxyEnabled: (v: boolean) => void;
@@ -446,9 +542,16 @@ function pushHistory(state: Pick<AppState, "pastStacks" | "effectStack">) {
   };
 }
 
+/** Mask undo depth. Masks are full-size PNGs, so this is bounded on purpose. */
+const MASK_HISTORY_LIMIT = 30;
+
 export const useAppStore = create<AppState>((set, get) => ({
   currentTime: 0,
-  isPlaying: true,
+  // Paused on launch. This defaulted to true, so the app opened mid-playback
+  // with the transport already showing Pause -- and because a paused preview
+  // used to keep animating off the wall clock, nothing about the screen made
+  // that visible.
+  isPlaying: false,
   loopMode: "off",
   duration: 10,
   mediaLoaded: false,
@@ -459,7 +562,19 @@ export const useAppStore = create<AppState>((set, get) => ({
   filePath: null,
   proxyUrl: null,
   isVideo: false,
+  mediaFps: 30,
   useCpuPreview: false,
+  previewAutoExact: true,
+  mediaReloadToken: 0,
+  ffglitchMode: "classic",
+  ffglitchParams: {},
+  exportFormat: "mp4",
+  exportCodec: "h264",
+  exportResolutionId: "source",
+  exportProcessingScaleId: "auto",
+  exportQuality: "good",
+  exportFps: 30,
+  exportIncludeAudio: true,
   allEffects: [],
   activeCategory: "dithering",
   searchQuery: "",
@@ -513,6 +628,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   appBarSize: 300,
   theme: "dark",
   panelOpacity: 0.65,
+  animateDurationSecs: 5,
+  animateFps: 30,
+  animateSourceStillPath: null,
+  animateDialogOpen: false,
   customPrimary: "#00f4fe",
   customSecondary: "#ffade0",
   customBg: "#131314",
@@ -528,7 +647,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeTrackId: null,
   inPoint: null,
   outPoint: null,
+  pendingInOut: null,
   activeMask: null,
+  maskHistory: [],
   maskRevision: 0,
   maskVisible: true,
   viewportGuides: {
@@ -551,28 +672,91 @@ export const useAppStore = create<AppState>((set, get) => ({
   sam3Masks: [],
   sam3MaskScores: [],
   sam3MaskIndex: 0,
-  sam3FrameMasks: {},
   keyframes: {},
   exportProgress: 0,
   exportIsRunning: false,
   exportCancelRequested: false,
   exportTriggerId: 0,
   watermark: DEFAULT_WATERMARK,
+  currentProjectPath: null,
 
-  setCurrentTime: (t) => set({ currentTime: t }),
+  // Guarded like setDuration/setInPoint/setOutPoint, which this alone was
+  // missing. currentTime reaches shader uniforms (PreviewViewport passes it as
+  // animTime), so a NaN or Infinity here corrupts the render silently rather
+  // than throwing.
+  //
+  // Only the lower bound is enforced here, not `duration`: duration is set
+  // asynchronously while media loads, so clamping to it would truncate a seek
+  // that arrives before the real duration does. The upper bound belongs at the
+  // call sites that actually know it -- the playback loop already wraps to 0
+  // before calling this.
+  setCurrentTime: (t) =>
+    set({ currentTime: Number.isFinite(t) ? Math.max(0, t) : 0 }),
   togglePlay: () => set((state) => ({ isPlaying: !state.isPlaying })),
   stopPlayback: () => set({ isPlaying: false }),
   setLoopMode: (mode) => set({ loopMode: mode }),
-  setDuration: (d) => set({ duration: Math.max(0.1, d) }),
+  // Setting the duration also settles any in/out points that were waiting
+  // for it.
+  //
+  // Opening a project restores in/out synchronously, but the media -- and
+  // therefore the real duration -- loads afterwards, and setInPoint/
+  // setOutPoint clamp against whatever `duration` currently holds. So a 30 s
+  // out point saved against a 35 s clip came back clamped to the store
+  // default of 10, and the first export after reopening cut the clip at ten
+  // seconds. Clamping here, against the length we now actually know, is the
+  // only point at which the answer can be right.
+  setDuration: (d) =>
+    set((state) => {
+      const duration = Math.max(0.1, d);
+      const pending = state.pendingInOut;
+      if (!pending) return { duration };
+      const inPoint =
+        pending.inPoint === null ? null : clampFinite(pending.inPoint, 0, duration, 0);
+      const outPoint =
+        pending.outPoint === null ? null : clampFinite(pending.outPoint, 0, duration, 0);
+      return {
+        duration,
+        pendingInOut: null,
+        inPoint,
+        // A shorter clip can collapse the range; drop the out point rather
+        // than keep one at or before the in point.
+        outPoint: outPoint !== null && inPoint !== null && outPoint <= inPoint ? null : outPoint,
+      };
+    }),
   setMediaLoaded: (loaded) => set({ mediaLoaded: loaded }),
   setMediaInfo: (info) => set({ mediaInfo: info }),
   setMediaMetadata: (meta) => set({ mediaMetadata: meta }),
   setPreviewDataUrl: (url) => set({ previewDataUrl: url }),
   setOriginalDataUrl: (url) => set({ originalDataUrl: url }),
   setFilePath: (path) => set({ filePath: path }),
+  setCurrentProjectPath: (path) => set({ currentProjectPath: path }),
   setProxyUrl: (url) => set({ proxyUrl: url }),
   setIsVideo: (isVideo) => set({ isVideo }),
+  setMediaFps: (fps) => set({ mediaFps: Number.isFinite(fps) && fps > 0 ? fps : 30 }),
   setUseCpuPreview: (v) => set({ useCpuPreview: v }),
+  setPreviewAutoExact: (v) => set({ previewAutoExact: v }),
+  requestMediaReload: () => set((st) => ({ mediaReloadToken: st.mediaReloadToken + 1 })),
+  setFfglitchMode: (v) => set({ ffglitchMode: v }),
+  setFfglitchParam: (mode, id, value) =>
+    set((state) => ({
+      ffglitchParams: {
+        ...state.ffglitchParams,
+        [mode]: { ...(state.ffglitchParams[mode] ?? {}), [id]: value },
+      },
+    })),
+  resetFfglitchParams: (mode) =>
+    set((state) => {
+      const next = { ...state.ffglitchParams };
+      delete next[mode];
+      return { ffglitchParams: next };
+    }),
+  setExportFormat: (v) => set({ exportFormat: v }),
+  setExportCodec: (v) => set({ exportCodec: v }),
+  setExportResolutionId: (v) => set({ exportResolutionId: v }),
+  setExportProcessingScaleId: (v) => set({ exportProcessingScaleId: v }),
+  setExportQuality: (v) => set({ exportQuality: v }),
+  setExportFps: (v) => set({ exportFps: v }),
+  setExportIncludeAudio: (v) => set({ exportIncludeAudio: v }),
   setAllEffects: (effects) => set({ allEffects: effects }),
   setActiveCategory: (cat) => set({ activeCategory: cat }),
   setSearchQuery: (q) => set({ searchQuery: q }),
@@ -613,6 +797,41 @@ export const useAppStore = create<AppState>((set, get) => ({
     // web-style URL with the leading slash removed. Custom user LUTs pass the
     // absolute disk path instead.
     const lut_path = filePath ?? previewUrl.replace(/^\//, "");
+
+    // Applying a look from the LUT library SWAPS the current one rather than
+    // layering a second on top. The library is a gallery of one-click tiles
+    // labelled "Apply <name>", and the status bar reports "LUT applied: <name>"
+    // in the singular, so browsing looks reads as swapping -- but this used to
+    // append, and every LUT grades the output of the one before it. Four clicks
+    // on Gotham took a test image from mean luma 124.8 to 2.5: a black preview,
+    // reported for months as "the LUT blacked out the screen".
+    //
+    // Only the texture is swapped, so a strength the user has dialled in on the
+    // slider carries across the looks they audition. Stacking two LUTs is still
+    // possible deliberately, by duplicating the entry from the effect stack.
+    let existingIndex = -1;
+    for (let i = state.effectStack.length - 1; i >= 0; i--) {
+      if (state.effectStack[i].effectId === "color.lut_grading") {
+        existingIndex = i;
+        break;
+      }
+    }
+    if (existingIndex !== -1) {
+      const existing = state.effectStack[existingIndex];
+      const swapped: StackEntry = {
+        ...existing,
+        params: { ...existing.params, tLUT: previewUrl, lut_path },
+      };
+      const nextStack = [...state.effectStack];
+      nextStack[existingIndex] = swapped;
+      set((s) => ({
+        ...pushHistory(s),
+        effectStack: nextStack,
+        selectedStackId: swapped.id,
+      }));
+      return;
+    }
+
     const entry: StackEntry = {
       id: nextStackId(),
       effectId: "color.lut_grading",
@@ -712,11 +931,93 @@ export const useAppStore = create<AppState>((set, get) => ({
       effectStack: state.effectStack.map((e) => (e.id === id ? { ...e, enabled: !e.enabled } : e)),
     })),
 
+  duplicateStackItem: (id) =>
+    set((state) => {
+      const index = state.effectStack.findIndex((e) => e.id === id);
+      if (index === -1) return state;
+      // Params are cloned rather than shared: they are a mutable object, and a
+      // shared reference would make editing the copy silently edit the original.
+      const copy: StackEntry = {
+        ...state.effectStack[index],
+        id: nextStackId(),
+        params: { ...state.effectStack[index].params },
+      };
+      const newStack = [...state.effectStack];
+      // Directly above the source, where stacking order makes the relationship
+      // obvious -- appending to the end would change what the copy composites over.
+      newStack.splice(index + 1, 0, copy);
+      return { ...pushHistory(state), effectStack: newStack, selectedStackId: copy.id };
+    }),
+
+  soloStackItem: (id) =>
+    set((state) => {
+      const target = state.effectStack.find((e) => e.id === id);
+      if (!target) return state;
+      const othersAllDisabled = state.effectStack.every((e) => e.id === id || !e.enabled);
+      // Already soloed -> restore everything, so the same action toggles both
+      // ways and cannot strand the user with one effect and no way back.
+      const enableAll = othersAllDisabled && target.enabled;
+      return {
+        ...pushHistory(state),
+        effectStack: state.effectStack.map((e) => ({
+          ...e,
+          enabled: enableAll ? true : e.id === id,
+        })),
+        selectedStackId: id,
+      };
+    }),
+
+  copiedStackEntry: null,
+  copyStackItem: (id) =>
+    set((state) => {
+      const entry = state.effectStack.find((e) => e.id === id);
+      if (!entry) return state;
+      // Detached copy: holding the live object would let later edits to the
+      // source mutate what gets pasted.
+      return { copiedStackEntry: { ...entry, params: { ...entry.params } } };
+    }),
+
+  pasteStackItem: () =>
+    set((state) => {
+      const copied = state.copiedStackEntry;
+      if (!copied) return state;
+      const entry: StackEntry = {
+        ...copied,
+        id: nextStackId(),
+        params: { ...copied.params },
+      };
+      return {
+        ...pushHistory(state),
+        effectStack: [...state.effectStack, entry],
+        selectedStackId: entry.id,
+      };
+    }),
+
   selectStackItem: (id) => set({ selectedStackId: id }),
   setIsProcessing: (v) => set({ isProcessing: v }),
   setShowBeforeAfter: (v) => set({ showBeforeAfter: v }),
   setZoom: (z) => set({ zoom: clampFinite(z, 0.1, 5, 1) }),
-  setStatusMessage: (msg) => set({ statusMessage: msg }),
+  setStatusMessage: (msg, level) => {
+    // The status bar is where this app reports failures -- ExportPanel and the
+    // rest call setStatusMessage and never the logger -- so without this a
+    // failure existed only as UI text the user had to relay by hand.
+    //
+    // `level` is the reliable channel and callers should pass it. The regex is
+    // only a net for the ~40 sites that do not, and it is DEMONSTRABLY leaky:
+    // "The original file is no longer available", "WebGL context lost" and
+    // "Load media before exporting" all describe failures and match none of
+    // these words. Widening it further is a losing game -- "No masks found for
+    // prompt" cannot be matched by any robust pattern -- which is why the
+    // explicit parameter exists.
+    const isFailure =
+      level === "error" ||
+      (level === undefined &&
+        /fail|error|unavailable|cannot|could not|denied|no longer|not available|lost|unable/i.test(msg));
+    if (msg && msg !== get().statusMessage && isFailure) {
+      logger.error("status", msg);
+    }
+    set({ statusMessage: msg });
+  },
   setPlaybackSpeed: (speed) => set({ playbackSpeed: clampFinite(speed, 0.25, 4, 1) }),
   setScopeMode: (mode) => set({ scopeMode: mode }),
   setScopesVisible: (v) => set({ scopesVisible: v }),
@@ -742,11 +1043,22 @@ export const useAppStore = create<AppState>((set, get) => ({
   setTheme: (theme) => set({ theme }),
   toggleTheme: () => set((state) => ({ theme: state.theme === "dark" ? "light" : "dark" })),
   setPanelOpacity: (v) => set({ panelOpacity: Math.max(0.2, Math.min(1, v)) }),
+  // Clamped rather than validated at the call site so a bad value cannot reach
+  // ffmpeg's -t/-r. The ceilings are practical, not technical: a still expands
+  // to duration*fps identical frames, so 120s at 120fps is already 14400 frames
+  // of freeze-frame before any effect runs.
+  setAnimateDurationSecs: (v) =>
+    set({ animateDurationSecs: Number.isFinite(v) ? Math.max(0.1, Math.min(120, v)) : 5 }),
+  setAnimateFps: (v) =>
+    set({ animateFps: Number.isFinite(v) ? Math.max(1, Math.min(120, Math.round(v))) : 30 }),
+  setAnimateSourceStillPath: (p) => set({ animateSourceStillPath: p }),
+  setAnimateDialogOpen: (open) => set({ animateDialogOpen: open }),
   setCustomThemeColors: (primary, secondary, bg) =>
     set({ customPrimary: primary, customSecondary: secondary, customBg: bg, theme: "custom" }),
   setCustomUiModalOpen: (open) => set({ customUiModalOpen: open }),
   setAspectRatioLock: (v) => set({ aspectRatioLock: v }),
   setAspectRatio: (ratio) => set({ aspectRatio: ratio }),
+  setPendingInOut: (v) => set({ pendingInOut: v }),
   setInPoint: (t) =>
     set((state) => {
       const val = t === null ? null : clampFinite(t, 0, state.duration, 0);
@@ -920,6 +1232,24 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Mask actions
   setActiveMask: (maskB64) =>
     set((state) => ({ activeMask: maskB64, maskRevision: state.maskRevision + 1 })),
+  pushMaskHistory: (label) =>
+    set((state) => ({
+      maskHistory: [
+        ...state.maskHistory.slice(-(MASK_HISTORY_LIMIT - 1)),
+        { mask: state.activeMask, label },
+      ],
+    })),
+  undoMask: () => {
+    const { maskHistory, maskRevision } = get();
+    const last = maskHistory[maskHistory.length - 1];
+    if (!last) return null;
+    set({
+      maskHistory: maskHistory.slice(0, -1),
+      activeMask: last.mask,
+      maskRevision: maskRevision + 1,
+    });
+    return last.label;
+  },
   setMaskVisible: (v) => set({ maskVisible: v }),
   toggleViewportGuide: (guide) =>
     set((state) => ({
@@ -981,10 +1311,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       };
     }),
 
-  setSam3FrameMasks: (masks) =>
-    set((state) => ({ sam3FrameMasks: masks, maskRevision: state.maskRevision + 1 })),
-  clearSam3FrameMasks: () =>
-    set((state) => ({ sam3FrameMasks: {}, maskRevision: state.maskRevision + 1 })),
 
   // Proxy actions
   setProxyEnabled: (v) => set({ proxyEnabled: v }),

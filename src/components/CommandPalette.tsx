@@ -1,17 +1,22 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useAppStore } from "../store";
-import { registerCommand, getCommands, fuzzyMatch, type Command } from "../utils/commands";
+import {
+  registerCommand,
+  subscribeCommands,
+  getCommandsSnapshot,
+  fuzzyMatch,
+  type Command,
+} from "../utils/commands";
 import { dockWindowAppbar, undockWindowAppbar } from "../lib/tauri";
 
 export default function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+
   const inputRef = useRef<HTMLInputElement>(null);
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
   const setCurrentTime = useAppStore((s) => s.setCurrentTime);
-  const setAudioPlaying = useAppStore((s) => s.setAudioPlaying);
-  const audioPlaying = useAppStore((s) => s.audioPlaying);
   const undo = useAppStore((s) => s.undo);
   const redo = useAppStore((s) => s.redo);
   const canUndo = useAppStore((s) => s.canUndo);
@@ -22,14 +27,19 @@ export default function CommandPalette() {
   const setMediaInfo = useAppStore((s) => s.setMediaInfo);
   const setPreviewDataUrl = useAppStore((s) => s.setPreviewDataUrl);
   const setOriginalDataUrl = useAppStore((s) => s.setOriginalDataUrl);
-  const clearSam3FrameMasks = useAppStore((s) => s.clearSam3FrameMasks);
   const setInPoint = useAppStore((s) => s.setInPoint);
   const setOutPoint = useAppStore((s) => s.setOutPoint);
   const clearInOut = useAppStore((s) => s.clearInOut);
   const setScopesVisible = useAppStore((s) => s.setScopesVisible);
 
+  // Subscribed rather than read once: the commands below are registered in an
+  // effect that runs after this component's first render, so a plain
+  // getCommands() here captured an empty registry and the palette opened
+  // showing "No commands found" until the user typed.
+  const registered = useSyncExternalStore(subscribeCommands, getCommandsSnapshot);
+
   const commands = useMemo(() => {
-    const all = getCommands();
+    const all = registered;
     if (!query.trim()) return all;
     return all
       .map((cmd) => ({
@@ -39,7 +49,7 @@ export default function CommandPalette() {
       .filter((r) => r.score > 0)
       .sort((a, b) => b.score - a.score)
       .map((r) => r.cmd);
-  }, [query]);
+  }, [query, registered]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -68,14 +78,21 @@ export default function CommandPalette() {
 
   useEffect(() => {
     registerCommand({ id: "go-to-start", label: "Go to start", category: "Timeline", shortcut: "Home", action: () => setCurrentTime(0) });
-    registerCommand({ id: "go-to-end", label: "Go to end", category: "Timeline", shortcut: "End", action: () => setCurrentTime(300) });
-    registerCommand({ id: "play-pause", label: "Play / pause", category: "Timeline", shortcut: "Space", action: () => setAudioPlaying(!audioPlaying) });
+    // Reads duration at invocation rather than closing over it, so the command
+    // stays correct as media changes. It was previously a hard-coded 300, which
+    // is not the end of anything -- on a 5s clip "Go to end" jumped a minute
+    // past it, and since setCurrentTime did not clamp, the playhead stuck there.
+    registerCommand({ id: "go-to-end", label: "Go to end", category: "Timeline", shortcut: "End", action: () => setCurrentTime(useAppStore.getState().duration) });
+    // Space toggles the transport (useKeyboardShortcuts); this entry claims
+    // that shortcut, so it must do the same. It toggled AUDIO playback.
+    registerCommand({ id: "play-pause", label: "Play / pause", category: "Timeline", shortcut: "Space", action: () => useAppStore.getState().togglePlay() });
     registerCommand({ id: "undo", label: "Undo", category: "Edit", shortcut: "Ctrl+Z", action: () => { if (canUndo()) undo(); } });
     registerCommand({ id: "redo", label: "Redo", category: "Edit", shortcut: "Ctrl+Shift+Z", action: () => { if (canRedo()) redo(); } });
     registerCommand({ id: "clear-stack", label: "Clear effect stack", category: "Edit", action: () => { clearStack(); setStatusMessage("Effect stack cleared"); } });
-    registerCommand({ id: "close-media", label: "Close media", category: "File", action: () => { setFilePath(null); setMediaLoaded(false); setMediaInfo(null); setPreviewDataUrl(null); setOriginalDataUrl(null); clearSam3FrameMasks(); setStatusMessage("Media closed"); } });
-    registerCommand({ id: "set-in-point", label: "Set in point", category: "Timeline", shortcut: "I", action: () => setInPoint(0) });
-    registerCommand({ id: "set-out-point", label: "Set out point", category: "Timeline", shortcut: "O", action: () => setOutPoint(300) });
+    registerCommand({ id: "close-media", label: "Close media", category: "File", action: () => { setFilePath(null); setMediaLoaded(false); setMediaInfo(null); setPreviewDataUrl(null); setOriginalDataUrl(null); setStatusMessage("Media closed"); } });
+    // At the playhead, like the I / O keys. These set 0 and 300 regardless.
+    registerCommand({ id: "set-in-point", label: "Set in point", category: "Timeline", shortcut: "I", action: () => setInPoint(useAppStore.getState().currentTime) });
+    registerCommand({ id: "set-out-point", label: "Set out point", category: "Timeline", shortcut: "O", action: () => setOutPoint(useAppStore.getState().currentTime) });
     registerCommand({ id: "clear-in-out", label: "Clear in/out points", category: "Timeline", shortcut: "X", action: () => clearInOut() });
     registerCommand({ id: "toggle-scopes", label: "Toggle scopes", category: "View", action: () => setScopesVisible(!useAppStore.getState().scopesVisible) });
     
@@ -95,9 +112,9 @@ export default function CommandPalette() {
       s.setAppBarDocked(true, "right", 300);
     } });
   }, [
-    setCurrentTime, setAudioPlaying, audioPlaying, undo, redo, canUndo, canRedo,
+    setCurrentTime, undo, redo, canUndo, canRedo,
     clearStack, setFilePath, setMediaLoaded, setMediaInfo, setPreviewDataUrl,
-    setOriginalDataUrl, clearSam3FrameMasks, setInPoint, setOutPoint, clearInOut,
+    setOriginalDataUrl, setInPoint, setOutPoint, clearInOut,
     setScopesVisible, setStatusMessage,
   ]);
 

@@ -169,7 +169,11 @@ const NEEDS_INPUT_EFFECTS: &[&str] = &[
     // Need an audio feature stream; there is no audio in a still-frame harness.
     "audio_reactive.bass_pulse",
     "audio_reactive.beat_glitch",
+    "audio_reactive.chromatic",
+    "audio_reactive.pixelate",
     "audio_reactive.spectral_shift",
+    "audio_reactive.spectrum",
+    "audio_reactive.waveform",
     // Identity at its default parameters, which is the correct behaviour for a
     // grading effect with no LUT loaded.
     "color.lut_grading",

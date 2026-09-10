@@ -90,6 +90,54 @@ try:
         triton.jit = _safe_triton_jit
 except Exception:
     logging.warning("Triton unavailable — SageAttention CUDA kernels will be unavailable.")
+
+if getattr(sys, "frozen", False):
+    # Second, unrelated frozen-bundle source lookup: torch.jit.script.
+    #
+    # SAM2Transforms.__init__ scripts nn.Sequential(Resize(...), Normalize(...)),
+    # and torchvision's Resize holds an InterpolationMode, which is an Enum. To
+    # script an Enum class TorchScript walks cls.__dict__ -- which on Python 3.12+
+    # contains Enum._generate_next_value_ -- and calls inspect.getsource on each
+    # entry. A PyInstaller bundle ships no stdlib .py source, so that raises
+    # OSError and the model never loads: "Failed to get source for
+    # <function Enum._generate_next_value_> using inspect.getsource".
+    #
+    # get_type_hint_captures returns a map from the LITERAL annotation text to
+    # the type it names, built solely from the function's annotations. A function
+    # with no annotations therefore has an EMPTY map by definition, so returning
+    # {} for one is exact rather than a guess -- torch's own comment says to do
+    # this ("If we can't get the source, simply return an empty dict"); only the
+    # code disagrees. Anything that IS annotated still raises, because there we
+    # would genuinely be dropping information.
+    try:
+        import inspect
+
+        import torch._jit_internal as _jit_internal
+
+        _orig_type_hint_captures = _jit_internal.get_type_hint_captures
+
+        def _safe_type_hint_captures(fn):
+            try:
+                return _orig_type_hint_captures(fn)
+            except OSError:
+                try:
+                    sig = inspect.signature(fn)
+                except (TypeError, ValueError):
+                    raise
+                annotated = any(
+                    p.annotation is not inspect.Parameter.empty
+                    for p in sig.parameters.values()
+                ) or sig.return_annotation is not inspect.Signature.empty
+                if annotated:
+                    raise
+                return {}
+
+        _jit_internal.get_type_hint_captures = _safe_type_hint_captures
+    except Exception:
+        logging.warning(
+            "Could not patch torch._jit_internal for the frozen bundle; "
+            "torch.jit.script on stdlib-derived classes may fail."
+        )
 # Resolve the sam3_repo location. The Rust side sets SAM3_REPO for both dev
 # (pointing at packages/python-backend/sam3_repo) and production sidecars.
 # PyInstaller bundles extract to a temporary _MEIPASS directory.
@@ -115,6 +163,71 @@ _DEFAULT_CHECKPOINT = Path.home() / ".moshdither" / "models" / "sam3" / "sam3.pt
 CHECKPOINT_PATH = os.environ.get("SAM3_CHECKPOINT", str(_DEFAULT_CHECKPOINT))
 DEVICE = os.environ.get("SAM3_DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
 USE_AMP = os.environ.get("SAM3_USE_AMP", "1") == "1"
+
+if not torch.cuda.is_available():
+    # The vendored SAM3 hard-codes CUDA in ~15 places that no config reaches --
+    # `torch.zeros(..., device="cuda")` in position_encoding.py and decoder.py,
+    # and bare `.cuda()` calls in io_utils.py and the tracker/predictor modules.
+    # On a machine without CUDA the model therefore dies during *construction*
+    # with "Torch not compiled with CUDA enabled", long before any device
+    # argument we pass is consulted.
+    #
+    # sam3_repo is a gitignored vendored clone, so editing it leaves no record
+    # and does not survive a re-clone. Patch here instead, where the change is
+    # tracked -- the same reasoning as the triton.jit and torch.jit patches
+    # above. Each override means exactly one thing: with no CUDA present,
+    # "cuda" denotes the CPU. That is only ever installed when CUDA is absent,
+    # so a GPU machine runs the stock, unmodified code paths.
+    def _cpu_device(kwargs):
+        dev = kwargs.get("device")
+        if dev is not None and str(dev).startswith("cuda"):
+            kwargs["device"] = "cpu"
+        return kwargs
+
+    for _name in ("zeros", "ones", "empty", "full", "arange", "tensor", "rand", "randn"):
+        _orig = getattr(torch, _name)
+
+        def _make(orig):
+            def _wrapper(*args, **kwargs):
+                return orig(*args, **_cpu_device(kwargs))
+
+            return _wrapper
+
+        setattr(torch, _name, _make(_orig))
+
+    # `.cuda()` on a tensor or module: stay put rather than raise.
+    torch.Tensor.cuda = lambda self, *a, **k: self
+    torch.nn.Module.cuda = lambda self, *a, **k: self
+
+    # sam3_multiplex_base.py and the tracking predictors build a
+    # `torch.autocast(device_type="cuda", dtype=torch.bfloat16)` and call
+    # __enter__ on it WITHOUT ever exiting -- "keep using for the entire model
+    # process". With no CUDA that leaves bf16 activations meeting fp32 weights
+    # ("mat1 and mat2 must have the same dtype, but got BFloat16 and Float").
+    # A CUDA autocast on a CPU-only machine describes a device that is not
+    # there, so make it inert; CPU autocast requests still behave normally.
+    _orig_autocast = torch.autocast
+
+    class _InertAutocast:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def __call__(self, fn):
+            return fn
+
+    def _autocast(device_type="cuda", *args, **kwargs):
+        if str(device_type).startswith("cuda"):
+            return _InertAutocast()
+        return _orig_autocast(device_type, *args, **kwargs)
+
+    torch.autocast = _autocast
+    logging.warning(
+        "No CUDA device — SAM3 will run on the CPU. Segmentation will be "
+        "considerably slower than on a GPU."
+    )
 
 MAX_SAM3_DIM = int(os.environ.get("SAM3_MAX_DIM", "1024"))
 scale_x = 1.0
@@ -182,6 +295,76 @@ def _do_auth_handshake():
     send_response({"status": "auth_ok"})
 
 
+NL = chr(10)
+NL2 = chr(10) + chr(10)
+
+# Weights are ~3.2 GB and are deliberately NOT bundled: shipping them would take
+# the installer from ~1.5 GB to ~4.7 GB, and they version independently of the
+# app. Fetched once on first use and cached forever -- the same shape Ollama and
+# LM Studio use.
+_CHECKPOINT_REPO = os.environ.get("SAM3_REPO_ID", "facebook/sam3.1")
+_CHECKPOINT_FILE = os.environ.get("SAM3_FILENAME", "sam3.1_multiplex.pt")
+
+
+def _ensure_checkpoint():
+    """Download the SAM3 checkpoint on first use, or explain precisely why not.
+
+    This previously raised a FileNotFoundError telling the user to run
+    `python scripts/setup_sam3.py` -- a developer script that does not exist in
+    an installed app. That message was a dead end for anyone who had not built
+    the project from source, and it is the "SAM3 unavailable" wall users hit.
+    """
+    import shutil
+
+    dest = Path(CHECKPOINT_PATH)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    log(
+        "SAM3 checkpoint missing; downloading %s from %s (~3.2 GB, one time)",
+        _CHECKPOINT_FILE,
+        _CHECKPOINT_REPO,
+    )
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError as exc:
+        raise RuntimeError(
+            "SAM3 weights are missing and huggingface_hub is unavailable to "
+            "fetch them. Expected the checkpoint at: " + str(dest)
+        ) from exc
+
+    try:
+        fetched = hf_hub_download(
+            repo_id=_CHECKPOINT_REPO, filename=_CHECKPOINT_FILE, token=token
+        )
+    except Exception as exc:
+        # facebook/sam3.1 is gated: Meta requires accepting the licence, so a
+        # first-use fetch cannot be fully automatic however the app is packaged.
+        raise RuntimeError(
+            "SAM3 weights could not be downloaded."
+            + NL2
+            + "The model is gated by Meta, so it needs a one-time approval:"
+            + NL
+            + "  1. Accept the licence at https://huggingface.co/"
+            + _CHECKPOINT_REPO
+            + NL
+            + "  2. Create a token at https://huggingface.co/settings/tokens"
+            + NL
+            + "  3. Set HF_TOKEN to that token and retry."
+            + NL2
+            + "Already have the file? Point SAM3_CHECKPOINT at it, or place it at:"
+            + NL
+            + "  "
+            + str(dest)
+            + NL2
+            + "Underlying error: "
+            + str(exc)
+        ) from exc
+
+    if Path(fetched) != dest:
+        shutil.copyfile(fetched, dest)
+    log("SAM3 checkpoint ready at %s", dest)
+
+
 def ensure_model_loaded():
     """Lazy-load SAM3 model on first use."""
     global model, processor, model_manager
@@ -191,14 +374,7 @@ def ensure_model_loaded():
         return
     log("Loading SAM3 model from %s on CPU (pinned) ...", CHECKPOINT_PATH)
     if not Path(CHECKPOINT_PATH).exists():
-        raise FileNotFoundError(
-            f"Checkpoint not found: {CHECKPOINT_PATH}\n"
-            "To use SAM3, either:\n"
-            "  1. Request access at https://huggingface.co/facebook/sam3, then run:\n"
-            "       python scripts/setup_sam3.py --download-hf\n"
-            "  2. Provide a direct URL: python scripts/setup_sam3.py --checkpoint-url <url>\n"
-            "  3. Set SAM3_CHECKPOINT env var to an existing sam3.pt file."
-        )
+        _ensure_checkpoint()
     # torch.compile can cause inaccurate results on some Windows/GPU combos.
     # Enable only if explicitly requested via env var.
     use_compile = DEVICE == "cuda" and os.environ.get("SAM3_ENABLE_COMPILE", "0") == "1"
@@ -283,6 +459,11 @@ def cmd_load_image(image_b64: str):
         if model_manager:
             model_manager.move_to_target()
     except Exception as e:
+        # The message alone is not enough to act on -- "Failed to get source for
+        # <function Enum._generate_next_value_>" named neither the file nor the
+        # call site, and cost a full sidecar rebuild to locate. Put the traceback
+        # on stderr, which Rust captures, so the next one names itself.
+        logging.exception("SAM3 model load failed")
         return {"status": "error", "message": f"Model load failed: {e}"}
 
     try:
@@ -364,6 +545,10 @@ def cmd_load_image(image_b64: str):
                 except Exception:
                     pass
             return {"status": "error", "message": f"CUDA out of memory during image encoding: {e}"}
+        # Same reasoning as the model-load handlers: the bare message names
+        # neither a file nor a call site, which is precisely what made the
+        # CPU-only port expensive to debug. Rust captures this stderr.
+        logging.exception("SAM3 image encoding failed")
         return {"status": "error", "message": f"Image encoding failed: {e}"}
 
     # Every step succeeded -- publish all five values together.
@@ -619,6 +804,11 @@ def cmd_video_predictor(frames: list, prompt: str = None):
         if model_manager:
             model_manager.move_to_target()
     except Exception as e:
+        # The message alone is not enough to act on -- "Failed to get source for
+        # <function Enum._generate_next_value_>" named neither the file nor the
+        # call site, and cost a full sidecar rebuild to locate. Put the traceback
+        # on stderr, which Rust captures, so the next one names itself.
+        logging.exception("SAM3 model load failed")
         return {"status": "error", "message": f"Model load failed: {e}"}
 
     all_frame_masks = []

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { logger } from "../utils/logger";
 import { useShallow } from "zustand/react/shallow";
 import {
   animateStillAsVideo,
   applyEffectStack,
-  applyFfglitch,
   convertFileSrc,
   generateProxy,
   getFrameData,
@@ -15,26 +15,27 @@ import {
 } from "../lib/tauri";
 import { useClickOutside } from "../hooks/useClickOutside";
 import { useAppStore } from "../store";
+import { useProject } from "../hooks/useProject";
 import { stackToRustPayload, stackRequiresCpuPreview } from "../utils/effectConverter";
 import WindowControls from "./WindowControls";
 import KeyboardShortcutsEditor from "./KeyboardShortcutsEditor";
 import UpdateChecker from "./UpdateChecker";
 import LabeledSlider from "./LabeledSlider";
+import AnimateAsVideoModal from "./AnimateAsVideoModal";
 import { PANEL_REGISTRY } from "./DockSystem/panelRegistry";
 
 interface Props {
   readonly onFileLoaded: () => Promise<boolean>;
 }
 
-// "Animate as Video" (still image -> looped freeze-frame video) defaults.
-// Fixed values instead of a duration/fps prompt modal -- 5s @ 30fps (150
-// frames) gives every video-only effect (frame_reverse, shuffle,
-// motion_transfer, ...) real multi-frame material to operate on, and a
-// still image has no "existing fps" to inherit the way a video would. A v1
-// modal was judged not worth the complexity for a one-off conversion; see
-// the PR description for the full tradeoff.
-const ANIMATE_AS_VIDEO_DURATION_SECS = 5;
-const ANIMATE_AS_VIDEO_FPS = 30;
+// "Animate as Video" (still image -> looped freeze-frame video) now prompts for
+// length and frame rate rather than using fixed 5s/30fps constants. The v1
+// reasoning -- that 150 frames is enough material for any video-only effect and
+// a still has no source fps to inherit -- justified a sane default, not a fixed
+// value: how far an I-frame's corruption smears is a function of how many
+// frames follow it, so for datamoshing the clip length is the creative control.
+// The old constants survive as the store's defaults (see animateDurationSecs /
+// animateFps), and the last values used are remembered.
 
 export default function Toolbar({ onFileLoaded }: Props) {
   const mediaLoaded = useAppStore((s) => s.mediaLoaded);
@@ -42,6 +43,10 @@ export default function Toolbar({ onFileLoaded }: Props) {
   const isProcessing = useAppStore((s) => s.isProcessing);
   const setIsVideo = useAppStore((s) => s.setIsVideo);
   const setDuration = useAppStore((s) => s.setDuration);
+  const { saveProject, openProject } = useProject();
+  const setAnimateDialogOpen = useAppStore((s) => s.setAnimateDialogOpen);
+  const setAnimateSourceStillPath = useAppStore((s) => s.setAnimateSourceStillPath);
+  const animateSourceStillPath = useAppStore((s) => s.animateSourceStillPath);
   const setProxyUrl = useAppStore((s) => s.setProxyUrl);
   const showBeforeAfter = useAppStore((s) => s.showBeforeAfter);
   const zoom = useAppStore((s) => s.zoom);
@@ -189,11 +194,18 @@ export default function Toolbar({ onFileLoaded }: Props) {
             const b64 = await getFrameData();
             await sam3LoadImage(b64);
           } catch (e) {
-            console.warn("Failed to load new image into SAM3", e);
+            logger.warn("sam3", "Failed to load new image into SAM3", { err: String(e) });
           }
         }
 
-        setStatusMessage(synced ? `Loaded: ${path}` : `Loaded: ${path} (preview sync pending)`);
+        // A failed preview sync used to read as "Loaded: <path> (preview sync
+        // pending)" -- success-shaped text for a backend failure, which neither
+        // the log heuristic nor the user could tell had gone wrong.
+        if (synced) {
+          setStatusMessage(`Loaded: ${path}`);
+        } else {
+          setStatusMessage(`Loaded ${path}, but the preview did not refresh`, "error");
+        }
       } else {
         setStatusMessage("Open cancelled");
       }
@@ -210,7 +222,57 @@ export default function Toolbar({ onFileLoaded }: Props) {
   // elsewhere. Only meaningful when a still image (not already a video) is
   // loaded, matching the isVideoOnlyEffect gating used across
   // EffectBrowser/EffectStack.
-  const handleAnimateAsVideo = async () => {
+  // Undo of Animate as Video. The conversion replaced filePath/isVideo with the
+  // generated clip, which left no way back short of reopening the original by
+  // hand -- the still on disk was never touched, the app had simply forgotten
+  // it. Reloads the remembered still through the same path as File > Open so
+  // isVideo, duration, proxy and SAM3 are all re-derived rather than patched.
+  const handleRevertToStill = async () => {
+    const state = useAppStore.getState();
+    const stillPath = state.animateSourceStillPath;
+    if (!stillPath || isProcessing) return;
+    setStatusMessage("Reverting to the original still...");
+    setIsProcessing(true);
+    try {
+      await loadMediaFromPath(stillPath);
+      setFilePath(stillPath);
+      setIsVideo(false);
+      setProxyUrl(null);
+      setAnimateSourceStillPath(null);
+      const synced = await onFileLoaded();
+      try {
+        setMediaMetadata(await getMediaMetadata(stillPath));
+      } catch (e) {
+        console.warn("Failed to load metadata for reverted still", e);
+      }
+      if (useAppStore.getState().sam3Ready) {
+        try {
+          await sam3LoadImage(await getFrameData());
+        } catch (e) {
+          console.warn("Failed to load reverted still into SAM3", e);
+        }
+      }
+      setStatusMessage(
+        synced ? `Reverted to still: ${stillPath}` : `Reverted to still: ${stillPath} (preview sync pending)`
+      );
+    } catch (err) {
+      setStatusMessage(`Revert to still failed: ${err}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Opens the prompt; the conversion itself runs from its onConfirm.
+  const handleAnimateAsVideo = () => {
+    if (!mediaLoaded || isVideo || isProcessing) return;
+    if (!useAppStore.getState().filePath) {
+      setStatusMessage("Animate as Video: no file path for the loaded image (reopen it via File > Open first)");
+      return;
+    }
+    setAnimateDialogOpen(true);
+  };
+
+  const runAnimateAsVideo = async (durationSecs: number, fps: number) => {
     if (!mediaLoaded || isVideo || isProcessing) return;
     const state = useAppStore.getState();
     const path = state.filePath;
@@ -221,11 +283,10 @@ export default function Toolbar({ onFileLoaded }: Props) {
     setStatusMessage("Animating still image as video...");
     setIsProcessing(true);
     try {
-      const videoPath = await animateStillAsVideo(
-        path,
-        ANIMATE_AS_VIDEO_DURATION_SECS,
-        ANIMATE_AS_VIDEO_FPS
-      );
+      const videoPath = await animateStillAsVideo(path, durationSecs, fps);
+      // Remember what this was made from so the conversion can be undone
+      // without hunting for the original file again.
+      setAnimateSourceStillPath(path);
       // Only point filePath at the generated video once it's actually loaded --
       // otherwise a failed loadMediaFromPath below leaves filePath referencing
       // a video while isVideo/mediaLoaded still reflect the prior still image.
@@ -238,7 +299,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
       // which is the only other place isVideo/proxyUrl get set for real:
       // the WebGL preview's video texture only activates when both are set.
       setIsVideo(true);
-      setDuration(ANIMATE_AS_VIDEO_DURATION_SECS);
+      setDuration(durationSecs);
       try {
         const proxy = await generateProxy(videoPath, 1280, 28);
         setProxyUrl(convertFileSrc(proxy));
@@ -279,27 +340,44 @@ export default function Toolbar({ onFileLoaded }: Props) {
     const path = state.filePath;
     if (!path) return;
 
+    if (!dockedIds.has("export")) {
+      triggerLayoutAction("add", "export");
+      setStatusMessage("Export panel opened");
+      return;
+    }
+
     // Route both video and image sources to the ExportPanel for video export.
     // The backend duplicates single frames to fill the duration (commands.rs).
     state.triggerExport();
     setStatusMessage("Export started from Export panel...");
   };
 
+  // FFglitch/datamosh works by corrupting interframe compression, so it needs a
+  // real multi-frame video. Run against a still it produced an unreadable
+  // intermediate and surfaced as a raw ffmpeg traceback from mosh_cli.py
+  // ("ffmpeg failed: ffmpeg version 8.0-essentials_build ..."), which gave no
+  // hint that the input was simply the wrong kind of media. Gate it the same
+  // way handleAnimateAsVideo gates the inverse case, and point at the
+  // conversion that makes the export possible.
   const handleFfglitchExport = async () => {
-    if (!mediaLoaded) return;
+    if (!mediaLoaded || isProcessing) return;
+    if (!isVideo) {
+      setStatusMessage(
+        "FFglitch needs a video — it datamoshes between frames. Use File > Animate as Video first to turn this still into one."
+      );
+      return;
+    }
     const state = useAppStore.getState();
     const path = state.filePath;
-    if (!path) return;
-    setStatusMessage("FFglitch export started...");
-    setIsProcessing(true);
-    try {
-      const outPath = await applyFfglitch(path, "classic", {});
-      setStatusMessage(`FFglitch exported: ${outPath}`);
-    } catch (err) {
-      setStatusMessage(`FFglitch export failed: ${err}`);
-    } finally {
-      setIsProcessing(false);
+    if (!path) {
+      setStatusMessage("FFglitch export: no file path for the loaded video (reopen it via File > Open first)");
+      return;
     }
+
+    if (!dockedIds.has("export")) {
+      triggerLayoutAction("add", "export");
+    }
+    setStatusMessage("Export panel opened for FFglitch datamoshing — select your mode and parameters.");
   };
 
   // Saves exactly one processed frame to disk, unlike Export Video (which
@@ -435,6 +513,19 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   <span className="material-symbols-outlined menu-item-icon" aria-hidden="true">animation</span>
                   Animate as Video
                 </button>
+                {animateSourceStillPath && (
+                  <button
+                    onClick={() => { handleRevertToStill(); setFileMenuOpen(false); }}
+                    disabled={isProcessing}
+                    className={`w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors ${isProcessing ? "toolbar-disabled" : "toolbar-enabled"}`}
+                    role="menuitem"
+                    aria-disabled={isProcessing}
+                    title="Load the still this clip was animated from. The generated video file is left on disk."
+                  >
+                    <span className="material-symbols-outlined menu-item-icon" aria-hidden="true">undo</span>
+                    Revert to Still
+                  </button>
+                )}
                 <div className="border-t border-outline/10 my-1" />
                 <button
                   onClick={() => { handleExport(); setFileMenuOpen(false); }}
@@ -443,19 +534,60 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   role="menuitem"
                   aria-disabled={!mediaLoaded}
                 >
-                  <span className="material-symbols-outlined menu-item-icon">movie_export</span>
+                  <span className="material-symbols-outlined menu-item-icon">movie</span>
                   Export Video
                 </button>
                 <button
                   onClick={() => { handleFfglitchExport(); setFileMenuOpen(false); }}
-                  disabled={!mediaLoaded}
-                  className={`w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded ? "toolbar-enabled" : "toolbar-disabled"}`}
+                  disabled={!mediaLoaded || !isVideo}
+                  title={
+                    mediaLoaded && !isVideo
+                      ? "FFglitch datamoshes between video frames — use Animate as Video first"
+                      : undefined
+                  }
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors ${mediaLoaded && isVideo ? "toolbar-enabled" : "toolbar-disabled"}`}
                   role="menuitem"
-                  aria-disabled={!mediaLoaded}
+                  aria-disabled={!mediaLoaded || !isVideo}
                 >
                   <span className="material-symbols-outlined menu-item-icon">bug_report</span>
                   Export FFglitch
                 </button>
+                {/* Save/Open Project existed ONLY as Ctrl+S and Ctrl+O.
+                    The .moshdither format is fully implemented -- versioned,
+                    carrying the stack, keyframes, audio bindings and mask -- and
+                    was reachable from nowhere in the UI, not the File menu, not
+                    the command palette, not even the shortcuts editor that is
+                    supposed to document keystrokes. A save format a user cannot
+                    find is a save format they do not have. */}
+                <div className="border-t border-outline/10 my-1" />
+                <button
+                  onClick={() => { void saveProject(false); setFileMenuOpen(false); }}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors"
+                  role="menuitem"
+                >
+                  <span className="material-symbols-outlined menu-item-icon">save</span>
+                  Save Project
+                  <span className="ml-auto opacity-50 font-code-sm text-code-sm">Ctrl+S</span>
+                </button>
+                <button
+                  onClick={() => { void saveProject(true); setFileMenuOpen(false); }}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors"
+                  role="menuitem"
+                >
+                  <span className="material-symbols-outlined menu-item-icon">save_as</span>
+                  Save Project As…
+                  <span className="ml-auto opacity-50 font-code-sm text-code-sm">Ctrl+Shift+S</span>
+                </button>
+                <button
+                  onClick={() => { void openProject(); setFileMenuOpen(false); }}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors"
+                  role="menuitem"
+                >
+                  <span className="material-symbols-outlined menu-item-icon">folder_open</span>
+                  Open Project
+                  <span className="ml-auto opacity-50 font-code-sm text-code-sm">Ctrl+O</span>
+                </button>
+                <div className="border-t border-outline/10 my-1" />
                 <button
                   onClick={() => { handleSaveImage(); setFileMenuOpen(false); }}
                   disabled={!mediaLoaded || stackCount === 0}
@@ -466,15 +598,14 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   <span className="material-symbols-outlined menu-item-icon">image</span>
                   Save Image
                 </button>
-                <div className="border-t border-outline/10 my-1" />
-                <button
-                  onClick={() => { setShowUpdateChecker(true); setFileMenuOpen(false); }}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors"
-                  role="menuitem"
-                >
-                  <span className="material-symbols-outlined menu-item-icon" aria-hidden="true">system_update</span>
-                  Check for Updates
-                </button>
+                {/* "Check for Updates" is deliberately not offered.
+                    The updater needs two things this project does not have: a
+                    published latest.json (nothing has ever published to the
+                    endpoint) and a TAURI_SIGNING_PRIVATE_KEY to sign releases
+                    with. Until both exist, the menu item could only ever show
+                    "Update check failed", so offering it is worse than not.
+                    UpdateChecker.tsx is kept intact: restore the updater block
+                    in tauri.conf.json and this button together. */}
               </div>
             )}
           </div>
@@ -520,7 +651,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                 <div className="px-3 py-1 font-label-sm text-label-sm text-on-surface-variant uppercase">
                   Panels
                 </div>
-                {PANEL_REGISTRY.map((p) => {
+                {PANEL_REGISTRY.filter((p) => p.id !== "verify").map((p) => {
                   const isDocked = dockedIds.has(p.id);
                   return (
                     <button
@@ -549,7 +680,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                 <div className="border-t border-outline/10 mt-1 pt-1 flex gap-2 px-3">
                   <button
                     onClick={() => {
-                      PANEL_REGISTRY.forEach((p) => {
+                      PANEL_REGISTRY.filter((p) => p.id !== "verify").forEach((p) => {
                         if (!dockedIds.has(p.id)) {
                           useAppStore.getState().triggerLayoutAction("add", p.id);
                         }
@@ -738,6 +869,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
         </button>
         <WindowControls />
       </div>
+      <AnimateAsVideoModal onConfirm={runAnimateAsVideo} />
       {showShortcuts && <KeyboardShortcutsEditor onClose={() => setShowShortcuts(false)} />}
       {showUpdateChecker && <UpdateChecker onClose={() => setShowUpdateChecker(false)} />}
     </header>

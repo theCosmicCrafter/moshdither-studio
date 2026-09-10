@@ -12,18 +12,18 @@ export default function SearchBar() {
       >
         search
       </span>
+      {/* This input carried `outline-none` plus an imperative onFocus/onBlur pair
+          that wrote a hard-coded pink/lime box-shadow glow. Together those
+          suppressed the app-wide `:focus-visible` ring (index.css) and replaced it
+          with colors that ignore the active theme, on `:focus` so it also fired for
+          mouse clicks. Both are gone, so this shows the same designed accent ring
+          as every other control. */}
       <input
         type="text"
         value={query}
         onChange={(e) => setSearchQuery(e.target.value)}
         placeholder="Search effects..."
-        className="w-full text-label-sm font-label-sm rounded-lg pl-8 pr-7 py-1.5 outline-none transition-all neo-flat text-on-surface"
-        onFocus={(e) => {
-          e.currentTarget.style.boxShadow = "0 0 10px rgba(255,173,224,0.3), 0 0 20px rgba(184,211,0,0.15)";
-        }}
-        onBlur={(e) => {
-          e.currentTarget.style.boxShadow = "";
-        }}
+        className="w-full text-label-sm font-label-sm rounded-lg pl-8 pr-7 py-1.5 transition neo-flat text-on-surface"
       />
       {query && (
         <button

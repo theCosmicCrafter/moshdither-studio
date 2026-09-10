@@ -1,0 +1,94 @@
+{
+  "_comment": [
+    "Known-good sidecar binaries for this project, pinned by SHA-256.",
+    "",
+    "The binaries themselves are gitignored (247 MB) and have never been",
+    "committed, so losing src-tauri/bin/ made the project UNBUILDABLE with no",
+    "recorded way back: prebuild failed on a missing file, and nothing said",
+    "which version to go and get. This manifest is that record. It answers two",
+    "questions the repository previously could not: exactly which build is",
+    "known to work, and whether the file on disk is that build.",
+    "",
+    "scripts/verify-external-bins.mjs checks disk against these hashes.",
+    "A MISMATCH IS NOT AUTOMATICALLY AN ERROR -- a newer FFmpeg is a legitimate",
+    "upgrade -- but it must be a deliberate one, so it warns rather than",
+    "passing in silence. Update the hash here when you intend the change.",
+    "",
+    "Licensing matters because these are redistributed inside the installer:",
+    "both are FFmpeg-derived and GPL/LGPL. Ship the licence text with any",
+    "public release."
+  ],
+  "target": "x86_64-pc-windows-msvc",
+  "recordedOn": "2026-09-05",
+  "binaries": {
+    "ffmpeg": {
+      "file": "ffmpeg-x86_64-pc-windows-msvc.exe",
+      "sha256": "d4de4dda46c8b06d415ced0173babdf5ea40223f9395461b2e195c41268a27d7",
+      "bytes": 98704896,
+      "version": "8.0-essentials_build-www.gyan.dev",
+      "source": "gyan.dev FFmpeg 'essentials' build for Windows",
+      "note": "ffmpeg and ffprobe come from the SAME archive; upgrade them together."
+    },
+    "ffprobe": {
+      "file": "ffprobe-x86_64-pc-windows-msvc.exe",
+      "sha256": "d1ae16546bd37e7e2336c23388658cdc05e3d93e6d0c97d79107239e6678e933",
+      "bytes": 98551808,
+      "version": "8.0-essentials_build-www.gyan.dev",
+      "source": "gyan.dev FFmpeg 'essentials' build for Windows"
+    },
+    "ffgac": {
+      "file": "ffgac-x86_64-pc-windows-msvc.exe",
+      "sha256": "323e50a32a6dbdf101bc4689acf1b178b94efb2b62b5fe4d5d126238ce7b7bc6",
+      "bytes": 31015936,
+      "version": "ffglitch-0.10.2",
+      "source": "FFglitch project (ffglitch.org)",
+      "note": "ffgac and ffedit ship in the SAME FFglitch release; upgrade them together."
+    },
+    "ffedit": {
+      "file": "ffedit-x86_64-pc-windows-msvc.exe",
+      "sha256": "a0d2cbf3e5bc08935d85eb83887f73458865f439ad4d403e348550525f23fd92",
+      "bytes": 30806016,
+      "version": "ffglitch-0.10.2",
+      "source": "FFglitch project (ffglitch.org)"
+    }
+  },
+  "_downloads": [
+    "Pinned to the EXACT versions above, not to a 'latest' URL. gyan.dev's",
+    "permanent ffmpeg-release-essentials.7z now resolves to 9.0.1, so a 'latest'",
+    "fetch would silently install a different build than the one this project is",
+    "known to work with -- which is the failure this manifest exists to prevent.",
+    "",
+    "ZIP is chosen over the smaller 7z deliberately: Windows extracts .zip with",
+    "built-in tar.exe/Expand-Archive, while .7z needs 7-Zip installed. This",
+    "script runs when someone's build is ALREADY broken, so it must not add a",
+    "dependency to work.",
+    "",
+    "All three URLs HEAD-verified 2026-09-05 (200, byte counts as stated).",
+    "FFglitch publishes no checksums at all -- probed for .sha256, SHA256SUMS and",
+    ".asc, all 404 -- so the sha256 values above, computed from the binaries this",
+    "project already runs, ARE the trust anchor. The fetch script verifies against",
+    "them before installing anything."
+  ],
+  "archives": {
+    "ffmpeg": {
+      "url": "https://github.com/GyanD/codexffmpeg/releases/download/8.0/ffmpeg-8.0-essentials_build.zip",
+      "bytes": 105748282,
+      "members": {
+        "ffmpeg": "ffmpeg-8.0-essentials_build/bin/ffmpeg.exe",
+        "ffprobe": "ffmpeg-8.0-essentials_build/bin/ffprobe.exe"
+      },
+      "license": "GPLv3 (static build; archive ships its own LICENSE)",
+      "note": "Supplies BOTH ffmpeg and ffprobe. ffplay.exe is also present and is not used."
+    },
+    "ffglitch": {
+      "url": "https://ffglitch.org/pub/bin/win64/ffglitch-0.10.2-windows-x86_64.zip",
+      "bytes": 40311219,
+      "members": {
+        "ffgac": "ffglitch-0.10.2-windows-x86_64/ffgac.exe",
+        "ffedit": "ffglitch-0.10.2-windows-x86_64/ffedit.exe"
+      },
+      "license": "FFmpeg-derived (GPL); see the FFglitch project for terms",
+      "note": "Supplies BOTH ffgac and ffedit."
+    }
+  }
+}

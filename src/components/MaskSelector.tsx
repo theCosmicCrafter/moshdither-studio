@@ -36,7 +36,7 @@ export default function MaskSelector({ masks, scores, selectedIndex, onSelect }:
             <button
               key={i}
               onClick={() => onSelect(i)}
-              className={`flex items-center gap-2 p-1.5 rounded border transition-all text-left ${
+              className={`flex items-center gap-2 p-1.5 rounded border transition text-left ${
                 i === selectedIndex
                   ? "border-[var(--accent)] bg-[var(--accent)]/10 ring-1 ring-[var(--accent)]/40"
                   : "border-[var(--panel-border)] hover:border-[var(--text-muted)] hover:bg-[var(--surface-1)]"
@@ -55,7 +55,7 @@ export default function MaskSelector({ masks, scores, selectedIndex, onSelect }:
 
               {/* Info */}
               <div className="flex flex-col gap-0.5 flex-1 min-w-0">
-                <span className="text-[11px] font-semibold text-[var(--text-primary)]">
+                <span className="text-dense-sm font-semibold text-[var(--text-primary)]">
                   Mask #{i + 1}
                 </span>
                 <span className="font-code-sm text-code-sm text-[var(--text-muted)]">

@@ -28,7 +28,6 @@
     "core:window:allow-outer-position",
     "core:window:allow-outer-size",
     "core:window:allow-current-monitor",
-    "dialog:default",
-    "updater:default"
+    "dialog:default"
   ]
 }

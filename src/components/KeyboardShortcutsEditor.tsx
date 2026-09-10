@@ -10,7 +10,17 @@ import {
   type ShortcutPreset,
 } from "../utils/keyboardShortcuts";
 import { getCommands } from "../utils/commands";
-import { X, RotateCcw, Check, ChevronDown } from "lucide-react";
+// Icons come from the Material Symbols webfont, as they do in the other ~23
+// components. This file previously imported lucide-react -- the only import of
+// that package anywhere -- which shipped a second icon library, with different
+// metrics and stroke weights, for four glyphs.
+//
+// Note the font is subsetted by scripts/subset-material-symbols.mjs to the
+// glyph names it finds in source, so any icon added here must be picked up by
+// that script (or added to its EXTRA_ICONS) and the subset regenerated.
+// `restart_alt` replaces lucide's RotateCcw: it was initially swapped for
+// `undo`, but `undo` already means Edit -> Undo elsewhere in the app, and this
+// button discards every custom binding rather than reversing one step.
 
 interface KeyboardShortcutsEditorProps {
   readonly onClose: () => void;
@@ -115,7 +125,7 @@ export default function KeyboardShortcutsEditor({ onClose }: KeyboardShortcutsEd
               display: "flex",
             }}
           >
-            <X size={18} />
+            <span className="material-symbols-outlined" style={{ fontSize: 18 }}>close</span>
           </button>
         </div>
 
@@ -147,7 +157,7 @@ export default function KeyboardShortcutsEditor({ onClose }: KeyboardShortcutsEd
               }}
             >
               {presets.find((p) => p.name === selectedPreset)?.label || "Custom"}
-              <ChevronDown size={14} />
+              <span className="material-symbols-outlined" style={{ fontSize: 14 }}>expand_more</span>
             </button>
             {showPresets && (
               <div
@@ -181,7 +191,7 @@ export default function KeyboardShortcutsEditor({ onClose }: KeyboardShortcutsEd
                       gap: 8,
                     }}
                   >
-                    {selectedPreset === preset.name && <Check size={14} />}
+                    {selectedPreset === preset.name && <span className="material-symbols-outlined" style={{ fontSize: 14 }}>check</span>}
                     {preset.label}
                   </button>
                 ))}
@@ -204,7 +214,7 @@ export default function KeyboardShortcutsEditor({ onClose }: KeyboardShortcutsEd
               gap: 6,
             }}
           >
-            <RotateCcw size={14} />
+            <span className="material-symbols-outlined" style={{ fontSize: 14 }}>restart_alt</span>
             Reset Defaults
           </button>
 
