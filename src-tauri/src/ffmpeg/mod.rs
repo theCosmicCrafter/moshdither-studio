@@ -186,6 +186,10 @@ fn locate_binary(base: &str) -> Result<String> {
 }
 
 /// Locate the FFmpeg binary. Tries bundled sidecar first, then PATH.
+/// The error every NEW cancel site returns. The frontend branches on the
+/// store's cancel flag, never on this text, so it is free to stay terse.
+pub const EXPORT_CANCELLED: &str = "Export cancelled by user";
+
 pub fn ffmpeg_binary() -> Result<String> {
     locate_binary("ffmpeg")
 }
@@ -485,6 +489,19 @@ pub fn decode_video_with_options(
     max_frames: Option<usize>,
     scale: Option<usize>,
 ) -> Result<VideoSegment> {
+    decode_video_cancellable(path, max_frames, scale, None)
+}
+
+/// [`decode_video_with_options`] that can be interrupted: the export passes
+/// its cancel flag so the decode -- the first and, for long clips, one of
+/// the slowest stages -- stops when the user asks rather than running to
+/// completion behind a UI that already said it had.
+pub fn decode_video_cancellable(
+    path: &str,
+    max_frames: Option<usize>,
+    scale: Option<usize>,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<VideoSegment> {
     // Resolve an explicit or default frame cap up-front.
     let requested_max = max_frames.unwrap_or(DEFAULT_DECODE_MAX_FRAMES);
     let budget = adaptive_decode_memory_budget() as usize;
@@ -577,7 +594,7 @@ pub fn decode_video_with_options(
     cmd.args(["-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"]);
 
     const DECODE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
-    let output = output_with_timeout(&mut cmd, DECODE_TIMEOUT)?;
+    let output = output_with_timeout_cancellable(&mut cmd, DECODE_TIMEOUT, cancel)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(AppError::Ffmpeg(format!(
@@ -1500,8 +1517,30 @@ fn output_with_timeout(
     cmd: &mut Command,
     timeout: std::time::Duration,
 ) -> Result<std::process::Output> {
+    output_with_timeout_cancellable(cmd, timeout, None)
+}
+
+/// [`output_with_timeout`] that also watches a cancel flag.
+///
+/// The export's decode is one blocking ffmpeg call; it used to be the one
+/// stage a user could not interrupt at all. While it ran, the UI already
+/// said "Export cancelled" and the job kept the export slot. Now the child
+/// is polled every 100 ms and killed when the flag is set. ffmpeg has no
+/// grandchildren, so a plain kill closes its pipes and the readers join.
+fn output_with_timeout_cancellable(
+    cmd: &mut Command,
+    timeout: std::time::Duration,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<std::process::Output> {
     use child_wait_timeout::ChildWT;
     use std::io::{ErrorKind, Read};
+    use std::sync::atomic::Ordering;
+
+    let cancelled = || cancel.is_some_and(|c| c.load(Ordering::Relaxed));
+    // Cheap, and it avoids launching an ffmpeg only to kill it.
+    if cancelled() {
+        return Err(AppError::Generic(EXPORT_CANCELLED.to_string()));
+    }
 
     let mut child = cmd
         .stdout(Stdio::piped())
@@ -1550,22 +1589,38 @@ fn output_with_timeout(
         let _ = stderr_thread.join();
     };
 
-    let status = match child.wait_timeout(timeout) {
-        Ok(status) => status,
-        Err(e) if e.kind() == ErrorKind::TimedOut => {
-            tracing::warn!("Command timed out after {:?}, killing process", timeout);
-            let _ = child.kill();
-            let _ = child.wait_timeout(std::time::Duration::from_secs(10));
-            join_readers(stdout_thread, stderr_thread);
-            return Err(AppError::Ffmpeg(format!(
-                "Process timed out after {:?}",
-                timeout
-            )));
-        }
-        Err(e) => {
-            let _ = child.kill();
-            join_readers(stdout_thread, stderr_thread);
-            return Err(AppError::Io(e));
+    // Poll in short ticks so a cancel is noticed within ~100 ms, instead of
+    // one wait for the whole timeout. The deadline message is kept
+    // byte-identical to what it was; a test matches on "timed out".
+    let started = std::time::Instant::now();
+    let tick = std::time::Duration::from_millis(100);
+    let status = loop {
+        match child.wait_timeout(tick) {
+            Ok(status) => break status,
+            Err(e) if e.kind() == ErrorKind::TimedOut => {
+                if cancelled() {
+                    tracing::info!("Cancel requested; killing child process");
+                    let _ = child.kill();
+                    let _ = child.wait_timeout(std::time::Duration::from_secs(10));
+                    join_readers(stdout_thread, stderr_thread);
+                    return Err(AppError::Generic(EXPORT_CANCELLED.to_string()));
+                }
+                if started.elapsed() > timeout {
+                    tracing::warn!("Command timed out after {:?}, killing process", timeout);
+                    let _ = child.kill();
+                    let _ = child.wait_timeout(std::time::Duration::from_secs(10));
+                    join_readers(stdout_thread, stderr_thread);
+                    return Err(AppError::Ffmpeg(format!(
+                        "Process timed out after {:?}",
+                        timeout
+                    )));
+                }
+            }
+            Err(e) => {
+                let _ = child.kill();
+                join_readers(stdout_thread, stderr_thread);
+                return Err(AppError::Io(e));
+            }
         }
     };
 
@@ -2495,6 +2550,58 @@ mod output_with_timeout_tests {
             cmd.arg(secs.to_string());
             cmd
         }
+    }
+
+    /// The export's decode is one blocking ffmpeg call. This is the proof it is
+    /// now interruptible: a 30 s process, a flag flipped at ~300 ms, and the
+    /// call must come back with the cancel error long before the 30 s.
+    #[test]
+    fn cancels_a_running_process_when_the_flag_is_set() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let flag = Arc::new(AtomicBool::new(false));
+        let setter = Arc::clone(&flag);
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            setter.store(true, Ordering::Relaxed);
+        });
+
+        let mut cmd = hang_command(30);
+        let started = std::time::Instant::now();
+        let result = output_with_timeout_cancellable(
+            &mut cmd,
+            std::time::Duration::from_secs(30),
+            Some(&flag),
+        );
+        let elapsed = started.elapsed();
+
+        let err = match result {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("a cancelled process must not report success"),
+        };
+        assert!(
+            err.to_lowercase().contains("cancelled"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(20),
+            "cancel took {elapsed:?}; the 30 s process should have been killed promptly"
+        );
+    }
+
+    /// A flag that is already set must stop the process from being launched.
+    #[test]
+    fn a_preset_flag_never_spawns() {
+        use std::sync::atomic::AtomicBool;
+        let flag = AtomicBool::new(true);
+        let mut cmd = hang_command(30);
+        let started = std::time::Instant::now();
+        let result = output_with_timeout_cancellable(
+            &mut cmd,
+            std::time::Duration::from_secs(30),
+            Some(&flag),
+        );
+        assert!(result.is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
     }
 
     #[test]

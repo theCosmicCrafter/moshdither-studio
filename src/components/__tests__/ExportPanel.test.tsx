@@ -4,7 +4,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { useAppStore, type EffectMeta } from "../../store";
-import { cancelExport } from "../../lib/tauri";
+import { cancelExport, exportVideo } from "../../lib/tauri";
+import { save } from "@tauri-apps/plugin-dialog";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(() => Promise.resolve({})),
@@ -97,6 +98,8 @@ describe("ExportPanel", () => {
   beforeEach(() => {
     resetStore();
     localStorage.clear();
+    // Call counts must not leak between tests; implementations are kept.
+    vi.mocked(cancelExport).mockClear();
   });
 
   afterEach(() => {
@@ -289,13 +292,89 @@ describe("ExportPanel", () => {
     expect(screen.getByText("Cancel")).toBeInTheDocument();
   });
 
-  it("cancel button resets export state", () => {
+  // This used to assert exportIsRunning === false and progress === 0 the
+  // instant Cancel was clicked -- which was the lie being removed: the backend
+  // ran on for the rest of the decode or effects stage, holding the export
+  // slot, while the UI claimed it was done. Cancel now means REQUESTED.
+  it("cancel button requests cancellation and says so, without pretending it is done", () => {
     useAppStore.getState().setExportIsRunning(true);
     useAppStore.getState().setExportProgress(50);
     render(<ExportPanel />);
     fireEvent.click(screen.getByText("Cancel"));
+    expect(useAppStore.getState().exportIsRunning).toBe(true);
+    expect(useAppStore.getState().exportCancelRequested).toBe(true);
+    expect(useAppStore.getState().statusMessage).toContain("Cancelling");
+    expect(screen.getByText("Cancelling…")).toBeInTheDocument();
+  });
+
+  it("a second click while cancelling does not re-notify the backend", () => {
+    useAppStore.getState().setExportIsRunning(true);
+    render(<ExportPanel />);
+    fireEvent.click(screen.getByText("Cancel"));
+    fireEvent.click(screen.getByText("Cancelling…"));
+    expect(vi.mocked(cancelExport)).toHaveBeenCalledTimes(1);
+  });
+
+  it("a cancelled export ends when the backend returns, and reads as cancelled, not failed", async () => {
+    let rejectRun: ((e: Error) => void) | undefined;
+    vi.mocked(exportVideo).mockImplementationOnce(
+      () => new Promise((_, reject) => { rejectRun = reject; })
+    );
+    useAppStore.getState().setMediaLoaded(true);
+    useAppStore.getState().setMediaInfo({ width: 1920, height: 1080 });
+    useAppStore.getState().setFilePath("/test/video.mp4");
+    useAppStore.getState().addToStack(mockEffectMeta("dithering.bayer", "Bayer", "dithering"));
+    render(<ExportPanel />);
+
+    fireEvent.click(screen.getByText("Export Video"));
+    await waitFor(() => expect(useAppStore.getState().exportIsRunning).toBe(true));
+
+    fireEvent.click(screen.getByText("Cancel"));
+    expect(vi.mocked(cancelExport)).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().exportIsRunning).toBe(true);
+    expect(screen.getByText("Cancelling…")).toBeInTheDocument();
+
+    // The backend noticed the flag and came back with its cancel error.
+    rejectRun!(new Error("Export cancelled by user"));
+    await waitFor(() => expect(useAppStore.getState().statusMessage).toBe("Export cancelled"));
     expect(useAppStore.getState().exportIsRunning).toBe(false);
-    expect(useAppStore.getState().exportProgress).toBe(0);
+    expect(useAppStore.getState().exportCancelRequested).toBe(false);
+  });
+
+  it("a failure with no cancel pending still reads as a failure", async () => {
+    vi.mocked(exportVideo).mockRejectedValueOnce(new Error("disk full"));
+    useAppStore.getState().setMediaLoaded(true);
+    useAppStore.getState().setMediaInfo({ width: 1920, height: 1080 });
+    useAppStore.getState().setFilePath("/test/video.mp4");
+    useAppStore.getState().addToStack(mockEffectMeta("dithering.bayer", "Bayer", "dithering"));
+    render(<ExportPanel />);
+    fireEvent.click(screen.getByText("Export Video"));
+    await waitFor(() => expect(useAppStore.getState().statusMessage).toContain("Export failed: disk full"));
+    expect(useAppStore.getState().exportIsRunning).toBe(false);
+  });
+
+  // A cancelled FFglitch run used to leave exportCancelRequested true forever,
+  // so the NEXT ordinary export's failure was reported as a cancellation.
+  it("a cancelled FFglitch export clears the cancel flag when it ends", async () => {
+    vi.mocked(save).mockResolvedValueOnce("/out/x.mp4");
+    let rejectRun: ((e: Error) => void) | undefined;
+    vi.mocked(exportVideo).mockImplementationOnce(
+      () => new Promise((_, reject) => { rejectRun = reject; })
+    );
+    useAppStore.getState().setMediaLoaded(true);
+    useAppStore.getState().setMediaInfo({ width: 1920, height: 1080 });
+    useAppStore.getState().setFilePath("/test/video.mp4");
+    useAppStore.getState().addToStack(mockEffectMeta("dithering.bayer", "Bayer", "dithering"));
+    render(<ExportPanel />);
+
+    fireEvent.click(screen.getByText(/Export FFglitch/));
+    await waitFor(() => expect(useAppStore.getState().exportIsRunning).toBe(true));
+    fireEvent.click(screen.getByText("Cancel"));
+    // Reject before the intermediate is written, so no temp cleanup is reached.
+    rejectRun!(new Error("Export cancelled by user"));
+    await waitFor(() => expect(useAppStore.getState().statusMessage).toBe("Export cancelled"));
+    expect(useAppStore.getState().exportIsRunning).toBe(false);
+    expect(useAppStore.getState().exportCancelRequested).toBe(false);
   });
 
   it("cancel button notifies the backend, not just local UI state", () => {

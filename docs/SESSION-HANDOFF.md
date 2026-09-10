@@ -95,6 +95,23 @@ unsafe (a live process may own one). The safe route is `--runtime-tmpdir` in
 the two build-sidecar scripts plus a reaper beside `cleanup_stale_sam3_bridge`,
 and that is an owner decision under never-delete-recycle-instead.
 
+**Export cancel is real now.** The flag was polled only inside the encoder's
+write loop -- the last 15 % of an export -- so Cancel during decode or effects
+changed nothing but the status text, while the job kept the export slot and
+the next Export click queued silently behind it. Now: the decode's ffmpeg
+child is polled every 100 ms and killed (`decode_video_cancellable`); the flag
+is read between effects, per frame in both non-temporal branches, and in the
+mask-blend pass; the encoder path is unchanged. NOT interruptible: one
+temporal `process_video` pass -- tens of seconds on a long clip, with the
+progress bar still -- because the Effect trait has no cancel hook. The UI
+contract changed to match: Cancel means REQUESTED. `exportIsRunning` stays
+true and the button reads "Cancelling..." until the backend returns; the
+catch branches on the store flag, never on message text. A cancelled
+FFglitch run used to leave the flag set forever, so the NEXT export's failure
+read as a cancellation -- `finally` now resets it. Note the one global
+`export_cancel` flag is also reset on entry by `apply_ffglitch`, which the
+batch queue and the mosh preview reach without setting `exportIsRunning`.
+
 **The pre-commit secret scan never excluded anything on Windows.** Its
 `--exclude-paths` patterns were `name/`, matched against backslash paths, so
 `recycling/`, `build-archive/` and `target/` were all scanned -- and TruffleHog

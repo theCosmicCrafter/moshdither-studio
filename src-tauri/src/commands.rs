@@ -1050,8 +1050,13 @@ fn export_video_blocking(
         "export-progress",
         serde_json::json!({"stage": "decoding", "progress": 0}),
     );
-    let mut segment = crate::ffmpeg::decode_video_with_options(&source_path, None, decode_scale)
-        .map_err(|e| e.to_string())?;
+    let mut segment = crate::ffmpeg::decode_video_cancellable(
+        &source_path,
+        None,
+        decode_scale,
+        Some(cancel.as_ref()),
+    )
+    .map_err(|e| e.to_string())?;
     tracing::info!(
         "Decoded {} frames, {}x{}, fps={}",
         segment.frames.len(),
@@ -1202,6 +1207,13 @@ fn export_video_blocking(
     let time_offset = trim_start.unwrap_or(0.0).max(0.0);
 
     for (effect_idx, call) in stack.iter().enumerate() {
+        // Cancel is polled between effects, and per frame inside the two
+        // non-temporal branches below. It used to be read only inside the
+        // encoder's write loop -- the last 15% of an export -- so "Cancel"
+        // during decode or effects changed nothing but the status text.
+        if cancel.load(Ordering::Relaxed) {
+            return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
+        }
         let effect = registry
             .get(&call.effect_id)
             .ok_or_else(|| format!("Effect '{}' not found", call.effect_id))?;
@@ -1234,6 +1246,12 @@ fn export_video_blocking(
             None
         };
 
+        // A temporal effect takes the whole segment through one
+        // `Effect::process_video` call with no cancel hook, so a cancel during
+        // it lands between effects: the pass runs to completion first. That
+        // is seconds to tens of seconds on a long clip, with the progress bar
+        // still. The UI says "Cancelling..." rather than "cancelled" for
+        // exactly this reason.
         if effect.is_temporal() {
             // Temporal effects: must use sequential process_video for cross-frame correctness.
             // Per-frame audio injection is meaningless here -- the effect gets the
@@ -1263,6 +1281,11 @@ fn export_video_blocking(
                 .par_iter()
                 .enumerate()
                 .map(|(idx, frame)| {
+                    if cancel.load(Ordering::Relaxed) {
+                        return Err(crate::error::AppError::Generic(
+                            crate::ffmpeg::EXPORT_CANCELLED.to_string(),
+                        ));
+                    }
                     let t = time_offset + idx as f64 / fps_val;
                     let mut frame_params = params_ref.clone();
                     frame_params.insert("time".to_string(), serde_json::Value::from(t));
@@ -1282,6 +1305,9 @@ fn export_video_blocking(
             let mut smoother = AudioBindingSmoother::default();
             let dt = 1.0 / (fps_val as f64).max(1.0);
             for (frame_idx, frame) in segment.frames.iter().enumerate() {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
+                }
                 let t = time_offset + frame_idx as f64 / fps_val;
                 let mut frame_params = params.clone();
                 frame_params.insert("time".to_string(), serde_json::Value::from(t));
@@ -1327,6 +1353,9 @@ fn export_video_blocking(
                 .par_iter_mut()
                 .enumerate()
                 .try_for_each(|(i, frame)| {
+                    if cancel.load(Ordering::Relaxed) {
+                        return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
+                    }
                     blend_mask(frame, &prev[i], m, mode).map_err(|e| e.to_string())
                 })?;
         }
@@ -1391,8 +1420,11 @@ fn export_video_blocking(
     Ok(output_path)
 }
 
-/// Request cancellation of an in-progress export. The export command polls
-/// this flag while feeding frames to FFmpeg and aborts early if it is set.
+/// Request cancellation of an in-progress export. The export polls this flag
+/// during the decode (killing the ffmpeg child), between effects, per frame
+/// inside non-temporal effects, and while feeding frames to the encoder.
+/// A temporal effect's single process_video pass is the one stretch it
+/// cannot interrupt.
 #[tauri::command]
 pub fn cancel_export(state: State<'_, AppState>) -> std::result::Result<(), String> {
     state.export_cancel.store(true, Ordering::Relaxed);

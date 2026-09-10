@@ -106,6 +106,7 @@ export default function ExportPanel() {
   const setExportProgress = useAppStore((s) => s.setExportProgress);
   const resetExport = useAppStore((s) => s.resetExport);
   const requestExportCancel = useAppStore((s) => s.requestExportCancel);
+  const exportCancelRequested = useAppStore((s) => s.exportCancelRequested);
   const watermark = useAppStore((s) => s.watermark);
   const setWatermark = useAppStore((s) => s.setWatermark);
   const aspectRatioLock = useAppStore((s) => s.aspectRatioLock);
@@ -214,6 +215,7 @@ export default function ExportPanel() {
       return;
     }
 
+    resetExport();
     setExportIsRunning(true);
     setExportProgress(0);
     setExportWarning(null);
@@ -233,9 +235,13 @@ export default function ExportPanel() {
       "export-progress",
       (event) => {
         const { stage, progress, message, warning } = event.payload;
+        // Once a cancel is pending the status line belongs to it; stage
+        // names and warnings still update their own state but do not
+        // overwrite "Cancelling…".
+        const cancelling = useAppStore.getState().exportCancelRequested;
         if (warning) {
           setExportWarning(warning);
-          setStatusMessage(warning);
+          if (!cancelling) setStatusMessage(warning);
         }
         if (stage === "error") {
           if (progressTimerRef.current) {
@@ -247,6 +253,7 @@ export default function ExportPanel() {
           setStatusMessage(`Export failed: ${message ?? "unknown error"}`);
         } else {
           setExportProgress(progress);
+          if (cancelling) return;
           if (stage === "decoding") setStatusMessage("Decoding video...");
           else if (stage === "effects") setStatusMessage("Applying effects...");
           else if (stage === "encoding") setStatusMessage("Encoding video...");
@@ -327,9 +334,17 @@ export default function ExportPanel() {
         clearInterval(progressTimerRef.current);
         progressTimerRef.current = null;
       }
-      setExportIsRunning(false);
-      setExportProgress(0);
-      setStatusMessage(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+      // Branch on the store flag, not on the message: exportVideo throws its
+      // own "Export cancelled" for a dismissed Save dialog with the flag
+      // unset, and that must keep reading as it does today.
+      if (useAppStore.getState().exportCancelRequested) {
+        resetExport();
+        setStatusMessage("Export cancelled");
+      } else {
+        setExportIsRunning(false);
+        setExportProgress(0);
+        setStatusMessage(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   };
 
@@ -343,21 +358,18 @@ export default function ExportPanel() {
   }, [exportTriggerId]);
 
   const handleCancel = () => {
+    // Cancel means REQUESTED, not done. This used to flip exportIsRunning
+    // off and announce "Export cancelled" on the spot, while the backend
+    // ran on for the rest of the decode or effects stage holding the export
+    // slot -- so the next Export click queued silently behind it. The
+    // running state now clears only when the backend actually returns
+    // (see the catch in handleExport), and the status says so.
+    if (!exportIsRunning || exportCancelRequested) return;
     requestExportCancel();
-    // requestExportCancel() only resets local UI state (progress bar,
-    // running flag) -- it never told the backend anything. Without this
-    // call, the actual ffmpeg/mosh_cli.py subprocess kept running untouched
-    // after the UI already claimed the export was cancelled.
     void cancelExport().catch((err) => {
       console.error("Failed to cancel export on the backend:", err);
     });
-    if (progressTimerRef.current) {
-      clearInterval(progressTimerRef.current);
-      progressTimerRef.current = null;
-    }
-    setExportIsRunning(false);
-    setExportProgress(0);
-    setStatusMessage("Export cancelled");
+    setStatusMessage("Cancelling… finishing the current step (a datamosh pass can take a while)");
   };
 
   const handleMoshPreview = async () => {
@@ -408,6 +420,7 @@ export default function ExportPanel() {
     // large write across drives is far slower) and inherits its writability.
     const tempPath = finalPath.replace(/(\.[^.\\/]*)?$/, ".moshdither-fx-tmp.mp4");
 
+    resetExport();
     setExportIsRunning(true);
     setExportProgress(0);
     let tempWritten = false;
@@ -442,11 +455,18 @@ export default function ExportPanel() {
           : `FFglitch exported: ${outputPath}`
       );
     } catch (err) {
-      setStatusMessage(`FFglitch export failed: ${err instanceof Error ? err.message : String(err)}`);
+      if (useAppStore.getState().exportCancelRequested) {
+        setStatusMessage("Export cancelled");
+      } else {
+        setStatusMessage(`FFglitch export failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     } finally {
       // Best-effort: a stranded intermediate is untidy, not a failed export.
       if (tempWritten) await removeExportTemp(tempPath).catch(() => {});
-      setExportIsRunning(false);
+      // resetExport, not just setExportIsRunning(false): a cancelled FFglitch
+      // run used to leave exportCancelRequested true forever, and the NEXT
+      // ordinary export's failure was then reported as a cancellation.
+      resetExport();
     }
   };
 
@@ -711,7 +731,7 @@ export default function ExportPanel() {
               }}
             >
               <span className="material-symbols-outlined" style={{ fontSize: 10 }}>close</span>
-              Cancel
+              {exportCancelRequested ? "Cancelling…" : "Cancel"}
             </button>
           </div>
         </div>
