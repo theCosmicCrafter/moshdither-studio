@@ -238,7 +238,6 @@ export interface AppState {
   sam3Masks: string[]; // base64 PNG masks
   sam3MaskScores: number[]; // confidence scores
   sam3MaskIndex: number; // which of the 3 masks is currently selected
-  sam3FrameMasks: Record<number, string>; // per-frame masks
 
   // Keyframes
   keyframes: Record<string, KeyframeTrack>;
@@ -463,8 +462,6 @@ export interface AppState {
   // Multi-mask actions
   setSam3Masks: (masks: string[], scores: number[]) => void;
   setSam3MaskIndex: (index: number) => void;
-  setSam3FrameMasks: (masks: Record<number, string>) => void;
-  clearSam3FrameMasks: () => void;
 
   // Proxy actions
   setProxyEnabled: (v: boolean) => void;
@@ -675,7 +672,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   sam3Masks: [],
   sam3MaskScores: [],
   sam3MaskIndex: 0,
-  sam3FrameMasks: {},
   keyframes: {},
   exportProgress: 0,
   exportIsRunning: false,
@@ -686,8 +682,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // Guarded like setDuration/setInPoint/setOutPoint, which this alone was
   // missing. currentTime reaches shader uniforms (PreviewViewport passes it as
-  // animTime) and indexes sam3FrameMasks, so a NaN or Infinity here corrupts
-  // the render silently rather than throwing.
+  // animTime), so a NaN or Infinity here corrupts the render silently rather
+  // than throwing.
   //
   // Only the lower bound is enforced here, not `duration`: duration is set
   // asynchronously while media loads, so clamping to it would truncate a seek
@@ -1315,10 +1311,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       };
     }),
 
-  setSam3FrameMasks: (masks) =>
-    set((state) => ({ sam3FrameMasks: masks, maskRevision: state.maskRevision + 1 })),
-  clearSam3FrameMasks: () =>
-    set((state) => ({ sam3FrameMasks: {}, maskRevision: state.maskRevision + 1 })),
 
   // Proxy actions
   setProxyEnabled: (v) => set({ proxyEnabled: v }),

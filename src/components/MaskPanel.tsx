@@ -15,7 +15,6 @@ import MaskSelector from "./MaskSelector";
 import PostProcessControls from "./PostProcessControls";
 import ManualMaskEditor from "./ManualMaskEditor";
 import Sam3Setup from "./Sam3Setup";
-import FrameTimeline from "./FrameTimeline";
 import LabeledSlider from "./LabeledSlider";
 
 export default function MaskPanel() {
@@ -500,9 +499,6 @@ export default function MaskPanel() {
               setShowPostProcess={setShowPostProcess}
             />
           )}
-
-          {/* Frame Timeline for Video */}
-          <FrameTimeline />
 
           {activeMask && (
             <button

@@ -104,12 +104,6 @@ describe("Studio Store", () => {
 
       useAppStore.getState().setSam3MaskIndex(1);
       expect(useAppStore.getState().maskRevision).toBe(4);
-
-      useAppStore.getState().setSam3FrameMasks({ 0: "frame-mask" });
-      expect(useAppStore.getState().maskRevision).toBe(5);
-
-      useAppStore.getState().clearSam3FrameMasks();
-      expect(useAppStore.getState().maskRevision).toBe(6);
     });
   });
 

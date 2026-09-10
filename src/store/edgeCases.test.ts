@@ -264,7 +264,7 @@ describe("Store Edge Cases", () => {
 
   describe("playhead (currentTime) edge cases", () => {
     // currentTime is fed to shader uniforms as animTime and used to index
-    // sam3FrameMasks, so a non-finite value corrupts the render silently
+    // shader time, so a non-finite value corrupts the render silently
     // instead of throwing. setDuration/setInPoint/setOutPoint were already
     // guarded; this one was not.
     it("rejects non-finite times instead of storing them", () => {

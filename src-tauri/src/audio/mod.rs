@@ -76,6 +76,45 @@ impl AudioBakeData {
         self.frames.get(idx)
     }
 
+    /// The bake frame covering absolute time `t` seconds.
+    ///
+    /// The bake is sampled at ITS fps, from the start of the audio file. The
+    /// export used to index it by the video's frame number, which was wrong
+    /// twice over: it assumed the bake's fps equalled the video's, and it
+    /// ignored the in-point, so an export trimmed to start at 5 s heard the
+    /// audio from 0 s. The preview plays audio at the transport time; this
+    /// is the same lookup.
+    pub fn frame_at_time(&self, t: f64) -> Option<&FrameAudioFeatures> {
+        if self.frames.is_empty() || !t.is_finite() {
+            return None;
+        }
+        let fps = if self.fps.is_finite() && self.fps > 0.0 {
+            self.fps
+        } else {
+            30.0
+        };
+        let idx = (t.max(0.0) * fps).round() as usize;
+        self.frames.get(idx.min(self.frames.len() - 1))
+    }
+
+    /// [`inject_params`] for the frame covering absolute time `t`.
+    pub fn inject_params_at_time(
+        &self,
+        params: &mut serde_json::Map<String, serde_json::Value>,
+        t: f64,
+    ) {
+        let fps = if self.fps.is_finite() && self.fps > 0.0 {
+            self.fps
+        } else {
+            30.0
+        };
+        if self.frames.is_empty() || !t.is_finite() {
+            return;
+        }
+        let idx = ((t.max(0.0) * fps).round() as usize).min(self.frames.len() - 1);
+        self.inject_params(params, idx);
+    }
+
     /// Frame indices on which a beat lands, from the low band.
     ///
     /// Bass is the useful default here: kick and snare hits drive the felt
@@ -158,5 +197,86 @@ impl AudioBakeData {
             val(if features.beat_treble { 1.0 } else { 0.0 }),
         );
         params.insert("_audio_beat_energy".to_string(), val(features.beat_energy));
+    }
+}
+
+#[cfg(test)]
+mod time_lookup_tests {
+    use super::*;
+
+    fn bake(fps: f64, n: usize) -> AudioBakeData {
+        AudioBakeData {
+            fps,
+            total_frames: n,
+            bpm: None,
+            frames: (0..n)
+                .map(|i| FrameAudioFeatures {
+                    frame: i,
+                    time: i as f64 / fps,
+                    rms: 0.0,
+                    energy: 0.0,
+                    spectral_centroid: 0.0,
+                    spectral_flatness: 0.0,
+                    spectral_rolloff: 0.0,
+                    spectral_flux: 0.0,
+                    zcr: 0.0,
+                    volume: 0.0,
+                    sub_bass: 0.0,
+                    // Encode the index in a feature so a lookup can be checked.
+                    bass: i as f64,
+                    low_mid: 0.0,
+                    mid: 0.0,
+                    high_mid: 0.0,
+                    presence: 0.0,
+                    brilliance: 0.0,
+                    beat_bass: false,
+                    beat_mid: false,
+                    beat_treble: false,
+                    beat_energy: 0.0,
+                })
+                .collect(),
+        }
+    }
+
+    /// The export used to index the bake by the VIDEO's frame number. With a
+    /// 60 fps bake and a 24 fps video, video frame 24 (t = 1 s) read bake
+    /// frame 24 (t = 0.4 s). By time, it reads bake frame 60.
+    #[test]
+    fn looks_up_by_time_regardless_of_the_videos_frame_rate() {
+        let b = bake(60.0, 600);
+        assert_eq!(b.frame_at_time(1.0).unwrap().bass, 60.0);
+        assert_eq!(b.frame_at_time(0.0).unwrap().bass, 0.0);
+        // Rounds to the nearest bake frame.
+        assert_eq!(b.frame_at_time(0.51).unwrap().bass, 31.0);
+    }
+
+    /// An export trimmed to start at 5 s must hear the audio from 5 s. The
+    /// caller adds the in-point to `t`; this test pins that the lookup itself
+    /// is absolute.
+    #[test]
+    fn an_in_point_offset_reaches_the_right_audio() {
+        let b = bake(30.0, 900);
+        let t = 5.0 + 10.0 / 30.0; // in-point 5 s, export frame 10 at 30 fps
+        assert_eq!(b.frame_at_time(t).unwrap().bass, 160.0);
+    }
+
+    #[test]
+    fn clamps_past_the_end_and_survives_bad_input() {
+        let b = bake(30.0, 10);
+        assert_eq!(b.frame_at_time(99.0).unwrap().bass, 9.0);
+        assert_eq!(b.frame_at_time(-3.0).unwrap().bass, 0.0);
+        assert!(b.frame_at_time(f64::NAN).is_none());
+        assert!(bake(30.0, 0).frame_at_time(1.0).is_none());
+        // A bake with a nonsense fps falls back to 30 rather than dividing by zero.
+        let odd = bake(0.0, 100);
+        assert_eq!(odd.frame_at_time(1.0).unwrap().bass, 30.0);
+    }
+
+    #[test]
+    fn inject_at_time_writes_the_same_frame_the_lookup_returns() {
+        let b = bake(30.0, 300);
+        let mut p = serde_json::Map::new();
+        b.inject_params_at_time(&mut p, 2.0);
+        assert_eq!(p["_audio_bass"], serde_json::Value::from(60.0));
     }
 }

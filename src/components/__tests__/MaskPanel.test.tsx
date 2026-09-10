@@ -115,6 +115,20 @@ describe("MaskPanel", () => {
     expect(screen.getByText(/SAM3 idle/i).parentElement?.querySelector(".animate-spin")).toBeNull();
   });
 
+  // "Run Video Predictor" is recycled (recycling/MANIFEST.md, ADR 0006). It ran
+  // an independent auto-segment per frame with no identity carried between
+  // them, and its output reached only the green overlay -- never the
+  // renderer, never the export. This fails if the button comes back without an
+  // export path behind it, which is the exact bug being kept out.
+  it("offers no video predictor on a video source", () => {
+    useAppStore.setState({ mediaLoaded: true, isVideo: true, sam3Ready: true, maskTab: "sam3" });
+    render(<MaskPanel />);
+    // Positive anchor first, so a silent early return cannot pass this test.
+    expect(screen.getByText("Load Current Image")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /video predictor/i })).toBeNull();
+    expect(screen.queryByText(/frame timeline/i)).toBeNull();
+  });
+
   it("shows Load Current Image button when sam3 is ready", () => {
     useAppStore.getState().setMediaLoaded(true);
     useAppStore.getState().setSam3Ready(true);

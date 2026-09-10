@@ -27,7 +27,6 @@ export default function CommandPalette() {
   const setMediaInfo = useAppStore((s) => s.setMediaInfo);
   const setPreviewDataUrl = useAppStore((s) => s.setPreviewDataUrl);
   const setOriginalDataUrl = useAppStore((s) => s.setOriginalDataUrl);
-  const clearSam3FrameMasks = useAppStore((s) => s.clearSam3FrameMasks);
   const setInPoint = useAppStore((s) => s.setInPoint);
   const setOutPoint = useAppStore((s) => s.setOutPoint);
   const clearInOut = useAppStore((s) => s.clearInOut);
@@ -90,7 +89,7 @@ export default function CommandPalette() {
     registerCommand({ id: "undo", label: "Undo", category: "Edit", shortcut: "Ctrl+Z", action: () => { if (canUndo()) undo(); } });
     registerCommand({ id: "redo", label: "Redo", category: "Edit", shortcut: "Ctrl+Shift+Z", action: () => { if (canRedo()) redo(); } });
     registerCommand({ id: "clear-stack", label: "Clear effect stack", category: "Edit", action: () => { clearStack(); setStatusMessage("Effect stack cleared"); } });
-    registerCommand({ id: "close-media", label: "Close media", category: "File", action: () => { setFilePath(null); setMediaLoaded(false); setMediaInfo(null); setPreviewDataUrl(null); setOriginalDataUrl(null); clearSam3FrameMasks(); setStatusMessage("Media closed"); } });
+    registerCommand({ id: "close-media", label: "Close media", category: "File", action: () => { setFilePath(null); setMediaLoaded(false); setMediaInfo(null); setPreviewDataUrl(null); setOriginalDataUrl(null); setStatusMessage("Media closed"); } });
     // At the playhead, like the I / O keys. These set 0 and 300 regardless.
     registerCommand({ id: "set-in-point", label: "Set in point", category: "Timeline", shortcut: "I", action: () => setInPoint(useAppStore.getState().currentTime) });
     registerCommand({ id: "set-out-point", label: "Set out point", category: "Timeline", shortcut: "O", action: () => setOutPoint(useAppStore.getState().currentTime) });
@@ -115,7 +114,7 @@ export default function CommandPalette() {
   }, [
     setCurrentTime, undo, redo, canUndo, canRedo,
     clearStack, setFilePath, setMediaLoaded, setMediaInfo, setPreviewDataUrl,
-    setOriginalDataUrl, clearSam3FrameMasks, setInPoint, setOutPoint, clearInOut,
+    setOriginalDataUrl, setInPoint, setOutPoint, clearInOut,
     setScopesVisible, setStatusMessage,
   ]);
 

@@ -1193,6 +1193,14 @@ fn export_video_blocking(
     let registry = registry
         .lock()
         .map_err(|e| format!("registry lock poisoned: {e}"))?;
+    // The instant a frame represents on the TRANSPORT, not its index in the
+    // trimmed segment. Trimming happened above, so frame 0 here is
+    // `trim_start` seconds into the clip -- and keyframes are stored at
+    // absolute transport time, the audio bake runs from the audio file's
+    // start, and the preview passes the absolute time to shaders. Counting
+    // from 0 shifted every one of them early by the in-point in the export.
+    let time_offset = trim_start.unwrap_or(0.0).max(0.0);
+
     for (effect_idx, call) in stack.iter().enumerate() {
         let effect = registry
             .get(&call.effect_id)
@@ -1235,7 +1243,7 @@ fn export_video_blocking(
             // A temporal effect is handed the whole segment at once, so it has
             // no per-frame parameter hook. Animated parameters take their value
             // at the START of the clip rather than being ignored outright.
-            if inject_keyframe_params(call.keyframes.as_ref(), &mut temporal_params, 0.0) {
+            if inject_keyframe_params(call.keyframes.as_ref(), &mut temporal_params, time_offset) {
                 temporal_params = crate::effects::clamp_for_effect(effect, &temporal_params);
             }
             if let Some(ref audio) = audio_data {
@@ -1255,7 +1263,7 @@ fn export_video_blocking(
                 .par_iter()
                 .enumerate()
                 .map(|(idx, frame)| {
-                    let t = idx as f64 / fps_val;
+                    let t = time_offset + idx as f64 / fps_val;
                     let mut frame_params = params_ref.clone();
                     frame_params.insert("time".to_string(), serde_json::Value::from(t));
                     // Re-clamp after injection: the clamp above ran on the static
@@ -1274,21 +1282,21 @@ fn export_video_blocking(
             let mut smoother = AudioBindingSmoother::default();
             let dt = 1.0 / (fps_val as f64).max(1.0);
             for (frame_idx, frame) in segment.frames.iter().enumerate() {
-                let t = frame_idx as f64 / fps_val;
+                let t = time_offset + frame_idx as f64 / fps_val;
                 let mut frame_params = params.clone();
                 frame_params.insert("time".to_string(), serde_json::Value::from(t));
                 if inject_keyframe_params(call.keyframes.as_ref(), &mut frame_params, t) {
                     frame_params = crate::effects::clamp_for_effect(effect, &frame_params);
                 }
                 if let Some(ref audio) = audio_data {
-                    audio.inject_params(&mut frame_params, frame_idx);
+                    audio.inject_params_at_time(&mut frame_params, t);
                     // After the keyframes above: binding a parameter to audio is
                     // the more explicit instruction, so it wins when both name
                     // the same parameter.
                     if smoother.inject(
                         call.audio_bindings.as_ref(),
                         &mut frame_params,
-                        audio.get_frame(frame_idx),
+                        audio.frame_at_time(t),
                         dt,
                     ) {
                         frame_params = crate::effects::clamp_for_effect(effect, &frame_params);

@@ -10,13 +10,12 @@ const CHECK_INTERVAL_MS = 30 * 1000; // 30 seconds
  * after 5 minutes of inactivity to reclaim ~6GB of RAM.
  *
  * Activity is tracked by watching SAM3-related state changes (masks, hover
- * mask, frame masks, mode, clicking). Any change resets the idle timer.
+ * mask, mode, clicking). Any change resets the idle timer.
  */
 export function useSam3IdleShutdown() {
   const sam3Ready = useAppStore((s) => s.sam3Ready);
   const sam3Masks = useAppStore((s) => s.sam3Masks);
   const sam3HoverMask = useAppStore((s) => s.sam3HoverMask);
-  const sam3FrameMasks = useAppStore((s) => s.sam3FrameMasks);
   const sam3Mode = useAppStore((s) => s.sam3Mode);
   const sam3Clicking = useAppStore((s) => s.sam3Clicking);
   const setSam3Ready = useAppStore((s) => s.setSam3Ready);
@@ -30,7 +29,7 @@ export function useSam3IdleShutdown() {
     if (sam3Ready) {
       lastActivityRef.current = Date.now();
     }
-  }, [sam3Ready, sam3Masks, sam3HoverMask, sam3FrameMasks, sam3Mode, sam3Clicking]);
+  }, [sam3Ready, sam3Masks, sam3HoverMask, sam3Mode, sam3Clicking]);
 
   // Periodic check for idle timeout
   useEffect(() => {

@@ -129,7 +129,6 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     sam3Points,
     maskTab,
     sam3HoverMask,
-    sam3FrameMasks,
     sam3OverlayOpacity,
     sam3OverlayColor,
     theme,
@@ -143,7 +142,6 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       sam3Points: s.sam3Points,
       maskTab: s.maskTab,
       sam3HoverMask: s.sam3HoverMask,
-      sam3FrameMasks: s.sam3FrameMasks,
       sam3OverlayOpacity: s.sam3OverlayOpacity,
       sam3OverlayColor: s.sam3OverlayColor,
       theme: s.theme,
@@ -832,9 +830,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       // Sync mask image
       const maskImg = maskImgRef.current;
       if (maskImg && !state.sam3HoverMask) {
-        const currentFrameIndex = Math.floor(state.currentTime * 10);
-        const frameMask = state.sam3FrameMasks[currentFrameIndex];
-        const src = frameMask || state.activeMask || "";
+        const src = state.activeMask || "";
         if (maskImg.getAttribute("src") !== src) {
           maskImg.src = src;
         }
@@ -1052,9 +1048,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       try {
         const s = useAppStore.getState();
         const animTime = s.isPlaying ? s.currentTime : 0;
-        const currentFrameIndex = Math.floor(animTime * 10);
-        const activeMaskForFrame = s.sam3FrameMasks[currentFrameIndex] || s.activeMask;
-        const activeStack = stackToRustPayload(s.effectStack, activeMaskForFrame, s.sam3Masks, animTime);
+        const activeStack = stackToRustPayload(s.effectStack, s.activeMask, s.sam3Masks, animTime);
         const result = await applyEffectStack(activeStack, null, scale);
         if (!cancelled && renderRevision === cpuRenderRevisionRef.current) state.setPreviewDataUrl(result);
       } catch (e) {
@@ -1109,9 +1103,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
         try {
           const s = useAppStore.getState();
           const animTime = s.currentTime;
-          const currentFrameIndex = Math.floor(animTime * 10);
-          const activeMaskForFrame = s.sam3FrameMasks[currentFrameIndex] || s.activeMask;
-          const activeStack = stackToRustPayload(s.effectStack, activeMaskForFrame, s.sam3Masks, animTime);
+          const activeStack = stackToRustPayload(s.effectStack, s.activeMask, s.sam3Masks, animTime);
           const result = await applyEffectStack(activeStack, null, 0.5); // Playing uses 0.5 for performance
           if (!cancelled && renderRevision === cpuRenderRevisionRef.current) s.setPreviewDataUrl(result);
         } catch (e) {
@@ -1444,10 +1436,10 @@ function PreviewViewport({ isDropTarget = false }: Props) {
                       rendered when split mode was off, and merging that branch into this always-mounted
                       tree dropped the guard, so the colored mask painted over both halves of the
                       comparison it exists to let the user check. */}
-                  {(Object.keys(sam3FrameMasks).length > 0 || activeMask || sam3HoverMask) && maskVisible && !isManualMaskActive && !showBeforeAfter && (
+                  {(activeMask || sam3HoverMask) && maskVisible && !isManualMaskActive && !showBeforeAfter && (
                     <img
                       ref={maskImgRef}
-                      src={sam3HoverMask || sam3FrameMasks[Math.floor((useAppStore.getState().currentTime || 0) * 10)] || activeMask || undefined}
+                      src={sam3HoverMask || activeMask || undefined}
                       alt="Mask"
                       draggable={false}
                       className="absolute inset-0 pointer-events-none preview-img mask-overlay-img"

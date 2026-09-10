@@ -113,18 +113,6 @@ export async function sam3Clear(): Promise<string> {
   return invoke("sam3_clear");
 }
 
-export async function sam3VideoPredictor(
-  frames: string[],
-  prompt?: string
-): Promise<{
-  status: string;
-  frame_masks: string[][];
-  frame_scores: number[][];
-}> {
-  if (!isTauriAvailable()) return { status: "browser-fallback", frame_masks: [], frame_scores: [] };
-  return invoke("sam3_video_predictor", { frames, prompt });
-}
-
 export async function sam3Shutdown(): Promise<string> {
   if (!isTauriAvailable()) return "ok";
   return invoke("sam3_shutdown");
