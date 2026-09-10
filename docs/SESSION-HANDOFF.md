@@ -70,6 +70,44 @@ to end against a real clip with no system Python involved.
 the icons are all bundled. Effects, dithering, glitch, datamoshing, LUTs and
 export need nothing from the internet.
 
+## STATE OF THE TREE -- 2026-09-09 23:00 (read this first)
+
+**Everything is committed and pushed.** `Cosmic/upbeat-golick-68081b` is at
+`b37398f` locally and on origin (0 ahead / 0 behind), 119 commits ahead of
+`origin/master`, 0 behind it. Full 10-gate run passed on that HEAD.
+[PR #49](https://github.com/theCosmicCrafter/moshdither-studio/pull/49) is
+retitled and its body describes the branch; it was still titled for the
+UI-token fix it started as.
+
+**Not aligned, deliberately left alone (not this session's work):**
+
+* A second worktree, `.claude/worktrees/vigorous-northcutt-560e78` on branch
+  `fix/export-keyframe-trim-offset`, has UNCOMMITTED edits to
+  `src-tauri/src/commands.rs`. It is refactoring the committed `time_offset`
+  into an `export_frame_time()` helper -- functionally identical to `345abcd`,
+  not a double offset. Redundant polish from a session that started after the
+  fix landed. If it commits, it merges cleanly; if it is abandoned, nothing is
+  lost.
+* The main checkout (`master`, `a099379`) has an uncommitted `.husky/pre-commit`
+  that is an OLDER subset of the version already committed on this branch.
+  Merging the PR supersedes it. The `references/` submodule noise there is
+  vendored third-party state.
+* Local `checkpoint/*` tags are not pushed (bookkeeping, not history).
+
+**GitHub reported 11 Dependabot alerts on master (6 high, 5 moderate)** in the
+push output. Dependabot DOES run on the free plan, unlike Actions, so this is
+a real signal: `/security/dependabot`. Not investigated.
+
+**Human steps before a public release, unchanged:** code signing; the SAM3
+add-on upload (`npm run sam3:publish -- --upload`, ~6 GB); GPL
+corresponding-source tarballs; LUT licence provenance; the `_MEI*` reaper
+decision (37.8 GB leaked on this machine).
+
+**Next code batch, in order:** SAM3 bridge death reported as a 300 s timeout;
+add-on download with no cancel/resume/disk check; uninstall leaves 6.5 GB;
+heavy work on the main UI thread ("Not Responding"); `run-parity.spec.ts`
+compares two placeholder PNGs; CHANGELOG and THIRD-PARTY-NOTICES stale.
+
 ## Session 2026-09-09 (night): cancel kills the tree; the scan finally excludes
 
 **Orphaned processes -- CONFIRMED empirically, then fixed.** mosh-cli and the
