@@ -1,4 +1,0 @@
-[20260909-185726] checkpoint=checkpoint/20260909-185726-Cosmic-upbeat-golick-68081b branch=Cosmic/upbeat-golick-68081b commit=81fce12c2d3aef95c2e6525b3eb425b55039df0b msg="pre-remediation-phase1"
-[20260909-221253] checkpoint=checkpoint/20260909-221253-Cosmic-upbeat-golick-68081b branch=Cosmic/upbeat-golick-68081b commit=345abcd1f6bb948010aba38afd24839b4115840a msg="before process-tree job object"
-[20260909-223343] checkpoint=checkpoint/20260909-223343-Cosmic-upbeat-golick-68081b branch=Cosmic/upbeat-golick-68081b commit=4519ee6965e4a4c74d22a2adaeacbff0504e39e4 msg="before export memory rewrite"
-[20260909-225715] checkpoint=checkpoint/20260909-225715-fix-export-keyframe-trim-offset branch=fix/export-keyframe-trim-offset commit=b37398f4ceacd0a82469135640dc8a91d9930e99 msg="before export-frame-time helper and tests"
