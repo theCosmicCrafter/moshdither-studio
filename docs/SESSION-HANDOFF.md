@@ -4,7 +4,7 @@ Living pass-down note. Update it at the end of every session and commit it.
 It lives in `docs/` on purpose: the previous handoff sat in `outputs/`, which is
 gitignored, so it never travelled with the branch.
 
-**Last updated:** 2026-09-08 · branch `Cosmic/upbeat-golick-68081b` · PR #49
+**Last updated:** 2026-09-09 · branch `fix/export-keyframe-trim-offset` (off `Cosmic/upbeat-golick-68081b`, PR #49)
 
 ---
 
@@ -154,6 +154,22 @@ now `(^|[\/])name[\/]` and the scan takes 9 s instead of 35 s-2.5 min.
 counted from the in-point, while keyframes, the audio bake and the preview's
 shader time are all absolute. One `time_offset` now; the bake is looked up by
 TIME (it was indexed by the video's frame number, which also assumed equal fps).
+
+*Follow-up, 2026-09-09 (branch `fix/export-keyframe-trim-offset`, off
+`b37398f`; merge into `Cosmic/upbeat-golick-68081b`).* That fix went in under
+the checkpoint commit `345abcd` ("checkpoint: before process-tree job
+object"), so `git log --grep` will not find it and a bug report written
+against `34f6341`'s line numbers reads as still open -- it is not. The
+computation is now one function, `export_frame_time(trim_start, idx, fps)` in
+`commands.rs`, used by all three branches (temporal takes frame 0 of the
+segment), and pinned by two tests in `keyframe_export_tests`: the arithmetic,
+and the regression itself (in-point 2 s + a 0->100 ramp over 4 s: frame 0 must
+read 50, not 0). The audio side was already pinned by
+`an_in_point_offset_reaches_the_right_audio` in `audio/mod.rs`.
+Trap for a fresh worktree: `cargo test` does not compile until
+`src-tauri/bin/` has the five sidecar exes (copy from another checkout or
+`npm run fetch:external`), `npm ci` has run, and `npm run build` has produced
+`dist/` -- `tauri::generate_context!` panics on a missing `frontendDist`.
 
 **Video mask tracking recycled** (ADR 0006): per-frame auto_mask with no
 identity, could not finish, rendered nowhere but the overlay.

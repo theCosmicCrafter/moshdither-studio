@@ -561,6 +561,21 @@ fn keyframe_value_at(track: &[KeyframePoint], time: f64) -> Option<f64> {
     Some(k1.value + (k2.value - k1.value) * eased)
 }
 
+/// The instant on the TRANSPORT, in seconds, that frame `idx` of an export
+/// segment represents.
+///
+/// Export trims the decoded frames to the in/out points BEFORE the effects
+/// run, so frame 0 of the segment is `trim_start` seconds into the clip, not
+/// clip time 0. Keyframes are stored at absolute transport time, the audio
+/// bake runs from the audio file's start, and the preview hands shaders the
+/// absolute time -- so this is the value every one of them must be evaluated
+/// at. Counting from the segment index instead made each of them fire
+/// `trim_start` seconds late in the exported file whenever the in-point was
+/// not 0, and the export stopped matching the preview the user approved.
+fn export_frame_time(trim_start: Option<f64>, idx: usize, fps: f64) -> f64 {
+    trim_start.unwrap_or(0.0).max(0.0) + idx as f64 / fps
+}
+
 /// Overwrite animated parameters with their value at `time`.
 fn inject_keyframe_params(
     keyframes: Option<&std::collections::HashMap<String, Vec<KeyframePoint>>>,
@@ -1251,13 +1266,9 @@ fn export_video_blocking(
     let registry = registry
         .lock()
         .map_err(|e| format!("registry lock poisoned: {e}"))?;
-    // The instant a frame represents on the TRANSPORT, not its index in the
-    // trimmed segment. Trimming happened above, so frame 0 here is
-    // `trim_start` seconds into the clip -- and keyframes are stored at
-    // absolute transport time, the audio bake runs from the audio file's
-    // start, and the preview passes the absolute time to shaders. Counting
-    // from 0 shifted every one of them early by the in-point in the export.
-    let time_offset = trim_start.unwrap_or(0.0).max(0.0);
+    // Every per-frame time below goes through `export_frame_time`: the frames
+    // were trimmed above, so a frame's index in the segment is NOT its time on
+    // the transport. See that function for why it matters.
 
     for (effect_idx, call) in stack.iter().enumerate() {
         // Cancel is polled between effects, and per frame inside the two
@@ -1321,8 +1332,11 @@ fn export_video_blocking(
             let mut temporal_params = params.clone();
             // A temporal effect is handed the whole segment at once, so it has
             // no per-frame parameter hook. Animated parameters take their value
-            // at the START of the clip rather than being ignored outright.
-            if inject_keyframe_params(call.keyframes.as_ref(), &mut temporal_params, time_offset) {
+            // at the START of the segment -- the in-point, not clip time 0 --
+            // rather than being ignored outright.
+            let segment_start = export_frame_time(trim_start, 0, segment.fps);
+            if inject_keyframe_params(call.keyframes.as_ref(), &mut temporal_params, segment_start)
+            {
                 temporal_params = crate::effects::clamp_for_effect(effect, &temporal_params);
             }
             if let Some(ref audio) = audio_data {
@@ -1381,7 +1395,7 @@ fn export_video_blocking(
                     if cancel.load(Ordering::Relaxed) {
                         return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
                     }
-                    let t = time_offset + idx as f64 / fps_val;
+                    let t = export_frame_time(trim_start, idx, fps_val);
                     let mut frame_params = params_ref.clone();
                     frame_params.insert("time".to_string(), serde_json::Value::from(t));
                     // Re-clamp after injection: the clamp above ran on the static
@@ -1409,7 +1423,7 @@ fn export_video_blocking(
                 if cancel.load(Ordering::Relaxed) {
                     return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
                 }
-                let t = time_offset + frame_idx as f64 / fps_val;
+                let t = export_frame_time(trim_start, frame_idx, fps_val);
                 let mut frame_params = params.clone();
                 frame_params.insert("time".to_string(), serde_json::Value::from(t));
                 if inject_keyframe_params(call.keyframes.as_ref(), &mut frame_params, t) {
@@ -3825,6 +3839,81 @@ mod keyframe_export_tests {
         untouched.insert("amount".to_string(), serde_json::Value::from(7.0));
         assert!(!inject_keyframe_params(None, &mut untouched, 1.0));
         assert_eq!(untouched["amount"], serde_json::Value::from(7.0));
+    }
+
+    /// Frames are trimmed to the in/out points before the effects loop, so a
+    /// frame's index in the segment is not its time on the transport. With no
+    /// in-point the two agree; with one, every frame is `trim_start` later.
+    #[test]
+    fn export_frame_time_counts_from_the_in_point_not_the_segment() {
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+
+        // No trim: the segment IS the clip.
+        assert!(close(export_frame_time(None, 0, 30.0), 0.0));
+        assert!(close(export_frame_time(None, 15, 30.0), 0.5));
+
+        // In-point at 2 s: frame 0 of the segment is 2 s into the clip.
+        assert!(close(export_frame_time(Some(2.0), 0, 30.0), 2.0));
+        assert!(close(export_frame_time(Some(2.0), 15, 30.0), 2.5));
+        assert!(close(export_frame_time(Some(2.0), 30, 24.0), 3.25));
+
+        // A negative in-point cannot exist on the transport; treat it as 0.
+        assert!(close(export_frame_time(Some(-1.0), 3, 30.0), 0.1));
+    }
+
+    /// The regression itself: with the in-point at 2 s, the first exported
+    /// frame must take the keyframe value the preview showed at 2 s, not the
+    /// value at clip time 0. Before the fix, every keyframe in a trimmed
+    /// export fired `trim_start` seconds late.
+    #[test]
+    fn keyframes_in_a_trimmed_export_fire_at_transport_time() {
+        let mut tracks = std::collections::HashMap::new();
+        tracks.insert(
+            "amount".to_string(),
+            vec![kf(0.0, 0.0, "linear"), kf(4.0, 100.0, "linear")],
+        );
+        let fps = 30.0;
+        let fresh = || {
+            let mut p = serde_json::Map::new();
+            p.insert("amount".to_string(), serde_json::Value::from(7.0));
+            p
+        };
+
+        // Untrimmed: segment frame 0 is clip time 0.
+        let mut untrimmed = fresh();
+        assert!(inject_keyframe_params(
+            Some(&tracks),
+            &mut untrimmed,
+            export_frame_time(None, 0, fps)
+        ));
+        assert_eq!(untrimmed["amount"], serde_json::Value::from(0.0));
+
+        // In-point at 2 s: segment frame 0 is clip time 2 s, halfway up the ramp.
+        let mut trimmed = fresh();
+        assert!(inject_keyframe_params(
+            Some(&tracks),
+            &mut trimmed,
+            export_frame_time(Some(2.0), 0, fps)
+        ));
+        assert_eq!(
+            trimmed["amount"],
+            serde_json::Value::from(50.0),
+            "frame 0 of a segment trimmed to start at 2 s must evaluate keyframes at 2 s"
+        );
+
+        // And one second of frames later it has advanced to 3 s on the clip,
+        // not to 1 s: the offset is not a one-off on the first frame.
+        let mut later = fresh();
+        assert!(inject_keyframe_params(
+            Some(&tracks),
+            &mut later,
+            export_frame_time(Some(2.0), 30, fps)
+        ));
+        assert_eq!(later["amount"], serde_json::Value::from(75.0));
+
+        // The temporal branch samples the START of the segment: same rule.
+        let start = export_frame_time(Some(2.0), 0, fps);
+        assert_eq!(keyframe_value_at(&tracks["amount"], start), Some(50.0));
     }
 
     /// The payload must survive a frontend that sends no `keyframes` key at all
