@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { StackEntry } from "../store";
 import { rustToWebGL } from "./effectConverter";
@@ -6,6 +9,23 @@ import {
   LEGACY_EFFECT_IDS,
   migrateOverlayGuides,
 } from "./migrateOverlayGuides";
+
+const EFFECTS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../src-tauri/src/effects");
+
+function rustEffectIds(dir = EFFECTS_DIR): Set<string> {
+  const ids = new Set<string>();
+  for (const item of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, item.name);
+    if (item.isDirectory()) {
+      for (const id of rustEffectIds(full)) ids.add(id);
+    } else if (item.name.endsWith(".rs")) {
+      for (const m of readFileSync(full, "utf8").matchAll(/EffectMeta\s*\{\s*id:\s*"([^"]+)"/g)) {
+        ids.add(m[1]);
+      }
+    }
+  }
+  return ids;
+}
 
 function entry(
   effectId: string,
@@ -169,8 +189,20 @@ describe("migrateOverlayGuides", () => {
     expect(result.stack).toEqual(stack);
   });
 
+  it("migrates a pre-removal audio_reactive.chromatic with no params to spectral_shift", () => {
+    const result = migrateOverlayGuides([entry("audio_reactive.chromatic", true, {})]);
+    expect(result.migrated).toBe(true);
+    expect(result.stack).toEqual([
+      expect.objectContaining({ effectId: "audio_reactive.spectral_shift", params: {} }),
+    ]);
+  });
+
   it("never aliases an effect ID that is still live", () => {
-    const live = Object.keys(LEGACY_EFFECT_IDS).filter((id) => id in rustToWebGL);
+    const rustIds = rustEffectIds();
+    expect(rustIds.has("audio_reactive.chromatic")).toBe(true);
+    const live = Object.keys(LEGACY_EFFECT_IDS).filter(
+      (id) => id in rustToWebGL || rustIds.has(id)
+    );
     expect(live).toEqual([]);
   });
 

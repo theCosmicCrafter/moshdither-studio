@@ -56,13 +56,15 @@ const RECLAIMED_LEGACY_EFFECT_IDS: Record<
     remap: (params: Record<string, unknown>) => Record<string, unknown>;
   }
 > = {
-  // The pre-removal chromatic effect stored `intensity`; the live one stores
-  // `max_shift`/`direction`. spectral_shift's `shift_amount` (0-2, default
-  // 0.5) is the closest equivalent to the old `intensity`.
+  // The live chromatic effect always stores `max_shift`/`direction` (adding an
+  // effect fills in every declared default), so an entry with neither is a
+  // pre-removal save. spectral_shift's `shift_amount` (0-2, default 0.5) is
+  // the closest equivalent to the old `intensity`.
   "audio_reactive.chromatic": {
     effectId: "audio_reactive.spectral_shift",
-    isLegacy: (params) => "intensity" in params && !("max_shift" in params),
-    remap: ({ intensity, ...rest }) => ({ ...rest, shift_amount: intensity }),
+    isLegacy: (params) => !("max_shift" in params) && !("direction" in params),
+    remap: ({ intensity, ...rest }) =>
+      intensity === undefined ? rest : { ...rest, shift_amount: intensity },
   },
 };
 
