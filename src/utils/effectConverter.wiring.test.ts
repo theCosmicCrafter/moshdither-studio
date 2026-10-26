@@ -17,7 +17,7 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { rustToWebGL, stackToRustPayload } from "./effectConverter";
+import { rustToWebGL, stackToRenderPasses, stackToRustPayload } from "./effectConverter";
 import type { StackEntry, Keyframe } from "../store";
 import { shaderRegistry } from "../engine/shaders";
 
@@ -157,6 +157,56 @@ describe("effect parameter wiring (Rust <-> WebGL preview)", () => {
     // pass_through renders the source unchanged. Claiming that is an accurate
     // preview tells the user the effect is doing nothing.
     expect(lying).toEqual([]);
+  });
+
+  it("branches transforms only on keys of their own paramMap", () => {
+    // stackToRenderPasses calls transform(rustParam, value). A branch that
+    // compares the first argument against anything else -- e.g. the uniform
+    // name "u_blockSize" -- can never fire, and the value silently falls
+    // through to whichever branch comes last.
+    const unreachable: string[] = [];
+    let comparisons = 0;
+    for (const [id, m] of entries) {
+      if (!m.transform) continue;
+      const src = m.transform.toString();
+      const arg = /^\s*(?:function\s*[\w$]*\s*)?\(?\s*([A-Za-z_$][\w$]*)/.exec(src)?.[1];
+      if (!arg) continue;
+      const cmp = new RegExp(String.raw`\b${arg}\s*===?\s*["']([^"']+)["']`, "g");
+      for (const [, key] of src.matchAll(cmp)) {
+        comparisons++;
+        if (!(key in m.paramMap)) unreachable.push(`${id}: ${arg} === "${key}"`);
+      }
+    }
+    expect(comparisons).toBeGreaterThan(0);
+    expect(unreachable).toEqual([]);
+  });
+
+  it("applies the size/scale branch of datamoshing transforms", () => {
+    const uniformsFor = (effectId: string, params: Record<string, unknown>) =>
+      stackToRenderPasses([
+        {
+          id: "s1",
+          effectId,
+          effectName: effectId,
+          params,
+          enabled: true,
+          maskId: null,
+          maskMode: "inside",
+        },
+      ])[0].uniforms;
+
+    expect(uniformsFor("datamoshing.classic", { chunk_size: 16, repeats: 5 })).toMatchObject({
+      u_blockSize: 16,
+      u_intensity: 0.5,
+    });
+    expect(uniformsFor("datamoshing.stop", { threshold: 50, n_frames: 3 })).toMatchObject({
+      u_blockSize: 12,
+      u_intensity: 0.5,
+    });
+    expect(uniformsFor("datamoshing.motion_transfer", { strength: 30, block_size: 20 })).toMatchObject({
+      u_scale: 2,
+      u_intensity: 0.3,
+    });
   });
 });
 
