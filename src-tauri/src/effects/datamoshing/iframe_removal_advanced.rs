@@ -1,6 +1,7 @@
 use crate::effects::types::*;
 use crate::effects::Effect;
 use crate::error::Result;
+use rand::Rng;
 use serde_json::json;
 
 /// Advanced frame drop variants: automatic scene-change, random, range, precise.
@@ -132,6 +133,14 @@ impl Effect for IFrameRemovalAdvanced {
             .and_then(|v| v.as_u64())
             .unwrap_or(0) as usize;
 
+        let Some(first) = input.frames.first() else {
+            return Ok(VideoSegment {
+                frames: Vec::new(),
+                fps: input.fps,
+            });
+        };
+        let mut rng = crate::effects::rng::frame_rng(first, params);
+
         let mut frames = Vec::with_capacity(input.frames.len());
         match mode {
             "automatic" => {
@@ -142,28 +151,28 @@ impl Effect for IFrameRemovalAdvanced {
                     }
                     let prev = &input.frames[i - 1];
                     let diff = frame_difference(prev, frame);
-                    if diff < threshold || rand::random::<f32>() > rate {
+                    if diff < threshold || rng.gen::<f32>() > rate {
                         frames.push(frame.clone());
                     }
                 }
             }
             "random" => {
                 for (i, frame) in input.frames.iter().enumerate() {
-                    if i == 0 || rand::random::<f32>() > rate {
+                    if i == 0 || rng.gen::<f32>() > rate {
                         frames.push(frame.clone());
                     }
                 }
             }
             "range" => {
                 for (i, frame) in input.frames.iter().enumerate() {
-                    if i < start_frame || i > end_frame || rand::random::<f32>() > rate {
+                    if i < start_frame || i > end_frame || rng.gen::<f32>() > rate {
                         frames.push(frame.clone());
                     }
                 }
             }
             "precise" => {
                 for (i, frame) in input.frames.iter().enumerate() {
-                    if i != frame_number || rand::random::<f32>() > rate {
+                    if i != frame_number || rng.gen::<f32>() > rate {
                         frames.push(frame.clone());
                     }
                 }
@@ -172,7 +181,7 @@ impl Effect for IFrameRemovalAdvanced {
                 let mut current_rate = 0.0f32;
                 let step = rate / input.frames.len().max(1) as f32;
                 for (i, frame) in input.frames.iter().enumerate() {
-                    if i == 0 || rand::random::<f32>() > current_rate {
+                    if i == 0 || rng.gen::<f32>() > current_rate {
                         frames.push(frame.clone());
                     }
                     current_rate = (current_rate + step).min(1.0);
@@ -183,8 +192,8 @@ impl Effect for IFrameRemovalAdvanced {
             }
         }
 
-        if frames.is_empty() && !input.frames.is_empty() {
-            frames.push(input.frames[0].clone());
+        if frames.is_empty() {
+            frames.push(first.clone());
         }
 
         Ok(VideoSegment {
@@ -208,4 +217,72 @@ fn frame_difference(a: &Frame, b: &Frame) -> f32 {
     }
     let count = (len / 4).max(1) as u64;
     (diff / (3 * count)) as f32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_segment(n: usize) -> VideoSegment {
+        let frames: Vec<Frame> = (0..n)
+            .map(|i| Frame {
+                width: 2,
+                height: 2,
+                data: vec![(i * 7) as u8; 16],
+            })
+            .collect();
+        VideoSegment { frames, fps: 30.0 }
+    }
+
+    fn params(mode: &str, seed: Option<i64>) -> ParameterValues {
+        let mut p = ParameterValues::new();
+        p.insert("mode".into(), json!(mode));
+        p.insert("rate".into(), json!(0.5));
+        p.insert("end_frame".into(), json!(40));
+        if let Some(s) = seed {
+            p.insert(crate::effects::rng::SEED_PARAM.into(), json!(s));
+        }
+        p
+    }
+
+    fn kept(seg: &VideoSegment, p: &ParameterValues) -> Vec<u8> {
+        IFrameRemovalAdvanced
+            .process_video(seg, None, p)
+            .unwrap()
+            .frames
+            .iter()
+            .map(|f| f.data[0])
+            .collect()
+    }
+
+    #[test]
+    fn every_mode_is_reproducible() {
+        let seg = make_segment(32);
+        for mode in ["automatic", "random", "range", "precise", "progressive"] {
+            let p = params(mode, None);
+            assert_eq!(kept(&seg, &p), kept(&seg, &p), "mode {mode}");
+        }
+    }
+
+    #[test]
+    fn seed_param_varies_the_drop_pattern() {
+        let seg = make_segment(32);
+        assert_ne!(
+            kept(&seg, &params("random", Some(1))),
+            kept(&seg, &params("random", Some(2)))
+        );
+    }
+
+    #[test]
+    fn empty_input_yields_empty_output() {
+        let seg = VideoSegment {
+            frames: Vec::new(),
+            fps: 24.0,
+        };
+        let r = IFrameRemovalAdvanced
+            .process_video(&seg, None, &params("random", None))
+            .unwrap();
+        assert!(r.frames.is_empty());
+        assert_eq!(r.fps, 24.0);
+    }
 }
