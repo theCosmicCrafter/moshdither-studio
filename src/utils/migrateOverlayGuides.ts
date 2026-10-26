@@ -28,13 +28,12 @@ const OVERLAY_TO_GUIDE: Record<string, keyof ViewportGuides> = {
  * These aliases must be normalized before a preset reaches Rust, where an
  * unknown ID aborts the complete effect stack.
  */
-const LEGACY_EFFECT_IDS: Record<string, string> = {
+export const LEGACY_EFFECT_IDS: Record<string, string> = {
   "noise.gaussian_noise": "noise.gaussian",
   "color.contrast_brightness": "color.brightness_contrast",
   "color.saturation": "color.brightness_contrast",
   "dithering.palette_dither": "dithering.palette",
   "dithering.ordered": "dithering.ordered_variants",
-  "audio_reactive.chromatic": "audio_reactive.spectral_shift",
   "analog.film_grain": "noise.gaussian",
 };
 
@@ -44,6 +43,28 @@ const REMOVED_LEGACY_EFFECT_IDS = new Set([
   "analog.vignette",
   "color.temperature_tint",
 ]);
+
+/**
+ * Legacy IDs that a live effect later reclaimed. Only entries still in the old
+ * parameter shape are migrated; saves of the live effect pass through as-is.
+ */
+const RECLAIMED_LEGACY_EFFECT_IDS: Record<
+  string,
+  {
+    effectId: string;
+    isLegacy: (params: Record<string, unknown>) => boolean;
+    remap: (params: Record<string, unknown>) => Record<string, unknown>;
+  }
+> = {
+  // The pre-removal chromatic effect stored `intensity`; the live one stores
+  // `max_shift`/`direction`. spectral_shift's `shift_amount` (0-2, default
+  // 0.5) is the closest equivalent to the old `intensity`.
+  "audio_reactive.chromatic": {
+    effectId: "audio_reactive.spectral_shift",
+    isLegacy: (params) => "intensity" in params && !("max_shift" in params),
+    remap: ({ intensity, ...rest }) => ({ ...rest, shift_amount: intensity }),
+  },
+};
 
 /**
  * Per-legacy-ID parameter remaps, keyed by the OLD effect ID.
@@ -79,11 +100,6 @@ const LEGACY_PARAM_REMAP: Record<
     amount === undefined ? rest : { ...rest, std_dev: amount },
   "analog.film_grain": ({ intensity, ...rest }) =>
     intensity === undefined ? rest : { ...rest, std_dev: intensity },
-
-  // audio_reactive.spectral_shift's `shift_amount` (0-2, default 0.5) is the
-  // closest equivalent to chromatic's old `intensity`.
-  "audio_reactive.chromatic": ({ intensity, ...rest }) =>
-    intensity === undefined ? rest : { ...rest, shift_amount: intensity },
 
   // dithering.ordered_variants replaced a continuous `scale` with a named
   // matrix pattern (`matrix`) plus a level count (`levels`) -- a different
@@ -136,6 +152,15 @@ export function migrateOverlayGuides(stack: StackEntry[]): OverlayMigrationResul
     const guide = OVERLAY_TO_GUIDE[entry.effectId];
     if (!guide) {
       if (REMOVED_LEGACY_EFFECT_IDS.has(entry.effectId)) continue;
+      const reclaimed = RECLAIMED_LEGACY_EFFECT_IDS[entry.effectId];
+      if (reclaimed?.isLegacy(entry.params)) {
+        kept.push({
+          ...entry,
+          effectId: reclaimed.effectId,
+          params: reclaimed.remap(entry.params),
+        });
+        continue;
+      }
       const effectId = LEGACY_EFFECT_IDS[entry.effectId];
       if (!effectId) {
         kept.push(entry);

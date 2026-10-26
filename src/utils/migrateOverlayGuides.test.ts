@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { StackEntry } from "../store";
-import { isLegacyOverlayEffect, migrateOverlayGuides } from "./migrateOverlayGuides";
+import { rustToWebGL } from "./effectConverter";
+import {
+  isLegacyOverlayEffect,
+  LEGACY_EFFECT_IDS,
+  migrateOverlayGuides,
+} from "./migrateOverlayGuides";
 
 function entry(
   effectId: string,
@@ -143,7 +148,7 @@ describe("migrateOverlayGuides", () => {
     ]);
   });
 
-  it("renames audio_reactive.chromatic's intensity to spectral_shift's shift_amount", () => {
+  it("migrates a pre-removal audio_reactive.chromatic (intensity) to spectral_shift's shift_amount", () => {
     const result = migrateOverlayGuides([
       entry("audio_reactive.chromatic", true, { intensity: 0.8 }),
     ]);
@@ -153,6 +158,20 @@ describe("migrateOverlayGuides", () => {
         params: { shift_amount: 0.8 },
       }),
     ]);
+  });
+
+  it("leaves the live audio_reactive.chromatic effect and its params untouched", () => {
+    const stack = [
+      entry("audio_reactive.chromatic", true, { max_shift: 24, direction: 1 }),
+    ];
+    const result = migrateOverlayGuides(stack);
+    expect(result.migrated).toBe(false);
+    expect(result.stack).toEqual(stack);
+  });
+
+  it("never aliases an effect ID that is still live", () => {
+    const live = Object.keys(LEGACY_EFFECT_IDS).filter((id) => id in rustToWebGL);
+    expect(live).toEqual([]);
   });
 
   it("drops dithering.ordered's scale, which has no equivalent on ordered_variants", () => {
