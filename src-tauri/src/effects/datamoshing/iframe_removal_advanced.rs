@@ -223,12 +223,14 @@ fn frame_difference(a: &Frame, b: &Frame) -> f32 {
 mod tests {
     use super::*;
 
+    // Adjacent frames differ by at least 37 levels, above automatic mode's
+    // default threshold of 30, so every mode actually draws from the RNG.
     fn make_segment(n: usize) -> VideoSegment {
         let frames: Vec<Frame> = (0..n)
             .map(|i| Frame {
                 width: 2,
                 height: 2,
-                data: vec![(i * 7) as u8; 16],
+                data: vec![(i * 37) as u8; 16],
             })
             .collect();
         VideoSegment { frames, fps: 30.0 }
@@ -267,10 +269,13 @@ mod tests {
     #[test]
     fn seed_param_varies_the_drop_pattern() {
         let seg = make_segment(32);
-        assert_ne!(
-            kept(&seg, &params("random", Some(1))),
-            kept(&seg, &params("random", Some(2)))
-        );
+        for mode in ["automatic", "random", "range", "progressive"] {
+            assert_ne!(
+                kept(&seg, &params(mode, Some(1))),
+                kept(&seg, &params(mode, Some(2))),
+                "mode {mode}"
+            );
+        }
     }
 
     #[test]
