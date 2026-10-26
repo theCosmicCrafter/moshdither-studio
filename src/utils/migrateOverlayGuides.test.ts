@@ -1,6 +1,31 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { StackEntry } from "../store";
-import { isLegacyOverlayEffect, migrateOverlayGuides } from "./migrateOverlayGuides";
+import { rustToWebGL } from "./effectConverter";
+import {
+  isLegacyOverlayEffect,
+  LEGACY_EFFECT_IDS,
+  migrateOverlayGuides,
+} from "./migrateOverlayGuides";
+
+const EFFECTS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../src-tauri/src/effects");
+
+function rustEffectIds(dir = EFFECTS_DIR): Set<string> {
+  const ids = new Set<string>();
+  for (const item of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, item.name);
+    if (item.isDirectory()) {
+      for (const id of rustEffectIds(full)) ids.add(id);
+    } else if (item.name.endsWith(".rs")) {
+      for (const m of readFileSync(full, "utf8").matchAll(/EffectMeta\s*\{\s*id:\s*"([^"]+)"/g)) {
+        ids.add(m[1]);
+      }
+    }
+  }
+  return ids;
+}
 
 function entry(
   effectId: string,
@@ -143,7 +168,7 @@ describe("migrateOverlayGuides", () => {
     ]);
   });
 
-  it("renames audio_reactive.chromatic's intensity to spectral_shift's shift_amount", () => {
+  it("migrates a pre-removal audio_reactive.chromatic (intensity) to spectral_shift's shift_amount", () => {
     const result = migrateOverlayGuides([
       entry("audio_reactive.chromatic", true, { intensity: 0.8 }),
     ]);
@@ -153,6 +178,32 @@ describe("migrateOverlayGuides", () => {
         params: { shift_amount: 0.8 },
       }),
     ]);
+  });
+
+  it("leaves the live audio_reactive.chromatic effect and its params untouched", () => {
+    const stack = [
+      entry("audio_reactive.chromatic", true, { max_shift: 24, direction: 1 }),
+    ];
+    const result = migrateOverlayGuides(stack);
+    expect(result.migrated).toBe(false);
+    expect(result.stack).toEqual(stack);
+  });
+
+  it("migrates a pre-removal audio_reactive.chromatic with no params to spectral_shift", () => {
+    const result = migrateOverlayGuides([entry("audio_reactive.chromatic", true, {})]);
+    expect(result.migrated).toBe(true);
+    expect(result.stack).toEqual([
+      expect.objectContaining({ effectId: "audio_reactive.spectral_shift", params: {} }),
+    ]);
+  });
+
+  it("never aliases an effect ID that is still live", () => {
+    const rustIds = rustEffectIds();
+    expect(rustIds.has("audio_reactive.chromatic")).toBe(true);
+    const live = Object.keys(LEGACY_EFFECT_IDS).filter(
+      (id) => id in rustToWebGL || rustIds.has(id)
+    );
+    expect(live).toEqual([]);
   });
 
   it("drops dithering.ordered's scale, which has no equivalent on ordered_variants", () => {
