@@ -133,42 +133,38 @@ fn fit_to_preview_budget(frame: Frame) -> crate::error::Result<Frame> {
 
 /// Load an image or video file into the app.
 #[tauri::command]
-pub async fn load_media(
-    state: State<'_, AppState>,
-    path: String,
-) -> crate::error::Result<String> {
+pub async fn load_media(state: State<'_, AppState>, path: String) -> crate::error::Result<String> {
     let path_clone = path.clone();
-    let frame =
-        tauri::async_runtime::spawn_blocking(move || -> crate::error::Result<Frame> {
-            validate_io_path(&path_clone, true)?;
+    let frame = tauri::async_runtime::spawn_blocking(move || -> crate::error::Result<Frame> {
+        validate_io_path(&path_clone, true)?;
 
-            let ext = Path::new(&path_clone)
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_lowercase();
+        let ext = Path::new(&path_clone)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
 
-            let video_exts = [
-                "mp4", "avi", "mov", "mkv", "webm", "m4v", "flv", "wmv", "mpeg", "mpg",
-            ];
+        let video_exts = [
+            "mp4", "avi", "mov", "mkv", "webm", "m4v", "flv", "wmv", "mpeg", "mpg",
+        ];
 
-            let raw_frame = if video_exts.contains(&ext.as_str()) {
-                // Decode first frame of video
-                let segment = decode_video(&path_clone, Some(1))?;
-                segment
-                    .frames
-                    .into_iter()
-                    .next()
-                    .ok_or("No frames decoded")?
-            } else {
-                load_image(&path_clone)?
-            };
+        let raw_frame = if video_exts.contains(&ext.as_str()) {
+            // Decode first frame of video
+            let segment = decode_video(&path_clone, Some(1))?;
+            segment
+                .frames
+                .into_iter()
+                .next()
+                .ok_or("No frames decoded")?
+        } else {
+            load_image(&path_clone)?
+        };
 
-            // Keep the in-memory preview frame within a sane pixel budget so that
-            // giant stills do not blow up RAM and the effect cache.
-            fit_to_preview_budget(raw_frame)
-        })
-        .await??;
+        // Keep the in-memory preview frame within a sane pixel budget so that
+        // giant stills do not blow up RAM and the effect cache.
+        fit_to_preview_budget(raw_frame)
+    })
+    .await??;
 
     *lock_state(&state.current_frame, "frame")? = Some(frame);
     *lock_state(&state.frame_cache, "cache")? = EffectCache::default();
@@ -202,8 +198,8 @@ pub async fn load_media_from_base64(
     })
     .await??;
 
-    let frame = tauri::async_runtime::spawn_blocking(move || load_image_from_memory(&bytes))
-        .await??;
+    let frame =
+        tauri::async_runtime::spawn_blocking(move || load_image_from_memory(&bytes)).await??;
 
     *lock_state(&state.current_frame, "frame")? = Some(frame);
     *lock_state(&state.frame_cache, "cache")? = EffectCache::default();
@@ -248,9 +244,7 @@ pub fn test_all_functions(
     Ok(run_all_function_tests())
 }
 
-fn decode_mask_b64(
-    mask_b64: Option<&str>,
-) -> crate::error::Result<Option<crate::effects::Mask>> {
+fn decode_mask_b64(mask_b64: Option<&str>) -> crate::error::Result<Option<crate::effects::Mask>> {
     let Some(b64) = mask_b64 else {
         return Ok(None);
     };
@@ -1531,9 +1525,7 @@ pub fn extract_audio_from_video(
 
 /// Get the current image dimensions.
 #[tauri::command]
-pub fn get_media_info(
-    state: State<'_, AppState>,
-) -> crate::error::Result<serde_json::Value> {
+pub fn get_media_info(state: State<'_, AppState>) -> crate::error::Result<serde_json::Value> {
     let frame_lock = lock_state(&state.current_frame, "frame")?;
     match frame_lock.as_ref() {
         Some(frame) => Ok(json!({
@@ -1573,7 +1565,9 @@ where
                 *sam3_lock = Some(engine);
             }
             Err(e) => {
-                return Err(AppError::Generic(format!("Failed to start SAM3 engine: {e}")));
+                return Err(AppError::Generic(format!(
+                    "Failed to start SAM3 engine: {e}"
+                )));
             }
         }
     }
@@ -1615,7 +1609,9 @@ pub fn sam3_init(
                 *sam3_lock = Some(engine);
                 Ok("SAM3 engine initialized".into())
             }
-            Err(e) => Err(AppError::Generic(format!("Failed to start SAM3 engine: {e}"))),
+            Err(e) => Err(AppError::Generic(format!(
+                "Failed to start SAM3 engine: {e}"
+            ))),
         }
     } else {
         Ok("SAM3 engine already running".into())
@@ -2600,9 +2596,7 @@ pub struct UpdateInfo {
 /// Check whether a newer signed release is available from the configured
 /// updater endpoint.
 #[tauri::command]
-pub async fn check_update(
-    app: tauri::AppHandle,
-) -> crate::error::Result<Option<UpdateInfo>> {
+pub async fn check_update(app: tauri::AppHandle) -> crate::error::Result<Option<UpdateInfo>> {
     let updater = app.updater()?;
     match updater.check().await? {
         Some(update) => Ok(Some(UpdateInfo {
@@ -2622,7 +2616,9 @@ pub async fn install_update(app: tauri::AppHandle) -> crate::error::Result<Strin
     let updater = app.updater()?;
     match updater.check().await? {
         Some(update) => {
-            update.download_and_install(|_chunk, _total| {}, || {}).await?;
+            update
+                .download_and_install(|_chunk, _total| {}, || {})
+                .await?;
             app.restart();
         }
         None => Ok("up to date".to_string()),
@@ -2976,10 +2972,9 @@ pub fn remove_export_temp(path: String) -> crate::error::Result<()> {
         .and_then(|n| n.to_str())
         .unwrap_or_default();
     if !name.contains(EXPORT_TEMP_MARKER) {
-        return Err(format!(
-            "Refusing to remove {name}: not a MoshDither export intermediate"
-        )
-        .into());
+        return Err(
+            format!("Refusing to remove {name}: not a MoshDither export intermediate").into(),
+        );
     }
     std::fs::remove_file(&validated)?;
     Ok(())
