@@ -18,6 +18,26 @@ use serde_json::Value;
 use super::registry::EffectRegistry;
 use super::types::{Effect, ParamType, ParameterDef, ParameterValues};
 
+/// Reads a non-negative integer parameter. Clamping, keyframing and audio
+/// binding all emit float-tagged JSON (`20.0`), which `Value::as_u64` rejects,
+/// so integers are read through `as_f64` and rounded.
+pub fn as_uint(v: &Value) -> Option<u64> {
+    v.as_u64().or_else(|| {
+        v.as_f64()
+            .filter(|f| f.is_finite())
+            .map(|f| f.round().max(0.0) as u64)
+    })
+}
+
+/// Signed counterpart of [`as_uint`].
+pub fn as_int(v: &Value) -> Option<i64> {
+    v.as_i64().or_else(|| {
+        v.as_f64()
+            .filter(|f| f.is_finite())
+            .map(|f| f.round() as i64)
+    })
+}
+
 static PARAM_RANGES: OnceLock<HashMap<String, Vec<ParameterDef>>> = OnceLock::new();
 
 fn ranges() -> &'static HashMap<String, Vec<ParameterDef>> {
@@ -137,6 +157,17 @@ fn number_value(f: f64) -> Value {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn integer_readers_accept_float_tagged_values() {
+        assert_eq!(as_uint(&json!(20.0)), Some(20));
+        assert_eq!(as_uint(&json!(19.6)), Some(20));
+        assert_eq!(as_uint(&json!(7)), Some(7));
+        assert_eq!(as_uint(&json!(-3.0)), Some(0));
+        assert_eq!(as_uint(&json!("x")), None);
+        assert_eq!(as_int(&json!(-4.0)), Some(-4));
+        assert_eq!(as_int(&json!(5)), Some(5));
+    }
 
     #[test]
     fn test_clamps_above_max_and_below_min() {

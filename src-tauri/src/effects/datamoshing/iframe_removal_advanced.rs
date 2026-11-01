@@ -1,6 +1,7 @@
 use crate::effects::types::*;
 use crate::effects::Effect;
 use crate::error::Result;
+use rand::Rng;
 use serde_json::json;
 
 /// Advanced frame drop variants: automatic scene-change, random, range, precise.
@@ -121,17 +122,21 @@ impl Effect for IFrameRemovalAdvanced {
         let rate = params.get("rate").and_then(|v| v.as_f64()).unwrap_or(0.3) as f32;
         let start_frame = params
             .get("start_frame")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(0) as usize;
         let end_frame = params
             .get("end_frame")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(100) as usize;
         let frame_number = params
             .get("frame_number")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(0) as usize;
 
+        let mut rng = match input.frames.first() {
+            Some(first) => crate::effects::rng::frame_rng(first, params),
+            None => return Ok(input.clone()),
+        };
         let mut frames = Vec::with_capacity(input.frames.len());
         match mode {
             "automatic" => {
@@ -142,28 +147,28 @@ impl Effect for IFrameRemovalAdvanced {
                     }
                     let prev = &input.frames[i - 1];
                     let diff = frame_difference(prev, frame);
-                    if diff < threshold || rand::random::<f32>() > rate {
+                    if diff < threshold || rng.gen::<f32>() > rate {
                         frames.push(frame.clone());
                     }
                 }
             }
             "random" => {
                 for (i, frame) in input.frames.iter().enumerate() {
-                    if i == 0 || rand::random::<f32>() > rate {
+                    if i == 0 || rng.gen::<f32>() > rate {
                         frames.push(frame.clone());
                     }
                 }
             }
             "range" => {
                 for (i, frame) in input.frames.iter().enumerate() {
-                    if i < start_frame || i > end_frame || rand::random::<f32>() > rate {
+                    if i < start_frame || i > end_frame || rng.gen::<f32>() > rate {
                         frames.push(frame.clone());
                     }
                 }
             }
             "precise" => {
                 for (i, frame) in input.frames.iter().enumerate() {
-                    if i != frame_number || rand::random::<f32>() > rate {
+                    if i != frame_number || rng.gen::<f32>() > rate {
                         frames.push(frame.clone());
                     }
                 }
@@ -172,7 +177,7 @@ impl Effect for IFrameRemovalAdvanced {
                 let mut current_rate = 0.0f32;
                 let step = rate / input.frames.len().max(1) as f32;
                 for (i, frame) in input.frames.iter().enumerate() {
-                    if i == 0 || rand::random::<f32>() > current_rate {
+                    if i == 0 || rng.gen::<f32>() > current_rate {
                         frames.push(frame.clone());
                     }
                     current_rate = (current_rate + step).min(1.0);

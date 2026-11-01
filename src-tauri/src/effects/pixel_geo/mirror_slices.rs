@@ -50,7 +50,7 @@ impl Effect for MirrorSlices {
     ) -> Result<Frame> {
         let slice_height = params
             .get("slice_height")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.slice_height as u64) as usize;
         let w = input.width as usize;
         let h = input.height as usize;

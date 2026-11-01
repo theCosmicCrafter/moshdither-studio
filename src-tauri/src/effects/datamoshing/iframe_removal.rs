@@ -100,7 +100,7 @@ impl Effect for IFrameRemoval {
     ) -> Result<VideoSegment> {
         let interval = params
             .get("interval")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.interval as u64) as usize;
         let mut frames = Vec::new();
         for (i, frame) in input.frames.iter().enumerate() {

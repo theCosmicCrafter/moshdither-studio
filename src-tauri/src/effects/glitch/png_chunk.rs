@@ -66,7 +66,7 @@ impl Effect for PngChunkGlitch {
     ) -> Result<Frame> {
         let chunk_interval = params
             .get("chunk_interval")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(4096) as usize;
         let corruption = params
             .get("corruption")
@@ -184,11 +184,11 @@ impl Effect for CrcMismatchGlitch {
     ) -> Result<Frame> {
         let scanline_interval = params
             .get("scanline_interval")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(8) as usize;
         let shift_amount = params
             .get("shift_amount")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(16) as usize;
 
         let w = input.width as usize;

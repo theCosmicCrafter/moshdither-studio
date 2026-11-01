@@ -244,7 +244,7 @@ impl Effect for VibrateGlitch {
     ) -> Result<Frame> {
         let randomness = params
             .get("randomness")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(10) as i32;
         let bias = randomness / 2;
         let mut rng = crate::effects::rng::frame_rng(input, params);
@@ -362,7 +362,7 @@ impl Effect for StopGlitch {
             .unwrap_or(self.threshold);
         let n_frames = params
             .get("n_frames")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.n_frames as u64) as usize;
         // Video-level: seed from the first frame so the whole segment shares one
         // reproducible sequence rather than re-rolling per render.
@@ -485,7 +485,7 @@ impl Effect for BufferGlitch {
     ) -> Result<VideoSegment> {
         let buffer_size = params
             .get("buffer_size")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(3) as usize;
         let feedback = params
             .get("feedback")
@@ -613,7 +613,7 @@ impl Effect for DelayGlitch {
     ) -> Result<VideoSegment> {
         let delay = params
             .get("delay_frames")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(5) as usize;
 
         if input.frames.len() < 2 {

@@ -657,8 +657,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.classic": {
     shaderId: "temporalDatamoshing",
     paramMap: { chunk_size: "u_blockSize", repeats: "u_intensity" },
-    transform: (_k, v) => {
-      if (_k === "u_blockSize") return typeof v === "number" ? v : 16;
+    transform: (rustParam, v) => {
+      if (rustParam === "chunk_size") return typeof v === "number" ? v : 16;
       return typeof v === "number" ? v / 10 : 0.2;
     },
     accurate: false,
@@ -666,8 +666,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.bloom": {
     shaderId: "temporalDatamoshing",
     paramMap: { bloom_size: "u_blockSize" },
-    transform: (_k, v) => {
-      if (_k === "u_blockSize") return typeof v === "number" ? v : 32;
+    transform: (rustParam, v) => {
+      if (rustParam === "bloom_size") return typeof v === "number" ? v : 32;
       return 0.3;
     },
     accurate: false,
@@ -675,8 +675,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.buffer": {
     shaderId: "temporalDatamoshing",
     paramMap: { buffer_size: "u_blockSize", feedback: "u_intensity" },
-    transform: (_k, v) => {
-      if (_k === "u_blockSize") return typeof v === "number" ? v : 16;
+    transform: (rustParam, v) => {
+      if (rustParam === "buffer_size") return typeof v === "number" ? v : 16;
       return typeof v === "number" ? v / 100 : 0.3;
     },
     accurate: false,
@@ -684,8 +684,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.stop": {
     shaderId: "temporalDatamoshing",
     paramMap: { threshold: "u_intensity", n_frames: "u_blockSize" },
-    transform: (_k, v) => {
-      if (_k === "u_blockSize") return typeof v === "number" ? v * 4 : 16;
+    transform: (rustParam, v) => {
+      if (rustParam === "n_frames") return typeof v === "number" ? v * 4 : 16;
       return typeof v === "number" ? v / 100 : 0.2;
     },
     accurate: false,
@@ -699,8 +699,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.shuffle": {
     shaderId: "temporalDatamoshing",
     paramMap: { chunk_size: "u_blockSize" },
-    transform: (_k, v) => {
-      if (_k === "u_blockSize") return typeof v === "number" ? v : 16;
+    transform: (rustParam, v) => {
+      if (rustParam === "chunk_size") return typeof v === "number" ? v : 16;
       return 0.4;
     },
     accurate: false,
@@ -708,8 +708,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.delay": {
     shaderId: "temporalDatamoshing",
     paramMap: { delay_frames: "u_blockSize" },
-    transform: (_k, v) => {
-      if (_k === "u_blockSize") return typeof v === "number" ? v * 4 : 16;
+    transform: (rustParam, v) => {
+      if (rustParam === "delay_frames") return typeof v === "number" ? v * 4 : 16;
       return 0.3;
     },
     accurate: false,
@@ -750,8 +750,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.iframe_removal_advanced": {
     shaderId: "iframeRemoval",
     paramMap: { threshold: "u_intensity", rate: "u_blockSize" },
-    transform: (_k, v) => {
-      if (_k === "u_blockSize") return typeof v === "number" ? v * 4 : 16;
+    transform: (rustParam, v) => {
+      if (rustParam === "rate") return typeof v === "number" ? v * 4 : 16;
       return typeof v === "number" ? v / 100 : 0.3;
     },
     accurate: false,
@@ -765,8 +765,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.motion_transfer": {
     shaderId: "motionVectorGlitch",
     paramMap: { strength: "u_intensity", block_size: "u_scale" },
-    transform: (_k, v) => {
-      if (_k === "u_scale") return typeof v === "number" ? v / 10 : 1;
+    transform: (rustParam, v) => {
+      if (rustParam === "block_size") return typeof v === "number" ? v / 10 : 1;
       return typeof v === "number" ? v / 100 : 0.3;
     },
     accurate: false,
@@ -774,8 +774,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.optical_flow": {
     shaderId: "motionVectorGlitch",
     paramMap: { warp_strength: "u_intensity", alpha: "u_scale" },
-    transform: (_k, v) => {
-      if (_k === "u_scale") return typeof v === "number" ? v : 1;
+    transform: (rustParam, v) => {
+      if (rustParam === "alpha") return typeof v === "number" ? v : 1;
       return typeof v === "number" ? v / 10 : 0.2;
     },
     accurate: false,
@@ -783,8 +783,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.profile_glitch": {
     shaderId: "temporalDatamoshing",
     paramMap: { intensity: "u_intensity", drop_interval: "u_blockSize" },
-    transform: (_k, v) => {
-      if (_k === "u_blockSize") return typeof v === "number" ? v * 4 : 16;
+    transform: (rustParam, v) => {
+      if (rustParam === "drop_interval") return typeof v === "number" ? v * 4 : 16;
       return typeof v === "number" ? v / 100 : 0.4;
     },
     accurate: false,
@@ -792,8 +792,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.profile_bloom": {
     shaderId: "temporalDatamoshing",
     paramMap: { bloom_size: "u_blockSize", repeat_count: "u_intensity" },
-    transform: (_k, v) => {
-      if (_k === "u_blockSize") return typeof v === "number" ? v : 32;
+    transform: (rustParam, v) => {
+      if (rustParam === "bloom_size") return typeof v === "number" ? v : 32;
       return typeof v === "number" ? v / 10 : 0.3;
     },
     accurate: false,
@@ -801,8 +801,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.profile_smear": {
     shaderId: "temporalDatamoshing",
     paramMap: { strength: "u_intensity", drop_interval: "u_blockSize" },
-    transform: (_k, v) => {
-      if (_k === "u_blockSize") return typeof v === "number" ? v * 4 : 16;
+    transform: (rustParam, v) => {
+      if (rustParam === "drop_interval") return typeof v === "number" ? v * 4 : 16;
       return typeof v === "number" ? v / 100 : 0.5;
     },
     accurate: false,
@@ -816,8 +816,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.profile_rainbow": {
     shaderId: "temporalDatamoshing",
     paramMap: { hue_shift: "u_intensity", drop_interval: "u_blockSize" },
-    transform: (_k, v) => {
-      if (_k === "u_blockSize") return typeof v === "number" ? v * 4 : 16;
+    transform: (rustParam, v) => {
+      if (rustParam === "drop_interval") return typeof v === "number" ? v * 4 : 16;
       return typeof v === "number" ? v / 360 : 0.3;
     },
     accurate: false,

@@ -90,7 +90,7 @@ export default function CommandPalette() {
     registerCommand({ id: "redo", label: "Redo", category: "Edit", shortcut: "Ctrl+Shift+Z", action: () => { if (canRedo()) redo(); } });
     registerCommand({ id: "clear-stack", label: "Clear effect stack", category: "Edit", action: () => { clearStack(); setStatusMessage("Effect stack cleared"); } });
     registerCommand({ id: "close-media", label: "Close media", category: "File", action: () => { setFilePath(null); setMediaLoaded(false); setMediaInfo(null); setPreviewDataUrl(null); setOriginalDataUrl(null); setStatusMessage("Media closed"); } });
-    // At the playhead, like the I / O keys. These set 0 and 300 regardless.
+    // At the playhead, like the I / O keys.
     registerCommand({ id: "set-in-point", label: "Set in point", category: "Timeline", shortcut: "I", action: () => setInPoint(useAppStore.getState().currentTime) });
     registerCommand({ id: "set-out-point", label: "Set out point", category: "Timeline", shortcut: "O", action: () => setOutPoint(useAppStore.getState().currentTime) });
     registerCommand({ id: "clear-in-out", label: "Clear in/out points", category: "Timeline", shortcut: "X", action: () => clearInOut() });

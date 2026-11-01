@@ -118,7 +118,7 @@ impl Effect for CrossVideoDatamosh {
 
         let block_size = params
             .get("block_size")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(16) as usize;
 
         let strength = params

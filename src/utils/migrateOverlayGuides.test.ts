@@ -155,6 +155,19 @@ describe("migrateOverlayGuides", () => {
     ]);
   });
 
+  it("keeps the live audio_reactive.chromatic effect when it has current params", () => {
+    const result = migrateOverlayGuides([
+      entry("audio_reactive.chromatic", true, { max_shift: 12, direction: "horizontal" }),
+    ]);
+    expect(result.migrated).toBe(false);
+    expect(result.stack).toEqual([
+      expect.objectContaining({
+        effectId: "audio_reactive.chromatic",
+        params: { max_shift: 12, direction: "horizontal" },
+      }),
+    ]);
+  });
+
   it("drops dithering.ordered's scale, which has no equivalent on ordered_variants", () => {
     // ordered_variants replaced a continuous scale with a named matrix
     // pattern plus a level count -- a different parameter model, not a

@@ -55,7 +55,7 @@ impl Effect for ChannelSwap {
     ) -> Result<Frame> {
         let mode = params
             .get("mode")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.mode as u64) as usize;
         let mut data = input.data.clone();
         let map: [(usize, usize, usize); 6] = [

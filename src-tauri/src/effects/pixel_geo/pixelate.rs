@@ -50,7 +50,7 @@ impl Effect for Pixelate {
     ) -> Result<Frame> {
         let bs = params
             .get("block_size")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.block_size as u64) as usize;
         let w = input.width as usize;
         let h = input.height as usize;

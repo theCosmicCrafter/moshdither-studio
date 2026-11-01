@@ -52,7 +52,7 @@ impl Effect for UniformNoise {
     ) -> Result<Frame> {
         let range = params
             .get("range")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.range as u64) as i16;
         let time = params.get("time").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
         let mut data = input.data.clone();

@@ -115,7 +115,7 @@ impl Effect for GlitchProfile {
     ) -> Result<VideoSegment> {
         let drop_interval = params
             .get("drop_interval")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(8) as usize;
 
         // Phase 1: Drop I-frames
@@ -206,7 +206,7 @@ impl Effect for BloomProfile {
     ) -> Result<Frame> {
         let bloom_size = params
             .get("bloom_size")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(8) as usize;
         let mut out = input.data.clone();
 
@@ -253,11 +253,11 @@ impl Effect for BloomProfile {
     ) -> Result<VideoSegment> {
         let bloom_size = params
             .get("bloom_size")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(8) as usize;
         let repeat_count = params
             .get("repeat_count")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(3) as usize;
 
         // Phase 1: Bloom — duplicate keyframes
@@ -393,7 +393,7 @@ impl Effect for SmearProfile {
     ) -> Result<VideoSegment> {
         let drop_interval = params
             .get("drop_interval")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(10) as usize;
 
         // Phase 1: Progressive frame drop (more drops toward end)
@@ -744,7 +744,7 @@ impl Effect for RainbowProfile {
     ) -> Result<VideoSegment> {
         let drop_interval = params
             .get("drop_interval")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(12) as usize;
 
         // Phase 1: Drop I-frames

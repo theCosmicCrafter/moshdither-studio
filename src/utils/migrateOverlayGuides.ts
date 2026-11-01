@@ -117,6 +117,17 @@ export interface OverlayMigrationResult {
   migrated: boolean;
 }
 
+/**
+ * `audio_reactive.chromatic` is a live effect again, so only entries that
+ * still carry the pre-consolidation `intensity` param (and none of the
+ * current params) are treated as the legacy alias.
+ */
+function isLegacyShape(entry: StackEntry): boolean {
+  if (entry.effectId !== "audio_reactive.chromatic") return true;
+  const params = entry.params ?? {};
+  return "intensity" in params && !("max_shift" in params);
+}
+
 /** Whether an effect ID is a legacy composition-guide overlay. */
 export function isLegacyOverlayEffect(effectId: string): boolean {
   return effectId in OVERLAY_TO_GUIDE;
@@ -137,7 +148,7 @@ export function migrateOverlayGuides(stack: StackEntry[]): OverlayMigrationResul
     if (!guide) {
       if (REMOVED_LEGACY_EFFECT_IDS.has(entry.effectId)) continue;
       const effectId = LEGACY_EFFECT_IDS[entry.effectId];
-      if (!effectId) {
+      if (!effectId || !isLegacyShape(entry)) {
         kept.push(entry);
         continue;
       }

@@ -11,6 +11,11 @@ import psutil
 TAURI_PROCESS_NAME = "moshdither-studio"
 SAM3_KEYWORD = "sam3"  # Look for this in the command line of python processes
 OUTPUT_FILE = "resource_profile.csv"
+CRASH_LOG_FILE = "crash_log.csv"
+HEAP_CORRUPTION_CODE = 0xC0000374  # STATUS_HEAP_CORRUPTION
+
+# PIDs seen on the previous sample; used to detect terminated processes.
+known_pids: set = set()
 
 def get_vram_usage():
     try:

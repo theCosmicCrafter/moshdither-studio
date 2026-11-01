@@ -55,7 +55,7 @@ impl Effect for CombineDatamosh {
     ) -> Result<Frame> {
         let stride = params
             .get("stride")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.stride as u64) as usize;
         let w = input.width as usize;
         let h = input.height as usize;
@@ -85,7 +85,7 @@ impl Effect for CombineDatamosh {
     ) -> Result<VideoSegment> {
         let stride = params
             .get("stride")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.stride as u64) as usize;
         let mut frames = Vec::new();
         let n = input.frames.len();

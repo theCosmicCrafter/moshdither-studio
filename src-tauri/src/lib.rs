@@ -64,6 +64,7 @@ pub fn run() {
                     state: None,
                     radius: Some(16.0),
                     color: None,
+                    ..Default::default()
                 });
 
                 #[cfg(target_os = "windows")]
@@ -72,6 +73,7 @@ pub fn run() {
                     state: None,
                     radius: None,
                     color: None,
+                    ..Default::default()
                 });
             }
             Ok(())

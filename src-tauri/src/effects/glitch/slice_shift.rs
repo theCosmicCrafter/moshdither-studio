@@ -68,11 +68,11 @@ impl Effect for SliceShift {
     ) -> Result<Frame> {
         let slice_height = params
             .get("slice_height")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.slice_height as u64) as u32;
         let max_shift = params
             .get("max_shift")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.max_shift as u64) as u32;
         let time = params.get("time").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
 
