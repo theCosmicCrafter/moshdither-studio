@@ -982,7 +982,7 @@ pub async fn export_video(
     source_path: String,
     output_path: String,
     stack: Vec<EffectCall>,
-    options: ExportOptions,
+    options: Option<ExportOptions>,
 ) -> std::result::Result<String, String> {
     // Logged BEFORE validation, which is the first thing that can fail. A
     // missing source returned here with no trace at all: the log showed a clean
@@ -1015,7 +1015,9 @@ pub async fn export_video(
     // way as source_path/output_path so a compromised renderer (or a
     // malicious .moshdither preset) can't smuggle a UNC path or an
     // unexpected local file through the watermark fields instead.
-    let mut options = options;
+    // `options` is optional at the IPC boundary — the frontend always sends
+    // it, but a bare invoke defaults to an all-defaults export.
+    let mut options = options.unwrap_or_default();
     if let Some(wm) = options.watermark.as_mut() {
         if wm.enabled {
             if let Some(p) = &wm.image_path {
