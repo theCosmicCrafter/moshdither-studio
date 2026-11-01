@@ -561,9 +561,19 @@ impl Sam3Engine {
         req.auth_token = Some(self.auth_token.clone());
         let payload = serde_json::to_vec(&req)?;
         let mut stdin = self.stdin.lock();
-        stdin.write_all(&(payload.len() as u32).to_le_bytes())?;
-        stdin.write_all(&payload)?;
-        stdin.flush()?;
+        // Pipe writes get the dedicated Sam3Pipe variant so callers can tell a
+        // dead bridge from a model-side error without matching message text.
+        let pipe_err = |e: std::io::Error| {
+            crate::error::AppError::Sam3Pipe(format!(
+                "SAM3 pipe write failed for '{}': {}",
+                req.cmd, e
+            ))
+        };
+        stdin
+            .write_all(&(payload.len() as u32).to_le_bytes())
+            .map_err(&pipe_err)?;
+        stdin.write_all(&payload).map_err(&pipe_err)?;
+        stdin.flush().map_err(&pipe_err)?;
         drop(stdin);
 
         // Commands like video prediction can legitimately take minutes, while
@@ -582,10 +592,23 @@ impl Sam3Engine {
                 let drain_rx = self.rx.lock();
                 let _ = drain_rx.recv_timeout(Duration::from_secs(2));
                 drop(drain_rx);
-                return Err(crate::error::AppError::Sam3Timeout(format!(
-                    "SAM3 IPC timed out after {:?} for command '{}': {}",
-                    timeout, req.cmd, e
-                )));
+                return Err(match e {
+                    // The channel only disconnects when the reader thread
+                    // exits, which means the bridge's stdout is gone -- a
+                    // transport failure, not a slow command.
+                    std::sync::mpsc::RecvTimeoutError::Disconnected => {
+                        crate::error::AppError::Sam3Pipe(format!(
+                            "SAM3 IPC timed out after {:?} for command '{}': {}",
+                            timeout, req.cmd, e
+                        ))
+                    }
+                    std::sync::mpsc::RecvTimeoutError::Timeout => {
+                        crate::error::AppError::Sam3Timeout(format!(
+                            "SAM3 IPC timed out after {:?} for command '{}': {}",
+                            timeout, req.cmd, e
+                        ))
+                    }
+                });
             }
         };
         drop(rx);

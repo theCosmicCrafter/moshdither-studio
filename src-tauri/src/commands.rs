@@ -4,6 +4,7 @@ use crate::effects::{
     blend_mask, functional_tests::run_all_function_tests, verification::verify_all_effects, Effect,
     EffectCategory, EffectMeta, EffectRegistry, Frame, Mask,
 };
+use crate::error::AppError;
 use crate::ffmpeg::{
     decode_video, encode_video, extract_audio_to_wav, ffedit_binary, ffgac_binary, ffmpeg_binary,
     generate_proxy, has_audio_stream, image_to_video, probe_metadata,
@@ -86,6 +87,18 @@ impl Default for AppState {
     }
 }
 
+/// Lock a shared-state mutex, mapping a poisoned lock to `AppError` instead
+/// of panicking. `name` is the field label used in the message, e.g. "frame"
+/// produces "frame lock poisoned: ...".
+fn lock_state<T>(
+    mutex: &Mutex<T>,
+    name: &str,
+) -> crate::error::Result<std::sync::MutexGuard<'_, T>> {
+    mutex
+        .lock()
+        .map_err(|e| AppError::LockPoisoned(format!("{name} lock poisoned: {e}")))
+}
+
 /// Trim cached intermediate frames so the total byte size stays under budget.
 /// Oldest entries are evicted first.
 fn trim_cache_to_budget(entries: &mut Vec<CacheEntry>, budget: usize) {
@@ -123,10 +136,10 @@ fn fit_to_preview_budget(frame: Frame) -> crate::error::Result<Frame> {
 pub async fn load_media(
     state: State<'_, AppState>,
     path: String,
-) -> std::result::Result<String, String> {
+) -> crate::error::Result<String> {
     let path_clone = path.clone();
     let frame =
-        tauri::async_runtime::spawn_blocking(move || -> std::result::Result<Frame, String> {
+        tauri::async_runtime::spawn_blocking(move || -> crate::error::Result<Frame> {
             validate_io_path(&path_clone, true)?;
 
             let ext = Path::new(&path_clone)
@@ -141,31 +154,24 @@ pub async fn load_media(
 
             let raw_frame = if video_exts.contains(&ext.as_str()) {
                 // Decode first frame of video
-                let segment = decode_video(&path_clone, Some(1)).map_err(|e| e.to_string())?;
+                let segment = decode_video(&path_clone, Some(1))?;
                 segment
                     .frames
                     .into_iter()
                     .next()
-                    .ok_or("No frames decoded".to_string())?
+                    .ok_or("No frames decoded")?
             } else {
-                load_image(&path_clone).map_err(|e| e.to_string())?
+                load_image(&path_clone)?
             };
 
             // Keep the in-memory preview frame within a sane pixel budget so that
             // giant stills do not blow up RAM and the effect cache.
-            fit_to_preview_budget(raw_frame).map_err(|e| e.to_string())
+            fit_to_preview_budget(raw_frame)
         })
-        .await
-        .map_err(|e| format!("Task failed: {}", e))??;
+        .await??;
 
-    *state
-        .current_frame
-        .lock()
-        .map_err(|e| format!("frame lock poisoned: {e}"))? = Some(frame);
-    *state
-        .frame_cache
-        .lock()
-        .map_err(|e| format!("cache lock poisoned: {e}"))? = EffectCache::default();
+    *lock_state(&state.current_frame, "frame")? = Some(frame);
+    *lock_state(&state.frame_cache, "cache")? = EffectCache::default();
     Ok(path)
 }
 
@@ -174,14 +180,15 @@ pub async fn load_media(
 pub async fn load_media_from_base64(
     state: State<'_, AppState>,
     data_url: String,
-) -> std::result::Result<String, String> {
+) -> crate::error::Result<String> {
     const MAX_BASE64_INPUT_LEN: usize = 100 * 1024 * 1024;
     if data_url.len() > MAX_BASE64_INPUT_LEN {
         return Err(format!(
             "Input too large: {} chars (max {} chars)",
             data_url.len(),
             MAX_BASE64_INPUT_LEN
-        ));
+        )
+        .into());
     }
 
     let bytes = tauri::async_runtime::spawn_blocking(move || {
@@ -193,33 +200,20 @@ pub async fn load_media_from_base64(
         base64::Engine::decode(&base64::engine::general_purpose::STANDARD, base64_part)
             .map_err(|e| format!("Invalid base64: {}", e))
     })
-    .await
-    .map_err(|e| format!("Task failed: {}", e))??;
+    .await??;
 
-    let frame = tauri::async_runtime::spawn_blocking(move || {
-        load_image_from_memory(&bytes).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| format!("Task failed: {}", e))??;
+    let frame = tauri::async_runtime::spawn_blocking(move || load_image_from_memory(&bytes))
+        .await??;
 
-    *state
-        .current_frame
-        .lock()
-        .map_err(|e| format!("frame lock poisoned: {e}"))? = Some(frame);
-    *state
-        .frame_cache
-        .lock()
-        .map_err(|e| format!("cache lock poisoned: {e}"))? = EffectCache::default();
+    *lock_state(&state.current_frame, "frame")? = Some(frame);
+    *lock_state(&state.frame_cache, "cache")? = EffectCache::default();
     Ok("loaded".to_string())
 }
 
 /// Get metadata for all available effects.
 #[tauri::command]
-pub fn list_effects(state: State<'_, AppState>) -> std::result::Result<Vec<EffectMeta>, String> {
-    let registry = state
-        .registry
-        .lock()
-        .map_err(|e| format!("registry lock poisoned: {e}"))?;
+pub fn list_effects(state: State<'_, AppState>) -> crate::error::Result<Vec<EffectMeta>> {
+    let registry = lock_state(&state.registry, "registry")?;
     Ok(registry.list())
 }
 
@@ -228,11 +222,8 @@ pub fn list_effects(state: State<'_, AppState>) -> std::result::Result<Vec<Effec
 pub fn list_effects_by_category(
     state: State<'_, AppState>,
     category: EffectCategory,
-) -> std::result::Result<Vec<EffectMeta>, String> {
-    let registry = state
-        .registry
-        .lock()
-        .map_err(|e| format!("registry lock poisoned: {e}"))?;
+) -> crate::error::Result<Vec<EffectMeta>> {
+    let registry = lock_state(&state.registry, "registry")?;
     Ok(registry.list_by_category(category))
 }
 
@@ -243,11 +234,8 @@ pub fn list_effects_by_category(
 #[tauri::command]
 pub fn verify_effects(
     state: State<'_, AppState>,
-) -> std::result::Result<crate::effects::verification::VerificationReport, String> {
-    let registry = state
-        .registry
-        .lock()
-        .map_err(|e| format!("registry lock poisoned: {e}"))?;
+) -> crate::error::Result<crate::effects::verification::VerificationReport> {
+    let registry = lock_state(&state.registry, "registry")?;
     Ok(verify_all_effects(&registry))
 }
 
@@ -256,13 +244,13 @@ pub fn verify_effects(
 /// stack chaining, mask blending, animation, FFmpeg, FFglitch, SAM3.
 #[tauri::command]
 pub fn test_all_functions(
-) -> std::result::Result<crate::effects::functional_tests::FunctionTestReport, String> {
+) -> crate::error::Result<crate::effects::functional_tests::FunctionTestReport> {
     Ok(run_all_function_tests())
 }
 
 fn decode_mask_b64(
     mask_b64: Option<&str>,
-) -> std::result::Result<Option<crate::effects::Mask>, String> {
+) -> crate::error::Result<Option<crate::effects::Mask>> {
     let Some(b64) = mask_b64 else {
         return Ok(None);
     };
@@ -298,20 +286,18 @@ fn process_frame_with_mask(
     mask: Option<&Mask>,
     params: &serde_json::Map<String, serde_json::Value>,
     mode: &str,
-) -> std::result::Result<Frame, String> {
+) -> crate::error::Result<Frame> {
     let blend_needed = needs_mask_blend(effect, mask);
 
     let clamped_params = crate::effects::clamp_for_effect(effect, params);
-    let mut result = effect
-        .process_frame(working, mask, &clamped_params)
-        .map_err(|e| e.to_string())?;
+    let mut result = effect.process_frame(working, mask, &clamped_params)?;
 
     // `working` is borrowed for the whole call and process_frame returns an
     // owned Frame, so the blend can read the caller's frame directly. This
     // used to clone it first -- a full frame per call, for nothing.
     if blend_needed {
         if let Some(m) = mask {
-            blend_mask(&mut result, working, m, mode).map_err(|e| e.to_string())?;
+            blend_mask(&mut result, working, m, mode)?;
         }
     }
 
@@ -337,12 +323,10 @@ fn apply_frame_in_place(
     params: &serde_json::Map<String, serde_json::Value>,
     blend: bool,
     mode: &str,
-) -> std::result::Result<(), String> {
-    let mut out = effect
-        .process_frame(&*frame, mask, params)
-        .map_err(|e| e.to_string())?;
+) -> crate::error::Result<()> {
+    let mut out = effect.process_frame(&*frame, mask, params)?;
     if let (true, Some(m)) = (blend, mask) {
-        blend_mask(&mut out, &*frame, m, mode).map_err(|e| e.to_string())?;
+        blend_mask(&mut out, &*frame, m, mode)?;
     }
     *frame = out;
     Ok(())
@@ -361,15 +345,15 @@ fn blend_segment_against(
     mask: &Mask,
     mode: &str,
     cancel: &AtomicBool,
-) -> std::result::Result<(), String> {
+) -> crate::error::Result<()> {
     frames
         .par_iter_mut()
         .zip(previous.par_iter())
         .try_for_each(|(f, p)| {
             if cancel.load(Ordering::Relaxed) {
-                return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
+                return Err(crate::ffmpeg::EXPORT_CANCELLED.into());
             }
-            blend_mask(f, p, mask, mode).map_err(|e| e.to_string())
+            blend_mask(f, p, mask, mode)
         })
 }
 
@@ -628,11 +612,8 @@ pub fn apply_effect_stack(
     stack: Vec<EffectCall>,
     mask_b64: Option<String>,
     preview_scale: Option<f32>,
-) -> std::result::Result<String, String> {
-    let frame_lock = state
-        .current_frame
-        .lock()
-        .map_err(|e| format!("frame lock poisoned: {e}"))?;
+) -> crate::error::Result<String> {
+    let frame_lock = lock_state(&state.current_frame, "frame")?;
     let original = frame_lock.as_ref().ok_or("No media loaded")?.clone();
     drop(frame_lock);
 
@@ -653,19 +634,13 @@ pub fn apply_effect_stack(
     // already handle dimension mismatches via nearest-neighbor sampling.
     let global_mask = decode_mask_b64(mask_b64.as_deref())?;
 
-    let registry = state
-        .registry
-        .lock()
-        .map_err(|e| format!("registry lock poisoned: {e}"))?;
+    let registry = lock_state(&state.registry, "registry")?;
     let mut use_cache = true;
     let mut new_cache = Vec::new();
 
     // Check if scale or global mask changed
     {
-        let cache_lock = state
-            .frame_cache
-            .lock()
-            .map_err(|e| format!("cache lock poisoned: {e}"))?;
+        let cache_lock = lock_state(&state.frame_cache, "cache")?;
         if cache_lock.scale != preview_scale || cache_lock.global_mask_b64 != mask_b64 {
             use_cache = false;
         }
@@ -677,10 +652,7 @@ pub fn apply_effect_stack(
             .ok_or_else(|| format!("Effect '{}' not found", call.effect_id))?;
 
         if use_cache {
-            let cache_lock = state
-                .frame_cache
-                .lock()
-                .map_err(|e| format!("cache lock poisoned: {e}"))?;
+            let cache_lock = lock_state(&state.frame_cache, "cache")?;
             if i < cache_lock.entries.len() {
                 let entry = &cache_lock.entries[i];
                 if entry.effect_id == call.effect_id
@@ -724,10 +696,7 @@ pub fn apply_effect_stack(
 
     // Update cache
     {
-        let mut cache_lock = state
-            .frame_cache
-            .lock()
-            .map_err(|e| format!("cache lock poisoned: {e}"))?;
+        let mut cache_lock = lock_state(&state.frame_cache, "cache")?;
         cache_lock.scale = preview_scale;
         cache_lock.global_mask_b64 = mask_b64;
         cache_lock.entries = new_cache;
@@ -742,8 +711,7 @@ pub fn apply_effect_stack(
     let img = image::RgbaImage::from_raw(working.width, working.height, working.data)
         .ok_or("Invalid frame data after processing.")?;
     let mut buf = Cursor::new(Vec::new());
-    img.write_to(&mut buf, ImageFormat::Png)
-        .map_err(|e| e.to_string())?;
+    img.write_to(&mut buf, ImageFormat::Png)?;
 
     let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, buf.into_inner());
     Ok(format!("data:image/png;base64,{}", b64))
@@ -751,7 +719,7 @@ pub fn apply_effect_stack(
 
 /// Downscale a Frame by a factor using simple box averaging (no external deps).
 /// Returns an error if the frame's raw buffer does not match its declared dimensions.
-fn downscale_frame(frame: Frame, scale: f32) -> std::result::Result<Frame, String> {
+fn downscale_frame(frame: Frame, scale: f32) -> crate::error::Result<Frame> {
     let new_w = ((frame.width as f32 * scale) as u32).max(1);
     let new_h = ((frame.height as f32 * scale) as u32).max(1);
     let data_len = frame.data.len();
@@ -777,7 +745,7 @@ fn downscale_frame(frame: Frame, scale: f32) -> std::result::Result<Frame, Strin
 
 /// Upscale a Frame back to the target dimensions.
 /// Returns an error if the frame's raw buffer does not match its declared dimensions.
-fn upscale_frame(frame: Frame, target_w: u32, target_h: u32) -> std::result::Result<Frame, String> {
+fn upscale_frame(frame: Frame, target_w: u32, target_h: u32) -> crate::error::Result<Frame> {
     let data_len = frame.data.len();
     let img =
         image::RgbaImage::from_raw(frame.width, frame.height, frame.data).ok_or_else(|| {
@@ -801,17 +769,13 @@ fn upscale_frame(frame: Frame, target_w: u32, target_h: u32) -> std::result::Res
 
 /// Get the current frame as base64 PNG.
 #[tauri::command]
-pub fn get_frame_data(state: State<'_, AppState>) -> std::result::Result<String, String> {
-    let frame_lock = state
-        .current_frame
-        .lock()
-        .map_err(|e| format!("frame lock poisoned: {e}"))?;
+pub fn get_frame_data(state: State<'_, AppState>) -> crate::error::Result<String> {
+    let frame_lock = lock_state(&state.current_frame, "frame")?;
     let frame = frame_lock.as_ref().ok_or("No media loaded")?;
     let img = image::RgbaImage::from_raw(frame.width, frame.height, frame.data.clone())
         .ok_or("Invalid frame data.")?;
     let mut buf = Cursor::new(Vec::new());
-    img.write_to(&mut buf, ImageFormat::Png)
-        .map_err(|e| e.to_string())?;
+    img.write_to(&mut buf, ImageFormat::Png)?;
 
     let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, buf.into_inner());
     Ok(format!("data:image/png;base64,{}", b64))
@@ -825,14 +789,11 @@ pub fn save_media(
     path: String,
     format: Option<String>,
     quality: Option<u8>,
-) -> std::result::Result<String, String> {
+) -> crate::error::Result<String> {
     validate_io_path(&path, false)?;
-    let frame_lock = state
-        .current_frame
-        .lock()
-        .map_err(|e| format!("frame lock poisoned: {e}"))?;
+    let frame_lock = lock_state(&state.current_frame, "frame")?;
     let frame = frame_lock.as_ref().ok_or("No media loaded")?;
-    save_image(frame, &path, format.as_deref(), quality).map_err(|e| e.to_string())?;
+    save_image(frame, &path, format.as_deref(), quality)?;
     Ok(path)
 }
 
@@ -846,7 +807,7 @@ fn apply_stack_to_frame(
     frame: Frame,
     stack: &[EffectCall],
     global_mask: Option<&Mask>,
-) -> std::result::Result<Frame, String> {
+) -> crate::error::Result<Frame> {
     let mut working = frame;
     for call in stack {
         let effect = registry
@@ -878,25 +839,19 @@ pub fn save_processed_image(
     path: String,
     format: Option<String>,
     quality: Option<u8>,
-) -> std::result::Result<String, String> {
+) -> crate::error::Result<String> {
     validate_io_path(&path, false)?;
 
-    let frame_lock = state
-        .current_frame
-        .lock()
-        .map_err(|e| format!("frame lock poisoned: {e}"))?;
+    let frame_lock = lock_state(&state.current_frame, "frame")?;
     let frame = frame_lock.as_ref().ok_or("No media loaded")?.clone();
     drop(frame_lock);
 
     let global_mask = decode_mask_b64(mask_b64.as_deref())?;
-    let registry = state
-        .registry
-        .lock()
-        .map_err(|e| format!("registry lock poisoned: {e}"))?;
+    let registry = lock_state(&state.registry, "registry")?;
     let working = apply_stack_to_frame(&registry, frame, &stack, global_mask.as_ref())?;
     drop(registry);
 
-    save_image(&working, &path, format.as_deref(), quality).map_err(|e| e.to_string())?;
+    save_image(&working, &path, format.as_deref(), quality)?;
     Ok(path)
 }
 
@@ -938,7 +893,7 @@ pub async fn export_video(
     quality: Option<String>,
     include_audio: Option<bool>,
     processing_scale: Option<usize>,
-) -> std::result::Result<String, String> {
+) -> crate::error::Result<String> {
     // Logged BEFORE validation, which is the first thing that can fail. A
     // missing source returned here with no trace at all: the log showed a clean
     // startup and nothing else, so an export that died on its first line looked
@@ -954,7 +909,7 @@ pub async fn export_video(
     tracing::info!("export_video {}", crate::sysmem::describe(&headroom));
     if let Some(notice) = crate::sysmem::notice_for(&headroom) {
         tracing::error!("export_video refused: {notice}");
-        return Err(notice);
+        return Err(notice.into());
     }
     let validated_output = validate_io_path(&output_path, false).inspect_err(|e| {
         tracing::error!("export_video rejected output {output_path}: {e}");
@@ -990,12 +945,7 @@ pub async fn export_video(
     // apply_ffglitch share that flag, so resetting it while another
     // export-like operation is still running (or queued ahead of us) could
     // silently un-cancel that other job.
-    let permit = state
-        .export_semaphore
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(|e| format!("Export queue error: {}", e))?;
+    let permit = state.export_semaphore.clone().acquire_owned().await?;
     cancel.store(false, Ordering::Relaxed);
 
     tauri::async_runtime::spawn_blocking(move || {
@@ -1023,10 +973,10 @@ pub async fn export_video(
         )
     })
     .await
-    .map_err(|e| format!("Export task failed: {}", e))?
+    .map_err(|e| format!("Export task failed: {e}"))?
     // A failure that started with plenty of memory can still end in an
     // allocation that did not fit; the suffix is empty unless it did.
-    .map_err(|e: String| format!("{e}{}", crate::sysmem::low_memory_suffix()))
+    .map_err(|e| AppError::Generic(format!("{e}{}", crate::sysmem::low_memory_suffix())))
 }
 
 fn export_video_blocking(
@@ -1049,7 +999,7 @@ fn export_video_blocking(
     include_audio: Option<bool>,
     processing_scale: Option<usize>,
     cancel: Arc<AtomicBool>,
-) -> std::result::Result<String, String> {
+) -> crate::error::Result<String> {
     // Parse optional trim suffix from output filename (e.g. name_trim_0.5-2.3.mp4)
     let (mut trim_start, mut trim_end) = (trim_start, trim_end);
     if trim_start.is_none() && trim_end.is_none() {
@@ -1098,8 +1048,7 @@ fn export_video_blocking(
     let (decode_scale, budget_bytes) = match still_target_frames {
         Some(n) => crate::ffmpeg::plan_decode_for_frames(&source_path, processing_scale, n),
         None => crate::ffmpeg::plan_decode(&source_path, processing_scale),
-    }
-    .map_err(|e| e.to_string())?;
+    }?;
     let budget_mb = budget_bytes as f64 / (1024.0 * 1024.0);
     tracing::info!(
         "Export decode plan: scale={:?}, memory budget={:.0} MB",
@@ -1135,8 +1084,7 @@ fn export_video_blocking(
         None,
         decode_scale,
         Some(cancel.as_ref()),
-    )
-    .map_err(|e| e.to_string())?;
+    )?;
     tracing::info!(
         "Decoded {} frames, {}x{}, fps={}",
         segment.frames.len(),
@@ -1257,7 +1205,7 @@ fn export_video_blocking(
             .take(end_frame - start_frame)
             .collect();
         if segment.frames.is_empty() {
-            return Err("Trim range resulted in no frames".to_string());
+            return Err("Trim range resulted in no frames".into());
         }
     }
 
@@ -1275,9 +1223,7 @@ fn export_video_blocking(
         "export-progress",
         serde_json::json!({"stage": "effects", "progress": 5, "total": stack.len(), "current": 0}),
     );
-    let registry = registry
-        .lock()
-        .map_err(|e| format!("registry lock poisoned: {e}"))?;
+    let registry = lock_state(&registry, "registry")?;
     // Every per-frame time below goes through `export_frame_time`: the frames
     // were trimmed above, so a frame's index in the segment is NOT its time on
     // the transport. See that function for why it matters.
@@ -1288,7 +1234,7 @@ fn export_video_blocking(
         // encoder's write loop -- the last 15% of an export -- so "Cancel"
         // during decode or effects changed nothing but the status text.
         if cancel.load(Ordering::Relaxed) {
-            return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
+            return Err(crate::ffmpeg::EXPORT_CANCELLED.into());
         }
         let effect = registry
             .get(&call.effect_id)
@@ -1354,9 +1300,7 @@ fn export_video_blocking(
             if let Some(ref audio) = audio_data {
                 audio.inject_timeline_params(&mut temporal_params);
             }
-            let processed = effect
-                .process_video(&segment, active_mask, &temporal_params)
-                .map_err(|e| e.to_string())?;
+            let processed = effect.process_video(&segment, active_mask, &temporal_params)?;
             let previous = std::mem::replace(&mut segment, processed);
             if needs_mask_blend {
                 if let Some(m) = active_mask {
@@ -1403,9 +1347,9 @@ fn export_video_blocking(
             let keyframes_ref = call.keyframes.as_ref();
             let fps_val = segment.fps;
             segment.frames.par_iter_mut().enumerate().try_for_each(
-                |(idx, frame)| -> std::result::Result<(), String> {
+                |(idx, frame)| -> crate::error::Result<()> {
                     if cancel.load(Ordering::Relaxed) {
-                        return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
+                        return Err(crate::ffmpeg::EXPORT_CANCELLED.into());
                     }
                     let t = export_frame_time(trim_start, idx, fps_val);
                     let mut frame_params = params_ref.clone();
@@ -1433,7 +1377,7 @@ fn export_video_blocking(
             let dt = 1.0 / (fps_val as f64).max(1.0);
             for (frame_idx, frame) in segment.frames.iter_mut().enumerate() {
                 if cancel.load(Ordering::Relaxed) {
-                    return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
+                    return Err(crate::ffmpeg::EXPORT_CANCELLED.into());
                 }
                 let t = export_frame_time(trim_start, frame_idx, fps_val);
                 let mut frame_params = params.clone();
@@ -1516,8 +1460,7 @@ fn export_video_blocking(
         Some(cancel.as_ref()),
         Some(ENCODE_TIMEOUT),
         format.as_deref(),
-    )
-    .map_err(|e| e.to_string())?;
+    )?;
     let _ = app_handle.emit(
         "export-progress",
         serde_json::json!({"stage": "done", "progress": 100}),
@@ -1532,16 +1475,16 @@ fn export_video_blocking(
 /// A temporal effect's single process_video pass is the one stretch it
 /// cannot interrupt.
 #[tauri::command]
-pub fn cancel_export(state: State<'_, AppState>) -> std::result::Result<(), String> {
+pub fn cancel_export(state: State<'_, AppState>) -> crate::error::Result<()> {
     state.export_cancel.store(true, Ordering::Relaxed);
     Ok(())
 }
 
 /// Get metadata for a media file.
 #[tauri::command]
-pub fn get_media_metadata(path: String) -> std::result::Result<serde_json::Value, String> {
+pub fn get_media_metadata(path: String) -> crate::error::Result<serde_json::Value> {
     validate_io_path(&path, true)?;
-    let meta = probe_metadata(&path).map_err(|e| e.to_string())?;
+    let meta = probe_metadata(&path)?;
     Ok(json!(meta))
 }
 
@@ -1559,14 +1502,14 @@ pub fn get_media_metadata(path: String) -> std::result::Result<serde_json::Value
 pub fn extract_audio_from_video(
     video_path: String,
     max_duration_secs: Option<f64>,
-) -> std::result::Result<String, String> {
+) -> crate::error::Result<String> {
     let validated = validate_io_path(&video_path, true)?;
     let video_path = validated.to_string_lossy().into_owned();
 
     // Fast path: if there's no audio stream, fail fast with a clear message
     // so the frontend can show a "no audio" warning instead of a generic error.
-    if !has_audio_stream(&video_path).map_err(|e| e.to_string())? {
-        return Err("Source video has no audio stream".to_string());
+    if !has_audio_stream(&video_path)? {
+        return Err("Source video has no audio stream".into());
     }
 
     // Write to a per-video temp file so repeated loads overwrite cleanly.
@@ -1582,8 +1525,7 @@ pub fn extract_audio_from_video(
     std::fs::create_dir_all(&out_dir).map_err(|e| format!("Failed to create temp dir: {e}"))?;
     let out_path = out_dir.join(format!("{hash}.wav"));
 
-    extract_audio_to_wav(&video_path, &out_path.to_string_lossy(), max_duration_secs)
-        .map_err(|e| e.to_string())?;
+    extract_audio_to_wav(&video_path, &out_path.to_string_lossy(), max_duration_secs)?;
     Ok(out_path.to_string_lossy().into_owned())
 }
 
@@ -1591,11 +1533,8 @@ pub fn extract_audio_from_video(
 #[tauri::command]
 pub fn get_media_info(
     state: State<'_, AppState>,
-) -> std::result::Result<serde_json::Value, String> {
-    let frame_lock = state
-        .current_frame
-        .lock()
-        .map_err(|e| format!("frame lock poisoned: {e}"))?;
+) -> crate::error::Result<serde_json::Value> {
+    let frame_lock = lock_state(&state.current_frame, "frame")?;
     match frame_lock.as_ref() {
         Some(frame) => Ok(json!({
             "width": frame.width,
@@ -1604,15 +1543,6 @@ pub fn get_media_info(
         })),
         None => Ok(json!({ "loaded": false })),
     }
-}
-
-fn lock_sam3<'a>(
-    state: &'a State<'_, AppState>,
-) -> std::result::Result<std::sync::MutexGuard<'a, Option<Sam3Engine>>, String> {
-    state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))
 }
 
 /// Zip parallel (mask_b64, score) pairs into the `{count, masks, scores}`
@@ -1631,18 +1561,20 @@ fn with_sam3<F, R>(
     app: &tauri::AppHandle,
     state: &State<'_, AppState>,
     f: F,
-) -> std::result::Result<R, String>
+) -> crate::error::Result<R>
 where
     F: Fn(&Sam3Engine) -> crate::error::Result<R>,
 {
-    let mut sam3_lock = lock_sam3(state)?;
+    let mut sam3_lock = lock_state(&state.sam3, "SAM3")?;
 
     if sam3_lock.is_none() {
         match Sam3Engine::new(app) {
             Ok(engine) => {
                 *sam3_lock = Some(engine);
             }
-            Err(e) => return Err(format!("Failed to start SAM3 engine: {e}")),
+            Err(e) => {
+                return Err(AppError::Generic(format!("Failed to start SAM3 engine: {e}")));
+            }
         }
     }
 
@@ -1650,14 +1582,11 @@ where
     match f(engine) {
         Ok(res) => Ok(res),
         Err(e) => {
-            let err_str = e.to_string();
-            // If the sidecar IPC pipe broke or died, drop the dead engine lock and attempt auto-restart
-            if err_str.contains("pipe")
-                || err_str.contains("closed")
-                || err_str.contains("os error")
-            {
+            // A dead transport (broken pipe / bridge exited) gets one restart
+            // retry; a model/timeout error is returned as-is.
+            if e.is_sam3_transport_failure() {
                 tracing::warn!(
-                    "SAM3 engine pipe error detected ({err_str}), auto-restarting SAM3 engine..."
+                    "SAM3 engine transport failure ({e}), auto-restarting SAM3 engine..."
                 );
                 *sam3_lock = None;
                 if let Ok(new_engine) = Sam3Engine::new(app) {
@@ -1668,7 +1597,7 @@ where
                     *sam3_lock = Some(new_engine);
                 }
             }
-            Err(err_str)
+            Err(e)
         }
     }
 }
@@ -1678,15 +1607,15 @@ where
 pub fn sam3_init(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
-) -> std::result::Result<String, String> {
-    let mut sam3_lock = lock_sam3(&state)?;
+) -> crate::error::Result<String> {
+    let mut sam3_lock = lock_state(&state.sam3, "SAM3")?;
     if sam3_lock.is_none() {
         match Sam3Engine::new(&app) {
             Ok(engine) => {
                 *sam3_lock = Some(engine);
                 Ok("SAM3 engine initialized".into())
             }
-            Err(e) => Err(format!("Failed to start SAM3 engine: {}", e)),
+            Err(e) => Err(AppError::Generic(format!("Failed to start SAM3 engine: {e}"))),
         }
     } else {
         Ok("SAM3 engine already running".into())
@@ -1699,7 +1628,7 @@ pub fn sam3_load_image(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     image_b64: String,
-) -> std::result::Result<serde_json::Value, String> {
+) -> crate::error::Result<serde_json::Value> {
     let (w, h) = with_sam3(&app, &state, |engine| engine.load_image(image_b64.clone()))?;
     Ok(json!({ "width": w, "height": h }))
 }
@@ -1710,7 +1639,7 @@ pub fn sam3_text_prompt(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     prompt: String,
-) -> std::result::Result<serde_json::Value, String> {
+) -> crate::error::Result<serde_json::Value> {
     let masks = with_sam3(&app, &state, |engine| engine.text_prompt(prompt.clone()))?;
     Ok(masks_to_json(masks))
 }
@@ -1722,7 +1651,7 @@ pub fn sam3_point_prompt(
     state: State<'_, AppState>,
     points: Vec<[f64; 2]>,
     labels: Option<Vec<i32>>,
-) -> std::result::Result<serde_json::Value, String> {
+) -> crate::error::Result<serde_json::Value> {
     let f32_points: Vec<[f32; 2]> = points
         .into_iter()
         .map(|[x, y]| [x as f32, y as f32])
@@ -1739,7 +1668,7 @@ pub fn sam3_box_prompt(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     boxes: Vec<[f64; 4]>,
-) -> std::result::Result<serde_json::Value, String> {
+) -> crate::error::Result<serde_json::Value> {
     let f32_boxes: Vec<[f32; 4]> = boxes
         .into_iter()
         .map(|[x1, y1, x2, y2]| [x1 as f32, y1 as f32, x2 as f32, y2 as f32])
@@ -1756,7 +1685,7 @@ pub fn sam3_auto_mask(
     grid_size: u32,
     iou_threshold: f32,
     min_mask_region_area: u32,
-) -> std::result::Result<serde_json::Value, String> {
+) -> crate::error::Result<serde_json::Value> {
     let masks = with_sam3(&app, &state, |engine| {
         engine.auto_mask(grid_size, iou_threshold, min_mask_region_area)
     })?;
@@ -1769,14 +1698,12 @@ pub fn sam3_video_predictor(
     state: State<'_, AppState>,
     frames: Vec<String>,
     prompt: Option<String>,
-) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = lock_sam3(&state)?;
+) -> crate::error::Result<serde_json::Value> {
+    let sam3_lock = lock_state(&state.sam3, "SAM3")?;
     let engine = sam3_lock
         .as_ref()
         .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
-    let (frame_masks, frame_scores) = engine
-        .video_predictor(frames, prompt)
-        .map_err(|e| e.to_string())?;
+    let (frame_masks, frame_scores) = engine.video_predictor(frames, prompt)?;
     Ok(json!({
         "status": "ok",
         "frame_masks": frame_masks,
@@ -1794,7 +1721,7 @@ pub fn sam3_refine_mask(
     mask_b64: String,
     points: Vec<[f64; 2]>,
     labels: Option<Vec<i32>>,
-) -> std::result::Result<serde_json::Value, String> {
+) -> crate::error::Result<serde_json::Value> {
     let f32_points: Vec<[f32; 2]> = points
         .into_iter()
         .map(|[x, y]| [x as f32, y as f32])
@@ -1817,7 +1744,7 @@ pub fn sam3_postprocess_mask(
     shrink: i32,
     feather: i32,
     fill_holes: bool,
-) -> std::result::Result<String, String> {
+) -> crate::error::Result<String> {
     with_sam3(&app, &state, |engine| {
         engine.postprocess_mask(mask_b64.clone(), grow, shrink, feather, fill_holes)
     })
@@ -1825,18 +1752,18 @@ pub fn sam3_postprocess_mask(
 
 /// Clear SAM3 state (image + masks).
 #[tauri::command]
-pub fn sam3_clear(state: State<'_, AppState>) -> std::result::Result<String, String> {
-    let sam3_lock = lock_sam3(&state)?;
+pub fn sam3_clear(state: State<'_, AppState>) -> crate::error::Result<String> {
+    let sam3_lock = lock_state(&state.sam3, "SAM3")?;
     if let Some(engine) = sam3_lock.as_ref() {
-        engine.clear().map_err(|e| e.to_string())?;
+        engine.clear()?;
     }
     Ok("SAM3 state cleared".into())
 }
 
 /// Shutdown the SAM3 bridge process.
 #[tauri::command]
-pub fn sam3_shutdown(state: State<'_, AppState>) -> std::result::Result<String, String> {
-    let mut sam3_lock = lock_sam3(&state)?;
+pub fn sam3_shutdown(state: State<'_, AppState>) -> crate::error::Result<String> {
+    let mut sam3_lock = lock_state(&state.sam3, "SAM3")?;
     if let Some(engine) = sam3_lock.take() {
         let _ = engine.shutdown();
     }
@@ -1924,7 +1851,7 @@ mod integration_tests {
             data: vec![0u8; 4],
         };
         let err = downscale_frame(bad, 0.5).unwrap_err();
-        assert!(err.contains("downscale_frame"));
+        assert!(err.to_string().contains("downscale_frame"));
     }
 
     #[test]
@@ -1948,14 +1875,14 @@ mod integration_tests {
             data: vec![0u8; 4],
         };
         let err = upscale_frame(bad, 20, 20).unwrap_err();
-        assert!(err.contains("upscale_frame"));
+        assert!(err.to_string().contains("upscale_frame"));
     }
 
     // ── Poisoned-lock error handling ────────────────────────────
-    // Command handlers map a poisoned Mutex into a `Result::Err(String)`
+    // Command handlers map a poisoned Mutex into a `Result::Err(AppError)`
     // instead of panicking (which previously could crash the whole app and
     // permanently poison shared state). These tests poison an AppState mutex
-    // and confirm the same `.lock().map_err(..)` pattern yields an error.
+    // and confirm `lock_state` yields the named lock error.
 
     /// Poison the given mutex by panicking while a guard is held on another thread.
     fn poison_mutex<T: Send>(m: &Mutex<T>) {
@@ -1975,13 +1902,10 @@ mod integration_tests {
         let state = AppState::default();
         poison_mutex(&state.current_frame);
 
-        let result: std::result::Result<_, String> = state
-            .current_frame
-            .lock()
-            .map_err(|e| format!("frame lock poisoned: {e}"));
+        let result = lock_state(&state.current_frame, "frame");
         match result {
             Ok(_) => panic!("expected poisoned frame lock error"),
-            Err(e) => assert!(e.contains("frame lock poisoned")),
+            Err(e) => assert!(e.to_string().contains("frame lock poisoned")),
         }
     }
 
@@ -1990,13 +1914,10 @@ mod integration_tests {
         let state = AppState::default();
         poison_mutex(&state.registry);
 
-        let result: std::result::Result<_, String> = state
-            .registry
-            .lock()
-            .map_err(|e| format!("registry lock poisoned: {e}"));
+        let result = lock_state(&state.registry, "registry");
         match result {
             Ok(_) => panic!("expected poisoned registry lock error"),
-            Err(e) => assert!(e.contains("registry lock poisoned")),
+            Err(e) => assert!(e.to_string().contains("registry lock poisoned")),
         }
     }
 
@@ -2005,13 +1926,10 @@ mod integration_tests {
         let state = AppState::default();
         poison_mutex(&state.sam3);
 
-        let result: std::result::Result<_, String> = state
-            .sam3
-            .lock()
-            .map_err(|e| format!("SAM3 lock poisoned: {e}"));
+        let result = lock_state(&state.sam3, "SAM3");
         match result {
             Ok(_) => panic!("expected poisoned SAM3 lock error"),
-            Err(e) => assert!(e.contains("SAM3 lock poisoned")),
+            Err(e) => assert!(e.to_string().contains("SAM3 lock poisoned")),
         }
     }
 
@@ -2592,32 +2510,35 @@ fn validate_project_path(
 /// Save a JSON string to a file path.
 /// Validates path safety and enforces a maximum file size.
 #[tauri::command]
-pub async fn save_file(path: String, contents: String) -> std::result::Result<(), String> {
+pub async fn save_file(path: String, contents: String) -> crate::error::Result<()> {
     if contents.len() > PROJECT_FILE_MAX_SIZE {
         return Err(format!(
             "File contents too large: {} bytes (max {} bytes)",
             contents.len(),
             PROJECT_FILE_MAX_SIZE
-        ));
+        )
+        .into());
     }
     let valid_path = validate_project_path(&path, true)?;
-    std::fs::write(&valid_path, contents).map_err(|e| e.to_string())
+    std::fs::write(&valid_path, contents)?;
+    Ok(())
 }
 
 /// Read a file as a string.
 /// Validates path safety and enforces a maximum file size.
 #[tauri::command]
-pub async fn read_file(path: String) -> std::result::Result<String, String> {
+pub async fn read_file(path: String) -> crate::error::Result<String> {
     let valid_path = validate_project_path(&path, false)?;
-    let meta = std::fs::metadata(&valid_path).map_err(|e| e.to_string())?;
+    let meta = std::fs::metadata(&valid_path)?;
     if meta.len() as usize > PROJECT_FILE_MAX_SIZE {
         return Err(format!(
             "File too large: {} bytes (max {} bytes)",
             meta.len(),
             PROJECT_FILE_MAX_SIZE
-        ));
+        )
+        .into());
     }
-    std::fs::read_to_string(&valid_path).map_err(|e| e.to_string())
+    Ok(std::fs::read_to_string(&valid_path)?)
 }
 
 /// Maximum size for a user-supplied custom LUT (PNG or .cube).
@@ -2632,7 +2553,7 @@ const ALLOWED_LUT_EXTS: &[&str] = &["png", "cube"];
 /// returning the destination path to use for both WebGL preview and the Rust
 /// export pipeline.
 #[tauri::command]
-pub async fn prepare_custom_lut(path: String) -> std::result::Result<String, String> {
+pub async fn prepare_custom_lut(path: String) -> crate::error::Result<String> {
     let validated = validate_io_path(&path, true)?;
 
     let ext = validated
@@ -2641,26 +2562,27 @@ pub async fn prepare_custom_lut(path: String) -> std::result::Result<String, Str
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
     if !ALLOWED_LUT_EXTS.contains(&ext.as_str()) {
-        return Err(format!("Unsupported LUT extension: .{}", ext));
+        return Err(format!("Unsupported LUT extension: .{}", ext).into());
     }
 
-    let meta = std::fs::metadata(&validated).map_err(|e| e.to_string())?;
+    let meta = std::fs::metadata(&validated)?;
     if meta.len() > LUT_MAX_SIZE {
         return Err(format!(
             "LUT file too large: {} bytes (max {} bytes)",
             meta.len(),
             LUT_MAX_SIZE
-        ));
+        )
+        .into());
     }
 
     let file_name = validated
         .file_name()
         .and_then(|n| n.to_str())
-        .ok_or_else(|| "Invalid LUT file name".to_string())?;
+        .ok_or("Invalid LUT file name")?;
     let dest_dir = std::env::temp_dir().join("moshdither-studio").join("luts");
-    std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dest_dir)?;
     let dest = dest_dir.join(file_name);
-    std::fs::copy(&validated, &dest).map_err(|e| e.to_string())?;
+    std::fs::copy(&validated, &dest)?;
 
     Ok(dest.to_string_lossy().into_owned())
 }
@@ -2680,9 +2602,9 @@ pub struct UpdateInfo {
 #[tauri::command]
 pub async fn check_update(
     app: tauri::AppHandle,
-) -> std::result::Result<Option<UpdateInfo>, String> {
-    let updater = app.updater().map_err(|e| e.to_string())?;
-    match updater.check().await.map_err(|e| e.to_string())? {
+) -> crate::error::Result<Option<UpdateInfo>> {
+    let updater = app.updater()?;
+    match updater.check().await? {
         Some(update) => Ok(Some(UpdateInfo {
             version: update.version,
             date: update.date.map(|d| d.to_string()),
@@ -2696,14 +2618,11 @@ pub async fn check_update(
 
 /// Download, verify, and install the latest signed update, then restart the app.
 #[tauri::command]
-pub async fn install_update(app: tauri::AppHandle) -> std::result::Result<String, String> {
-    let updater = app.updater().map_err(|e| e.to_string())?;
-    match updater.check().await.map_err(|e| e.to_string())? {
+pub async fn install_update(app: tauri::AppHandle) -> crate::error::Result<String> {
+    let updater = app.updater()?;
+    match updater.check().await? {
         Some(update) => {
-            update
-                .download_and_install(|_chunk, _total| {}, || {})
-                .await
-                .map_err(|e| e.to_string())?;
+            update.download_and_install(|_chunk, _total| {}, || {}).await?;
             app.restart();
         }
         None => Ok("up to date".to_string()),
@@ -3050,7 +2969,7 @@ pub const EXPORT_TEMP_MARKER: &str = ".moshdither-fx-tmp.";
 /// delete a user's media. Failure to clean up is not fatal to an export, so the
 /// caller is expected to ignore the error rather than fail the job over it.
 #[tauri::command]
-pub fn remove_export_temp(path: String) -> std::result::Result<(), String> {
+pub fn remove_export_temp(path: String) -> crate::error::Result<()> {
     let validated = validate_io_path(&path, true)?;
     let name = validated
         .file_name()
@@ -3059,9 +2978,11 @@ pub fn remove_export_temp(path: String) -> std::result::Result<(), String> {
     if !name.contains(EXPORT_TEMP_MARKER) {
         return Err(format!(
             "Refusing to remove {name}: not a MoshDither export intermediate"
-        ));
+        )
+        .into());
     }
-    std::fs::remove_file(&validated).map_err(|e| e.to_string())
+    std::fs::remove_file(&validated)?;
+    Ok(())
 }
 
 /// Apply an FFglitch datamoshing effect by delegating to the Python mosh_cli.py.
@@ -3086,7 +3007,7 @@ pub async fn preview_ffglitch(
     start_secs: Option<f64>,
     duration_secs: Option<f64>,
     params: Option<serde_json::Value>,
-) -> std::result::Result<String, String> {
+) -> crate::error::Result<String> {
     let validated = validate_io_path(&input_path, true)?;
     let source = validated.to_string_lossy().into_owned();
     let params = ffglitch_params_or_empty(params.unwrap_or(serde_json::Value::Null));
@@ -3128,7 +3049,7 @@ pub async fn preview_ffglitch(
     // Trim first. Moshing two seconds instead of the whole clip is the entire
     // point; handing the full source to the datamosher would be as slow as a
     // real export.
-    let ffmpeg = ffmpeg_binary().map_err(|e| e.to_string())?;
+    let ffmpeg = ffmpeg_binary()?;
     let trimmed = dir.join(format!("src-{key:016x}.mp4"));
     let trim = crate::proc::command(&ffmpeg)
         .args(["-v", "error", "-y", "-ss"])
@@ -3154,7 +3075,8 @@ pub async fn preview_ffglitch(
                 .last()
                 .unwrap_or("unknown error"),
             crate::sysmem::low_memory_suffix()
-        ));
+        )
+        .into());
     }
 
     let result = apply_ffglitch(
@@ -3176,7 +3098,7 @@ pub async fn apply_ffglitch(
     output_path: String,
     mode: String,
     params: serde_json::Value,
-) -> std::result::Result<String, String> {
+) -> crate::error::Result<String> {
     let validated_input = validate_io_path(&input_path, true)?;
     let validated_output = validate_io_path(&output_path, false)?;
     let input_path = validated_input.to_string_lossy().into_owned();
@@ -3192,7 +3114,7 @@ pub async fn apply_ffglitch(
     // reason instead. (Observed 2026-09-10, commit limit exhausted by
     // another app -- see sysmem.rs.)
     if let Some(notice) = crate::sysmem::low_memory_notice() {
-        return Err(notice);
+        return Err(notice.into());
     }
 
     // Prefer the bundled sidecar: it carries its own interpreter and numpy, so
@@ -3214,13 +3136,13 @@ pub async fn apply_ffglitch(
         }
     };
 
-    let ffgac = ffgac_binary().map_err(|e| e.to_string())?;
-    let ffedit = ffedit_binary().map_err(|e| e.to_string())?;
+    let ffgac = ffgac_binary()?;
+    let ffedit = ffedit_binary()?;
     if !Path::new(&ffgac).exists() || !Path::new(&ffedit).exists() {
-        return Err("FFglitch binaries (ffgac / ffedit) not found. Download them from ffglitch.org and place in src-tauri/bin/".to_string());
+        return Err("FFglitch binaries (ffgac / ffedit) not found. Download them from ffglitch.org and place in src-tauri/bin/".into());
     }
 
-    let ffmpeg = ffmpeg_binary().map_err(|e| e.to_string())?;
+    let ffmpeg = ffmpeg_binary()?;
 
     let config = serde_json::json!({
         "input": input_path,
@@ -3238,7 +3160,7 @@ pub async fn apply_ffglitch(
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     ));
-    std::fs::write(&temp_config, config.to_string()).map_err(|e| e.to_string())?;
+    std::fs::write(&temp_config, config.to_string())?;
 
     // Serialize against export_video (this file, ~line 615): the two
     // commands share one export_cancel AtomicBool, so without this permit a
@@ -3247,12 +3169,7 @@ pub async fn apply_ffglitch(
     // resetting the flag so a stale `true` left over from a previously
     // cancelled operation can't immediately abort this new one, and so this
     // reset can't race a still-running or queued export_video call.
-    let permit = state
-        .export_semaphore
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(|e| format!("Export queue error: {}", e))?;
+    let permit = state.export_semaphore.clone().acquire_owned().await?;
     let cancel = state.export_cancel.clone();
     cancel.store(false, Ordering::Relaxed);
 
@@ -3274,8 +3191,7 @@ pub async fn apply_ffglitch(
         )
         .map(|output| (output, output_path_clone))
     })
-    .await
-    .map_err(|e| format!("Task failed: {}", e))?;
+    .await?;
 
     let _ = std::fs::remove_file(&temp_config);
 
@@ -3295,7 +3211,8 @@ pub async fn apply_ffglitch(
             "FFglitch failed: {}{}",
             String::from_utf8_lossy(&output.stderr),
             crate::sysmem::low_memory_suffix()
-        ));
+        )
+        .into());
     }
 
     // Verify the output file exists and has non-zero size
@@ -3308,12 +3225,14 @@ pub async fn apply_ffglitch(
             Err(format!(
                 "FFglitch produced a 0-byte output file. stderr: {}",
                 String::from_utf8_lossy(&output.stderr)
-            ))
+            )
+            .into())
         }
         Err(_) => Err(format!(
             "FFglitch completed but output file was not created. stderr: {}",
             String::from_utf8_lossy(&output.stderr)
-        )),
+        )
+        .into()),
     }
 }
 
@@ -3324,14 +3243,10 @@ pub async fn generate_proxy_command(
     source_path: String,
     max_width: u32,
     crf: u32,
-) -> std::result::Result<String, String> {
+) -> crate::error::Result<String> {
     let validated = validate_io_path(&source_path, true)?;
     let path = validated.to_string_lossy().into_owned();
-    tauri::async_runtime::spawn_blocking(move || {
-        generate_proxy(&path, max_width, crf).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| format!("Task failed: {}", e))?
+    tauri::async_runtime::spawn_blocking(move || generate_proxy(&path, max_width, crf)).await?
 }
 
 /// Turn a currently-loaded still image into a real multi-frame video by
@@ -3345,14 +3260,10 @@ pub async fn animate_still_as_video(
     image_path: String,
     duration_secs: f64,
     fps: f64,
-) -> std::result::Result<String, String> {
+) -> crate::error::Result<String> {
     let validated = validate_io_path(&image_path, true)?;
     let path = validated.to_string_lossy().into_owned();
-    tauri::async_runtime::spawn_blocking(move || {
-        image_to_video(&path, duration_secs, fps).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| format!("Task failed: {}", e))?
+    tauri::async_runtime::spawn_blocking(move || image_to_video(&path, duration_secs, fps)).await?
 }
 
 #[cfg(test)]
@@ -4312,6 +4223,6 @@ mod in_place_mask_tests {
         let cancel = AtomicBool::new(true);
         let err = blend_segment_against(&previous, &mut frames, &mask, "inside", &cancel)
             .expect_err("a set cancel flag must abort");
-        assert!(err.contains("cancelled"));
+        assert!(err.to_string().contains("cancelled"));
     }
 }
