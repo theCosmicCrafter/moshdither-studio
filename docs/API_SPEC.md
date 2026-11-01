@@ -21,7 +21,7 @@ All communication between the React frontend and Rust backend uses Tauri v2's `i
 | `apply_effect_stack` | `stack: StackEntry[], maskB64?: string` | `string` (data URL) | Apply the full effect stack to the current frame — used for single effects too, there's no separate single-effect command. Each entry has `effect_id`, `params`, `mask_b64`, `mask_mode`. |
 | `get_frame_data` | — | `string` (data URL) | Get the current frame as a PNG data URL. |
 | `save_media` | `path: string, format: string, quality: number` | `void` | Save current frame to file (PNG/JPEG/BMP/TIFF). |
-| `export_video` | `sourcePath, outputPath, stack, maskB64?, codec?, fps?, width?, height?, audioBakeJson?, watermark?, trimStart?, trimEnd?` | `string` (output path) | Export video with effect stack applied via FFmpeg. |
+| `export_video` | `sourcePath, outputPath, stack, options?: { maskB64?, codec?, fps?, width?, height?, audioBakeJson?, watermark?, trimStart?, trimEnd?, format?, quality?, includeAudio?, processingScale? }` | `string` (output path) | Export video with effect stack applied via FFmpeg. |
 | `apply_ffglitch` | `inputPath, outputPath, mode, params` | `string` (output path) | Apply FFglitch datamoshing mode (ffgac/ffedit). |
 
 ### 1.2 Media Info & Proxy

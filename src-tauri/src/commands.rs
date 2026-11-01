@@ -1,8 +1,6 @@
-#![allow(clippy::too_many_arguments)]
-
 use crate::effects::{
     blend_mask, functional_tests::run_all_function_tests, verification::verify_all_effects, Effect,
-    EffectCategory, EffectMeta, EffectRegistry, Frame, Mask,
+    EffectCategory, EffectMeta, EffectRegistry, Frame, Mask, VideoSegment,
 };
 use crate::ffmpeg::{
     decode_video, encode_video, extract_audio_to_wav, ffedit_binary, ffgac_binary, ffmpeg_binary,
@@ -918,6 +916,65 @@ pub fn save_processed_image(
 /// point uses -- so a typo of 12000 in that box asked for 360 000 frames.
 const MAX_EXPORT_FRAMES: usize = 108_000;
 
+/// Optional parameters for a video export, deserialized once from the
+/// `options` object of the `export_video` invoke. Bundling them keeps the
+/// pipeline stages below from taking a dozen positional `Option<_>`s, where
+/// a swapped argument at the call site compiles silently.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportOptions {
+    pub mask_b64: Option<String>,
+    pub codec: Option<String>,
+    pub fps: Option<f64>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub audio_bake_json: Option<String>,
+    pub watermark: Option<WatermarkSettings>,
+    pub trim_start: Option<f64>,
+    pub trim_end: Option<f64>,
+    pub format: Option<String>,
+    pub quality: Option<String>,
+    pub include_audio: Option<bool>,
+    /// Optional max dimension (px) for the internal decode and
+    /// effect-processing pipeline. `None` means "auto" — the backend picks
+    /// the largest resolution that fits in the adaptive memory budget.
+    pub processing_scale: Option<usize>,
+}
+
+impl ExportOptions {
+    /// Fill an unset trim range from the `_trim_<start>-<end>` suffix
+    /// encoded in the output filename (e.g. `name_trim_0.5-2.3.mp4`).
+    /// An explicit range from the caller always wins.
+    fn resolve_filename_trim(&mut self, output_path: &str) {
+        if self.trim_start.is_some() || self.trim_end.is_some() {
+            return;
+        }
+        let (trim_start, trim_end) = filename_trim_range(output_path);
+        self.trim_start = trim_start;
+        self.trim_end = trim_end;
+    }
+}
+
+/// Read the trim range encoded in an output filename like
+/// `name_trim_0.5-2.3.mp4` — a start and end in seconds after a `_trim_`
+/// marker in the file stem. Either side that fails to parse stays `None`.
+fn filename_trim_range(output_path: &str) -> (Option<f64>, Option<f64>) {
+    let Some(stem) = std::path::Path::new(output_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+    else {
+        return (None, None);
+    };
+    let Some(idx) = stem.rfind("_trim_") else {
+        return (None, None);
+    };
+    let parts: Vec<&str> = stem[idx + 6..].split('-').collect();
+    if parts.len() != 2 {
+        return (None, None);
+    }
+    (parts[0].parse::<f64>().ok(), parts[1].parse::<f64>().ok())
+}
+
 #[tauri::command]
 pub async fn export_video(
     state: State<'_, AppState>,
@@ -925,19 +982,7 @@ pub async fn export_video(
     source_path: String,
     output_path: String,
     stack: Vec<EffectCall>,
-    mask_b64: Option<String>,
-    codec: Option<String>,
-    fps: Option<f64>,
-    width: Option<u32>,
-    height: Option<u32>,
-    audio_bake_json: Option<String>,
-    watermark: Option<WatermarkSettings>,
-    trim_start: Option<f64>,
-    trim_end: Option<f64>,
-    format: Option<String>,
-    quality: Option<String>,
-    include_audio: Option<bool>,
-    processing_scale: Option<usize>,
+    options: Option<ExportOptions>,
 ) -> std::result::Result<String, String> {
     // Logged BEFORE validation, which is the first thing that can fail. A
     // missing source returned here with no trace at all: the log showed a clean
@@ -970,19 +1015,19 @@ pub async fn export_video(
     // way as source_path/output_path so a compromised renderer (or a
     // malicious .moshdither preset) can't smuggle a UNC path or an
     // unexpected local file through the watermark fields instead.
-    let watermark = watermark
-        .map(|mut wm| -> std::result::Result<WatermarkSettings, String> {
-            if wm.enabled {
-                if let Some(p) = &wm.image_path {
-                    wm.image_path = Some(validate_io_path(p, true)?.to_string_lossy().into_owned());
-                }
-                if let Some(p) = &wm.font_path {
-                    wm.font_path = Some(validate_io_path(p, true)?.to_string_lossy().into_owned());
-                }
+    // `options` is optional at the IPC boundary — the frontend always sends
+    // it, but a bare invoke defaults to an all-defaults export.
+    let mut options = options.unwrap_or_default();
+    if let Some(wm) = options.watermark.as_mut() {
+        if wm.enabled {
+            if let Some(p) = &wm.image_path {
+                wm.image_path = Some(validate_io_path(p, true)?.to_string_lossy().into_owned());
             }
-            Ok(wm)
-        })
-        .transpose()?;
+            if let Some(p) = &wm.font_path {
+                wm.font_path = Some(validate_io_path(p, true)?.to_string_lossy().into_owned());
+            }
+        }
+    }
 
     // Serialize expensive exports (this and apply_ffglitch both share one
     // export_cancel AtomicBool) so only one runs at a time. The permit is
@@ -1006,19 +1051,7 @@ pub async fn export_video(
             source_path,
             output_path,
             stack,
-            mask_b64,
-            codec,
-            fps,
-            width,
-            height,
-            audio_bake_json,
-            watermark,
-            trim_start,
-            trim_end,
-            format,
-            quality,
-            include_audio,
-            processing_scale,
+            options,
             cancel,
         )
     })
@@ -1035,52 +1068,115 @@ fn export_video_blocking(
     source_path: String,
     output_path: String,
     stack: Vec<EffectCall>,
-    mask_b64: Option<String>,
-    codec: Option<String>,
-    fps: Option<f64>,
-    width: Option<u32>,
-    height: Option<u32>,
-    audio_bake_json: Option<String>,
-    watermark: Option<WatermarkSettings>,
-    trim_start: Option<f64>,
-    trim_end: Option<f64>,
-    format: Option<String>,
-    quality: Option<String>,
-    include_audio: Option<bool>,
-    processing_scale: Option<usize>,
+    mut options: ExportOptions,
     cancel: Arc<AtomicBool>,
 ) -> std::result::Result<String, String> {
     // Parse optional trim suffix from output filename (e.g. name_trim_0.5-2.3.mp4)
-    let (mut trim_start, mut trim_end) = (trim_start, trim_end);
-    if trim_start.is_none() && trim_end.is_none() {
-        if let Some(stem) = std::path::Path::new(&output_path)
-            .file_stem()
-            .and_then(|s| s.to_str())
-        {
-            if let Some(idx) = stem.rfind("_trim_") {
-                let range = &stem[idx + 6..];
-                let parts: Vec<&str> = range.split('-').collect();
-                if parts.len() == 2 {
-                    if let Ok(s) = parts[0].parse::<f64>() {
-                        trim_start = Some(s);
-                    }
-                    if let Ok(e) = parts[1].parse::<f64>() {
-                        trim_end = Some(e);
-                    }
-                }
-            }
-        }
-    }
+    options.resolve_filename_trim(&output_path);
 
+    let mut segment = plan_and_decode(&app_handle, &source_path, &options, &cancel)?;
+    apply_trim(&mut segment, options.trim_start, options.trim_end)?;
+
+    // Resolution override is now handled by FFmpeg -vf scale in encode_video
+
+    let global_mask = decode_mask_b64(options.mask_b64.as_deref())?;
+
+    // Deserialize audio bake data if provided
+    let audio_data: Option<crate::audio::AudioBakeData> = options
+        .audio_bake_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok());
+
+    // Apply the effect stack
+    tracing::info!("Applying {} effects for export", stack.len());
+    let _ = app_handle.emit(
+        "export-progress",
+        serde_json::json!({"stage": "effects", "progress": 5, "total": stack.len(), "current": 0}),
+    );
+    let registry = registry
+        .lock()
+        .map_err(|e| format!("registry lock poisoned: {e}"))?;
+    // Every per-frame time below goes through `export_frame_time`: the frames
+    // were trimmed above, so a frame's index in the segment is NOT its time on
+    // the transport. See that function for why it matters.
+    let ctx = EffectPassCtx {
+        app_handle: &app_handle,
+        global_mask: global_mask.as_ref(),
+        audio_data: audio_data.as_ref(),
+        trim_start: options.trim_start,
+        cancel: &cancel,
+    };
+
+    for (effect_idx, call) in stack.iter().enumerate() {
+        // Cancel is polled between effects, and per frame inside the two
+        // non-temporal branches of apply_effect_to_segment. It used to be
+        // read only inside the encoder's write loop -- the last 15% of an
+        // export -- so "Cancel" during decode or effects changed nothing but
+        // the status text.
+        if cancel.load(Ordering::Relaxed) {
+            return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
+        }
+        let effect = registry
+            .get(&call.effect_id)
+            .ok_or_else(|| format!("Effect '{}' not found", call.effect_id))?;
+        tracing::debug!(
+            "Export effect {}/{}: {} (temporal={})",
+            effect_idx + 1,
+            stack.len(),
+            call.effect_id,
+            effect.is_temporal()
+        );
+
+        apply_effect_to_segment(effect, call, &mut segment, &ctx, effect_idx, stack.len())?;
+
+        tracing::debug!("Export effect {}/{} done", effect_idx + 1, stack.len());
+        let pct = 5 + ((effect_idx + 1) as f64 / stack.len() as f64 * 80.0) as u32;
+        let _ = app_handle.emit("export-progress", serde_json::json!({"stage": "effects", "progress": pct, "total": stack.len(), "current": effect_idx + 1}));
+    }
+    drop(registry);
+
+    encode_output(
+        &app_handle,
+        &segment,
+        &source_path,
+        &output_path,
+        &options,
+        &cancel,
+    )?;
+
+    Ok(output_path)
+}
+
+/// Shared inputs for `apply_effect_to_segment` that stay the same for every
+/// effect in the stack: the decode-time global mask, the audio bake, the
+/// trim in-point the transport-time math counts from, and the progress /
+/// cancel plumbing.
+struct EffectPassCtx<'a> {
+    app_handle: &'a tauri::AppHandle,
+    global_mask: Option<&'a Mask>,
+    audio_data: Option<&'a crate::audio::AudioBakeData>,
+    trim_start: Option<f64>,
+    cancel: &'a AtomicBool,
+}
+
+/// Plan the decode resolution against the adaptive memory budget, decode
+/// the source, and expand a still image into the requested frame count.
+///
+/// `options.processing_scale = None` means "auto" — the backend picks the
+/// largest resolution that fits. `Some(n)` means the user explicitly chose
+/// n px on the longest side.
+fn plan_and_decode(
+    app_handle: &tauri::AppHandle,
+    source_path: &str,
+    options: &ExportOptions,
+    cancel: &AtomicBool,
+) -> std::result::Result<VideoSegment, String> {
     // Plan the decode: pick a processing scale that fits the adaptive
     // memory budget. This runs BEFORE decode so we don't silently truncate.
-    // `processing_scale = None` means "auto" — the backend picks the
-    // largest resolution that fits. `Some(n)` means the user explicitly
-    // chose n px on the longest side.
     tracing::info!(
         "Planning export decode for source: {} (preferred scale: {:?})",
         source_path,
-        processing_scale
+        options.processing_scale
     );
     let _ = app_handle.emit(
         "export-progress",
@@ -1089,15 +1185,15 @@ fn export_video_blocking(
     // A still image is decoded as ONE frame and then multiplied to fill the
     // requested duration, so the memory plan has to be made against the count
     // it will become. See plan_decode_for_frames.
-    let still_target_frames = if crate::ffmpeg::probe_frame_count(&source_path).unwrap_or(0) <= 1 {
-        let n = (trim_end.unwrap_or(10.0).max(0.0) * fps.unwrap_or(30.0)).round();
+    let still_target_frames = if crate::ffmpeg::probe_frame_count(source_path).unwrap_or(0) <= 1 {
+        let n = (options.trim_end.unwrap_or(10.0).max(0.0) * options.fps.unwrap_or(30.0)).round();
         Some((n.max(1.0) as usize).min(MAX_EXPORT_FRAMES))
     } else {
         None
     };
     let (decode_scale, budget_bytes) = match still_target_frames {
-        Some(n) => crate::ffmpeg::plan_decode_for_frames(&source_path, processing_scale, n),
-        None => crate::ffmpeg::plan_decode(&source_path, processing_scale),
+        Some(n) => crate::ffmpeg::plan_decode_for_frames(source_path, options.processing_scale, n),
+        None => crate::ffmpeg::plan_decode(source_path, options.processing_scale),
     }
     .map_err(|e| e.to_string())?;
     let budget_mb = budget_bytes as f64 / (1024.0 * 1024.0);
@@ -1130,13 +1226,9 @@ fn export_video_blocking(
         "export-progress",
         serde_json::json!({"stage": "decoding", "progress": 0}),
     );
-    let mut segment = crate::ffmpeg::decode_video_cancellable(
-        &source_path,
-        None,
-        decode_scale,
-        Some(cancel.as_ref()),
-    )
-    .map_err(|e| e.to_string())?;
+    let mut segment =
+        crate::ffmpeg::decode_video_cancellable(source_path, None, decode_scale, Some(cancel))
+            .map_err(|e| e.to_string())?;
     tracing::info!(
         "Decoded {} frames, {}x{}, fps={}",
         segment.frames.len(),
@@ -1171,11 +1263,11 @@ fn export_video_blocking(
     // budget and logged a tracing::warn about it -- which no user ever sees, so
     // a five-minute source silently exported as four and the file just ended.
     if still_target_frames.is_none() {
-        let probed = crate::ffmpeg::probe_frame_count(&source_path).unwrap_or(0);
+        let probed = crate::ffmpeg::probe_frame_count(source_path).unwrap_or(0);
         let decoded = segment.frames.len();
         // 2% slack: the probe is duration x fps, which is an estimate.
         if probed > 0 && decoded > 0 && (decoded as f64) < (probed as f64) * 0.98 {
-            let secs = decoded as f64 / (segment.fps as f64).max(1.0);
+            let secs = decoded as f64 / segment.fps.max(1.0);
             let message = format!(
                 "This clip is too long to process at this resolution: exporting the \
                  first {:.0}s of it. Lower the processing resolution in Export \
@@ -1204,8 +1296,8 @@ fn export_video_blocking(
     // `vec![single; 300]` of a 48 MB frame is 14.6 GB, and a failed Rust
     // allocation ABORTS rather than panicking, so nothing reached the log.
     if segment.frames.len() == 1 {
-        let effective_fps = fps.unwrap_or(30.0);
-        let target_duration = trim_end.unwrap_or(10.0);
+        let effective_fps = options.fps.unwrap_or(30.0);
+        let target_duration = options.trim_end.unwrap_or(10.0);
         let requested_frames =
             ((target_duration * effective_fps).round().max(1.0) as usize).min(MAX_EXPORT_FRAMES);
         let frame_bytes = segment.frames[0].data.len().max(1);
@@ -1239,238 +1331,226 @@ fn export_video_blocking(
         }
     }
 
-    // Trim frames by in/out points (seconds)
-    if trim_start.is_some() || trim_end.is_some() {
-        let fps = segment.fps as f64;
-        let total_frames = segment.frames.len();
-        let start_frame = trim_start
-            .map(|s| (s.max(0.0) * fps).min(total_frames as f64) as usize)
-            .unwrap_or(0);
-        let end_frame = trim_end
-            .map(|e| (e.max(0.0) * fps).min(total_frames as f64) as usize)
-            .unwrap_or(total_frames)
-            .max(start_frame);
-        let frames = std::mem::take(&mut segment.frames);
-        segment.frames = frames
-            .into_iter()
-            .skip(start_frame)
-            .take(end_frame - start_frame)
-            .collect();
-        if segment.frames.is_empty() {
-            return Err("Trim range resulted in no frames".to_string());
-        }
+    Ok(segment)
+}
+
+/// Trim a decoded segment to the in/out points (seconds). Both `None` is a
+/// no-op; a range covering no frames is an error.
+fn apply_trim(
+    segment: &mut VideoSegment,
+    trim_start: Option<f64>,
+    trim_end: Option<f64>,
+) -> std::result::Result<(), String> {
+    if trim_start.is_none() && trim_end.is_none() {
+        return Ok(());
     }
+    let fps = segment.fps;
+    let total_frames = segment.frames.len();
+    let start_frame = trim_start
+        .map(|s| (s.max(0.0) * fps).min(total_frames as f64) as usize)
+        .unwrap_or(0);
+    let end_frame = trim_end
+        .map(|e| (e.max(0.0) * fps).min(total_frames as f64) as usize)
+        .unwrap_or(total_frames)
+        .max(start_frame);
+    let frames = std::mem::take(&mut segment.frames);
+    segment.frames = frames
+        .into_iter()
+        .skip(start_frame)
+        .take(end_frame - start_frame)
+        .collect();
+    if segment.frames.is_empty() {
+        return Err("Trim range resulted in no frames".to_string());
+    }
+    Ok(())
+}
 
-    // Resolution override is now handled by FFmpeg -vf scale in encode_video
+/// Build the parameter map for one frame at transport time `t`: copy the
+/// static params, stamp `time`, then overwrite animated parameters with
+/// their keyframed value at `t` and re-clamp -- a keyframe can name any
+/// value the user dragged to, inside or outside the declared range.
+fn frame_params_at(
+    effect: &dyn Effect,
+    params: &serde_json::Map<String, serde_json::Value>,
+    keyframes: Option<&std::collections::HashMap<String, Vec<KeyframePoint>>>,
+    t: f64,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut frame_params = params.clone();
+    frame_params.insert("time".to_string(), serde_json::Value::from(t));
+    if inject_keyframe_params(keyframes, &mut frame_params, t) {
+        frame_params = crate::effects::clamp_for_effect(effect, &frame_params);
+    }
+    frame_params
+}
 
-    let global_mask = decode_mask_b64(mask_b64.as_deref())?;
+/// Apply one effect call to the whole segment, in place.
+///
+/// Memory. Every branch below writes its result back into `segment` rather
+/// than building a second sequence beside it, and the mask is blended per
+/// frame against that frame's own previous contents. The old shape cloned
+/// the whole clip for the blend, collected a whole new clip per effect, and
+/// then blended the two -- three copies of the clip in flight for one
+/// masked effect, against a budget that only ever counted one. The temporal
+/// branch is the exception: a temporal effect returns an owned segment, so
+/// its input necessarily survives until the swap. That 2x is structural and
+/// PIPELINE_PEAK_COPIES in ffmpeg/mod.rs is what the memory plan divides by
+/// to allow for it.
+///
+/// On an Err the segment may be half-processed in place. Nothing reads it
+/// after that -- the export bails -- so do not add a retry on top.
+fn apply_effect_to_segment(
+    effect: &dyn Effect,
+    call: &EffectCall,
+    segment: &mut VideoSegment,
+    ctx: &EffectPassCtx<'_>,
+    effect_idx: usize,
+    stack_len: usize,
+) -> std::result::Result<(), String> {
+    // Clamp parameters to declared min/max before any processing.
+    let params = crate::effects::clamp_for_effect(effect, &call.params);
 
-    // Deserialize audio bake data if provided
-    let audio_data: Option<crate::audio::AudioBakeData> =
-        audio_bake_json.and_then(|json| serde_json::from_str(&json).ok());
+    // Per-effect mask overrides global mask
+    let per_effect_mask = if let Some(ref b64) = call.mask_b64 {
+        decode_mask_b64(Some(b64.as_str()))?
+    } else {
+        None
+    };
+    let active_mask = per_effect_mask.as_ref().or(ctx.global_mask);
 
-    // Apply the effect stack
-    tracing::info!("Applying {} effects for export", stack.len());
-    let _ = app_handle.emit(
-        "export-progress",
-        serde_json::json!({"stage": "effects", "progress": 5, "total": stack.len(), "current": 0}),
-    );
-    let registry = registry
-        .lock()
-        .map_err(|e| format!("registry lock poisoned: {e}"))?;
-    // Every per-frame time below goes through `export_frame_time`: the frames
-    // were trimmed above, so a frame's index in the segment is NOT its time on
-    // the transport. See that function for why it matters.
+    // Check if mask blending is needed (avoids expensive clone)
+    let blend_needed = needs_mask_blend(effect, active_mask);
+    let mode = call.mask_mode.as_deref().unwrap_or("inside");
 
-    for (effect_idx, call) in stack.iter().enumerate() {
-        // Cancel is polled between effects, and per frame inside the two
-        // non-temporal branches below. It used to be read only inside the
-        // encoder's write loop -- the last 15% of an export -- so "Cancel"
-        // during decode or effects changed nothing but the status text.
-        if cancel.load(Ordering::Relaxed) {
-            return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
+    // A temporal effect takes the whole segment through one
+    // `Effect::process_video` call with no cancel hook, so a cancel during
+    // it lands between effects: the pass runs to completion first. That
+    // is seconds to tens of seconds on a long clip, with the progress bar
+    // still. The UI says "Cancelling..." rather than "cancelled" for
+    // exactly this reason.
+    if effect.is_temporal() {
+        // Temporal effects: must use sequential process_video for cross-frame correctness.
+        // Per-frame audio injection is meaningless here -- the effect gets the
+        // whole segment at once -- so hand it the beat timeline instead, which
+        // is what lets a datamosh cut on the beat rather than on a clock.
+        let mut temporal_params = params.clone();
+        // A temporal effect is handed the whole segment at once, so it has
+        // no per-frame parameter hook. Animated parameters take their value
+        // at the START of the segment -- the in-point, not clip time 0 --
+        // rather than being ignored outright.
+        let segment_start = export_frame_time(ctx.trim_start, 0, segment.fps);
+        if inject_keyframe_params(call.keyframes.as_ref(), &mut temporal_params, segment_start) {
+            temporal_params = crate::effects::clamp_for_effect(effect, &temporal_params);
         }
-        let effect = registry
-            .get(&call.effect_id)
-            .ok_or_else(|| format!("Effect '{}' not found", call.effect_id))?;
-        tracing::debug!(
-            "Export effect {}/{}: {} (temporal={})",
-            effect_idx + 1,
-            stack.len(),
-            call.effect_id,
-            effect.is_temporal()
-        );
-
-        // Clamp parameters to declared min/max before any processing.
-        let params = crate::effects::clamp_for_effect(effect, &call.params);
-
-        // Per-effect mask overrides global mask
-        let per_effect_mask = if let Some(ref b64) = call.mask_b64 {
-            decode_mask_b64(Some(b64.as_str()))?
-        } else {
-            None
-        };
-        let active_mask = per_effect_mask.as_ref().or(global_mask.as_ref());
-
-        // Check if mask blending is needed (avoids expensive clone)
-        let needs_mask_blend = !effect.handles_masking() && active_mask.is_some();
-        let mode = call.mask_mode.as_deref().unwrap_or("inside");
-
-        // Memory. Every branch below writes its result back into `segment`
-        // rather than building a second sequence beside it, and the mask is
-        // blended per frame against that frame's own previous contents. The
-        // old shape cloned the whole clip for the blend, collected a whole new
-        // clip per effect, and then blended the two -- three copies of the
-        // clip in flight for one masked effect, against a budget that only
-        // ever counted one. The temporal branch is the exception: a temporal
-        // effect returns an owned segment, so its input necessarily survives
-        // until the swap. That 2x is structural and PIPELINE_PEAK_COPIES in
-        // ffmpeg/mod.rs is what the memory plan divides by to allow for it.
-        //
-        // On an Err the segment may be half-processed in place. Nothing reads
-        // it after that -- the export bails -- so do not add a retry on top.
-
-        // A temporal effect takes the whole segment through one
-        // `Effect::process_video` call with no cancel hook, so a cancel during
-        // it lands between effects: the pass runs to completion first. That
-        // is seconds to tens of seconds on a long clip, with the progress bar
-        // still. The UI says "Cancelling..." rather than "cancelled" for
-        // exactly this reason.
-        if effect.is_temporal() {
-            // Temporal effects: must use sequential process_video for cross-frame correctness.
-            // Per-frame audio injection is meaningless here -- the effect gets the
-            // whole segment at once -- so hand it the beat timeline instead, which
-            // is what lets a datamosh cut on the beat rather than on a clock.
-            let mut temporal_params = params.clone();
-            // A temporal effect is handed the whole segment at once, so it has
-            // no per-frame parameter hook. Animated parameters take their value
-            // at the START of the segment -- the in-point, not clip time 0 --
-            // rather than being ignored outright.
-            let segment_start = export_frame_time(trim_start, 0, segment.fps);
-            if inject_keyframe_params(call.keyframes.as_ref(), &mut temporal_params, segment_start)
-            {
-                temporal_params = crate::effects::clamp_for_effect(effect, &temporal_params);
-            }
-            if let Some(ref audio) = audio_data {
-                audio.inject_timeline_params(&mut temporal_params);
-            }
-            let processed = effect
-                .process_video(&segment, active_mask, &temporal_params)
-                .map_err(|e| e.to_string())?;
-            let previous = std::mem::replace(&mut segment, processed);
-            if needs_mask_blend {
-                if let Some(m) = active_mask {
-                    if previous.frames.len() == segment.frames.len() {
-                        blend_segment_against(
-                            &previous.frames,
-                            &mut segment.frames,
-                            m,
-                            mode,
-                            &cancel,
-                        )?;
-                    } else {
-                        // A frame-repeating datamosh returns more frames than it
-                        // was given, so there is no one-to-one "before" frame to
-                        // blend against. This used to index `prev[i]` past the
-                        // end and PANIC: every masked export with Frame Stutter
-                        // failed. Skipping the blend and saying so is the honest
-                        // result; zipping would blend the wrong frames and leave
-                        // the tail unmasked.
-                        let message = format!(
-                            "{} changes the clip length, so the mask could not be \
-                             applied to it. The effect still ran on the whole frame.",
-                            call.effect_id
-                        );
-                        tracing::warn!("{}", message);
-                        let pct = 5 + ((effect_idx + 1) as f64 / stack.len() as f64 * 80.0) as u32;
-                        let _ = app_handle.emit(
-                            "export-progress",
-                            serde_json::json!({
-                                "stage": "effects",
-                                "progress": pct,
-                                "warning": message
-                            }),
-                        );
-                    }
+        if let Some(audio) = ctx.audio_data {
+            audio.inject_timeline_params(&mut temporal_params);
+        }
+        let processed = effect
+            .process_video(segment, active_mask, &temporal_params)
+            .map_err(|e| e.to_string())?;
+        let previous = std::mem::replace(segment, processed);
+        if blend_needed {
+            if let Some(m) = active_mask {
+                if previous.frames.len() == segment.frames.len() {
+                    blend_segment_against(
+                        &previous.frames,
+                        &mut segment.frames,
+                        m,
+                        mode,
+                        ctx.cancel,
+                    )?;
+                } else {
+                    // A frame-repeating datamosh returns more frames than it
+                    // was given, so there is no one-to-one "before" frame to
+                    // blend against. This used to index `prev[i]` past the
+                    // end and PANIC: every masked export with Frame Stutter
+                    // failed. Skipping the blend and saying so is the honest
+                    // result; zipping would blend the wrong frames and leave
+                    // the tail unmasked.
+                    let message = format!(
+                        "{} changes the clip length, so the mask could not be \
+                         applied to it. The effect still ran on the whole frame.",
+                        call.effect_id
+                    );
+                    tracing::warn!("{}", message);
+                    let pct = 5 + ((effect_idx + 1) as f64 / stack_len as f64 * 80.0) as u32;
+                    let _ = ctx.app_handle.emit(
+                        "export-progress",
+                        serde_json::json!({
+                            "stage": "effects",
+                            "progress": pct,
+                            "warning": message
+                        }),
+                    );
                 }
             }
-            // `previous` drops here: the input copy is gone before the next effect.
-        } else if audio_data.is_none() {
-            // Non-temporal, no audio: parallelize frame processing with rayon,
-            // in place.
-            let mask_ref = active_mask;
-            let params_ref = &params;
-            let keyframes_ref = call.keyframes.as_ref();
-            let fps_val = segment.fps;
-            segment.frames.par_iter_mut().enumerate().try_for_each(
-                |(idx, frame)| -> std::result::Result<(), String> {
-                    if cancel.load(Ordering::Relaxed) {
-                        return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
-                    }
-                    let t = export_frame_time(trim_start, idx, fps_val);
-                    let mut frame_params = params_ref.clone();
-                    frame_params.insert("time".to_string(), serde_json::Value::from(t));
-                    // Re-clamp after injection: the clamp above ran on the static
-                    // map, and a keyframe can name any value the user dragged to.
-                    if inject_keyframe_params(keyframes_ref, &mut frame_params, t) {
-                        frame_params = crate::effects::clamp_for_effect(effect, &frame_params);
-                    }
-                    apply_frame_in_place(
-                        effect,
-                        frame,
-                        mask_ref,
-                        &frame_params,
-                        needs_mask_blend,
-                        mode,
-                    )
-                },
-            )?;
-        } else {
-            // Non-temporal with audio: sequential, because AudioBindingSmoother
-            // carries state from frame to frame. Still in place.
-            let fps_val = segment.fps;
-            let mut smoother = AudioBindingSmoother::default();
-            let dt = 1.0 / (fps_val as f64).max(1.0);
-            for (frame_idx, frame) in segment.frames.iter_mut().enumerate() {
-                if cancel.load(Ordering::Relaxed) {
+        }
+        // `previous` drops here: the input copy is gone before the next effect.
+    } else if ctx.audio_data.is_none() {
+        // Non-temporal, no audio: parallelize frame processing with rayon,
+        // in place.
+        let mask_ref = active_mask;
+        let params_ref = &params;
+        let keyframes_ref = call.keyframes.as_ref();
+        let fps_val = segment.fps;
+        segment.frames.par_iter_mut().enumerate().try_for_each(
+            |(idx, frame)| -> std::result::Result<(), String> {
+                if ctx.cancel.load(Ordering::Relaxed) {
                     return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
                 }
-                let t = export_frame_time(trim_start, frame_idx, fps_val);
-                let mut frame_params = params.clone();
-                frame_params.insert("time".to_string(), serde_json::Value::from(t));
-                if inject_keyframe_params(call.keyframes.as_ref(), &mut frame_params, t) {
+                let t = export_frame_time(ctx.trim_start, idx, fps_val);
+                let frame_params = frame_params_at(effect, params_ref, keyframes_ref, t);
+                apply_frame_in_place(effect, frame, mask_ref, &frame_params, blend_needed, mode)
+            },
+        )?;
+    } else {
+        // Non-temporal with audio: sequential, because AudioBindingSmoother
+        // carries state from frame to frame. Still in place.
+        let fps_val = segment.fps;
+        let mut smoother = AudioBindingSmoother::default();
+        let dt = 1.0 / fps_val.max(1.0);
+        for (frame_idx, frame) in segment.frames.iter_mut().enumerate() {
+            if ctx.cancel.load(Ordering::Relaxed) {
+                return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
+            }
+            let t = export_frame_time(ctx.trim_start, frame_idx, fps_val);
+            let mut frame_params = frame_params_at(effect, &params, call.keyframes.as_ref(), t);
+            if let Some(audio) = ctx.audio_data {
+                audio.inject_params_at_time(&mut frame_params, t);
+                // After the keyframes above: binding a parameter to audio is
+                // the more explicit instruction, so it wins when both name
+                // the same parameter.
+                if smoother.inject(
+                    call.audio_bindings.as_ref(),
+                    &mut frame_params,
+                    audio.frame_at_time(t),
+                    dt,
+                ) {
                     frame_params = crate::effects::clamp_for_effect(effect, &frame_params);
                 }
-                if let Some(ref audio) = audio_data {
-                    audio.inject_params_at_time(&mut frame_params, t);
-                    // After the keyframes above: binding a parameter to audio is
-                    // the more explicit instruction, so it wins when both name
-                    // the same parameter.
-                    if smoother.inject(
-                        call.audio_bindings.as_ref(),
-                        &mut frame_params,
-                        audio.frame_at_time(t),
-                        dt,
-                    ) {
-                        frame_params = crate::effects::clamp_for_effect(effect, &frame_params);
-                    }
-                }
-                apply_frame_in_place(
-                    effect,
-                    frame,
-                    active_mask,
-                    &frame_params,
-                    needs_mask_blend,
-                    mode,
-                )?;
             }
+            apply_frame_in_place(
+                effect,
+                frame,
+                active_mask,
+                &frame_params,
+                blend_needed,
+                mode,
+            )?;
         }
-
-        tracing::debug!("Export effect {}/{} done", effect_idx + 1, stack.len());
-        let pct = 5 + ((effect_idx + 1) as f64 / stack.len() as f64 * 80.0) as u32;
-        let _ = app_handle.emit("export-progress", serde_json::json!({"stage": "effects", "progress": pct, "total": stack.len(), "current": effect_idx + 1}));
     }
-    drop(registry);
+    Ok(())
+}
+
+/// Pick the codec, decide whether the source audio track gets muxed in, and
+/// run the final encode, emitting the encode and done progress events.
+fn encode_output(
+    app_handle: &tauri::AppHandle,
+    segment: &VideoSegment,
+    source_path: &str,
+    output_path: &str,
+    options: &ExportOptions,
+    cancel: &AtomicBool,
+) -> std::result::Result<(), String> {
     tracing::info!("All effects applied, proceeding to encode");
     let _ = app_handle.emit(
         "export-progress",
@@ -1478,8 +1558,8 @@ fn export_video_blocking(
     );
 
     // Determine codec: explicit codec > format-derived > default
-    let codec_str = codec.as_deref().unwrap_or({
-        match format.as_deref() {
+    let codec_str = options.codec.as_deref().unwrap_or({
+        match options.format.as_deref() {
             Some("webm") => "vp9",
             // gif / apng / webp / *_seq pick their own encoder in output_spec();
             // the value here is only a fallback for the video containers.
@@ -1494,36 +1574,35 @@ fn export_video_blocking(
     // and no combination of settings could produce reactive visuals *and* audio.
     // The bake drives per-frame effect params; this only decides whether a
     // second input is mapped in at encode time.
-    let effective_include_audio = include_audio.unwrap_or(false);
+    let effective_include_audio = options.include_audio.unwrap_or(false);
 
     // Cap a single encode at 30 minutes. This is generous for high-resolution
     // exports while preventing a hung FFmpeg process from blocking indefinitely.
     const ENCODE_TIMEOUT: Duration = Duration::from_secs(1800);
 
     encode_video(
-        &segment,
-        &output_path,
+        segment,
+        output_path,
         codec_str,
-        fps,
-        watermark.as_ref(),
-        Some(&source_path),
-        quality.as_deref(),
+        options.fps,
+        options.watermark.as_ref(),
+        Some(source_path),
+        options.quality.as_deref(),
         Some(effective_include_audio),
-        trim_start,
-        trim_end,
-        width,
-        height,
-        Some(cancel.as_ref()),
+        options.trim_start,
+        options.trim_end,
+        options.width,
+        options.height,
+        Some(cancel),
         Some(ENCODE_TIMEOUT),
-        format.as_deref(),
+        options.format.as_deref(),
     )
     .map_err(|e| e.to_string())?;
     let _ = app_handle.emit(
         "export-progress",
         serde_json::json!({"stage": "done", "progress": 100}),
     );
-
-    Ok(output_path)
+    Ok(())
 }
 
 /// Request cancellation of an in-progress export. The export polls this flag
@@ -4313,5 +4392,117 @@ mod in_place_mask_tests {
         let err = blend_segment_against(&previous, &mut frames, &mask, "inside", &cancel)
             .expect_err("a set cancel flag must abort");
         assert!(err.contains("cancelled"));
+    }
+}
+
+#[cfg(test)]
+mod export_pipeline_tests {
+    use super::*;
+
+    fn seg(n: usize, fps: f64) -> VideoSegment {
+        VideoSegment {
+            frames: (0..n)
+                .map(|_| Frame {
+                    width: 2,
+                    height: 2,
+                    data: vec![0u8; 16],
+                })
+                .collect(),
+            fps,
+        }
+    }
+
+    /// The filename suffix is an export option in disguise -- the Save dialog
+    /// can't carry an in/out range, so `name_trim_0.5-2.3.mp4` is how a
+    /// batch job says it. Explicit trim arguments must always win over it.
+    #[test]
+    fn filename_trim_range_parses_the_suffix() {
+        let close = |a: Option<f64>, b: Option<f64>| match (a, b) {
+            (Some(x), Some(y)) => (x - y).abs() < 1e-9,
+            (None, None) => true,
+            _ => false,
+        };
+
+        assert!(close(
+            filename_trim_range("out_trim_0.5-2.3.mp4").0,
+            Some(0.5)
+        ));
+        assert!(close(
+            filename_trim_range("out_trim_0.5-2.3.mp4").1,
+            Some(2.3)
+        ));
+        assert!(close(
+            filename_trim_range("C:/clips/name_trim_1-4.mp4").0,
+            Some(1.0)
+        ));
+        assert!(close(
+            filename_trim_range("C:/clips/name_trim_1-4.mp4").1,
+            Some(4.0)
+        ));
+
+        // No marker, or a malformed one: no range.
+        assert_eq!(filename_trim_range("plain.mp4"), (None, None));
+        assert_eq!(filename_trim_range("out_trim_1.mp4"), (None, None));
+        assert_eq!(filename_trim_range("out_trim_1-2-3.mp4"), (None, None));
+
+        // A side that fails to parse stays None while the other still applies.
+        assert_eq!(filename_trim_range("out_trim_abc-2.mp4"), (None, Some(2.0)));
+        assert_eq!(filename_trim_range("out_trim_1-xyz.mp4"), (Some(1.0), None));
+    }
+
+    /// An explicit in/out point beats the filename encoding, but a filename
+    /// fills in a range the caller left entirely unset.
+    #[test]
+    fn export_options_explicit_trim_wins_over_the_filename() {
+        let mut explicit = ExportOptions {
+            trim_start: Some(1.0),
+            trim_end: Some(3.0),
+            ..Default::default()
+        };
+        explicit.resolve_filename_trim("out_trim_9-9.mp4");
+        assert_eq!(explicit.trim_start, Some(1.0));
+        assert_eq!(explicit.trim_end, Some(3.0));
+
+        // Half-set is still "set": the filename must not fill in the other side.
+        let mut half = ExportOptions {
+            trim_start: Some(1.0),
+            ..Default::default()
+        };
+        half.resolve_filename_trim("out_trim_9-9.mp4");
+        assert_eq!(half.trim_start, Some(1.0));
+        assert_eq!(half.trim_end, None);
+
+        let mut unset = ExportOptions::default();
+        unset.resolve_filename_trim("out_trim_0.5-2.0.mp4");
+        assert_eq!(unset.trim_start, Some(0.5));
+        assert_eq!(unset.trim_end, Some(2.0));
+    }
+
+    /// Trimming drops frames outside the in/out points and, when the range
+    /// covers nothing, says so instead of handing the encoder an empty clip.
+    #[test]
+    fn apply_trim_slices_frames_and_rejects_an_empty_range() {
+        // 10 frames at 10 fps = 1 s; 0.2-0.5 s keeps frames 2..5.
+        let mut s = seg(10, 10.0);
+        apply_trim(&mut s, Some(0.2), Some(0.5)).expect("in-range trim");
+        assert_eq!(s.frames.len(), 3);
+
+        // Either side unset trims only the other edge.
+        let mut s = seg(10, 10.0);
+        apply_trim(&mut s, Some(0.8), None).expect("end-open trim");
+        assert_eq!(s.frames.len(), 2);
+        let mut s = seg(10, 10.0);
+        apply_trim(&mut s, None, Some(0.3)).expect("start-open trim");
+        assert_eq!(s.frames.len(), 3);
+
+        // No range at all is a no-op, not an error.
+        let mut s = seg(10, 10.0);
+        apply_trim(&mut s, None, None).expect("unset trim is a no-op");
+        assert_eq!(s.frames.len(), 10);
+
+        // A range past the end covers no frames -- error, don't encode air.
+        let mut s = seg(10, 10.0);
+        let err = apply_trim(&mut s, Some(5.0), Some(9.0)).expect_err("empty range must error");
+        assert!(err.contains("no frames"));
     }
 }
