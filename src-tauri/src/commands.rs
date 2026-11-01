@@ -90,10 +90,10 @@ impl Default for AppState {
 /// Lock a shared-state mutex, mapping a poisoned lock to `AppError` instead
 /// of panicking. `name` is the field label used in the message, e.g. "frame"
 /// produces "frame lock poisoned: ...".
-fn lock_state<T>(
-    mutex: &Mutex<T>,
+fn lock_state<'a, T>(
+    mutex: &'a Mutex<T>,
     name: &str,
-) -> crate::error::Result<std::sync::MutexGuard<'_, T>> {
+) -> crate::error::Result<std::sync::MutexGuard<'a, T>> {
     mutex
         .lock()
         .map_err(|e| AppError::LockPoisoned(format!("{name} lock poisoned: {e}")))
