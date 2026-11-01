@@ -425,23 +425,27 @@ export async function exportVideo(
   const resolvedFormat = options.outputPath
     ? options.format ?? null
     : formatFromPath(path, options.format) ?? null;
+  // The backend takes the required parameters positionally and the optional
+  // ones as one ExportOptions struct (`options` in the invoke).
   return invoke("export_video", {
     sourcePath,
     outputPath: path,
     stack,
-    maskB64: options.maskB64 ?? null,
-    codec: options.codec ?? null,
-    fps: options.fps ?? null,
-    width: options.width ?? null,
-    height: options.height ?? null,
-    audioBakeJson: options.audioBakeJson ?? null,
-    watermark: options.watermark ?? null,
-    trimStart: options.trimStart ?? null,
-    trimEnd: options.trimEnd ?? null,
-    format: resolvedFormat,
-    quality: options.quality ?? null,
-    includeAudio: options.includeAudio ?? null,
-    processingScale: options.processingScale ?? null,
+    options: {
+      maskB64: options.maskB64 ?? null,
+      codec: options.codec ?? null,
+      fps: options.fps ?? null,
+      width: options.width ?? null,
+      height: options.height ?? null,
+      audioBakeJson: options.audioBakeJson ?? null,
+      watermark: options.watermark ?? null,
+      trimStart: options.trimStart ?? null,
+      trimEnd: options.trimEnd ?? null,
+      format: resolvedFormat,
+      quality: options.quality ?? null,
+      includeAudio: options.includeAudio ?? null,
+      processingScale: options.processingScale ?? null,
+    },
   });
 }
 
