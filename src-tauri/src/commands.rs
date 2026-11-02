@@ -4412,6 +4412,6 @@ mod export_pipeline_tests {
         // A range past the end covers no frames -- error, don't encode air.
         let mut s = seg(10, 10.0);
         let err = apply_trim(&mut s, Some(5.0), Some(9.0)).expect_err("empty range must error");
-        assert!(err.contains("no frames"));
+        assert!(err.to_string().contains("no frames"));
     }
 }
