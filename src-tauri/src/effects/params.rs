@@ -108,6 +108,26 @@ pub fn clamp_for_effect(effect: &dyn Effect, params: &ParameterValues) -> Parame
     clamp_params(&effect.meta().id, params)
 }
 
+/// Read an integer-valued parameter (a count, interval or size), tolerating
+/// JSON floats.
+///
+/// `as_u64()` returns `None` for any float, and floats are what this pipeline
+/// produces: [`clamp_params`] rewrites an out-of-range value as an `f64`, and
+/// keyframes, audio bindings and wheel drags emit non-integral values. Reading
+/// with `as_u64()` silently dropped those and fell back to the default, so a
+/// clamped `30.0` came out as the default rather than the limit. This reads as
+/// `f64` and rounds instead, as `line_screen.rs` does.
+///
+/// Missing, non-numeric, non-finite and negative values fall back to `default`.
+pub fn usize_param(params: &ParameterValues, key: &str, default: usize) -> usize {
+    params
+        .get(key)
+        .and_then(Value::as_f64)
+        .filter(|v| v.is_finite() && *v >= 0.0)
+        .map(|v| v.round() as usize)
+        .unwrap_or(default)
+}
+
 fn clamp_value(v: &mut Value, min: f64, max: f64) {
     match v {
         Value::Number(n) => {
@@ -253,6 +273,42 @@ mod tests {
             Some("atkinson"),
             "a Select index must reach the effect as the option string it reads"
         );
+    }
+
+    #[test]
+    fn usize_param_reads_integers_as_before() {
+        let mut params = ParameterValues::new();
+        params.insert("n".to_string(), json!(12));
+        assert_eq!(usize_param(&params, "n", 8), 12);
+    }
+
+    #[test]
+    fn usize_param_honours_float_values() {
+        let mut params = ParameterValues::new();
+        for (v, want) in [(json!(30.0), 30), (json!(12.4), 12), (json!(12.6), 13)] {
+            params.insert("n".to_string(), v.clone());
+            assert_eq!(usize_param(&params, "n", 8), want, "{v}");
+        }
+    }
+
+    #[test]
+    fn usize_param_falls_back_to_default_for_unusable_values() {
+        let mut params = ParameterValues::new();
+        assert_eq!(usize_param(&params, "n", 8), 8, "missing");
+        for bad in [json!(-3), json!(-0.5), json!("12"), json!(null)] {
+            params.insert("n".to_string(), bad.clone());
+            assert_eq!(usize_param(&params, "n", 8), 8, "{bad}");
+        }
+    }
+
+    #[test]
+    fn usize_param_survives_clamping_for_a_real_effect() {
+        // clamp_params rewrites an out-of-range value as an f64; the effect must
+        // see the clamped limit, not its default.
+        let mut params = ParameterValues::new();
+        params.insert("drop_interval".to_string(), json!(40));
+        let out = clamp_params("datamoshing.profile_glitch", &params);
+        assert_eq!(usize_param(&out, "drop_interval", 8), 30);
     }
 
     #[test]
