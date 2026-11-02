@@ -376,7 +376,10 @@ function PreviewViewport({ isDropTarget = false }: Props) {
         const proxy = await generateProxy(path, 1280, 28);
         setProxyUrl(convertFileSrc(proxy));
       } catch (err) {
-        console.warn("[Preview] Proxy generation failed:", err);
+        logger.warn("proxy", "Proxy generation failed", {
+          err: String(err),
+          stack: err instanceof Error ? err.stack?.slice(0, 2000) : undefined,
+        });
         setProxyUrl(null);
       }
     } else {
@@ -413,7 +416,10 @@ function PreviewViewport({ isDropTarget = false }: Props) {
           setStatusMessage(`Loaded: ${file.name}`);
         } catch (err) {
           setStatusMessage(`Failed to load ${file.name}: ${err}`);
-          console.error("[html5-drop] error:", err);
+          logger.error("drag-drop", "Dropped-file load failed", {
+            err: String(err),
+            stack: err instanceof Error ? err.stack?.slice(0, 2000) : undefined,
+          });
         }
       }
     },
@@ -432,7 +438,10 @@ function PreviewViewport({ isDropTarget = false }: Props) {
         setStatusMessage("Open cancelled");
       }
     } catch (err) {
-      console.error("[PreviewViewport] handleClickOpen failed:", err);
+      logger.error("Preview", "handleClickOpen failed", {
+        err: String(err),
+        stack: err instanceof Error ? err.stack?.slice(0, 2000) : undefined,
+      });
       setStatusMessage(`Open error: ${err}`);
     }
   };
@@ -709,7 +718,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     try {
       const ctx = new WebGLContext(webglCanvasRef.current, {
         onContextLost: () => {
-          console.error("[Preview] WebGL context lost");
+          // The loss itself is already logged by WebGLContext.handleContextLost.
           setStatusMessage(
             "WebGL context lost — switched to CPU preview fallback"
           );
@@ -941,11 +950,14 @@ function PreviewViewport({ isDropTarget = false }: Props) {
           gl.bindFramebuffer(gl.FRAMEBUFFER, null);
           const err = gl.getError();
           if (err !== gl.NO_ERROR) {
-            console.error('[Preview] WebGL error after render:', err);
+            logger.error("Preview", "WebGL error after render", { err: String(err) });
           }
         }
       } catch (e) {
-        console.error('WebGL render failed:', e);
+        logger.error("Preview", "WebGL render failed", {
+          err: String(e),
+          stack: e instanceof Error ? e.stack?.slice(0, 2000) : undefined,
+        });
       } finally {
         isRendering = false;
         activeWebglRendersRef.current -= 1;
@@ -1052,7 +1064,10 @@ function PreviewViewport({ isDropTarget = false }: Props) {
         const result = await applyEffectStack(activeStack, null, scale);
         if (!cancelled && renderRevision === cpuRenderRevisionRef.current) state.setPreviewDataUrl(result);
       } catch (e) {
-        console.error('CPU preview render failed:', e);
+        logger.error("Preview", "CPU preview render failed", {
+          err: String(e),
+          stack: e instanceof Error ? e.stack?.slice(0, 2000) : undefined,
+        });
         if (!cancelled) {
           state.setStatusMessage(`Preview render failed: ${e}`);
         }
@@ -1107,7 +1122,10 @@ function PreviewViewport({ isDropTarget = false }: Props) {
           const result = await applyEffectStack(activeStack, null, 0.5); // Playing uses 0.5 for performance
           if (!cancelled && renderRevision === cpuRenderRevisionRef.current) s.setPreviewDataUrl(result);
         } catch (e) {
-          console.error('CPU preview render failed:', e);
+          logger.error("Preview", "CPU preview render failed", {
+            err: String(e),
+            stack: e instanceof Error ? e.stack?.slice(0, 2000) : undefined,
+          });
           if (!cancelled) {
             useAppStore.getState().setStatusMessage(`Preview render failed: ${e}`);
           }

@@ -2,6 +2,7 @@ import { LUTLoader } from "../lut/loader";
 import { FullscreenQuad } from "./FullscreenQuad";
 import { EffectShader, RenderPass } from "./types";
 import { WebGLContext } from "./WebGLContext";
+import { logger } from "../../utils/logger";
 
 const MASK_MODE_MAP: Record<string, number> = {
   inside: 0,
@@ -24,6 +25,9 @@ export class EffectChain {
   private maskTextureCache = new Map<string, WebGLTexture>();
   /** Labels already reported by `ckpt`, so a per-frame fault logs once. */
   private reportedGlFaults = new Set<string>();
+  /** Texture-load failures already logged, keyed on uniform+url: LUTLoader
+   * caches only successful loads, so a broken image rejects every frame. */
+  private reportedTextureErrors = new Set<string>();
   private static readonly MASK_CACHE_MAX = 8;
 
   constructor(ctx: WebGLContext, width: number, height: number) {
@@ -45,6 +49,7 @@ export class EffectChain {
     this.initialized = false;
     this.quad.reset();
     this.lutLoader.clearCache();
+    this.reportedTextureErrors.clear();
   }
 
   private async getMaskTexture(maskB64: string): Promise<WebGLTexture | null> {
@@ -154,7 +159,7 @@ export class EffectChain {
     shaders: Map<string, EffectShader>
   ) {
     if (this.gl.isContextLost()) {
-      console.warn("[EffectChain] render skipped: WebGL context lost");
+      logger.warn("EffectChain", "render skipped: WebGL context lost");
       return;
     }
 
@@ -218,7 +223,7 @@ export class EffectChain {
       const pass = expandedPasses[i];
       const shader = shaders.get(pass.shaderId);
       if (!shader) {
-        console.warn(`[EffectChain] Pass ${i}: shader "${pass.shaderId}" not found — skipping`);
+        logger.warn("EffectChain", `Pass ${i}: shader "${pass.shaderId}" not found — skipping`);
         continue;
       }
 
@@ -305,11 +310,21 @@ export class EffectChain {
               gl.bindTexture(gl.TEXTURE_2D, tex);
               gl.uniform1i(loc, unit);
             } catch (err) {
-              console.error(
-                `[EffectChain] texture for uniform "${name}" failed to load (${value}); ` +
-                  `rendering this pass without it`,
-                err
-              );
+              // Deduped like ckpt: one report per (uniform, url) per context
+              // lifetime, or playback with a broken LUT floods the app log.
+              const errorKey = `${name}:${value}`;
+              if (!this.reportedTextureErrors.has(errorKey)) {
+                this.reportedTextureErrors.add(errorKey);
+                logger.error(
+                  "EffectChain",
+                  `texture for uniform "${name}" failed to load (${value}); ` +
+                    `rendering this pass without it`,
+                  {
+                    err: String(err),
+                    stack: err instanceof Error ? err.stack?.slice(0, 2000) : undefined,
+                  }
+                );
+              }
               this.onTextureError?.(name, value, err);
             }
           }
@@ -403,7 +418,7 @@ export class EffectChain {
 
     // If no pass was rendered (all shaders missing), fall back to blit
     if (!renderedAnyPass) {
-      console.warn("[EffectChain] No passes were rendered — falling back to blit");
+      logger.warn("EffectChain", "No passes were rendered — falling back to blit");
       this.blit(sourceTexture);
     }
   }
@@ -449,8 +464,9 @@ export class EffectChain {
     if (this.reportedGlFaults.has(key)) return;
     this.reportedGlFaults.add(key);
     const name = names[err] ?? String(err);
-    console.error(
-      `[EffectChain] GL ${name} (${err}) at ${label} — reported once per chain; ` +
+    logger.error(
+      "EffectChain",
+      `GL ${name} (${err}) at ${label} — reported once per chain; ` +
         "later occurrences of this same label are suppressed."
     );
     // Surfaced to the UI as well: a console message cannot be read by someone

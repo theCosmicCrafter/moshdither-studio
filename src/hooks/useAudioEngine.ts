@@ -5,6 +5,7 @@ import { AudioParameterMapper } from "../engine/audio/AudioParameterMapper";
 import { audioChannelName, splitAudioChannelName } from "../engine/audio/channelName";
 import { AudioFeatureExtractor } from "../engine/audio/AudioFeatureExtractor";
 import { useAppStore } from "../store";
+import { logger } from "../utils/logger";
 import type { FrameAudioFeatures, ManifestFrame } from "../engine/audio/types";
 
 /**
@@ -258,7 +259,10 @@ export function useAudioEngine() {
             // Load into manifest engine for playback
             await manifestEngine.loadFile(file, manifest);
           } catch (e) {
-            console.warn("Manifest analysis failed, falling back to live engine:", e);
+            logger.warn("audio", "Manifest analysis failed, falling back to live engine", {
+              err: String(e),
+              stack: e instanceof Error ? e.stack?.slice(0, 2000) : undefined,
+            });
             setAudioManifestProgress(0, "Analysis failed");
             // Fallback to live engine
             const engine = getEngine();
