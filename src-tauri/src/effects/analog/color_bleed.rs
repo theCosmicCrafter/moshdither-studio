@@ -46,10 +46,7 @@ impl Effect for ColorBleed {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let amount = params
-            .get("amount")
-            .and_then(crate::effects::params::as_uint)
-            .unwrap_or(self.amount as u64) as usize;
+        let amount = crate::effects::params::usize_param(params, "amount", self.amount as usize);
         let w = input.width as usize;
         let h = input.height as usize;
         let mut data = vec![0u8; input.data.len()];

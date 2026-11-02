@@ -74,18 +74,12 @@ impl Effect for RgbShift {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let r_shift = params
-            .get("r_shift")
-            .and_then(crate::effects::params::as_int)
-            .unwrap_or(self.r_shift as i64) as isize;
-        let g_shift = params
-            .get("g_shift")
-            .and_then(crate::effects::params::as_int)
-            .unwrap_or(self.g_shift as i64) as isize;
-        let b_shift = params
-            .get("b_shift")
-            .and_then(crate::effects::params::as_int)
-            .unwrap_or(self.b_shift as i64) as isize;
+        let r_shift =
+            crate::effects::params::i64_param(params, "r_shift", self.r_shift as i64) as isize;
+        let g_shift =
+            crate::effects::params::i64_param(params, "g_shift", self.g_shift as i64) as isize;
+        let b_shift =
+            crate::effects::params::i64_param(params, "b_shift", self.b_shift as i64) as isize;
         let w = input.width as usize;
         let h = input.height as usize;
         let mut data = vec![0u8; input.data.len()];

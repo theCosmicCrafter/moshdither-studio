@@ -85,10 +85,8 @@ impl Effect for ClassicDatamosh {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let chunk_size = params
-            .get("chunk_size")
-            .and_then(crate::effects::params::as_uint)
-            .unwrap_or(self.chunk_size as u64) as usize;
+        let chunk_size =
+            crate::effects::params::usize_param(params, "chunk_size", self.chunk_size as usize);
         let w = input.width as usize;
         let h = input.height as usize;
         let mut out = input.data.clone();

@@ -64,10 +64,7 @@ impl Effect for MotionTransfer {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let block_size = params
-            .get("block_size")
-            .and_then(crate::effects::params::as_uint)
-            .unwrap_or(16) as usize;
+        let block_size = crate::effects::params::usize_param(params, "block_size", 16);
         let strength = params
             .get("strength")
             .and_then(|v| v.as_f64())
@@ -87,10 +84,7 @@ impl Effect for MotionTransfer {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let block_size = params
-            .get("block_size")
-            .and_then(crate::effects::params::as_uint)
-            .unwrap_or(16) as usize;
+        let block_size = crate::effects::params::usize_param(params, "block_size", 16);
         let strength = params
             .get("strength")
             .and_then(|v| v.as_f64())

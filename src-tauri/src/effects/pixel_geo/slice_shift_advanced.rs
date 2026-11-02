@@ -106,28 +106,24 @@ impl Effect for SliceShiftAdvanced {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let min_slice_size = params
-            .get("min_slice_size")
-            .and_then(crate::effects::params::as_uint)
-            .unwrap_or(self.min_slice_size as u64) as usize;
-        let max_slice_size = params
-            .get("max_slice_size")
-            .and_then(crate::effects::params::as_uint)
-            .unwrap_or(self.max_slice_size as u64) as usize;
+        let min_slice_size = crate::effects::params::usize_param(
+            params,
+            "min_slice_size",
+            self.min_slice_size as usize,
+        );
+        let max_slice_size = crate::effects::params::usize_param(
+            params,
+            "max_slice_size",
+            self.max_slice_size as usize,
+        );
         let min_slice_size = min_slice_size.max(1);
         let max_slice_size = max_slice_size.max(min_slice_size);
-        let shift_amount = params
-            .get("shift_amount")
-            .and_then(crate::effects::params::as_int)
-            .unwrap_or(8) as isize;
+        let shift_amount = crate::effects::params::i64_param(params, "shift_amount", 8) as isize;
         let direction = params
             .get("direction")
             .and_then(|v| v.as_str())
             .unwrap_or("horizontal");
-        let repeat = params
-            .get("repeat")
-            .and_then(crate::effects::params::as_uint)
-            .unwrap_or(0) as usize;
+        let repeat = crate::effects::params::usize_param(params, "repeat", 0);
         let mirror = params
             .get("mirror")
             .and_then(|v| v.as_bool())

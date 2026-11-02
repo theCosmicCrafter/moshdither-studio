@@ -86,10 +86,8 @@ impl Effect for FractalNoise {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let octaves = params
-            .get("octaves")
-            .and_then(crate::effects::params::as_uint)
-            .unwrap_or(self.octaves as u64) as u32;
+        let octaves =
+            crate::effects::params::u64_param(params, "octaves", self.octaves as u64) as u32;
         let persistence = params
             .get("persistence")
             .and_then(|v| v.as_f64())

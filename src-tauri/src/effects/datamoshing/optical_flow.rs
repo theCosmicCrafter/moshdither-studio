@@ -98,10 +98,7 @@ impl Effect for OpticalFlow {
             .get("alpha")
             .and_then(|v| v.as_f64())
             .unwrap_or(self.alpha as f64) as f32;
-        let iterations = params
-            .get("iterations")
-            .and_then(crate::effects::params::as_uint)
-            .unwrap_or(self.iterations as u64) as usize;
+        let iterations = crate::effects::params::usize_param(params, "iterations", self.iterations);
         let warp_strength = params
             .get("warp_strength")
             .and_then(|v| v.as_f64())

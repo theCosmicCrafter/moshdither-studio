@@ -48,10 +48,8 @@ impl Effect for Kaleidoscope {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let segments = params
-            .get("segments")
-            .and_then(crate::effects::params::as_uint)
-            .unwrap_or(self.segments as u64) as u32;
+        let segments =
+            crate::effects::params::u64_param(params, "segments", self.segments as u64) as u32;
         let w = input.width as usize;
         let h = input.height as usize;
         let cx = w / 2;

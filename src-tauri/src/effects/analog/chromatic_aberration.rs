@@ -46,10 +46,7 @@ impl Effect for ChromaticAberration {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let shift = params
-            .get("shift")
-            .and_then(crate::effects::params::as_uint)
-            .unwrap_or(self.shift as u64) as usize;
+        let shift = crate::effects::params::usize_param(params, "shift", self.shift as usize);
         let w = input.width as usize;
         let h = input.height as usize;
         let mut data = vec![0u8; input.data.len()];

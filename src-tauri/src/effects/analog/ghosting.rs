@@ -66,10 +66,7 @@ impl Effect for Ghosting {
             .get("intensity")
             .and_then(|v| v.as_f64())
             .unwrap_or(self.intensity as f64) as f32;
-        let offset = params
-            .get("offset")
-            .and_then(crate::effects::params::as_uint)
-            .unwrap_or(self.offset as u64) as usize;
+        let offset = crate::effects::params::usize_param(params, "offset", self.offset as usize);
         let w = input.width as usize;
         let h = input.height as usize;
         let mut data = input.data.clone();

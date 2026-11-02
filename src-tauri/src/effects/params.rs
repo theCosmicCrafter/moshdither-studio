@@ -148,6 +148,33 @@ pub fn usize_param(params: &ParameterValues, key: &str, default: usize) -> usize
         .unwrap_or(default)
 }
 
+/// `u64`-typed counterpart of [`usize_param`], for call sites that need the
+/// value back as `u64` rather than `usize`.
+///
+/// Prefer this over `as_u64()` at the map level for the same reason as
+/// [`usize_param`]: float-tagged values from clamping, keyframes and audio
+/// bindings must not silently fall back to the default.
+pub fn u64_param(params: &ParameterValues, key: &str, default: u64) -> u64 {
+    params
+        .get(key)
+        .and_then(Value::as_f64)
+        .filter(|v| v.is_finite() && *v >= 0.0)
+        .map(|v| v.round() as u64)
+        .unwrap_or(default)
+}
+
+/// Signed counterpart of [`usize_param`], for offsets and deltas that may be
+/// negative (e.g. `rgb_shift` channel shifts). Missing, non-numeric and
+/// non-finite values fall back to `default`.
+pub fn i64_param(params: &ParameterValues, key: &str, default: i64) -> i64 {
+    params
+        .get(key)
+        .and_then(Value::as_f64)
+        .filter(|v| v.is_finite())
+        .map(|v| v.round() as i64)
+        .unwrap_or(default)
+}
+
 fn clamp_value(v: &mut Value, min: f64, max: f64) {
     match v {
         Value::Number(n) => {
@@ -330,6 +357,27 @@ mod tests {
             params.insert("n".to_string(), bad.clone());
             assert_eq!(usize_param(&params, "n", 8), 8, "{bad}");
         }
+    }
+
+    #[test]
+    fn u64_param_matches_usize_param_semantics() {
+        let mut params = ParameterValues::new();
+        params.insert("n".to_string(), json!(12.6));
+        assert_eq!(u64_param(&params, "n", 8), 13);
+        params.insert("n".to_string(), json!(-1));
+        assert_eq!(u64_param(&params, "n", 8), 8, "negative falls back");
+        assert_eq!(u64_param(&params, "missing", 8), 8, "missing falls back");
+    }
+
+    #[test]
+    fn i64_param_accepts_signed_values() {
+        let mut params = ParameterValues::new();
+        params.insert("n".to_string(), json!(-4));
+        assert_eq!(i64_param(&params, "n", 8), -4);
+        params.insert("n".to_string(), json!(-3.6));
+        assert_eq!(i64_param(&params, "n", 8), -4, "floats round");
+        params.insert("n".to_string(), json!("x"));
+        assert_eq!(i64_param(&params, "n", 8), 8, "non-numeric falls back");
     }
 
     #[test]

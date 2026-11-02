@@ -48,10 +48,8 @@ impl Effect for Pixelate {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let bs = params
-            .get("block_size")
-            .and_then(crate::effects::params::as_uint)
-            .unwrap_or(self.block_size as u64) as usize;
+        let bs =
+            crate::effects::params::usize_param(params, "block_size", self.block_size as usize);
         let w = input.width as usize;
         let h = input.height as usize;
         let mut data = input.data.clone();

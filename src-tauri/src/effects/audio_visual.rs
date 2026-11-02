@@ -369,11 +369,7 @@ impl Effect for AudioChromatic {
         params: &ParameterValues,
     ) -> Result<Frame> {
         let max_shift = f32_param(params, "max_shift", 12.0).clamp(0.0, 60.0);
-        let vertical = params
-            .get("direction")
-            .and_then(crate::effects::params::as_uint)
-            .unwrap_or(0)
-            == 1;
+        let vertical = crate::effects::params::u64_param(params, "direction", 0) == 1;
         let flux = audio_f32(params, "_audio_flux").clamp(0.0, 1.0);
         let shift = (flux * max_shift).round() as i64;
 

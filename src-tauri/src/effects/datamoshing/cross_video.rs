@@ -116,10 +116,7 @@ impl Effect for CrossVideoDatamosh {
         let validated_second_path =
             validate_io_path(second_path, true).map_err(crate::error::AppError::Generic)?;
 
-        let block_size = params
-            .get("block_size")
-            .and_then(crate::effects::params::as_uint)
-            .unwrap_or(16) as usize;
+        let block_size = crate::effects::params::usize_param(params, "block_size", 16);
 
         let strength = params
             .get("strength")

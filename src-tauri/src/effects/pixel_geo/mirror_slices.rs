@@ -48,10 +48,8 @@ impl Effect for MirrorSlices {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let slice_height = params
-            .get("slice_height")
-            .and_then(crate::effects::params::as_uint)
-            .unwrap_or(self.slice_height as u64) as usize;
+        let slice_height =
+            crate::effects::params::usize_param(params, "slice_height", self.slice_height as usize);
         let w = input.width as usize;
         let h = input.height as usize;
         let mut data = input.data.clone();

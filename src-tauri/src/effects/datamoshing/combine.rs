@@ -53,10 +53,7 @@ impl Effect for CombineDatamosh {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let stride = params
-            .get("stride")
-            .and_then(crate::effects::params::as_uint)
-            .unwrap_or(self.stride as u64) as usize;
+        let stride = crate::effects::params::usize_param(params, "stride", self.stride as usize);
         let w = input.width as usize;
         let h = input.height as usize;
         let mut out = input.data.clone();
@@ -83,10 +80,7 @@ impl Effect for CombineDatamosh {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let stride = params
-            .get("stride")
-            .and_then(crate::effects::params::as_uint)
-            .unwrap_or(self.stride as u64) as usize;
+        let stride = crate::effects::params::usize_param(params, "stride", self.stride as usize);
         let mut frames = Vec::new();
         let n = input.frames.len();
 

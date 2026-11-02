@@ -50,10 +50,7 @@ impl Effect for UniformNoise {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let range = params
-            .get("range")
-            .and_then(crate::effects::params::as_uint)
-            .unwrap_or(self.range as u64) as i16;
+        let range = crate::effects::params::u64_param(params, "range", self.range as u64) as i16;
         let time = params.get("time").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
         let mut data = input.data.clone();
         for (i, chunk) in data.as_chunks_mut::<4>().0.iter_mut().enumerate() {

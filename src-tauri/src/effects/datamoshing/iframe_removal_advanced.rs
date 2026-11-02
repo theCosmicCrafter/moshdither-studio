@@ -120,18 +120,9 @@ impl Effect for IFrameRemovalAdvanced {
             .and_then(|v| v.as_f64())
             .unwrap_or(30.0) as f32;
         let rate = params.get("rate").and_then(|v| v.as_f64()).unwrap_or(0.3) as f32;
-        let start_frame = params
-            .get("start_frame")
-            .and_then(crate::effects::params::as_uint)
-            .unwrap_or(0) as usize;
-        let end_frame = params
-            .get("end_frame")
-            .and_then(crate::effects::params::as_uint)
-            .unwrap_or(100) as usize;
-        let frame_number = params
-            .get("frame_number")
-            .and_then(crate::effects::params::as_uint)
-            .unwrap_or(0) as usize;
+        let start_frame = crate::effects::params::usize_param(params, "start_frame", 0);
+        let end_frame = crate::effects::params::usize_param(params, "end_frame", 100);
+        let frame_number = crate::effects::params::usize_param(params, "frame_number", 0);
 
         let Some(first) = input.frames.first() else {
             return Ok(VideoSegment {

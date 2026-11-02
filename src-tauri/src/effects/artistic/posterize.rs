@@ -48,10 +48,7 @@ impl Effect for Posterize {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let bits = params
-            .get("bits")
-            .and_then(crate::effects::params::as_uint)
-            .unwrap_or(self.bits as u64) as u8;
+        let bits = crate::effects::params::u64_param(params, "bits", self.bits as u64) as u8;
         let shift = 8 - bits;
         let mut data = input.data.clone();
         for chunk in data.as_chunks_mut::<4>().0.iter_mut() {
