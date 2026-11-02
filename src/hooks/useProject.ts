@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { readFile, writeFile } from "../lib/tauri";
 import { useCallback } from "react";
 import { useAppStore, type StackEntry } from "../store";
 import { logger } from "../utils/logger";
@@ -79,7 +79,7 @@ export function useProject() {
         };
 
         logger.log("SAVE", "Project object built, calling save_file...");
-        await invoke("save_file", { path, contents: JSON.stringify(project, null, 2) });
+        await writeFile(path, JSON.stringify(project, null, 2));
         logger.log("SAVE", "save_file succeeded");
         clearAutoSave();
         setStatusMessage(`Project saved: ${path}`);
@@ -101,7 +101,7 @@ export function useProject() {
       });
       if (!path || typeof path !== "string") return false;
 
-      const raw = await invoke<string>("read_file", { path });
+      const raw = await readFile(path);
 
       // Validate BEFORE touching the user's work.
       //

@@ -273,7 +273,7 @@ export default function AppLayout() {
     const setupDragDrop = async () => {
       try {
         // Guard: Tauri APIs are only available inside the desktop app
-        if (typeof globalThis !== "undefined" && !(globalThis as Record<string, unknown>).__TAURI_INTERNALS__) {
+        if (!isTauriAvailable()) {
           logger.log("drag-drop", "Running outside Tauri, skipping webview drag-drop");
           return;
         }

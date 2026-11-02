@@ -1,7 +1,7 @@
 import { useAppStore } from "../../store";
 import { LUT_PRESETS, loadCustomLUT } from "../../engine/lut/loader";
 import { open } from "@tauri-apps/plugin-dialog";
-import { invoke } from "@tauri-apps/api/core";
+import { prepareCustomLut } from "../../lib/tauri";
 import { isTauriAvailable } from "../../lib/browserFallback";
 
 export default function LUTPanel() {
@@ -34,7 +34,7 @@ export default function LUTPanel() {
     try {
       // Copy the user-selected LUT into the app's allowed temporary directory so
       // the webview can preview it through the asset protocol.
-      const preparedPath = (await invoke("prepare_custom_lut", { path: selected })) as string;
+      const preparedPath = await prepareCustomLut(selected);
       const { previewUrl, filePath } = await loadCustomLUT(preparedPath);
       addLUTEffect(previewUrl, filePath);
       setStatusMessage(`Custom LUT loaded: ${preparedPath.split(/[/\\]/).pop()}`);

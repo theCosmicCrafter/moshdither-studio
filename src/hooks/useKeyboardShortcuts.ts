@@ -4,6 +4,8 @@ import { useAppStore } from "../store";
 import { eventToKeyString, getAllBindings } from "../utils/keyboardShortcuts";
 import { getCommands } from "../utils/commands";
 import { formatTimecode } from "../utils/timecode";
+import { isTauriAvailable } from "../lib/browserFallback";
+import { logger } from "../utils/logger";
 import { useProject } from "./useProject";
 
 /**
@@ -323,23 +325,13 @@ export function useKeyboardShortcuts() {
     };
 
     const toggleFullscreen = async () => {
-      let appWindow: {
-        isFullscreen: () => Promise<boolean>;
-        setFullscreen: (v: boolean) => Promise<void>;
-      } | null = null;
-      if (
-        typeof globalThis !== "undefined" &&
-        (globalThis as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
-      ) {
-        try {
-          appWindow = getCurrentWindow();
-        } catch {
-          appWindow = null;
-        }
-      }
-      if (appWindow) {
+      if (!isTauriAvailable()) return;
+      try {
+        const appWindow = getCurrentWindow();
         const fs = await appWindow.isFullscreen();
         await appWindow.setFullscreen(!fs);
+      } catch (err) {
+        logger.warn("shortcuts", "toggle fullscreen failed", { error: String(err) });
       }
     };
 

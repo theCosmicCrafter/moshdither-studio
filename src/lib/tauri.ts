@@ -704,3 +704,32 @@ export async function installUpdate(): Promise<string> {
   if (!isTauriAvailable()) return "up to date";
   return invoke<string>("install_update");
 }
+
+// ── File IO ──────────────────────────────────────────────────
+
+/**
+ * Reads a UTF-8 file through the path-guarded backend reader. No Tauri
+ * guard on purpose: a silent no-op read would be indistinguishable from an
+ * empty file, so callers outside the shell should see invoke() reject.
+ */
+export async function readFile(path: string): Promise<string> {
+  return invoke<string>("read_file", { path });
+}
+
+/**
+ * Writes `contents` to `path` through the path-guarded backend writer.
+ * Deliberately unguarded for the same reason as {@link readFile} — a save
+ * that silently did nothing would report success while losing work.
+ */
+export async function writeFile(path: string, contents: string): Promise<void> {
+  await invoke("save_file", { path, contents });
+}
+
+/**
+ * Copies a user-picked LUT into the app's allowed temporary directory so the
+ * webview can preview it through the asset protocol. Returns the prepared
+ * path inside that directory.
+ */
+export async function prepareCustomLut(path: string): Promise<string> {
+  return invoke<string>("prepare_custom_lut", { path });
+}

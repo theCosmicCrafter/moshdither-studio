@@ -16,15 +16,15 @@ pub fn blend_mask(
     mode: &str,
 ) -> crate::error::Result<()> {
     if working.width != previous.width || working.height != previous.height {
-        return Err(crate::error::AppError::Generic(
+        return Err(crate::error::AppError::DimensionMismatch(
             "Cannot blend frames with mismatched dimensions".to_string(),
         ));
     }
 
     let expected_mask_pixels = (mask.width as u64).saturating_mul(mask.height as u64);
     if mask.data.is_empty() || mask.data.len() as u64 != expected_mask_pixels {
-        return Err(crate::error::AppError::Generic(format!(
-            "mask dimension mismatch: {}x{} expects {} pixels, got {}",
+        return Err(crate::error::AppError::DimensionMismatch(format!(
+            "{}x{} mask expects {} pixels, got {}",
             mask.width,
             mask.height,
             expected_mask_pixels,

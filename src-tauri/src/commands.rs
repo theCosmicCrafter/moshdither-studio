@@ -118,7 +118,9 @@ fn fit_to_preview_budget(frame: Frame) -> crate::error::Result<Frame> {
     let new_h = ((frame.height as f64 * scale) as u32).max(1);
     let img =
         image::RgbaImage::from_raw(frame.width, frame.height, frame.data).ok_or_else(|| {
-            crate::error::AppError::Generic("frame buffer does not match dimensions".to_string())
+            crate::error::AppError::DimensionMismatch(
+                "frame buffer does not match dimensions".to_string(),
+            )
         })?;
     let resized =
         image::imageops::resize(&img, new_w, new_h, image::imageops::FilterType::Triangle);

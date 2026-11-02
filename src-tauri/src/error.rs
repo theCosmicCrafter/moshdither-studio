@@ -42,6 +42,11 @@ pub enum AppError {
     #[error("Export queue error: {0}")]
     ExportQueue(#[from] tokio::sync::AcquireError),
 
+    /// A frame or mask arrived whose pixel count does not match its declared
+    /// dimensions, or two buffers that must be the same size are not.
+    #[error("dimension mismatch: {0}")]
+    DimensionMismatch(String),
+
     #[error("{0}")]
     Generic(String),
 }
