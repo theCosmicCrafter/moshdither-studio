@@ -2870,17 +2870,10 @@ fn run_cancellable(
             }
         })
     };
-    let join_readers = |stdout_thread: std::thread::JoinHandle<()>,
-                        stderr_thread: std::thread::JoinHandle<()>| {
-        let _ = stdout_thread.join();
-        let _ = stderr_thread.join();
-    };
-
     let started = std::time::Instant::now();
     let status = loop {
         if cancel.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            let _ = child.wait_timeout(Duration::from_secs(10));
+            crate::proc::kill_and_wait(&mut child);
             // Do NOT join the readers here. The job is dropped at `return`,
             // AFTER a join -- and the join cannot finish while a surviving
             // grandchild holds the inherited pipe handles. Joining first meant
@@ -2889,8 +2882,7 @@ fn run_cancellable(
             return Err("Cancelled by user".to_string());
         }
         if started.elapsed() > timeout {
-            let _ = child.kill();
-            let _ = child.wait_timeout(Duration::from_secs(10));
+            crate::proc::kill_and_wait(&mut child);
             // Do NOT join the readers here. The job is dropped at `return`,
             // AFTER a join -- and the join cannot finish while a surviving
             // grandchild holds the inherited pipe handles. Joining first meant
@@ -2902,7 +2894,7 @@ fn run_cancellable(
             Ok(status) => break status,
             Err(e) if e.kind() == ErrorKind::TimedOut => continue,
             Err(e) => {
-                let _ = child.kill();
+                crate::proc::kill_and_wait(&mut child);
                 // Do NOT join the readers here. The job is dropped at `return`,
                 // AFTER a join -- and the join cannot finish while a surviving
                 // grandchild holds the inherited pipe handles. Joining first meant
@@ -2913,7 +2905,7 @@ fn run_cancellable(
         }
     };
 
-    join_readers(stdout_thread, stderr_thread);
+    crate::proc::join_readers([stdout_thread, stderr_thread]);
     let stdout = stdout_buf.lock().map(|g| g.clone()).unwrap_or_default();
     let stderr = stderr_buf.lock().map(|g| g.clone()).unwrap_or_default();
     Ok(std::process::Output {

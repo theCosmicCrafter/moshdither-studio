@@ -39,6 +39,51 @@ pub fn command<S: AsRef<std::ffi::OsStr>>(program: S) -> Command {
     }
 }
 
+/// How long an abort path waits for a killed child to die before giving up
+/// on the reap. A killed process exits in milliseconds, so this is generous;
+/// what an abort path must never do is wait without a bound -- that is the
+/// same "await that never settles" defect the timeouts exist to prevent.
+const KILL_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Kill `child` and wait up to [`KILL_GRACE`] for it to die.
+///
+/// Both halves drop their results on purpose: `kill` fails only when the
+/// child has already exited, which is what the caller wanted anyway (the
+/// failure is still worth a debug note), and a timed-out wait leaves the
+/// caller free to report its own error.
+pub fn kill_and_wait(child: &mut std::process::Child) {
+    use child_wait_timeout::ChildWT;
+    if let Err(e) = child.kill() {
+        tracing::debug!("child.kill() failed -- already exited?: {e}");
+    }
+    let _ = child.wait_timeout(KILL_GRACE);
+}
+
+/// Join every pipe-draining reader thread, ignoring panics.
+///
+/// The caller must know the child's pipes will actually close: once the
+/// child is dead the readers' `read_to_end` returns and these joins cannot
+/// block, but a surviving grandchild that inherited the handles would hold
+/// them open forever (see `run_cancellable` in commands.rs, which relies on
+/// `KillJob` and deliberately does not join).
+pub fn join_readers(readers: impl IntoIterator<Item = std::thread::JoinHandle<()>>) {
+    for reader in readers {
+        let _ = reader.join();
+    }
+}
+
+/// The full abort ritual: [`kill_and_wait`], then [`join_readers`] so the
+/// reader threads' captured output lands in its buffers before the caller
+/// reads them. `stderr_thread.take()` passes zero or one handle;
+/// `[stdout_thread, stderr_thread]` passes both.
+pub fn kill_and_reap(
+    child: &mut std::process::Child,
+    readers: impl IntoIterator<Item = std::thread::JoinHandle<()>>,
+) {
+    kill_and_wait(child);
+    join_readers(readers);
+}
+
 /// A Windows Job Object that kills every process assigned to it when the
 /// job handle is closed -- i.e. when this value is dropped.
 ///

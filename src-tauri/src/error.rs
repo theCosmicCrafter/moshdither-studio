@@ -23,6 +23,12 @@ pub enum AppError {
     #[error("SAM3 timeout: {0}")]
     Sam3Timeout(String),
 
+    /// A user-initiated cancel. Not a failure -- the operation stopped on
+    /// purpose -- but the operation did not complete, so it still travels
+    /// the `Err` channel.
+    #[error("{0}")]
+    Cancelled(String),
+
     #[error("{0}")]
     Generic(String),
 }
