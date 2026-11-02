@@ -84,6 +84,26 @@ pub fn kill_and_reap(
     join_readers(readers);
 }
 
+/// [`kill_and_reap`] for a child that is probably already dying on its own
+/// (e.g. it closed a pipe the caller was writing to): give it up to
+/// [`KILL_GRACE`] to exit so its last words still reach the reader threads,
+/// kill it only if it outstays that, then [`join_readers`].
+///
+/// Use this over `kill_and_reap` when the caller goes on to report what the
+/// child wrote: `kill` first can cut a final stderr diagnosis off mid-write.
+pub fn wait_and_reap(
+    child: &mut std::process::Child,
+    readers: impl IntoIterator<Item = std::thread::JoinHandle<()>>,
+) {
+    use child_wait_timeout::ChildWT;
+    if let Err(e) = child.wait_timeout(KILL_GRACE) {
+        if e.kind() == std::io::ErrorKind::TimedOut {
+            kill_and_wait(child);
+        }
+    }
+    join_readers(readers);
+}
+
 /// A Windows Job Object that kills every process assigned to it when the
 /// job handle is closed -- i.e. when this value is dropped.
 ///

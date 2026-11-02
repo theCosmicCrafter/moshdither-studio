@@ -1487,7 +1487,10 @@ pub fn encode_video(
                 // The IO error is only ever "the pipe has been ended", which
                 // says nothing about the cause; FFmpeg's own diagnosis is
                 // sitting in `stderr_buf`. Surface that instead of the errno.
-                crate::proc::kill_and_reap(&mut child, stderr_thread.take());
+                // wait_and_reap, not kill_and_reap: FFmpeg may still be
+                // writing that diagnosis after closing stdin, so it gets a
+                // bounded grace to exit before any kill.
+                crate::proc::wait_and_reap(&mut child, stderr_thread.take());
                 let stderr = stderr_buf
                     .lock()
                     .map(|g| String::from_utf8_lossy(&g).into_owned())
