@@ -1384,8 +1384,7 @@ fn apply_effect_to_segment(
         if let Some(audio) = ctx.audio_data {
             audio.inject_timeline_params(&mut temporal_params);
         }
-        let processed = effect
-            .process_video(segment, active_mask, &temporal_params)?;
+        let processed = effect.process_video(segment, active_mask, &temporal_params)?;
         let previous = std::mem::replace(segment, processed);
         if blend_needed {
             if let Some(m) = active_mask {

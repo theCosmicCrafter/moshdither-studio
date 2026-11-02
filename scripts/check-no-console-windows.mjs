@@ -47,7 +47,11 @@ function walk(dir, out = []) {
         name === "node_modules" ||
         name === "__pycache__" ||
         name === "target" ||
-        name === "build"
+        name === "build" ||
+        // venvs are gitignored third-party installs, same category as
+        // node_modules and sam3_repo -- flagging their subprocess use
+        // reports other people's code as ours.
+        name === "venv"
       )
         continue;
       walk(p, out);
