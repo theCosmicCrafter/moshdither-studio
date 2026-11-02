@@ -1287,7 +1287,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     // remember to check.
     const paired = masks.map((m, i) => [m, scores[i]] as const).filter(([m]) => !!m);
     if (paired.length < masks.length) {
-      console.warn(
+      logger.warn(
+        "sam3",
         `setSam3Masks: dropped ${masks.length - paired.length} empty/invalid mask candidate(s) from SAM3 response`
       );
     }

@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import { useAppStore, type StackEntry, type KeyframeTrack, type AudioBinding } from "../store";
 import { loadMediaFromPath, loadMediaFromBase64 } from "../lib/tauri";
 import { migrateOverlayGuides } from "../utils/migrateOverlayGuides";
+import { logger } from "../utils/logger";
 
 const AUTO_SAVE_KEY = "moshdither_autosave_v1";
 const RECENT_PROJECTS_KEY = "moshdither_recent_projects_v1";
@@ -185,7 +186,7 @@ export function useProjectSession() {
           // while the preview stayed black, with no error anywhere.
           mediaRestored = onRefreshPreview ? await onRefreshPreview() : true;
         } catch (err) {
-          console.error("[useProjectSession] Failed to load media from filePath:", err);
+          logger.error("useProjectSession", "Failed to load media from filePath", { err: String(err) });
           // The file has moved or been deleted since the session was saved.
           // Drop the path: the base64 fallback below can still restore what the
           // preview shows, but EXPORT reads filePath, so leaving a dead one set
@@ -201,7 +202,7 @@ export function useProjectSession() {
           await loadMediaFromBase64(session.mediaDataUrl);
           mediaRestored = onRefreshPreview ? await onRefreshPreview() : true;
         } catch (err) {
-          console.error("[useProjectSession] Failed to load media from base64:", err);
+          logger.error("useProjectSession", "Failed to load media from base64", { err: String(err) });
         }
       }
 

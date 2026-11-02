@@ -2,6 +2,7 @@ import { LUTLoader } from "../lut/loader";
 import { FullscreenQuad } from "./FullscreenQuad";
 import { EffectShader, RenderPass } from "./types";
 import { WebGLContext } from "./WebGLContext";
+import { logger } from "../../utils/logger";
 
 const MASK_MODE_MAP: Record<string, number> = {
   inside: 0,
@@ -154,7 +155,7 @@ export class EffectChain {
     shaders: Map<string, EffectShader>
   ) {
     if (this.gl.isContextLost()) {
-      console.warn("[EffectChain] render skipped: WebGL context lost");
+      logger.warn("EffectChain", "render skipped: WebGL context lost");
       return;
     }
 
@@ -218,7 +219,7 @@ export class EffectChain {
       const pass = expandedPasses[i];
       const shader = shaders.get(pass.shaderId);
       if (!shader) {
-        console.warn(`[EffectChain] Pass ${i}: shader "${pass.shaderId}" not found — skipping`);
+        logger.warn("EffectChain", `Pass ${i}: shader "${pass.shaderId}" not found — skipping`);
         continue;
       }
 
@@ -305,10 +306,11 @@ export class EffectChain {
               gl.bindTexture(gl.TEXTURE_2D, tex);
               gl.uniform1i(loc, unit);
             } catch (err) {
-              console.error(
-                `[EffectChain] texture for uniform "${name}" failed to load (${value}); ` +
+              logger.error(
+                "EffectChain",
+                `texture for uniform "${name}" failed to load (${value}); ` +
                   `rendering this pass without it`,
-                err
+                { err: String(err) }
               );
               this.onTextureError?.(name, value, err);
             }
@@ -403,7 +405,7 @@ export class EffectChain {
 
     // If no pass was rendered (all shaders missing), fall back to blit
     if (!renderedAnyPass) {
-      console.warn("[EffectChain] No passes were rendered — falling back to blit");
+      logger.warn("EffectChain", "No passes were rendered — falling back to blit");
       this.blit(sourceTexture);
     }
   }
@@ -449,8 +451,9 @@ export class EffectChain {
     if (this.reportedGlFaults.has(key)) return;
     this.reportedGlFaults.add(key);
     const name = names[err] ?? String(err);
-    console.error(
-      `[EffectChain] GL ${name} (${err}) at ${label} — reported once per chain; ` +
+    logger.error(
+      "EffectChain",
+      `GL ${name} (${err}) at ${label} — reported once per chain; ` +
         "later occurrences of this same label are suppressed."
     );
     // Surfaced to the UI as well: a console message cannot be read by someone

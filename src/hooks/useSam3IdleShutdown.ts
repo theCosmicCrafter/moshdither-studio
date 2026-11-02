@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useAppStore } from "../store";
 import { sam3Shutdown } from "../lib/tauri";
+import { logger } from "../utils/logger";
 
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const CHECK_INTERVAL_MS = 30 * 1000; // 30 seconds
@@ -49,7 +50,7 @@ export function useSam3IdleShutdown() {
           setSam3Ready(false);
           setStatusMessage("SAM3 shut down after idle (RAM reclaimed)");
         } catch (e) {
-          console.warn("SAM3 idle shutdown failed:", e);
+          logger.warn("sam3", "SAM3 idle shutdown failed", { err: String(e) });
         }
       }
     }, CHECK_INTERVAL_MS);
