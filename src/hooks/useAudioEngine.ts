@@ -259,7 +259,10 @@ export function useAudioEngine() {
             // Load into manifest engine for playback
             await manifestEngine.loadFile(file, manifest);
           } catch (e) {
-            logger.warn("audio", "Manifest analysis failed, falling back to live engine", { err: String(e) });
+            logger.warn("audio", "Manifest analysis failed, falling back to live engine", {
+              err: String(e),
+              stack: e instanceof Error ? e.stack?.slice(0, 2000) : undefined,
+            });
             setAudioManifestProgress(0, "Analysis failed");
             // Fallback to live engine
             const engine = getEngine();

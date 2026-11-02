@@ -186,7 +186,10 @@ export function useProjectSession() {
           // while the preview stayed black, with no error anywhere.
           mediaRestored = onRefreshPreview ? await onRefreshPreview() : true;
         } catch (err) {
-          logger.error("useProjectSession", "Failed to load media from filePath", { err: String(err) });
+          logger.error("useProjectSession", "Failed to load media from filePath", {
+            err: String(err),
+            stack: err instanceof Error ? err.stack?.slice(0, 2000) : undefined,
+          });
           // The file has moved or been deleted since the session was saved.
           // Drop the path: the base64 fallback below can still restore what the
           // preview shows, but EXPORT reads filePath, so leaving a dead one set
@@ -202,7 +205,10 @@ export function useProjectSession() {
           await loadMediaFromBase64(session.mediaDataUrl);
           mediaRestored = onRefreshPreview ? await onRefreshPreview() : true;
         } catch (err) {
-          logger.error("useProjectSession", "Failed to load media from base64", { err: String(err) });
+          logger.error("useProjectSession", "Failed to load media from base64", {
+            err: String(err),
+            stack: err instanceof Error ? err.stack?.slice(0, 2000) : undefined,
+          });
         }
       }
 

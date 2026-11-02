@@ -50,7 +50,10 @@ export function useSam3IdleShutdown() {
           setSam3Ready(false);
           setStatusMessage("SAM3 shut down after idle (RAM reclaimed)");
         } catch (e) {
-          logger.warn("sam3", "SAM3 idle shutdown failed", { err: String(e) });
+          logger.warn("sam3", "SAM3 idle shutdown failed", {
+            err: String(e),
+            stack: e instanceof Error ? e.stack?.slice(0, 2000) : undefined,
+          });
         }
       }
     }, CHECK_INTERVAL_MS);

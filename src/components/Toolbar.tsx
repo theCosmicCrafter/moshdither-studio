@@ -114,7 +114,10 @@ export default function Toolbar({ onFileLoaded }: Props) {
         setPreviewDataUrl(original);
         setStatusMessage("Showing original");
       } catch (err) {
-        logger.error("Toolbar", "Failed to load original frame", { err: String(err) });
+        logger.error("Toolbar", "Failed to load original frame", {
+          err: String(err),
+          stack: err instanceof Error ? err.stack?.slice(0, 2000) : undefined,
+        });
       }
       return;
     }
@@ -184,7 +187,10 @@ export default function Toolbar({ onFileLoaded }: Props) {
           const meta = await getMediaMetadata(path);
           setMediaMetadata(meta);
         } catch (e) {
-          logger.warn("metadata", "Failed to load metadata", { err: String(e) });
+          logger.warn("metadata", "Failed to load metadata", {
+            err: String(e),
+            stack: e instanceof Error ? e.stack?.slice(0, 2000) : undefined,
+          });
         }
 
         const state = useAppStore.getState();
@@ -210,7 +216,10 @@ export default function Toolbar({ onFileLoaded }: Props) {
         setStatusMessage("Open cancelled");
       }
     } catch (err) {
-      logger.error("Toolbar", "handleOpen failed", { err: String(err) });
+      logger.error("Toolbar", "handleOpen failed", {
+        err: String(err),
+        stack: err instanceof Error ? err.stack?.slice(0, 2000) : undefined,
+      });
       setStatusMessage(`Open error: ${err}`);
     }
   };
@@ -243,13 +252,19 @@ export default function Toolbar({ onFileLoaded }: Props) {
       try {
         setMediaMetadata(await getMediaMetadata(stillPath));
       } catch (e) {
-        logger.warn("metadata", "Failed to load metadata for reverted still", { err: String(e) });
+        logger.warn("metadata", "Failed to load metadata for reverted still", {
+          err: String(e),
+          stack: e instanceof Error ? e.stack?.slice(0, 2000) : undefined,
+        });
       }
       if (useAppStore.getState().sam3Ready) {
         try {
           await sam3LoadImage(await getFrameData());
         } catch (e) {
-          logger.warn("sam3", "Failed to load reverted still into SAM3", { err: String(e) });
+          logger.warn("sam3", "Failed to load reverted still into SAM3", {
+            err: String(e),
+            stack: e instanceof Error ? e.stack?.slice(0, 2000) : undefined,
+          });
         }
       }
       setStatusMessage(
@@ -304,7 +319,10 @@ export default function Toolbar({ onFileLoaded }: Props) {
         const proxy = await generateProxy(videoPath, 1280, 28);
         setProxyUrl(convertFileSrc(proxy));
       } catch (e) {
-        logger.warn("proxy", "Proxy generation failed for animated video", { err: String(e) });
+        logger.warn("proxy", "Proxy generation failed for animated video", {
+          err: String(e),
+          stack: e instanceof Error ? e.stack?.slice(0, 2000) : undefined,
+        });
         setProxyUrl(null);
       }
 
@@ -317,7 +335,10 @@ export default function Toolbar({ onFileLoaded }: Props) {
           const b64 = await getFrameData();
           await sam3LoadImage(b64);
         } catch (e) {
-          logger.warn("sam3", "Failed to load animated frame into SAM3", { err: String(e) });
+          logger.warn("sam3", "Failed to load animated frame into SAM3", {
+            err: String(e),
+            stack: e instanceof Error ? e.stack?.slice(0, 2000) : undefined,
+          });
         }
       }
 
@@ -327,7 +348,10 @@ export default function Toolbar({ onFileLoaded }: Props) {
           : `Animated as video: ${videoPath} (preview sync pending)`
       );
     } catch (err) {
-      logger.error("Toolbar", "handleAnimateAsVideo failed", { err: String(err) });
+      logger.error("Toolbar", "handleAnimateAsVideo failed", {
+        err: String(err),
+        stack: err instanceof Error ? err.stack?.slice(0, 2000) : undefined,
+      });
       setStatusMessage(`Animate as Video failed: ${err}`);
     } finally {
       setIsProcessing(false);

@@ -25,6 +25,9 @@ export class EffectChain {
   private maskTextureCache = new Map<string, WebGLTexture>();
   /** Labels already reported by `ckpt`, so a per-frame fault logs once. */
   private reportedGlFaults = new Set<string>();
+  /** Texture-load failures already logged, keyed on uniform+url: LUTLoader
+   * caches only successful loads, so a broken image rejects every frame. */
+  private reportedTextureErrors = new Set<string>();
   private static readonly MASK_CACHE_MAX = 8;
 
   constructor(ctx: WebGLContext, width: number, height: number) {
@@ -46,6 +49,7 @@ export class EffectChain {
     this.initialized = false;
     this.quad.reset();
     this.lutLoader.clearCache();
+    this.reportedTextureErrors.clear();
   }
 
   private async getMaskTexture(maskB64: string): Promise<WebGLTexture | null> {
@@ -306,12 +310,21 @@ export class EffectChain {
               gl.bindTexture(gl.TEXTURE_2D, tex);
               gl.uniform1i(loc, unit);
             } catch (err) {
-              logger.error(
-                "EffectChain",
-                `texture for uniform "${name}" failed to load (${value}); ` +
-                  `rendering this pass without it`,
-                { err: String(err) }
-              );
+              // Deduped like ckpt: one report per (uniform, url) per context
+              // lifetime, or playback with a broken LUT floods the app log.
+              const errorKey = `${name}:${value}`;
+              if (!this.reportedTextureErrors.has(errorKey)) {
+                this.reportedTextureErrors.add(errorKey);
+                logger.error(
+                  "EffectChain",
+                  `texture for uniform "${name}" failed to load (${value}); ` +
+                    `rendering this pass without it`,
+                  {
+                    err: String(err),
+                    stack: err instanceof Error ? err.stack?.slice(0, 2000) : undefined,
+                  }
+                );
+              }
               this.onTextureError?.(name, value, err);
             }
           }

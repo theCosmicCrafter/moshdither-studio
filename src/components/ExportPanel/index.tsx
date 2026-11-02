@@ -368,7 +368,10 @@ export default function ExportPanel() {
     if (!exportIsRunning || exportCancelRequested) return;
     requestExportCancel();
     void cancelExport().catch((err) => {
-      logger.error("export", "Failed to cancel export on the backend", { err: String(err) });
+      logger.error("export", "Failed to cancel export on the backend", {
+        err: String(err),
+        stack: err instanceof Error ? err.stack?.slice(0, 2000) : undefined,
+      });
     });
     setStatusMessage("Cancelling… finishing the current step (a datamosh pass can take a while)");
   };
