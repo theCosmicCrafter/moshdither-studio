@@ -207,11 +207,18 @@ fn locate_binary(base: &str) -> Result<String> {
     Ok(base.to_string())
 }
 
-/// Locate the FFmpeg binary. Tries bundled sidecar first, then PATH.
-/// The error every NEW cancel site returns. The frontend branches on the
+/// The error every cancel site returns. The frontend branches on the
 /// store's cancel flag, never on this text, so it is free to stay terse.
+/// Plain-`String` error paths (commands.rs) use the constant directly.
 pub const EXPORT_CANCELLED: &str = "Export cancelled by user";
 
+/// `EXPORT_CANCELLED` as an `AppError`. Every `Result`-returning cancel
+/// path in this module returns exactly this -- one variant, one text.
+fn export_cancelled() -> AppError {
+    AppError::Cancelled(EXPORT_CANCELLED.to_string())
+}
+
+/// Locate the FFmpeg binary. Tries bundled sidecar first, then PATH.
 pub fn ffmpeg_binary() -> Result<String> {
     locate_binary("ffmpeg")
 }
@@ -1444,12 +1451,8 @@ pub fn encode_video(
                     tracing::info!("FFmpeg encode cancelled by user");
                     let _ = stdin.flush();
                     drop(stdin);
-                    let _ = child.kill();
-                    let _ = child.wait_timeout(std::time::Duration::from_secs(10));
-                    if let Some(t) = stderr_thread.take() {
-                        let _ = t.join();
-                    }
-                    return Err(AppError::Ffmpeg("Export cancelled by user".to_string()));
+                    crate::proc::kill_and_reap(&mut child, stderr_thread.take());
+                    return Err(export_cancelled());
                 }
             }
             if i % 50 == 0 || i == total - 1 {
@@ -1466,8 +1469,7 @@ pub fn encode_video(
             if frame.width != first_w || frame.height != first_h || frame.data.len() != expected {
                 let _ = stdin.flush();
                 drop(stdin);
-                let _ = child.kill();
-                let _ = child.wait();
+                crate::proc::kill_and_reap(&mut child, stderr_thread.take());
                 return Err(AppError::Ffmpeg(format!(
                     "Frame {} is {}x{} with {} bytes, but the encode was opened for                      {}x{} ({} bytes per frame). An effect changed the frame size                      mid-stream; FFmpeg cannot be re-sized once started.",
                     i + 1,
@@ -1485,11 +1487,10 @@ pub fn encode_video(
                 // The IO error is only ever "the pipe has been ended", which
                 // says nothing about the cause; FFmpeg's own diagnosis is
                 // sitting in `stderr_buf`. Surface that instead of the errno.
-                use child_wait_timeout::ChildWT;
-                let _ = child.wait_timeout(std::time::Duration::from_secs(10));
-                if let Some(t) = stderr_thread.take() {
-                    let _ = t.join();
-                }
+                // wait_and_reap, not kill_and_reap: FFmpeg may still be
+                // writing that diagnosis after closing stdin, so it gets a
+                // bounded grace to exit before any kill.
+                crate::proc::wait_and_reap(&mut child, stderr_thread.take());
                 let stderr = stderr_buf
                     .lock()
                     .map(|g| String::from_utf8_lossy(&g).into_owned())
@@ -1521,28 +1522,19 @@ pub fn encode_video(
                 "FFmpeg encode timed out after {:?}, killing process",
                 timeout
             );
-            let _ = child.kill();
-            let _ = child.wait_timeout(std::time::Duration::from_secs(10));
-            if let Some(t) = stderr_thread.take() {
-                let _ = t.join();
-            }
+            crate::proc::kill_and_reap(&mut child, stderr_thread.take());
             return Err(AppError::Ffmpeg(format!(
                 "FFmpeg encode timed out after {:?}",
                 timeout
             )));
         }
         Err(e) => {
-            let _ = child.kill();
-            if let Some(t) = stderr_thread.take() {
-                let _ = t.join();
-            }
+            crate::proc::kill_and_reap(&mut child, stderr_thread.take());
             return Err(AppError::Io(e));
         }
     };
 
-    if let Some(t) = stderr_thread.take() {
-        let _ = t.join();
-    }
+    crate::proc::join_readers(stderr_thread.take());
     let stderr_bytes = stderr_buf.lock().map(|g| g.clone()).unwrap_or_default();
     if !status.success() {
         let stderr = String::from_utf8_lossy(&stderr_bytes);
@@ -1618,7 +1610,7 @@ fn output_with_timeout_cancellable(
     let cancelled = || cancel.is_some_and(|c| c.load(Ordering::Relaxed));
     // Cheap, and it avoids launching an ffmpeg only to kill it.
     if cancelled() {
-        return Err(AppError::Generic(EXPORT_CANCELLED.to_string()));
+        return Err(export_cancelled());
     }
 
     let mut child = cmd
@@ -1662,12 +1654,6 @@ fn output_with_timeout_cancellable(
         })
     };
 
-    let join_readers = |stdout_thread: std::thread::JoinHandle<()>,
-                        stderr_thread: std::thread::JoinHandle<()>| {
-        let _ = stdout_thread.join();
-        let _ = stderr_thread.join();
-    };
-
     // Poll in short ticks so a cancel is noticed within ~100 ms, instead of
     // one wait for the whole timeout. The deadline message is kept
     // byte-identical to what it was; a test matches on "timed out".
@@ -1679,16 +1665,12 @@ fn output_with_timeout_cancellable(
             Err(e) if e.kind() == ErrorKind::TimedOut => {
                 if cancelled() {
                     tracing::info!("Cancel requested; killing child process");
-                    let _ = child.kill();
-                    let _ = child.wait_timeout(std::time::Duration::from_secs(10));
-                    join_readers(stdout_thread, stderr_thread);
-                    return Err(AppError::Generic(EXPORT_CANCELLED.to_string()));
+                    crate::proc::kill_and_reap(&mut child, [stdout_thread, stderr_thread]);
+                    return Err(export_cancelled());
                 }
                 if started.elapsed() > timeout {
                     tracing::warn!("Command timed out after {:?}, killing process", timeout);
-                    let _ = child.kill();
-                    let _ = child.wait_timeout(std::time::Duration::from_secs(10));
-                    join_readers(stdout_thread, stderr_thread);
+                    crate::proc::kill_and_reap(&mut child, [stdout_thread, stderr_thread]);
                     return Err(AppError::Ffmpeg(format!(
                         "Process timed out after {:?}",
                         timeout
@@ -1696,14 +1678,13 @@ fn output_with_timeout_cancellable(
                 }
             }
             Err(e) => {
-                let _ = child.kill();
-                join_readers(stdout_thread, stderr_thread);
+                crate::proc::kill_and_reap(&mut child, [stdout_thread, stderr_thread]);
                 return Err(AppError::Io(e));
             }
         }
     };
 
-    join_readers(stdout_thread, stderr_thread);
+    crate::proc::join_readers([stdout_thread, stderr_thread]);
     // Take, do not clone: the readers are joined, nobody else reads these
     // buffers, and a clone here was a transient second copy of the entire
     // raw decode.
