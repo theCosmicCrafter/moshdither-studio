@@ -462,6 +462,8 @@ export interface AppState {
   // Multi-mask actions
   setSam3Masks: (masks: string[], scores: number[]) => void;
   setSam3MaskIndex: (index: number) => void;
+  /** Replace the active SAM3 mask (e.g. with post-processed output), updating its candidate entry. */
+  replaceActiveSam3Mask: (maskB64: string) => void;
 
   // Proxy actions
   setProxyEnabled: (v: boolean) => void;
@@ -1307,6 +1309,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         sam3MaskIndex: safeIndex,
         activeMask: state.sam3Masks[safeIndex] ?? null,
+        maskRevision: state.maskRevision + 1,
+      };
+    }),
+  replaceActiveSam3Mask: (maskB64) =>
+    set((state) => {
+      const idx = state.sam3MaskIndex;
+      const inRange = idx >= 0 && idx < state.sam3Masks.length;
+      return {
+        sam3Masks: inRange
+          ? state.sam3Masks.map((m, i) => (i === idx ? maskB64 : m))
+          : state.sam3Masks,
+        activeMask: maskB64,
         maskRevision: state.maskRevision + 1,
       };
     }),
