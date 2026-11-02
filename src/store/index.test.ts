@@ -431,6 +431,31 @@ describe("Studio Store", () => {
       useAppStore.getState().setSam3MaskIndex(-5);
       expect(useAppStore.getState().sam3MaskIndex).toBe(0);
     });
+
+    it("replaceActiveSam3Mask swaps the indexed candidate, keeps index and scores, bumps maskRevision", () => {
+      // Post-process output replaces the active mask through the store so the
+      // activeMask => maskRevision contract (the CPU render signature's key)
+      // holds for it too.
+      useAppStore.getState().setSam3Masks(["m0", "m1", "m2"], [0.9, 0.8, 0.7]);
+      useAppStore.getState().setSam3MaskIndex(1);
+      const before = useAppStore.getState().maskRevision;
+      useAppStore.getState().replaceActiveSam3Mask("processed");
+      const s = useAppStore.getState();
+      expect(s.sam3Masks).toEqual(["m0", "processed", "m2"]);
+      expect(s.sam3MaskScores).toEqual([0.9, 0.8, 0.7]);
+      expect(s.sam3MaskIndex).toBe(1);
+      expect(s.activeMask).toBe("processed");
+      expect(s.maskRevision).toBe(before + 1);
+    });
+
+    it("replaceActiveSam3Mask with no candidate array only sets activeMask", () => {
+      const before = useAppStore.getState().maskRevision;
+      useAppStore.getState().replaceActiveSam3Mask("processed");
+      const s = useAppStore.getState();
+      expect(s.sam3Masks).toEqual([]);
+      expect(s.activeMask).toBe("processed");
+      expect(s.maskRevision).toBe(before + 1);
+    });
   });
 
   // ── SAM3 point prompts ─────────────────────────────────────
