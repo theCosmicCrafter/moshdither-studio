@@ -31,47 +31,22 @@ test.describe("Render Parity Auditor", () => {
     const canvas = page.locator("canvas").first();
     const cpuImg = page.locator('img[alt="Preview"]').first();
 
-    try {
-      if (await canvas.first().isVisible()) {
-        await canvas.first().screenshot({ path: webglPath });
-      } else {
-        fs.writeFileSync(
-          webglPath,
-          Buffer.from(
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
-            "base64"
-          )
-        );
-      }
+    // Comparing placeholder images would always "pass", so require real
+    // render targets and let every failure fail the test.
+    const haveRenders = (await canvas.isVisible()) && (await cpuImg.isVisible());
+    test.skip(
+      !haveRenders,
+      "WebGL canvas and CPU preview are not both rendered in this environment"
+    );
 
-      if (await cpuImg.first().isVisible()) {
-        await cpuImg.first().screenshot({ path: cpuPath });
-      } else {
-        fs.writeFileSync(
-          cpuPath,
-          Buffer.from(
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
-            "base64"
-          )
-        );
-      }
+    await canvas.screenshot({ path: webglPath });
+    await cpuImg.screenshot({ path: cpuPath });
 
-      // 3. Run the python parity auditor
-      const pythonScript = path.resolve(currentDir, "../../tools/render_parity_auditor.py");
-      console.log(`Running parity auditor...`);
-
-      const result = execSync(
-        `python "${pythonScript}" --webgl "${webglPath}" --cpu "${cpuPath}" --threshold 2.0`,
-        { encoding: "utf-8" }
-      );
-      console.log(result);
-
-      expect(result).toContain("PASS");
-    } catch (e) {
-      console.error("Parity audit execution failed:", e);
-      if (e.message && e.message.includes("FAIL")) {
-        throw e;
-      }
-    }
+    const pythonScript = path.resolve(currentDir, "../../tools/render_parity_auditor.py");
+    const result = execSync(
+      `python "${pythonScript}" --webgl "${webglPath}" --cpu "${cpuPath}" --threshold 2.0`,
+      { encoding: "utf-8" }
+    );
+    expect(result).toContain("PASS");
   });
 });

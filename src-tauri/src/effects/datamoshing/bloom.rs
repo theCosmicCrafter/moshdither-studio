@@ -140,7 +140,7 @@ impl Effect for BloomDatamosh {
     ) -> Result<Frame> {
         let bloom_size = params
             .get("bloom_size")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.bloom_size as u64) as usize;
         let mut out = input.data.clone();
         apply_bloom(
@@ -170,7 +170,7 @@ impl Effect for BloomDatamosh {
     ) -> Result<VideoSegment> {
         let bloom_size = params
             .get("bloom_size")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.bloom_size as u64) as usize;
         let mut frames = Vec::new();
 

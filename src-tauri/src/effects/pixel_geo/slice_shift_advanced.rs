@@ -108,23 +108,26 @@ impl Effect for SliceShiftAdvanced {
     ) -> Result<Frame> {
         let min_slice_size = params
             .get("min_slice_size")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.min_slice_size as u64) as usize;
         let max_slice_size = params
             .get("max_slice_size")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.max_slice_size as u64) as usize;
         let min_slice_size = min_slice_size.max(1);
         let max_slice_size = max_slice_size.max(min_slice_size);
         let shift_amount = params
             .get("shift_amount")
-            .and_then(|v| v.as_i64())
+            .and_then(crate::effects::params::as_int)
             .unwrap_or(8) as isize;
         let direction = params
             .get("direction")
             .and_then(|v| v.as_str())
             .unwrap_or("horizontal");
-        let repeat = params.get("repeat").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+        let repeat = params
+            .get("repeat")
+            .and_then(crate::effects::params::as_uint)
+            .unwrap_or(0) as usize;
         let mirror = params
             .get("mirror")
             .and_then(|v| v.as_bool())
@@ -137,6 +140,8 @@ impl Effect for SliceShiftAdvanced {
         let mut slice_idx = 0usize;
         let mut y = 0usize;
 
+        let shift_h = direction == "horizontal" || direction == "both";
+        let shift_v = direction == "vertical" || direction == "both";
         while y < h {
             // Variable slice size based on index
             let variability = slice_idx % 3;
@@ -148,20 +153,22 @@ impl Effect for SliceShiftAdvanced {
             if should_modify {
                 for row in y..(y + slice_height) {
                     for x in 0..w {
-                        if direction == "horizontal" || direction == "both" {
-                            let src_x =
-                                ((x as isize + shift_amount).rem_euclid(w as isize)) as usize;
-                            let src = (row * w + src_x) * 4;
-                            let dst = (row * w + x) * 4;
-                            data[dst..(4 + dst)].copy_from_slice(&input.data[src..(4 + src)]);
-                        }
-                        if direction == "vertical" || direction == "both" {
-                            let src_y =
-                                ((row as isize + shift_amount).rem_euclid(h as isize)) as usize;
-                            let src = (src_y * w + x) * 4;
-                            let dst = (row * w + x) * 4;
-                            data[dst..(4 + dst)].copy_from_slice(&input.data[src..(4 + src)]);
-                        }
+                        // "both" combines the two offsets into one diagonal
+                        // shift; separate writes would let vertical overwrite
+                        // horizontal.
+                        let src_x = if shift_h {
+                            ((x as isize + shift_amount).rem_euclid(w as isize)) as usize
+                        } else {
+                            x
+                        };
+                        let src_y = if shift_v {
+                            ((row as isize + shift_amount).rem_euclid(h as isize)) as usize
+                        } else {
+                            row
+                        };
+                        let src = (src_y * w + src_x) * 4;
+                        let dst = (row * w + x) * 4;
+                        data[dst..(4 + dst)].copy_from_slice(&input.data[src..(4 + src)]);
                     }
                     if mirror && slice_idx % 2 == 1 {
                         // Mirror the row horizontally
@@ -228,5 +235,26 @@ mod tests {
         // Output should be shifted horizontally by 1
         assert_eq!(r.data[0], f.data[4]);
         assert_eq!(r.data[4], f.data[8]);
+    }
+
+    #[test]
+    fn both_direction_applies_horizontal_and_vertical_shift() {
+        let (w, h) = (4usize, 2usize);
+        let data: Vec<u8> = (0..(w * h) as u8).flat_map(|i| [i, 0, 0, 255]).collect();
+        let f = Frame {
+            width: w as u32,
+            height: h as u32,
+            data,
+        };
+        let e = SliceShiftAdvanced::default();
+        let mut params = serde_json::Map::new();
+        params.insert("shift_amount".to_string(), json!(1));
+        params.insert("direction".to_string(), json!("both"));
+        params.insert("min_slice_size".to_string(), json!(2));
+        params.insert("max_slice_size".to_string(), json!(2));
+        params.insert("repeat".to_string(), json!(0));
+        let r = e.process_frame(&f, None, &params).unwrap();
+        // Pixel (0,0) must come from (1,1): shifted on both axes.
+        assert_eq!(r.data[0], f.data[(w + 1) * 4]);
     }
 }

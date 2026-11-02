@@ -100,7 +100,7 @@ impl Effect for OpticalFlow {
             .unwrap_or(self.alpha as f64) as f32;
         let iterations = params
             .get("iterations")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.iterations as u64) as usize;
         let warp_strength = params
             .get("warp_strength")

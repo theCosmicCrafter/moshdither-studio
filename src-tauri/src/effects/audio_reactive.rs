@@ -64,7 +64,7 @@ impl Effect for BassPulse {
             .unwrap_or(1.0) as f32;
         let block_size = params
             .get("block_size")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(16) as usize;
 
         let bass = audio_f32(params, "_audio_bass");
@@ -446,7 +446,7 @@ impl Effect for AudioDither {
             .unwrap_or(0.5) as f32;
         let levels = params
             .get("levels")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(4)
             .clamp(2, 16) as usize;
 

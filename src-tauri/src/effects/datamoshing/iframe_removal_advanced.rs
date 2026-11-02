@@ -122,15 +122,15 @@ impl Effect for IFrameRemovalAdvanced {
         let rate = params.get("rate").and_then(|v| v.as_f64()).unwrap_or(0.3) as f32;
         let start_frame = params
             .get("start_frame")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(0) as usize;
         let end_frame = params
             .get("end_frame")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(100) as usize;
         let frame_number = params
             .get("frame_number")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(0) as usize;
 
         let Some(first) = input.frames.first() else {

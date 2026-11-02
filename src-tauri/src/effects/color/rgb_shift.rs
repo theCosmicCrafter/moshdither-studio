@@ -76,15 +76,15 @@ impl Effect for RgbShift {
     ) -> Result<Frame> {
         let r_shift = params
             .get("r_shift")
-            .and_then(|v| v.as_i64())
+            .and_then(crate::effects::params::as_int)
             .unwrap_or(self.r_shift as i64) as isize;
         let g_shift = params
             .get("g_shift")
-            .and_then(|v| v.as_i64())
+            .and_then(crate::effects::params::as_int)
             .unwrap_or(self.g_shift as i64) as isize;
         let b_shift = params
             .get("b_shift")
-            .and_then(|v| v.as_i64())
+            .and_then(crate::effects::params::as_int)
             .unwrap_or(self.b_shift as i64) as isize;
         let w = input.width as usize;
         let h = input.height as usize;

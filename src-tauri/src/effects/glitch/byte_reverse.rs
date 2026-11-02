@@ -50,7 +50,7 @@ impl Effect for ByteReverse {
     ) -> Result<Frame> {
         let chunk_size = params
             .get("chunk_size")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.chunk_size as u64) as usize;
         let mut data = input.data.clone();
         for chunk in data.chunks_exact_mut(chunk_size) {

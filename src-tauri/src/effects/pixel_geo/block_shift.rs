@@ -68,11 +68,11 @@ impl Effect for BlockShift {
     ) -> Result<Frame> {
         let bs = params
             .get("block_size")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.block_size as u64) as usize;
         let max_shift = params
             .get("max_shift")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.max_shift as u64) as usize;
         let time = params.get("time").and_then(|v| v.as_f64()).unwrap_or(0.0) as usize;
         let w = input.width as usize;

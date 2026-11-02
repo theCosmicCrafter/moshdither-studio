@@ -1838,7 +1838,9 @@ pub fn sam3_clear(state: State<'_, AppState>) -> std::result::Result<String, Str
 pub fn sam3_shutdown(state: State<'_, AppState>) -> std::result::Result<String, String> {
     let mut sam3_lock = lock_sam3(&state)?;
     if let Some(engine) = sam3_lock.take() {
-        let _ = engine.shutdown();
+        engine
+            .shutdown()
+            .map_err(|e| format!("SAM3 shutdown failed: {e}"))?;
     }
     Ok("SAM3 engine shut down".into())
 }

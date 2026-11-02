@@ -288,7 +288,7 @@ impl Effect for Overlay {
             .unwrap_or(self.opacity as f64) as f32;
         let blend_mode = params
             .get("blend_mode")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.blend_mode as u64) as u32;
         let overlay_path = params
             .get("overlay_path")
@@ -320,7 +320,7 @@ impl Effect for Overlay {
             .unwrap_or(self.opacity as f64) as f32;
         let blend_mode = params
             .get("blend_mode")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.blend_mode as u64) as u32;
         let overlay_path = params
             .get("overlay_path")

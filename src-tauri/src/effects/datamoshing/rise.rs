@@ -99,7 +99,7 @@ impl Effect for RiseDatamosh {
     ) -> Result<VideoSegment> {
         let start_drop = params
             .get("start_drop")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.start_drop as u64) as usize;
         let total = input.frames.len();
         let mut frames = Vec::new();

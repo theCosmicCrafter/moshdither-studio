@@ -48,7 +48,7 @@ impl Effect for Solarize {
     ) -> Result<Frame> {
         let threshold = params
             .get("threshold")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.threshold as u64) as u8;
         let mut data = input.data.clone();
         for chunk in data.as_chunks_mut::<4>().0.iter_mut() {

@@ -193,7 +193,7 @@ impl Effect for JpegQuantize {
     ) -> Result<Frame> {
         let quality = params
             .get("quality")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.quality as u64)
             .clamp(1, 100) as u8;
 

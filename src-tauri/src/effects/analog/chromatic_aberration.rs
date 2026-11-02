@@ -48,7 +48,7 @@ impl Effect for ChromaticAberration {
     ) -> Result<Frame> {
         let shift = params
             .get("shift")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.shift as u64) as usize;
         let w = input.width as usize;
         let h = input.height as usize;

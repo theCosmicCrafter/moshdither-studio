@@ -50,7 +50,7 @@ impl Effect for Posterize {
     ) -> Result<Frame> {
         let bits = params
             .get("bits")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.bits as u64) as u8;
         let shift = 8 - bits;
         let mut data = input.data.clone();

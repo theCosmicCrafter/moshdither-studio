@@ -65,7 +65,7 @@ impl Effect for Scanlines {
     ) -> Result<Frame> {
         let gap = params
             .get("gap")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(self.gap as u64) as u32;
         let intensity = params
             .get("intensity")
