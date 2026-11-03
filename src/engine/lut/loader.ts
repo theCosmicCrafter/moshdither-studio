@@ -1,3 +1,4 @@
+import { logger } from "../../utils/logger";
 import { convertFileSrc } from "../../lib/tauri";
 import { cubeToFlatLutImageData, parseCubeLut } from "../../utils/parseLut";
 import { WebGLContext } from "../webgl2/WebGLContext";
@@ -113,9 +114,7 @@ export class LUTLoader {
 
     // Validate dimensions - must be 512x512 for 64^3 LUT
     if (img.width !== 512 || img.height !== 512) {
-      console.warn(
-        `LUT ${url} has unexpected dimensions: ${img.width}x${img.height}. Expected 512x512.`
-      );
+      logger.warn("lut", `LUT ${url} has unexpected dimensions: ${img.width}x${img.height}. Expected 512x512.`);
     }
 
     const tex = this.createTextureFromImage(img);

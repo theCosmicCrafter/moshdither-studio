@@ -7,6 +7,7 @@ import { stackToRustPayload } from "../../utils/effectConverter";
 import { useBatchQueue } from "../../hooks/useBatchQueue";
 import type { WatermarkSettings } from "../../utils/watermark";
 import { listen } from "@tauri-apps/api/event";
+import { logger } from "../../utils/logger";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import ChipButton from "./ChipButton";
 import LabeledSlider from "../LabeledSlider";
@@ -367,7 +368,7 @@ export default function ExportPanel() {
     if (!exportIsRunning || exportCancelRequested) return;
     requestExportCancel();
     void cancelExport().catch((err) => {
-      console.error("Failed to cancel export on the backend:", err);
+      logger.error("export", `Failed to cancel export on the backend:`, { error: String(err) });
     });
     setStatusMessage("Cancelling… finishing the current step (a datamosh pass can take a while)");
   };

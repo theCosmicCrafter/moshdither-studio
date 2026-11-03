@@ -567,7 +567,14 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "glitch.crc_mismatch": {
     shaderId: "slice_shift",
     paramMap: { scanline_interval: "sliceHeight", shift_amount: "amount" },
-    transform: (_k, v) => (typeof v === "number" ? v / 100 : 0.2),
+    // Key on the Rust param name: the shader's `amount` is normalized but
+    // `sliceHeight` is a pixel count — a blind /100 made every interval a
+    // sub-pixel slice and the effect invisible.
+    transform: (k, v) => {
+      const n = typeof v === "number" ? v : 0;
+      if (k === "shift_amount") return Math.min(1, n / 100);
+      return Math.max(1, n);
+    },
     // Mapped to slice_shift shader — completely different algorithm. Fake.
     accurate: false,
   },

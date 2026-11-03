@@ -99,9 +99,19 @@ export class WebGLContext {
     gl.bindAttribLocation(program, 0, "a_position");
     gl.bindAttribLocation(program, 1, "a_texCoord");
     gl.linkProgram(program);
+    // Once linked, the shader objects are dead weight until the program is
+    // deleted; on link failure everything leaked. Detach + delete either way.
+    gl.detachShader(program, vs);
+    gl.detachShader(program, fs);
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      throw new Error(`Program link error: ${gl.getProgramInfoLog(program)}`);
+      const info = gl.getProgramInfoLog(program);
+      gl.deleteProgram(program);
+      throw new Error(`Program link error: ${info}`);
     }
+    const old = this.programs.get(name);
+    if (old) gl.deleteProgram(old);
     this.programs.set(name, program);
     return program;
   }
@@ -127,6 +137,9 @@ export class WebGLContext {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.bindTexture(gl.TEXTURE_2D, null);
+    // A named slot overwrite would otherwise drop the old texture live.
+    const old = this.textures.get(name);
+    if (old) gl.deleteTexture(old);
     this.textures.set(name, tex);
     return tex;
   }
@@ -145,6 +158,8 @@ export class WebGLContext {
       throw new Error("Framebuffer incomplete");
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    const old = this.framebuffers.get(name);
+    if (old) gl.deleteFramebuffer(old);
     this.framebuffers.set(name, fb);
     return fb;
   }

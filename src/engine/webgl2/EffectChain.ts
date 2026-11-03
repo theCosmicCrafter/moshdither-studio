@@ -1,3 +1,4 @@
+import { logger } from "../../utils/logger";
 import { LUTLoader } from "../lut/loader";
 import { FullscreenQuad } from "./FullscreenQuad";
 import { EffectShader, RenderPass } from "./types";
@@ -127,14 +128,18 @@ export class EffectChain {
     }
   }
 
-  private ensurePingPongTextures(w: number, h: number) {
-    if (this.initialized) return;
+  private createPingPongTextures(w: number, h: number) {
     this.ctx.createTexture("fbo_a", w, h);
     this.ctx.createTexture("fbo_b", w, h);
     this.ctx.createTexture("fbo_c", w, h);
     this.ctx.createFramebuffer("fb_a", this.ctx.getTexture("fbo_a")!);
     this.ctx.createFramebuffer("fb_b", this.ctx.getTexture("fbo_b")!);
     this.ctx.createFramebuffer("fb_c", this.ctx.getTexture("fbo_c")!);
+  }
+
+  private ensurePingPongTextures(w: number, h: number) {
+    if (this.initialized) return;
+    this.createPingPongTextures(w, h);
     this.initialized = true;
   }
 
@@ -154,7 +159,7 @@ export class EffectChain {
     shaders: Map<string, EffectShader>
   ) {
     if (this.gl.isContextLost()) {
-      console.warn("[EffectChain] render skipped: WebGL context lost");
+      logger.warn("effectchain", `render skipped: WebGL context lost`);
       return;
     }
 
@@ -218,7 +223,7 @@ export class EffectChain {
       const pass = expandedPasses[i];
       const shader = shaders.get(pass.shaderId);
       if (!shader) {
-        console.warn(`[EffectChain] Pass ${i}: shader "${pass.shaderId}" not found — skipping`);
+        logger.warn("effectchain", `Pass ${i}: shader "${pass.shaderId}" not found — skipping`);
         continue;
       }
 
@@ -305,11 +310,7 @@ export class EffectChain {
               gl.bindTexture(gl.TEXTURE_2D, tex);
               gl.uniform1i(loc, unit);
             } catch (err) {
-              console.error(
-                `[EffectChain] texture for uniform "${name}" failed to load (${value}); ` +
-                  `rendering this pass without it`,
-                err
-              );
+              logger.error("effectchain", `texture for uniform "${name}" failed to load (${value}); `);
               this.onTextureError?.(name, value, err);
             }
           }
@@ -403,7 +404,7 @@ export class EffectChain {
 
     // If no pass was rendered (all shaders missing), fall back to blit
     if (!renderedAnyPass) {
-      console.warn("[EffectChain] No passes were rendered — falling back to blit");
+      logger.warn("effectchain", `No passes were rendered — falling back to blit`);
       this.blit(sourceTexture);
     }
   }
@@ -449,10 +450,7 @@ export class EffectChain {
     if (this.reportedGlFaults.has(key)) return;
     this.reportedGlFaults.add(key);
     const name = names[err] ?? String(err);
-    console.error(
-      `[EffectChain] GL ${name} (${err}) at ${label} — reported once per chain; ` +
-        "later occurrences of this same label are suppressed."
-    );
+    logger.error("effectchain", `GL ${name} (${err}) at ${label} — reported once per chain; `);
     // Surfaced to the UI as well: a console message cannot be read by someone
     // running the installed build, and this is the only signal that explains a
     // black preview.
@@ -497,27 +495,9 @@ export class EffectChain {
     this.width = width;
     this.height = height;
     if (this.initialized) {
-      // Delete old FBO textures and framebuffers before creating new ones
-      const gl = this.gl;
-      const oldTexA = this.ctx.getTexture("fbo_a");
-      const oldTexB = this.ctx.getTexture("fbo_b");
-      const oldTexC = this.ctx.getTexture("fbo_c");
-      const oldFbA = this.ctx.getFramebuffer("fb_a");
-      const oldFbB = this.ctx.getFramebuffer("fb_b");
-      const oldFbC = this.ctx.getFramebuffer("fb_c");
-      if (oldTexA) gl.deleteTexture(oldTexA);
-      if (oldTexB) gl.deleteTexture(oldTexB);
-      if (oldTexC) gl.deleteTexture(oldTexC);
-      if (oldFbA) gl.deleteFramebuffer(oldFbA);
-      if (oldFbB) gl.deleteFramebuffer(oldFbB);
-      if (oldFbC) gl.deleteFramebuffer(oldFbC);
-      // Recreate FBO textures at new size
-      this.ctx.createTexture("fbo_a", width, height);
-      this.ctx.createTexture("fbo_b", width, height);
-      this.ctx.createTexture("fbo_c", width, height);
-      this.ctx.createFramebuffer("fb_a", this.ctx.getTexture("fbo_a")!);
-      this.ctx.createFramebuffer("fb_b", this.ctx.getTexture("fbo_b")!);
-      this.ctx.createFramebuffer("fb_c", this.ctx.getTexture("fbo_c")!);
+      // createTexture/createFramebuffer already delete the object sitting in
+      // the named slot, so a resize is just the creation path again.
+      this.createPingPongTextures(width, height);
     }
   }
 
