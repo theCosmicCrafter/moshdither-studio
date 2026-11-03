@@ -46,6 +46,9 @@ export async function openPresetPanel(page: Page): Promise<Locator> {
   }
   await page.getByRole("tab", { name: "Presets" }).click();
   const panel = page.locator(".flexlayout__tab").filter({ has: page.getByLabel("Preset name") });
-  await expect(panel.getByLabel("Preset name")).toBeVisible();
+  // PresetPanel is a lazy chunk — a spec that reaches it before Vite has
+  // transformed it sees the Suspense "Loading..." fallback until the import
+  // resolves. 30s covers a cold fresh-server compile; warm runs resolve in ms.
+  await expect(panel.getByLabel("Preset name")).toBeVisible({ timeout: 30000 });
   return panel;
 }

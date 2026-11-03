@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
-import { openPresetPanel } from "./helpers";
+import { openApp, openPresetPanel } from "./helpers";
+import { tauriMockWithMediaScript } from "./mocks/tauri-mock-with-media";
 
 test.describe("UI Stress Testing", () => {
   // Every other E2E spec dismisses the onboarding modal before interacting
@@ -60,11 +61,20 @@ test.describe("UI Stress Testing", () => {
   });
 
   test("rapid preset loading does not flash original image", async ({ page }) => {
-    test.setTimeout(30000);
+    test.setTimeout(60000);
 
-    await page.goto("/");
-    await page
-      .waitForSelector("[data-testid='app-layout']", { state: "attached", timeout: 10000 });
+    // The "does not flash the original image" check needs a loaded image to
+    // exist -- without media there is no preview to revert to. This test
+    // drives the real open flow with the with-media mock, so the preview
+    // assertion afterwards is real.
+    await page.addInitScript(tauriMockWithMediaScript);
+    await openApp(page, "[data-testid='app-layout']");
+
+    await page.locator("header button:has-text('File')").click();
+    await page.locator("text=Open File").click();
+    await expect(
+      page.locator('[data-testid="preview-viewport"]').first()
+    ).toBeVisible({ timeout: 10000 });
 
     // Create two real presets through the Presets panel so there is
     // something to rapid-load. The old test queried `.preset-card` and
