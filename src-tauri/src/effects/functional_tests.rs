@@ -588,7 +588,7 @@ pub fn run_all_function_tests() -> FunctionTestReport {
 
     results.push(run_test("python_bridge_check", "ffglitch", || {
         // Check if Python is available
-        let result = std::process::Command::new("python")
+        let result = crate::proc::command("python")
             .arg("--version")
             .output();
         match result {
