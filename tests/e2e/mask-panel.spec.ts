@@ -1,22 +1,10 @@
 import { expect, test } from "@playwright/test";
 import { tauriMockScript } from "./mocks/tauri-mock";
+import { openApp } from "./helpers";
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(tauriMockScript);
-  await page.goto("/", { waitUntil: "domcontentloaded" });
-  await page.waitForSelector("header, [data-testid='toolbar']", { timeout: 15000 });
-  await page
-    .locator("text=Discard")
-    .click({ timeout: 2000 })
-    .catch(() => {});
-  await page
-    .locator("text=Skip")
-    .click({ timeout: 2000 })
-    .catch(() => {});
-  await page
-    .locator("text=Get Started")
-    .click({ timeout: 2000 })
-    .catch(() => {});
+  await openApp(page);
 });
 
 const GATE = "Load media to use SAM3 segmentation.";
@@ -40,10 +28,6 @@ test("mask panel replaces its prerequisite notice once media loads", async ({ pa
   });
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForSelector("header", { timeout: 15000 });
-  await page
-    .locator("text=Discard")
-    .click({ timeout: 2000 })
-    .catch(() => {});
 
   await page.getByRole("tab", { name: "Mask" }).click();
   await expect(page.getByText(GATE)).toBeVisible();
@@ -59,10 +43,6 @@ async function openMaskPanelWithMedia(page: import("@playwright/test").Page) {
   });
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForSelector("header", { timeout: 15000 });
-  await page
-    .locator("text=Discard")
-    .click({ timeout: 2000 })
-    .catch(() => {});
   await page.getByRole("tab", { name: "Mask" }).click();
   await loadMedia(page);
   const panel = page.locator(".flexlayout__tab").filter({ hasText: "SAM3" }).last();

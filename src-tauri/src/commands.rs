@@ -2882,7 +2882,12 @@ fn run_cancellable(
     poll_interval: Duration,
 ) -> std::result::Result<std::process::Output, String> {
     use child_wait_timeout::ChildWT;
-    use std::io::{ErrorKind, Read};
+    use std::io::ErrorKind;
+
+    if cancel.load(Ordering::Relaxed) {
+        // Cheap, and avoids launching the sidecar only to kill it.
+        return Err("Cancelled by user".to_string());
+    }
 
     let mut child = cmd
         .stdout(Stdio::piped())
@@ -2894,82 +2899,44 @@ fn run_cancellable(
     // dies when `_job` drops, i.e. on every return path below. See KillJob.
     let _job = crate::proc::KillJob::new().filter(|j| j.assign(&child));
 
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Failed to open child stdout".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "Failed to open child stderr".to_string())?;
-    let stdout_buf = Arc::new(Mutex::new(Vec::new()));
-    let stderr_buf = Arc::new(Mutex::new(Vec::new()));
-    let stdout_thread = {
-        let buf = Arc::clone(&stdout_buf);
-        std::thread::spawn(move || {
-            let mut reader = std::io::BufReader::new(stdout);
-            let mut data = Vec::new();
-            let _ = reader.read_to_end(&mut data);
-            if let Ok(mut guard) = buf.lock() {
-                *guard = data;
-            }
-        })
-    };
-    let stderr_thread = {
-        let buf = Arc::clone(&stderr_buf);
-        std::thread::spawn(move || {
-            let mut reader = std::io::BufReader::new(stderr);
-            let mut data = Vec::new();
-            let _ = reader.read_to_end(&mut data);
-            if let Ok(mut guard) = buf.lock() {
-                *guard = data;
-            }
-        })
-    };
-    let join_readers = |stdout_thread: std::thread::JoinHandle<()>,
-                        stderr_thread: std::thread::JoinHandle<()>| {
-        let _ = stdout_thread.join();
-        let _ = stderr_thread.join();
+    let (stdout_buf, stderr_buf, stdout_thread, stderr_thread) =
+        crate::proc::spawn_pipe_readers(&mut child).map_err(|e| e.to_string())?;
+
+    // Kill, then give the child a bounded window to die.
+    //
+    // Do NOT join the readers on a kill path: the job is dropped at `return`,
+    // AFTER a join -- and the join cannot finish while a surviving grandchild
+    // holds the inherited pipe handles. Joining first meant the tree died only
+    // when the orphan finished on its own. The JoinHandles detach at `return`
+    // instead. This is the opposite of ffmpeg's `kill_child_and_join`, which
+    // can join because its children spawn no pipe-holding grandchildren.
+    let kill_gracefully = |child: &mut std::process::Child| {
+        let _ = child.kill();
+        let _ = child.wait_timeout(Duration::from_secs(10));
     };
 
     let started = std::time::Instant::now();
     let status = loop {
         if cancel.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            let _ = child.wait_timeout(Duration::from_secs(10));
-            // Do NOT join the readers here. The job is dropped at `return`,
-            // AFTER a join -- and the join cannot finish while a surviving
-            // grandchild holds the inherited pipe handles. Joining first meant
-            // the tree died only when the orphan finished on its own. The
-            // JoinHandles detach at return instead.
+            kill_gracefully(&mut child);
             return Err("Cancelled by user".to_string());
         }
         if started.elapsed() > timeout {
-            let _ = child.kill();
-            let _ = child.wait_timeout(Duration::from_secs(10));
-            // Do NOT join the readers here. The job is dropped at `return`,
-            // AFTER a join -- and the join cannot finish while a surviving
-            // grandchild holds the inherited pipe handles. Joining first meant
-            // the tree died only when the orphan finished on its own. The
-            // JoinHandles detach at return instead.
+            kill_gracefully(&mut child);
             return Err(format!("Process timed out after {:?}", timeout));
         }
         match child.wait_timeout(poll_interval) {
             Ok(status) => break status,
             Err(e) if e.kind() == ErrorKind::TimedOut => continue,
             Err(e) => {
-                let _ = child.kill();
-                // Do NOT join the readers here. The job is dropped at `return`,
-                // AFTER a join -- and the join cannot finish while a surviving
-                // grandchild holds the inherited pipe handles. Joining first meant
-                // the tree died only when the orphan finished on its own. The
-                // JoinHandles detach at return instead.
+                kill_gracefully(&mut child);
                 return Err(format!("Failed to wait for process: {}", e));
             }
         }
     };
 
-    join_readers(stdout_thread, stderr_thread);
+    let _ = stdout_thread.join();
+    let _ = stderr_thread.join();
     let stdout = stdout_buf.lock().map(|g| g.clone()).unwrap_or_default();
     let stderr = stderr_buf.lock().map(|g| g.clone()).unwrap_or_default();
     Ok(std::process::Output {

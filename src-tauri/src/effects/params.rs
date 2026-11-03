@@ -148,6 +148,20 @@ pub fn usize_param(params: &ParameterValues, key: &str, default: usize) -> usize
         .unwrap_or(default)
 }
 
+/// The default an effect's parameter schema declares for `key`, as `f64`.
+///
+/// Effects whose only default lives in the schema should fall back to this
+/// instead of restating the literal at the read site -- restated literals
+/// drift from the UI's declared default (e.g. `vhs` had eight of them).
+/// Returns `None` when the schema does not declare `key`, which for a known
+/// parameter is a programming error the caller may safely `unwrap_or` over.
+pub fn schema_f64(meta: &super::types::EffectMeta, key: &str) -> Option<f64> {
+    meta.parameters
+        .iter()
+        .find(|p| p.id == key)
+        .and_then(|p| p.default.as_f64())
+}
+
 /// `u64`-typed counterpart of [`usize_param`], for call sites that need the
 /// value back as `u64` rather than `usize`.
 ///

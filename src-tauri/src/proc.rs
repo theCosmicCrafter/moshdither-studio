@@ -142,6 +142,59 @@ impl KillJob {
     }
 }
 
+/// Drain a spawned child's stdout and stderr on background threads into
+/// shared buffers.
+///
+/// Both cancellable subprocess paths (the ffmpeg encode/decode runner and
+/// the mosh-cli runner) poll `wait_timeout` while the child runs, so the
+/// pipes must be drained concurrently: reading on the caller's thread
+/// deadlocks once the ~64 KB pipe buffer fills, and `wait()` before reading
+/// deadlocks the other way.
+///
+/// Returns `(stdout_buf, stderr_buf, stdout_thread, stderr_thread)`. Whether
+/// the threads may be *joined* after a kill differs per call site -- ffmpeg's
+/// tree closes pipes with the direct child, while a mosh-cli grandchild can
+/// hold inherited handles open -- so joining stays the caller's decision.
+pub fn spawn_pipe_readers(
+    child: &mut std::process::Child,
+) -> std::io::Result<(
+    std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    std::thread::JoinHandle<()>,
+    std::thread::JoinHandle<()>,
+)> {
+    use std::io::Read;
+    use std::sync::{Arc, Mutex};
+
+    let missing = |name: &str| {
+        std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            format!("Failed to open child {}", name),
+        )
+    };
+    let stdout_pipe = child.stdout.take().ok_or_else(|| missing("stdout"))?;
+    let stderr_pipe = child.stderr.take().ok_or_else(|| missing("stderr"))?;
+
+    let stdout_buf = Arc::new(Mutex::new(Vec::new()));
+    let stderr_buf = Arc::new(Mutex::new(Vec::new()));
+    fn spawn_reader<R: Read + Send + 'static>(
+        pipe: R,
+        buf: Arc<Mutex<Vec<u8>>>,
+    ) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(pipe);
+            let mut data = Vec::new();
+            let _ = reader.read_to_end(&mut data);
+            if let Ok(mut guard) = buf.lock() {
+                *guard = data;
+            }
+        })
+    }
+    let stdout_thread = spawn_reader(stdout_pipe, Arc::clone(&stdout_buf));
+    let stderr_thread = spawn_reader(stderr_pipe, Arc::clone(&stderr_buf));
+    Ok((stdout_buf, stderr_buf, stdout_thread, stderr_thread))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

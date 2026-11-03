@@ -1613,7 +1613,7 @@ fn output_with_timeout_cancellable(
     cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<std::process::Output> {
     use child_wait_timeout::ChildWT;
-    use std::io::{ErrorKind, Read};
+    use std::io::ErrorKind;
     use std::sync::atomic::Ordering;
 
     let cancelled = || cancel.is_some_and(|c| c.load(Ordering::Relaxed));
@@ -1628,40 +1628,8 @@ fn output_with_timeout_cancellable(
         .spawn()
         .map_err(AppError::Io)?;
 
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| AppError::Ffmpeg("Failed to open child stdout".to_string()))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| AppError::Ffmpeg("Failed to open child stderr".to_string()))?;
-
-    let stdout_buf = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let stderr_buf = Arc::new(std::sync::Mutex::new(Vec::new()));
-
-    let stdout_thread = {
-        let buf = Arc::clone(&stdout_buf);
-        std::thread::spawn(move || {
-            let mut reader = std::io::BufReader::new(stdout);
-            let mut data = Vec::new();
-            let _ = reader.read_to_end(&mut data);
-            if let Ok(mut guard) = buf.lock() {
-                *guard = data;
-            }
-        })
-    };
-    let stderr_thread = {
-        let buf = Arc::clone(&stderr_buf);
-        std::thread::spawn(move || {
-            let mut reader = std::io::BufReader::new(stderr);
-            let mut data = Vec::new();
-            let _ = reader.read_to_end(&mut data);
-            if let Ok(mut guard) = buf.lock() {
-                *guard = data;
-            }
-        })
-    };
+    let (stdout_buf, stderr_buf, stdout_thread, stderr_thread) =
+        crate::proc::spawn_pipe_readers(&mut child).map_err(|e| AppError::Ffmpeg(e.to_string()))?;
 
     let join_readers = |stdout_thread: std::thread::JoinHandle<()>,
                         stderr_thread: std::thread::JoinHandle<()>| {

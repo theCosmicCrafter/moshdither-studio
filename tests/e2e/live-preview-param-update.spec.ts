@@ -3,6 +3,7 @@ import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
 import { tauriMockWithMediaScript } from "./mocks/tauri-mock-with-media";
+import { openApp } from "./helpers";
 
 // @ts-expect-error - import.meta.dirname may not be defined in all TS configs
 const currentDir = import.meta.dirname || __dirname;
@@ -23,20 +24,7 @@ test.beforeEach(async ({ page }) => {
       return original(command, args);
     };
   });
-  await page.goto("/", { waitUntil: "domcontentloaded" });
-  await page.waitForSelector("header, [data-testid='toolbar']", { timeout: 15000 });
-  await page
-    .locator("text=Discard")
-    .click({ timeout: 2000 })
-    .catch(() => {});
-  await page
-    .locator("text=Skip")
-    .click({ timeout: 2000 })
-    .catch(() => {});
-  await page
-    .locator("text=Get Started")
-    .click({ timeout: 2000 })
-    .catch(() => {});
+  await openApp(page);
 });
 
 // Regression test for a bug introduced by an earlier performance fix: the

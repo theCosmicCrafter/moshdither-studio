@@ -147,7 +147,7 @@ def log_resources():
                         p = psutil.Process(pid)
                         tauri_ram += p.memory_info().rss / (1024 * 1024)
                         tauri_vram += vram_map.get(pid, 0)
-                    except:
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                         pass
 
                 sam3_ram = 0
@@ -157,7 +157,7 @@ def log_resources():
                         p = psutil.Process(pid)
                         sam3_ram += p.memory_info().rss / (1024 * 1024)
                         sam3_vram += vram_map.get(pid, 0)
-                    except:
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                         pass
 
                 writer.writerow([

@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { openPresetPanel } from "./helpers";
 
 test.describe("UI Stress Testing", () => {
   // Every other E2E spec dismisses the onboarding modal before interacting
@@ -20,8 +21,7 @@ test.describe("UI Stress Testing", () => {
     await page.goto("/");
 
     await page
-      .waitForSelector(".app-container", { state: "attached", timeout: 10000 })
-      .catch(() => {});
+      .waitForSelector("[data-testid='app-layout']", { state: "attached", timeout: 10000 });
 
     const iterations = 50;
 
@@ -64,34 +64,20 @@ test.describe("UI Stress Testing", () => {
 
     await page.goto("/");
     await page
-      .waitForSelector(".app-container", { state: "attached", timeout: 10000 })
-      .catch(() => {});
+      .waitForSelector("[data-testid='app-layout']", { state: "attached", timeout: 10000 });
 
-    // Find preset buttons/cards in the preset panel
-    const presetButtons = await page.$$(
-      '[data-testid="preset-card"], .preset-card, button:has-text("Preset")'
-    );
-
-    if (presetButtons.length < 2) {
-      // If no presets visible, try opening the preset panel
-      const presetTab = page
-        .locator('button:has-text("Preset"), [data-panel-id="presets"]')
-        .first();
-      if (await presetTab.isVisible().catch(() => false)) {
-        await presetTab.click();
-        await page.waitForTimeout(500);
-      }
+    // Create two real presets through the Presets panel so there is
+    // something to rapid-load. The old test queried `.preset-card` and
+    // `[data-testid="preset-card"]` -- classes nothing renders -- then
+    // skipped itself, so it had never actually run.
+    const panel = await openPresetPanel(page);
+    for (const name of ["stress-a", "stress-b"]) {
+      await panel.getByLabel("Preset name").fill(name);
+      await panel.getByTitle("Save preset").click();
+      await expect(panel.locator(`[title='${name}']`)).toBeVisible();
     }
-
-    const presets = await page.$$(
-      '[data-testid="preset-card"], .preset-card, button:has-text("Preset")'
-    );
-    const presetCount = Math.min(presets.length, 10);
-
-    if (presetCount < 2) {
-      console.log("Not enough presets found for stress test — skipping");
-      return;
-    }
+    const presets = [panel.locator("[title='stress-a']"), panel.locator("[title='stress-b']")];
+    const presetCount = presets.length;
 
     // Rapidly load different presets
     for (let i = 0; i < 20; i++) {
@@ -127,8 +113,7 @@ test.describe("UI Stress Testing", () => {
 
     await page.goto("/");
     await page
-      .waitForSelector(".app-container", { state: "attached", timeout: 10000 })
-      .catch(() => {});
+      .waitForSelector("[data-testid='app-layout']", { state: "attached", timeout: 10000 });
 
     // Find all range sliders
     const sliders = await page.$$('input[type="range"]');
@@ -168,8 +153,7 @@ test.describe("UI Stress Testing", () => {
 
     await page.goto("/");
     await page
-      .waitForSelector(".app-container", { state: "attached", timeout: 10000 })
-      .catch(() => {});
+      .waitForSelector("[data-testid='app-layout']", { state: "attached", timeout: 10000 });
 
     // Find mask-related controls
     const maskSelects = await page.$$("select");
@@ -216,8 +200,7 @@ test.describe("UI Stress Testing", () => {
 
     await page.goto("/");
     await page
-      .waitForSelector(".app-container", { state: "attached", timeout: 10000 })
-      .catch(() => {});
+      .waitForSelector("[data-testid='app-layout']", { state: "attached", timeout: 10000 });
 
     // Combined stress: alternate between preset loads, slider scrubbing, and mask toggling
     for (let i = 0; i < 30; i++) {

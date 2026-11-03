@@ -147,16 +147,34 @@ impl Effect for VhsEffect {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
+        // Defaults for params without a struct field come from this effect's
+        // own schema rather than restated literals, so the UI's declared
+        // default and the engine's fallback cannot drift.
+        let meta = self.meta();
+        let sd = |key: &str| crate::effects::params::schema_f64(&meta, key).unwrap_or(0.0) as f32;
         let tracking = crate::effects::params::f32_param(params, "tracking", self.tracking);
         let noise = crate::effects::params::f32_param(params, "noise", self.noise);
-        let tracking_error = crate::effects::params::f32_param(params, "tracking_error", 0.1);
-        let scan_curve = crate::effects::params::f32_param(params, "scan_curve", 0.0);
-        let slice_size = crate::effects::params::usize_param(params, "slice_size", 8);
-        let glitch_prob = crate::effects::params::f32_param(params, "glitch_probability", 0.3);
-        let chroma_delay = crate::effects::params::f32_param(params, "chroma_delay", 0.0);
-        let chroma_bleed = crate::effects::params::f32_param(params, "chroma_bleed", 0.2);
-        let chroma_offset = crate::effects::params::f32_param(params, "chroma_offset", 0.0);
-        let head_switching = crate::effects::params::f32_param(params, "head_switching", 0.0);
+        let tracking_error =
+            crate::effects::params::f32_param(params, "tracking_error", sd("tracking_error"));
+        let scan_curve = crate::effects::params::f32_param(params, "scan_curve", sd("scan_curve"));
+        let slice_size = crate::effects::params::usize_param(
+            params,
+            "slice_size",
+            crate::effects::params::schema_f64(&meta, "slice_size").unwrap_or(0.0) as usize,
+        );
+        let glitch_prob = crate::effects::params::f32_param(
+            params,
+            "glitch_probability",
+            sd("glitch_probability"),
+        );
+        let chroma_delay =
+            crate::effects::params::f32_param(params, "chroma_delay", sd("chroma_delay"));
+        let chroma_bleed =
+            crate::effects::params::f32_param(params, "chroma_bleed", sd("chroma_bleed"));
+        let chroma_offset =
+            crate::effects::params::f32_param(params, "chroma_offset", sd("chroma_offset"));
+        let head_switching =
+            crate::effects::params::f32_param(params, "head_switching", sd("head_switching"));
         let time = crate::effects::params::usize_param(params, "time", 0) as u32;
 
         let w = input.width as usize;
