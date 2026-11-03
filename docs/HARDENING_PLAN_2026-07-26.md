@@ -1,8 +1,8 @@
 # MoshDither Studio — Correctness, Quality & Scope Plan
 
 **Date:** 2026-07-26
-**Status:** Plan only. Nothing in this document has been implemented.
-**Prerequisite:** approval, plus decisions on the items marked **[NEEDS YOUR CALL]**.
+**Status:** Superseded by completed quality-plan remediation and `docs/QC_DEVOPS_AUDIT_REPORT_2026-11-02.md` (see `docs/SESSION-HANDOFF.md`).
+**Prerequisite:** Historical plan record; items 1.1–1.4 implemented.
 
 ---
 

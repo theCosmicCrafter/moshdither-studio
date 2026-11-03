@@ -7,10 +7,7 @@
 
 ---
 
-> **Remediation status — updated 2026-07-26.** See §0 below. P0-2 and every
-> P1 item are now fixed and covered by tests. P0-1 (SAM3 sidecar + weights) and
-> P0-3 (code signing) remain open because they need build artifacts and
-> certificates rather than code changes.
+> **Remediation status — updated 2026-11-02.** See `docs/QC_DEVOPS_AUDIT_REPORT_2026-11-02.md` and `docs/SESSION-HANDOFF.md` for the current state on `dev`. P0-1 (`mosh-cli` sidecar + SAM3 add-on v1 release), P0-2 (preview parameter wiring), and all P1/P2 items (including per-panel error boundaries and unsaved-changes guard) are now resolved. P0-3 (code signing) has workflow support in `.github/workflows/release.yml` pending certificate secrets.
 
 ---
 
