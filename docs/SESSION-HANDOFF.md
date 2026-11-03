@@ -4,8 +4,9 @@ Living pass-down note. Update it at the end of every session and commit it.
 It lives in `docs/` on purpose: the previous handoff sat in `outputs/`, which is
 gitignored, so it never travelled with the branch.
 
-**Last updated:** 2026-11-02 · dev `e336b2c` (quality-plan COMPLETE: all 74 findings
-resolved or verified-already-fixed; branch model: `master` = release, `dev` = integration)
+**Last updated:** 2026-11-02 · dev `4987632` (quality-plan COMPLETE: all 74 findings
+resolved or verified-already-fixed; full E2E suite green; branch model:
+`master` = release, `dev` = integration)
 
 ---
 
@@ -16,7 +17,8 @@ Branch protocol now in use: feature branches → `dev` → `master` at release.
 
 **ALL 74 FINDINGS DONE.** Phase 0 (PRs #57-#62 + `quality-fixes`) merged earlier;
 phases 1-6 completed across commits `2a79e72`, `da49867`, `16407fa`, `b57dbb9`,
-`e336b2c`. Key architecture decisions a future session must not regress:
+`e336b2c`, `d813ee8`, `4987632`. Key architecture decisions a future session
+must not regress:
 
 - **Param reads:** `usize_param`/`u64_param`/`i64_param`/`f32_param`/`f64_param`
   in `effects/params.rs`. `as_uint`/`as_int` survive ONLY for compound Option
@@ -48,9 +50,24 @@ deletes the live `packages/python-backend/requirements.txt`.
 23.5 MB PyInstaller binary. Rebuild with
 `python scripts/build-mosh-sidecar.py` when `mosh_cli.py`/DatamoshLib changes.
 
-**Gates (last full run):** cargo test 716/716, vitest 1323/1323, tsc/eslint
-clean, cargo check/fmt clean, 10/10 targeted E2E (both mocks), secret scan
-clean. Full `npm run gate` not run — E2E was a targeted subset.
+**Gates (last full run, dev `4987632`):** cargo test 716/716, vitest
+1323/1323, tsc/eslint clean, cargo check/fmt clean, cargo build clean,
+**full E2E suite 73 passed / 1 skipped / 0 failed** (the skip is the parity
+spec's honest skip when both render targets are unavailable), secret scan
+clean. `mosh-verify` release binary rebuilt fresh — real-backend.spec.ts
+refuses to run against a stale binary, so rebuild it after touching Rust:
+`cargo build --release --bin mosh-verify --manifest-path src-tauri/Cargo.toml`.
+
+**E2E flake note:** `openPresetPanel` waits 30s for the lazy `PresetPanel`
+chunk — a spec that reaches it before Vite's fresh-server transform finishes
+sees only the Suspense "Loading..." fallback. If a different panel helper
+ever fails the same way, give it the same budget rather than retrying.
+
+**Known noise (not bugs):** `[drag-drop] Failed to register listener {"err":{}}`
+appears in every E2E run — the mock's event registration returns `{}`; the
+app logs it and moves on. The launch console-error test passes. The
+live-preview-param-update spec prints a parity RMSD ~23 as diagnostics but
+does not gate on it.
 
 ---
 
