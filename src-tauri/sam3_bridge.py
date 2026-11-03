@@ -612,10 +612,10 @@ def cmd_load_image(image_b64: str):
         image = pil_from_base64(image_b64)
     except ValueError as e:
         # Safe even after a prior successful load: this failure happens
-        # BEFORE current_image/orig_hw/inference_state are touched below, so
-        # all three globals are left exactly as the previous successful load
-        # set them (mutually consistent, still describing the OLD image) —
-        # no reset needed here, unlike the set_image() failure path below.
+        # BEFORE the session is touched below, so its fields are left
+        # exactly as the previous successful load set them (mutually
+        # consistent, still describing the OLD image) — no reset needed
+        # here, unlike the set_image() failure path below.
         return {"status": "error", "message": str(e)}
 
     # Compute everything the new image needs into LOCAL variables, and only

@@ -4,46 +4,53 @@ Living pass-down note. Update it at the end of every session and commit it.
 It lives in `docs/` on purpose: the previous handoff sat in `outputs/`, which is
 gitignored, so it never travelled with the branch.
 
-**Last updated:** 2026-11-02 · dev `da49867` (quality-plan Phases 0-1 landed; branch model: `master` = release, `dev` = integration)
+**Last updated:** 2026-11-02 · dev `e336b2c` (quality-plan COMPLETE: all 74 findings
+resolved or verified-already-fixed; branch model: `master` = release, `dev` = integration)
 
 ---
 
 ## Quality-plan progress (docs/moshdither-code-quality-plan.html, 74 findings)
 
 Branch protocol now in use: feature branches → `dev` → `master` at release.
-`dev` currently sits 25 commits ahead of `master`; all gates green.
+`dev` currently sits 30+ commits ahead of `master`; all gates green.
 
-**Phase 0 (land in-flight PRs) — DONE.** PRs #57-#62 + `quality-fixes` rollup +
-dependabot + `register-skill` reviewed and merged. Skipped as superseded:
-`fix/hang-audit-*`, `fix/mask-texture-load-hang`, `ui/typography-*`. Rejected as
-defective: `chore/recycle-legacy-sam3-rpc-backend` (deletes the live
-`packages/python-backend/requirements.txt` that `setup-sam3-env.py` needs).
+**ALL 74 FINDINGS DONE.** Phase 0 (PRs #57-#62 + `quality-fixes`) merged earlier;
+phases 1-6 completed across commits `2a79e72`, `da49867`, `16407fa`, `b57dbb9`,
+`e336b2c`. Key architecture decisions a future session must not regress:
 
-**Phase 1 (param plumbing) — MOSTLY DONE.** `usize_param`/`u64_param`/`i64_param`
-now read every simple integer param across 32 effects (48 sites, commit
-`2a79e72`). `as_uint`/`as_int` remain only for compound uses (classic.rs
-legacy-alias `or_else` chains, beat_sync `filter_map`). Negative values now
-fall back to the declared default instead of clamping to 0. Still open:
-schema-derived defaults, process_frame/process_video param-extraction dedup.
+- **Param reads:** `usize_param`/`u64_param`/`i64_param`/`f32_param`/`f64_param`
+  in `effects/params.rs`. `as_uint`/`as_int` survive ONLY for compound Option
+  uses (legacy-alias `or_else` chains, `filter_map`). Defaults that have no
+  struct field come from the schema via `schema_f64` (see vhs.rs pattern).
+- **process_video:** trait default in `types.rs` — do not re-add per-effect
+  copies.
+- **Subprocess cleanup:** `proc::spawn_pipe_readers` drains child pipes for
+  BOTH cancellable paths; `kill_child_and_join` (ffmpeg) joins readers on kill
+  because ffmpeg spawns no pipe-holding grandchildren; `run_cancellable`
+  (commands.rs) deliberately does NOT join on kill (mosh-cli grandchildren
+  hold inherited handles — joining deadlocks). Opposite by design.
+- **IPC:** all invoke() calls route through `src/lib/tauri.ts` adapters.
+  Errors are typed `AppError` variants; recovery checks use
+  `is_sam3_transport_failure()` / `NO_AUDIO_STREAM_ERROR`, never substring
+  matching. Frontend error logging goes through `utils/logger.ts`.
+- **sam3_bridge.py:** the five image-state globals are now `_SessionState`
+  (`session.publish`/`reset` — atomic); inference+OOM handling is `_infer()`.
+  Engine globals (model/processor/model_manager) intentionally separate.
+- **E2E:** `tests/e2e/helpers.ts` owns openApp/openPresetPanel; mock variants
+  are `buildTauriMockScript(config)` configs, not copied scripts.
+- **basic_modes.py:** the ffgac encode→raw-split→concat pipeline is shared
+  (`_ffg_to_raw_frames`/`_concat`); mode fns keep only their frame-order logic.
 
-**Phase 3 (IPC boundary) — STARTED.** `readFile`/`writeFile`/`prepareCustomLut`
-adapters in `lib/tauri.ts`; raw `invoke()` gone from LUTPanel/useProject;
-WindowControls `appWindow` memoised (was rebuilt/resubscribed every render);
-`__TAURI_INTERNALS__` casts replaced by `isTauriAvailable()`; window-IPC
-failures now reach the logger. `AppError::DimensionMismatch` added.
-Still open: typed IPC error codes (no substring matching), AppBar
-SHAppBarMessage result checks, window-command edge/window lookup dedup.
+**Rejected branch (do not merge):** `chore/recycle-legacy-sam3-rpc-backend`
+deletes the live `packages/python-backend/requirements.txt`.
 
-**Sidecar:** `src-tauri/bin/mosh-cli-x86_64-pc-windows-msvc.exe` is now a real
-23.5 MB PyInstaller binary (was missing/0-byte stub). Rebuild with
+**Sidecar:** `src-tauri/bin/mosh-cli-x86_64-pc-windows-msvc.exe` is a real
+23.5 MB PyInstaller binary. Rebuild with
 `python scripts/build-mosh-sidecar.py` when `mosh_cli.py`/DatamoshLib changes.
 
-**Remaining phases:** P2 WebGL boundary (key-blind transforms, GL object
-leaks, ping-pong FBO dedup), P4/P5 Rust hygiene (~25 findings: process_video
-default impl, kill/wait/join helper, ffgac pipeline dedup, export-progress
-emit helper, Sam3Request builder), P6 frontend dedup (docked-tab-ids x5,
-media-load x3, clearAutoSave x2, console.*→logger sweep), P7 test tooling
-(mosh-verify write errors, E2E modal-dismiss helper + mock dedup).
+**Gates (last full run):** cargo test 716/716, vitest 1323/1323, tsc/eslint
+clean, cargo check/fmt clean, 10/10 targeted E2E (both mocks), secret scan
+clean. Full `npm run gate` not run — E2E was a targeted subset.
 
 ---
 

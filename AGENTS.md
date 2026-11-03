@@ -81,6 +81,54 @@ Before coding, read these docs in order:
 5. `docs/API_SPEC.md` — Tauri IPC contracts (as needed)
 6. `docs/milestones/m<N>-*.md` — active milestone spec (JIT)
 
+## REPOSITORY MAP
+
+```
+src/                       React + TypeScript frontend (Vite)
+  components/              UI panels; complex ones get own dir (EffectStack/,
+                           AudioPanel/); DockSystem/ holds the layout model
+  engine/                  webgl2/ (WebGLContext, EffectChain), shaders/,
+                           audio/ (AudioEngine, AudioFeatureExtractor), lut/
+  hooks/                   useProject, useKeyboardShortcuts, useAutoAudioExtract…
+  lib/                     tauri.ts — the ONLY invoke() adapter layer;
+                           browserFallback.ts (isTauriAvailable)
+  store/                   Zustand store (index.ts)
+  utils/                   effectConverter.ts (Rust<->WebGL param mapping),
+                           logger.ts (all error-path logging goes here, never
+                           console.*), migrateOverlayGuides.ts
+src-tauri/
+  src/
+    main.rs, lib.rs        entry + command registration
+    commands.rs            Tauri IPC commands (typed AppError, never String)
+    error.rs               AppError variants — restart/no-audio checks are
+                           typed predicates, not substring matches
+    proc.rs                command() (no console window), KillJob,
+                           spawn_pipe_readers (shared child-pipe drain)
+    ffmpeg/                encode/decode, kill_child_and_join
+    effects/               Effect trait; params.rs = shared readers
+                           (usize_param/u64_param/i64_param/f32_param/f64_param
+                           + schema_f64); types.rs holds process_video default
+    sam3_engine.rs, sam3_addon.rs   engine lifecycle + addon installer
+    bin/mosh_verify.rs     verification CLI (cargo run --bin mosh-verify)
+  sam3_bridge.py           Python bridge; session state lives in _SessionState,
+                           inference wrapped by _infer(); never edit loosely
+  bin/mosh-cli-*.exe       PyInstaller sidecar — rebuild via
+                           python scripts/build-mosh-sidecar.py
+packages/python-backend/   mosh_cli.py entry, DatamoshLib/ (FFG_effects,
+                           Tomato), requirements.txt (LIVE — setup-sam3-env.py
+                           and release.yml need it), sam3_repo/ vendored
+tests/e2e/                 Playwright specs; ALL share helpers.ts
+                           (openApp, openPresetPanel) and mocks/ — build mock
+                           variants via buildTauriMockScript, never copy
+tools/                     resource_profiler.py, mcp-security.py (scan_gate),
+                           render_parity_auditor.py, scan-gate.ps1
+scripts/                   checkpoint.ps1, secret-scan.ps1, build-*-sidecar.py
+evals/                     regression.ps1
+references/                read-only research submodules — never stage
+docs/                      structure.md has naming conventions; this map is
+                           the orientation layer (update both when moving dirs)
+```
+
 ## WORKTREE POLICY
 
 - Use `pwsh scripts/new-task.ps1 -TaskName "<name>"` to create worktrees.
