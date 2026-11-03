@@ -118,10 +118,7 @@ impl Effect for CrossVideoDatamosh {
 
         let block_size = crate::effects::params::usize_param(params, "block_size", 16);
 
-        let strength = params
-            .get("strength")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.7) as f32;
+        let strength = crate::effects::params::f32_param(params, "strength", 0.7);
 
         let interleave = params
             .get("interleave")

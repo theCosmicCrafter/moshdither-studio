@@ -70,7 +70,7 @@ impl Effect for BlockShift {
             crate::effects::params::usize_param(params, "block_size", self.block_size as usize);
         let max_shift =
             crate::effects::params::usize_param(params, "max_shift", self.max_shift as usize);
-        let time = params.get("time").and_then(|v| v.as_f64()).unwrap_or(0.0) as usize;
+        let time = crate::effects::params::usize_param(params, "time", 0);
         let w = input.width as usize;
         let h = input.height as usize;
         let mut data = vec![0u8; input.data.len()];
@@ -99,22 +99,6 @@ impl Effect for BlockShift {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

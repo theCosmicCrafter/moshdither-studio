@@ -11,7 +11,7 @@ use std::time::Duration;
 use sysinfo::{Pid, System};
 use tauri::{AppHandle, Manager};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 struct Sam3Request {
     cmd: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -87,7 +87,11 @@ fn write_sam3_pid(child: &std::process::Child) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let _ = std::fs::write(&path, child.id().to_string());
+    // A failed write means the orphan reaper at the next launch cannot see
+    // this bridge -- it must not be silently dropped.
+    if let Err(e) = std::fs::write(&path, child.id().to_string()) {
+        tracing::warn!("SAM3 PID file write failed at {}: {e}", path.display());
+    }
 }
 
 fn remove_sam3_pid() {
@@ -632,22 +636,8 @@ impl Sam3Engine {
     pub fn load_image(&self, image_b64: String) -> crate::error::Result<(u32, u32)> {
         let resp = self.send(Sam3Request {
             cmd: "load_image".into(),
-            auth_token: None,
             image_b64: Some(image_b64),
-            prompt: None,
-            points: None,
-            labels: None,
-            boxes: None,
-            index: None,
-            grid_size: None,
-            iou_threshold: None,
-            min_mask_region_area: None,
-            mask_b64: None,
-            grow: None,
-            shrink: None,
-            feather: None,
-            fill_holes: None,
-            frames: None,
+            ..Default::default()
         })?;
         if resp.status == "ok" {
             Ok((resp.width, resp.height))
@@ -659,22 +649,8 @@ impl Sam3Engine {
     pub fn text_prompt(&self, prompt: String) -> crate::error::Result<Vec<(String, f64)>> {
         let resp = self.send(Sam3Request {
             cmd: "text_prompt".into(),
-            auth_token: None,
-            image_b64: None,
             prompt: Some(prompt),
-            points: None,
-            labels: None,
-            boxes: None,
-            index: None,
-            grid_size: None,
-            iou_threshold: None,
-            min_mask_region_area: None,
-            mask_b64: None,
-            grow: None,
-            shrink: None,
-            feather: None,
-            fill_holes: None,
-            frames: None,
+            ..Default::default()
         })?;
         if resp.status == "ok" {
             let mut results = Vec::with_capacity(resp.count);
@@ -725,22 +701,8 @@ impl Sam3Engine {
     pub fn box_prompt(&self, boxes: Vec<[f32; 4]>) -> crate::error::Result<Vec<(String, f64)>> {
         let resp = self.send(Sam3Request {
             cmd: "box_prompt".into(),
-            auth_token: None,
-            image_b64: None,
-            prompt: None,
-            points: None,
-            labels: None,
             boxes: Some(boxes),
-            index: None,
-            grid_size: None,
-            iou_threshold: None,
-            min_mask_region_area: None,
-            mask_b64: None,
-            grow: None,
-            shrink: None,
-            feather: None,
-            fill_holes: None,
-            frames: None,
+            ..Default::default()
         })?;
         if resp.status == "ok" {
             let mut results = Vec::with_capacity(resp.count);
@@ -761,22 +723,10 @@ impl Sam3Engine {
     ) -> crate::error::Result<Vec<(String, f64)>> {
         let req = Sam3Request {
             cmd: "auto_mask".into(),
-            auth_token: None,
-            image_b64: None,
-            prompt: None,
-            points: None,
-            labels: None,
-            boxes: None,
-            index: None,
             grid_size: Some(grid_size),
             iou_threshold: Some(iou_threshold),
             min_mask_region_area: Some(min_mask_region_area),
-            mask_b64: None,
-            grow: None,
-            shrink: None,
-            feather: None,
-            fill_holes: None,
-            frames: None,
+            ..Default::default()
         };
         let resp = self.send(req)?;
         if resp.status == "ok" {
@@ -868,22 +818,12 @@ impl Sam3Engine {
     ) -> crate::error::Result<String> {
         let resp = self.send(Sam3Request {
             cmd: "postprocess_mask".into(),
-            auth_token: None,
-            image_b64: None,
-            prompt: None,
-            points: None,
-            labels: None,
-            boxes: None,
-            index: None,
-            grid_size: None,
-            iou_threshold: None,
-            min_mask_region_area: None,
             mask_b64: Some(mask_b64),
             grow: Some(grow),
             shrink: Some(shrink),
             feather: Some(feather),
             fill_holes: Some(fill_holes),
-            frames: None,
+            ..Default::default()
         })?;
         if resp.status == "ok" {
             if resp.mask.is_empty() {
@@ -901,22 +841,7 @@ impl Sam3Engine {
     pub fn clear(&self) -> crate::error::Result<()> {
         let resp = self.send(Sam3Request {
             cmd: "clear".into(),
-            auth_token: None,
-            image_b64: None,
-            prompt: None,
-            points: None,
-            labels: None,
-            boxes: None,
-            index: None,
-            grid_size: None,
-            iou_threshold: None,
-            min_mask_region_area: None,
-            mask_b64: None,
-            grow: None,
-            shrink: None,
-            feather: None,
-            fill_holes: None,
-            frames: None,
+            ..Default::default()
         })?;
         if resp.status == "ok" {
             Ok(())
@@ -930,22 +855,7 @@ impl Sam3Engine {
         // bridge is already dead.
         if let Err(e) = self.send(Sam3Request {
             cmd: "shutdown".into(),
-            auth_token: None,
-            image_b64: None,
-            prompt: None,
-            points: None,
-            labels: None,
-            boxes: None,
-            index: None,
-            grid_size: None,
-            iou_threshold: None,
-            min_mask_region_area: None,
-            mask_b64: None,
-            grow: None,
-            shrink: None,
-            feather: None,
-            fill_holes: None,
-            frames: None,
+            ..Default::default()
         }) {
             tracing::warn!("SAM3 graceful shutdown request failed: {}", e);
         }

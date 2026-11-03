@@ -97,6 +97,29 @@ fn lock_state<'a, T>(
         .map_err(|e| AppError::LockPoisoned(format!("{name} lock poisoned: {e}")))
 }
 
+/// Payload for the `export-progress` Tauri event. `stage` names the phase the
+/// progress bar should show; the rest are optional extras the renderer reads
+/// only when present.
+#[derive(serde::Serialize, Default, Clone)]
+struct ExportProgress<'a> {
+    stage: &'a str,
+    progress: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    warning: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    downscaled_to: Option<usize>,
+}
+
+/// Emit `export-progress` best-effort: a dropped listener must not fail an
+/// export that is still running.
+fn emit_export_progress(app_handle: &tauri::AppHandle, p: ExportProgress<'_>) {
+    let _ = app_handle.emit("export-progress", p);
+}
+
 /// Trim cached intermediate frames so the total byte size stays under budget.
 /// Oldest entries are evicted first.
 fn trim_cache_to_budget(entries: &mut Vec<CacheEntry>, budget: usize) {
@@ -1035,9 +1058,15 @@ fn export_video_blocking(
 
     // Apply the effect stack
     tracing::info!("Applying {} effects for export", stack.len());
-    let _ = app_handle.emit(
-        "export-progress",
-        serde_json::json!({"stage": "effects", "progress": 5, "total": stack.len(), "current": 0}),
+    emit_export_progress(
+        &app_handle,
+        ExportProgress {
+            stage: "effects",
+            progress: 5,
+            total: Some(stack.len()),
+            current: Some(0),
+            ..Default::default()
+        },
     );
     let registry = lock_state(&registry, "registry")?;
     // Every per-frame time below goes through `export_frame_time`: the frames
@@ -1075,7 +1104,16 @@ fn export_video_blocking(
 
         tracing::debug!("Export effect {}/{} done", effect_idx + 1, stack.len());
         let pct = 5 + ((effect_idx + 1) as f64 / stack.len() as f64 * 80.0) as u32;
-        let _ = app_handle.emit("export-progress", serde_json::json!({"stage": "effects", "progress": pct, "total": stack.len(), "current": effect_idx + 1}));
+        emit_export_progress(
+            &app_handle,
+            ExportProgress {
+                stage: "effects",
+                progress: pct,
+                total: Some(stack.len()),
+                current: Some(effect_idx + 1),
+                ..Default::default()
+            },
+        );
     }
     drop(registry);
 
@@ -1122,9 +1160,13 @@ fn plan_and_decode(
         source_path,
         options.processing_scale
     );
-    let _ = app_handle.emit(
-        "export-progress",
-        serde_json::json!({"stage": "planning", "progress": 0}),
+    emit_export_progress(
+        &app_handle,
+        ExportProgress {
+            stage: "planning",
+            progress: 0,
+            ..Default::default()
+        },
     );
     // A still image is decoded as ONE frame and then multiplied to fill the
     // requested duration, so the memory plan has to be made against the count
@@ -1152,22 +1194,27 @@ fn plan_and_decode(
             s
         );
         tracing::warn!("{}", message);
-        let _ = app_handle.emit(
-            "export-progress",
-            serde_json::json!({
-                "stage": "planning",
-                "progress": 0,
-                "warning": message,
-                "downscaled_to": s
-            }),
+        emit_export_progress(
+            &app_handle,
+            ExportProgress {
+                stage: "planning",
+                progress: 0,
+                warning: Some(message),
+                downscaled_to: Some(s),
+                ..Default::default()
+            },
         );
     }
 
     // Decode the full source video
     tracing::info!("Decoding export source: {}", source_path);
-    let _ = app_handle.emit(
-        "export-progress",
-        serde_json::json!({"stage": "decoding", "progress": 0}),
+    emit_export_progress(
+        &app_handle,
+        ExportProgress {
+            stage: "decoding",
+            progress: 0,
+            ..Default::default()
+        },
     );
     let mut segment =
         crate::ffmpeg::decode_video_cancellable(source_path, None, decode_scale, Some(cancel))?;
@@ -1217,13 +1264,14 @@ fn plan_and_decode(
                 secs
             );
             tracing::warn!("{}", message);
-            let _ = app_handle.emit(
-                "export-progress",
-                serde_json::json!({
-                    "stage": "decoding",
-                    "progress": 0,
-                    "warning": message
-                }),
+            emit_export_progress(
+                &app_handle,
+                ExportProgress {
+                    stage: "decoding",
+                    progress: 0,
+                    warning: Some(message),
+                    ..Default::default()
+                },
             );
         }
     }
@@ -1257,13 +1305,14 @@ fn plan_and_decode(
                 target_duration, secs
             );
             tracing::warn!("{}", message);
-            let _ = app_handle.emit(
-                "export-progress",
-                serde_json::json!({
-                    "stage": "decoding",
-                    "progress": 0,
-                    "warning": message
-                }),
+            emit_export_progress(
+                &app_handle,
+                ExportProgress {
+                    stage: "decoding",
+                    progress: 0,
+                    warning: Some(message),
+                    ..Default::default()
+                },
             );
         }
         if target_frames > 1 {
@@ -1413,13 +1462,14 @@ fn apply_effect_to_segment(
                     );
                     tracing::warn!("{}", message);
                     let pct = 5 + ((effect_idx + 1) as f64 / stack_len as f64 * 80.0) as u32;
-                    let _ = ctx.app_handle.emit(
-                        "export-progress",
-                        serde_json::json!({
-                            "stage": "effects",
-                            "progress": pct,
-                            "warning": message
-                        }),
+                    emit_export_progress(
+                        &ctx.app_handle,
+                        ExportProgress {
+                            stage: "effects",
+                            progress: pct,
+                            warning: Some(message),
+                            ..Default::default()
+                        },
                     );
                 }
             }
@@ -1492,9 +1542,13 @@ fn encode_output(
     cancel: &AtomicBool,
 ) -> crate::error::Result<()> {
     tracing::info!("All effects applied, proceeding to encode");
-    let _ = app_handle.emit(
-        "export-progress",
-        serde_json::json!({"stage": "encoding", "progress": 90}),
+    emit_export_progress(
+        &app_handle,
+        ExportProgress {
+            stage: "encoding",
+            progress: 90,
+            ..Default::default()
+        },
     );
 
     // Determine codec: explicit codec > format-derived > default
@@ -1537,9 +1591,13 @@ fn encode_output(
         Some(ENCODE_TIMEOUT),
         options.format.as_deref(),
     )?;
-    let _ = app_handle.emit(
-        "export-progress",
-        serde_json::json!({"stage": "done", "progress": 100}),
+    emit_export_progress(
+        &app_handle,
+        ExportProgress {
+            stage: "done",
+            progress: 100,
+            ..Default::default()
+        },
     );
     Ok(())
 }
@@ -1584,7 +1642,7 @@ pub fn extract_audio_from_video(
     // Fast path: if there's no audio stream, fail fast with a clear message
     // so the frontend can show a "no audio" warning instead of a generic error.
     if !has_audio_stream(&video_path)? {
-        return Err("Source video has no audio stream".into());
+        return Err(crate::error::AppError::NoAudioStream);
     }
 
     // Write to a per-video temp file so repeated loads overwrite cleanly.

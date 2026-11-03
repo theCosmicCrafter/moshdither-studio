@@ -147,47 +147,17 @@ impl Effect for VhsEffect {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let tracking = params
-            .get("tracking")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(self.tracking as f64) as f32;
-        let noise = params
-            .get("noise")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(self.noise as f64) as f32;
-        let tracking_error = params
-            .get("tracking_error")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.1) as f32;
-        let scan_curve = params
-            .get("scan_curve")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0) as f32;
-        let slice_size = params
-            .get("slice_size")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(8.0) as usize;
-        let glitch_prob = params
-            .get("glitch_probability")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.3) as f32;
-        let chroma_delay = params
-            .get("chroma_delay")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0) as f32;
-        let chroma_bleed = params
-            .get("chroma_bleed")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.2) as f32;
-        let chroma_offset = params
-            .get("chroma_offset")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0) as f32;
-        let head_switching = params
-            .get("head_switching")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0) as f32;
-        let time = params.get("time").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
+        let tracking = crate::effects::params::f32_param(params, "tracking", self.tracking);
+        let noise = crate::effects::params::f32_param(params, "noise", self.noise);
+        let tracking_error = crate::effects::params::f32_param(params, "tracking_error", 0.1);
+        let scan_curve = crate::effects::params::f32_param(params, "scan_curve", 0.0);
+        let slice_size = crate::effects::params::usize_param(params, "slice_size", 8);
+        let glitch_prob = crate::effects::params::f32_param(params, "glitch_probability", 0.3);
+        let chroma_delay = crate::effects::params::f32_param(params, "chroma_delay", 0.0);
+        let chroma_bleed = crate::effects::params::f32_param(params, "chroma_bleed", 0.2);
+        let chroma_offset = crate::effects::params::f32_param(params, "chroma_offset", 0.0);
+        let head_switching = crate::effects::params::f32_param(params, "head_switching", 0.0);
+        let time = crate::effects::params::usize_param(params, "time", 0) as u32;
 
         let w = input.width as usize;
         let h = input.height as usize;
@@ -321,22 +291,6 @@ impl Effect for VhsEffect {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

@@ -514,8 +514,12 @@ fn cmd_render_all(args: &[String]) -> ExitCode {
     // Create output directory structure
     let images_dir = format!("{}/images", output_dir);
     let videos_dir = format!("{}/videos", output_dir);
-    let _ = std::fs::create_dir_all(&images_dir);
-    let _ = std::fs::create_dir_all(&videos_dir);
+    for dir in [&images_dir, &videos_dir] {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            eprintln!("Error creating output directory {}: {}", dir, e);
+            return ExitCode::from(2);
+        }
+    }
 
     // Load test image
     eprintln!("Loading image: {}", image_path);
@@ -731,7 +735,10 @@ fn cmd_render_all(args: &[String]) -> ExitCode {
     // Write summary report
     let report_path = format!("{}/render-report.csv", output_dir);
     let report_content = format!("status|effect_id|output|notes\n{}", report_lines.join("\n"));
-    let _ = std::fs::write(&report_path, report_content);
+    if let Err(e) = std::fs::write(&report_path, report_content) {
+        eprintln!("Error writing report {}: {}", report_path, e);
+        return ExitCode::from(2);
+    }
 
     eprintln!("\n=== Render Summary ===");
     eprintln!("Total effects: {}", stats.total);
@@ -817,7 +824,10 @@ fn cmd_render_presets(args: &[String]) -> ExitCode {
         }
     };
 
-    let _ = std::fs::create_dir_all(&output_dir);
+    if let Err(e) = std::fs::create_dir_all(&output_dir) {
+        eprintln!("Error creating output directory {}: {}", output_dir, e);
+        return ExitCode::from(2);
+    }
 
     eprintln!("Loading image: {}", image_path);
     let _current = match image_io::load_image(image_path) {
@@ -973,7 +983,10 @@ fn cmd_render_luts(args: &[String]) -> ExitCode {
         }
     };
 
-    let _ = std::fs::create_dir_all(&output_dir);
+    if let Err(e) = std::fs::create_dir_all(&output_dir) {
+        eprintln!("Error creating output directory {}: {}", output_dir, e);
+        return ExitCode::from(2);
+    }
 
     eprintln!("Loading image: {}", image_path);
     let test_image = match image_io::load_image(image_path) {
@@ -1207,7 +1220,10 @@ fn cmd_audio_render(args: &[String]) -> ExitCode {
     }
 
     // Create output directory
-    let _ = std::fs::create_dir_all(&output_dir);
+    if let Err(e) = std::fs::create_dir_all(&output_dir) {
+        eprintln!("Error creating output directory {}: {}", output_dir, e);
+        return ExitCode::from(2);
+    }
 
     // Find audio-reactive effects
     let registry = EffectRegistry::new();
@@ -1314,7 +1330,10 @@ fn cmd_audio_render(args: &[String]) -> ExitCode {
     // Write report
     let report_path = format!("{}/audio-render-report.csv", output_dir);
     let report_content = format!("status|effect_id|output|notes\n{}", report_lines.join("\n"));
-    let _ = std::fs::write(&report_path, report_content);
+    if let Err(e) = std::fs::write(&report_path, report_content) {
+        eprintln!("Error writing report {}: {}", report_path, e);
+        return ExitCode::from(2);
+    }
 
     eprintln!("\n=== Audio Render Summary ===");
     eprintln!("Total effects: {}", audio_effects.len());
@@ -1593,7 +1612,10 @@ fn cmd_animate_all(args: &[String]) -> ExitCode {
         }
     };
 
-    let _ = std::fs::create_dir_all(&output_dir);
+    if let Err(e) = std::fs::create_dir_all(&output_dir) {
+        eprintln!("Error creating output directory {}: {}", output_dir, e);
+        return ExitCode::from(2);
+    }
 
     // Load still image
     eprintln!("Loading image: {}", image_path);
@@ -1806,7 +1828,10 @@ fn cmd_animate_all(args: &[String]) -> ExitCode {
     // Write report
     let report_path = format!("{}/animate-report.csv", output_dir);
     let report_content = format!("status|effect_id|output|notes\n{}", report_lines.join("\n"));
-    let _ = std::fs::write(&report_path, report_content);
+    if let Err(e) = std::fs::write(&report_path, report_content) {
+        eprintln!("Error writing report {}: {}", report_path, e);
+        return ExitCode::from(2);
+    }
 
     eprintln!("\n=== Animation Summary ===");
     eprintln!("Total effects: {}", metas.len());

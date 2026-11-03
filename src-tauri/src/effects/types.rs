@@ -102,12 +102,26 @@ pub trait Effect: Send + Sync {
     ) -> crate::error::Result<Frame>;
 
     /// Process a full video segment (export tier).
+    ///
+    /// The default applies `process_frame` to every frame and keeps the fps.
+    /// Temporal effects -- datamoshing, optical flow, anything that needs its
+    /// neighbours -- override this; per-frame effects should not re-implement
+    /// the loop (it was copy-pasted into ~60 files before this default).
     fn process_video(
         &self,
         input: &VideoSegment,
         mask: Option<&Mask>,
         params: &ParameterValues,
-    ) -> crate::error::Result<VideoSegment>;
+    ) -> crate::error::Result<VideoSegment> {
+        let mut frames = Vec::with_capacity(input.frames.len());
+        for frame in &input.frames {
+            frames.push(self.process_frame(frame, mask, params)?);
+        }
+        Ok(VideoSegment {
+            frames,
+            fps: input.fps,
+        })
+    }
 }
 
 pub type ParameterValues = serde_json::Map<String, serde_json::Value>;

@@ -29,6 +29,27 @@ import { ErrorBoundary } from "../ErrorBoundary";
 const LAYOUT_STORAGE_KEY = "moshdither.dockLayout";
 const LAYOUT_VERSION = 3;
 
+/** Component ids of every tab node currently docked in `model`. */
+function collectDockedTabIds(model: Model): string[] {
+  const ids: string[] = [];
+  model.visitNodes((n) => {
+    if (n.getType() === "tab") {
+      const component = (n as TabNode).getComponent() as string | undefined;
+      if (component) ids.push(component);
+    }
+  });
+  return ids;
+}
+
+/** Run `fn` on every TabNode in `model` whose component id is `panelId`. */
+function forEachTabWithId(model: Model, panelId: string, fn: (tab: TabNode) => void): void {
+  model.visitNodes((n) => {
+    if (n.getType() === "tab" && (n as TabNode).getComponent() === panelId) {
+      fn(n as TabNode);
+    }
+  });
+}
+
 function loadSavedLayout(): Model | null {
   try {
     const raw = localStorage.getItem(LAYOUT_STORAGE_KEY);
@@ -77,11 +98,7 @@ export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) 
     setModel(newModel);
     
     // Initial sync
-    const activePanels: string[] = [];
-    newModel.visitNodes((n) => {
-      if (n.getType() === "tab") activePanels.push((n as TabNode).getComponent() as string);
-    });
-    useAppStore.getState().setDockedPanels(activePanels);
+    useAppStore.getState().setDockedPanels(collectDockedTabIds(newModel));
   }, []);
 
 
@@ -149,10 +166,8 @@ export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) 
     if (!model) return;
     
     let exists = false;
-    model.visitNodes((n) => {
-      if (n.getType() === "tab" && (n as TabNode).getComponent() === panelId) {
-        exists = true;
-      }
+    forEachTabWithId(model, panelId, () => {
+      exists = true;
     });
 
     if (exists) return;
@@ -177,20 +192,15 @@ export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) 
   // the current drag id and the live set of docked panels.
   const onExternalDrag = () => {
     if (!model) return undefined;
-    const dockedComponentIds = new Set<string>();
-    model.visitNodes((n) => {
-      if (n.getType() === "tab") dockedComponentIds.add((n as TabNode).getComponent() as string);
-    });
+    const dockedComponentIds = new Set<string>(collectDockedTabIds(model));
     const target = resolveExternalDrag(getActiveDragPanelId(), dockedComponentIds);
     return target && { ...target, onDrop: () => setActiveDragPanelId(null) };
   };
 
   const removePanel = (panelId: string) => {
     if (!model) return;
-    model.visitNodes((n) => {
-      if (n.getType() === "tab" && (n as TabNode).getComponent() === panelId) {
-        model.doAction(Actions.deleteTab(n.getId()));
-      }
+    forEachTabWithId(model, panelId, (tab) => {
+      model.doAction(Actions.deleteTab(tab.getId()));
     });
   };
 
@@ -202,11 +212,7 @@ export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) 
       clearSavedLayout();
       const newModel = Model.fromJson(DEFAULT_LAYOUT);
       setModel(newModel);
-      const activePanels: string[] = [];
-      newModel.visitNodes((n) => {
-        if (n.getType() === "tab") activePanels.push((n as TabNode).getComponent() as string);
-      });
-      useAppStore.getState().setDockedPanels(activePanels);
+      useAppStore.getState().setDockedPanels(collectDockedTabIds(newModel));
     } else if (layoutTrigger.action === "add" && layoutTrigger.panelId) {
       addPanel(layoutTrigger.panelId);
     } else if (layoutTrigger.action === "remove" && layoutTrigger.panelId) {
@@ -237,15 +243,7 @@ export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) 
             factory={factory}
             onExternalDrag={onExternalDrag}
             onModelChange={(m) => {
-              const activePanels: string[] = [];
-              m.visitNodes((n) => {
-                if (n.getType() === "tab") {
-                  const tabNode = n as TabNode;
-                  const componentStr = tabNode.getComponent() as string;
-                  if (componentStr) activePanels.push(componentStr);
-                }
-              });
-              useAppStore.getState().setDockedPanels(activePanels);
+              useAppStore.getState().setDockedPanels(collectDockedTabIds(m));
               saveLayout(m);
             }}
           />

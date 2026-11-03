@@ -291,10 +291,7 @@ impl AutoPaletteDither {
             .filter(|v| v.is_finite())
             .map(|v| v.round().clamp(2.0, 64.0) as usize)
             .unwrap_or(8);
-        let strength = params
-            .get("strength")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(1.0) as f32;
+        let strength = crate::effects::params::f32_param(params, "strength", 1.0);
         (num_colors, strength)
     }
 

@@ -64,10 +64,7 @@ impl Effect for ZoomGlitch {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let intensity = params
-            .get("intensity")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.5) as f32;
+        let intensity = crate::effects::params::f32_param(params, "intensity", 0.5);
         let w = input.width as usize;
         let h = input.height as usize;
         let cx = w as f32 / 2.0;
@@ -95,22 +92,6 @@ impl Effect for ZoomGlitch {
             vectors,
         };
         Ok(warp_by_motion_field(input, &field))
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
-        })
     }
 }
 
@@ -156,10 +137,7 @@ impl Effect for ShearGlitch {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let intensity = params
-            .get("intensity")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.5) as f32;
+        let intensity = crate::effects::params::f32_param(params, "intensity", 0.5);
         let w = input.width as usize;
         let h = input.height as usize;
         let cx = w as f32 / 2.0;
@@ -188,22 +166,6 @@ impl Effect for ShearGlitch {
             vectors,
         };
         Ok(warp_by_motion_field(input, &field))
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
-        })
     }
 }
 
@@ -270,22 +232,6 @@ impl Effect for VibrateGlitch {
             vectors,
         };
         Ok(warp_by_motion_field(input, &field))
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
-        })
     }
 }
 
@@ -359,10 +305,7 @@ impl Effect for StopGlitch {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let threshold = params
-            .get("threshold")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(self.threshold);
+        let threshold = crate::effects::params::f64_param(params, "threshold", self.threshold);
         let n_frames = usize_param(params, "n_frames", self.n_frames);
         // Video-level: seed from the first frame so the whole segment shares one
         // reproducible sequence rather than re-rolling per render.
@@ -484,10 +427,7 @@ impl Effect for BufferGlitch {
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
         let buffer_size = usize_param(params, "buffer_size", BUFFER_SIZE);
-        let feedback = params
-            .get("feedback")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.5) as f32;
+        let feedback = crate::effects::params::f32_param(params, "feedback", 0.5);
 
         if input.frames.len() < 2 {
             return Ok(input.clone());

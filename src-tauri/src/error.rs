@@ -47,6 +47,12 @@ pub enum AppError {
     #[error("dimension mismatch: {0}")]
     DimensionMismatch(String),
 
+    /// The source video carries no audio stream — a domain fact the frontend
+    /// must branch on, not a generic failure. Its Display text is the stable
+    /// IPC contract the frontend compares against exactly.
+    #[error("Source video has no audio stream")]
+    NoAudioStream,
+
     #[error("{0}")]
     Generic(String),
 }

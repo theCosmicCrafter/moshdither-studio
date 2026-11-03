@@ -48,10 +48,7 @@ impl Effect for HueShift {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let deg = params
-            .get("degrees")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(self.degrees as f64) as f32;
+        let deg = crate::effects::params::f32_param(params, "degrees", self.degrees);
         let mut data = input.data.clone();
         for chunk in data.as_chunks_mut::<4>().0.iter_mut() {
             let (h, s, v) = rgb_to_hsv(chunk[0], chunk[1], chunk[2]);
@@ -65,22 +62,6 @@ impl Effect for HueShift {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

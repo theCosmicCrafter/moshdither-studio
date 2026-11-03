@@ -28,6 +28,7 @@ import type {
   ManifestProgressCallback,
 } from "./types";
 import { MANIFEST_SCHEMA_VERSION, STANDARD_BANDS } from "./types";
+import { logger } from "../../utils/logger";
 
 export interface ExtractionOptions {
   /** Video FPS. Default 30. */
@@ -288,7 +289,10 @@ export class AudioFeatureExtractor {
     try {
       const bpmResult = await detectBpm(buffer);
       bpm = typeof bpmResult === "number" ? bpmResult : (bpmResult?.bpm ?? null);
-    } catch {
+    } catch (err) {
+      logger.warn("audio", "BPM detection failed; manifest will have no tempo", {
+        error: String(err),
+      });
       bpm = null;
     }
 
@@ -464,10 +468,10 @@ export class AudioFeatureExtractor {
     return AudioFeatureExtractor.extractManifest(buffer, opts, onProgress);
   }
 
-  // ─── Legacy compatibility (for existing export pipeline) ───────────────
+  // ─── Export pipeline bridge ────────────────────────────────────────────
 
   /**
-   * Convert an AudioManifest to the legacy AudioBakeData format
+   * Convert an AudioManifest to the AudioBakeData format
    * that the Rust export pipeline expects.
    */
   static manifestToBakeData(manifest: AudioManifest): AudioBakeData {

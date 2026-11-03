@@ -65,10 +65,7 @@ impl Effect for PngChunkGlitch {
         params: &ParameterValues,
     ) -> Result<Frame> {
         let chunk_interval = crate::effects::params::usize_param(params, "chunk_interval", 4096);
-        let corruption = params
-            .get("corruption")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.3) as f32;
+        let corruption = crate::effects::params::f32_param(params, "corruption", 0.3);
 
         let mut data = input.data.clone();
         let mut rng = crate::effects::rng::frame_rng(input, params);
@@ -107,22 +104,6 @@ impl Effect for PngChunkGlitch {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }
@@ -212,22 +193,6 @@ impl Effect for CrcMismatchGlitch {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

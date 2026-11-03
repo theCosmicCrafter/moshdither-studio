@@ -253,18 +253,23 @@ fn build_default_params(
         "noise.fractal" => {
             map.insert("amount".to_string(), json!(5.0));
         }
-        "glitch.byte_insert" | "glitch.byte_flip" | "glitch.byte_zero" | "glitch.byte_reverse" => {
+        "glitch.byte_insert" | "glitch.byte_flip" | "glitch.byte_zero" => {
             map.insert("amount".to_string(), json!(0.1));
         }
+        "glitch.byte_reverse" => {
+            // Its only parameter is chunk_size, not amount.
+            map.insert("chunk_size".to_string(), json!(8.0));
+        }
         "glitch.slice_shift" => {
-            map.insert("shift_amount".to_string(), json!(50.0));
+            map.insert("max_shift".to_string(), json!(50.0));
         }
         "glitch.edge_stretch" => {
-            map.insert("stretch".to_string(), json!(20.0));
+            map.insert("amount".to_string(), json!(20.0));
         }
         "glitch.macroblock_glitch" => {
-            map.insert("block_size".to_string(), json!(16.0));
-            map.insert("amount".to_string(), json!(0.5));
+            // This effect names its params after the shader uniforms.
+            map.insert("u_intensity".to_string(), json!(0.5));
+            map.insert("u_blockSize".to_string(), json!(16.0));
         }
         "glitch.databend" => {
             map.insert("amount".to_string(), json!(0.3));
@@ -279,10 +284,12 @@ fn build_default_params(
         }
         "pixel_geo.block_shift" => {
             map.insert("block_size".to_string(), json!(32.0));
-            map.insert("shift_amount".to_string(), json!(20.0));
+            map.insert("max_shift".to_string(), json!(20.0));
         }
         "color.rgb_shift" => {
-            map.insert("shift_amount".to_string(), json!(30.0));
+            map.insert("r_shift".to_string(), json!(30.0));
+            map.insert("g_shift".to_string(), json!(-15.0));
+            map.insert("b_shift".to_string(), json!(10.0));
         }
         "color.lift_gamma_gain" => {
             map.insert("lift_r".to_string(), json!(0.5));
@@ -300,10 +307,10 @@ fn build_default_params(
             map.insert("contrast".to_string(), json!(1.5));
         }
         "analog.chromatic_aberration" => {
-            map.insert("amount".to_string(), json!(15.0));
+            map.insert("shift".to_string(), json!(15.0));
         }
         "analog.scan_drift" => {
-            map.insert("amount".to_string(), json!(10.0));
+            map.insert("amplitude".to_string(), json!(10.0));
         }
         "analog.vhs" => {
             map.insert("tracking".to_string(), json!(0.5));
@@ -323,16 +330,17 @@ fn build_default_params(
             map.insert("strength".to_string(), json!(1.0));
         }
         "audio_reactive.audio_dither" => {
-            map.insert("amount".to_string(), json!(0.5));
+            map.insert("base_threshold".to_string(), json!(0.5));
+            map.insert("modulation".to_string(), json!(0.8));
         }
         "audio_reactive.bass_pulse" => {
-            map.insert("amount".to_string(), json!(1.0));
+            map.insert("sensitivity".to_string(), json!(1.0));
         }
         "audio_reactive.beat_glitch" => {
-            map.insert("amount".to_string(), json!(0.5));
+            map.insert("corruption".to_string(), json!(0.5));
         }
         "audio_reactive.spectral_shift" => {
-            map.insert("amount".to_string(), json!(1.0));
+            map.insert("shift_amount".to_string(), json!(1.0));
         }
         "datamoshing.stop" => {
             map.insert("threshold".to_string(), json!(50.0));
@@ -372,13 +380,14 @@ fn animate_effect_params(
     // Some effects need a specific override to show change
     match effect_id {
         "color.rgb_shift" => {
-            params.insert("shift_amount".to_string(), json!((time * 30.0) as i32));
+            params.insert("r_shift".to_string(), json!((time * 30.0) as i32));
+            params.insert("g_shift".to_string(), json!((time * -15.0) as i32));
         }
         "analog.hue_shift" => {
-            params.insert("shift_amount".to_string(), json!(time * 180.0));
+            params.insert("degrees".to_string(), json!(time * 180.0));
         }
         "analog.chromatic_aberration" => {
-            params.insert("amount".to_string(), json!(time * 15.0));
+            params.insert("shift".to_string(), json!(time * 15.0));
         }
         "color.brightness_contrast" => {
             params.insert("brightness".to_string(), json!(time * 40.0));

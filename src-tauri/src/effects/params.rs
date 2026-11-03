@@ -175,6 +175,24 @@ pub fn i64_param(params: &ParameterValues, key: &str, default: i64) -> i64 {
         .unwrap_or(default)
 }
 
+/// Reads a float-valued parameter.
+///
+/// Missing, non-numeric and non-finite values fall back to `default` — a NaN
+/// or Infinity parameter would otherwise propagate silently through every
+/// downstream pixel operation.
+pub fn f64_param(params: &ParameterValues, key: &str, default: f64) -> f64 {
+    params
+        .get(key)
+        .and_then(Value::as_f64)
+        .filter(|v| v.is_finite())
+        .unwrap_or(default)
+}
+
+/// `f32`-typed counterpart of [`f64_param`].
+pub fn f32_param(params: &ParameterValues, key: &str, default: f32) -> f32 {
+    f64_param(params, key, default as f64) as f32
+}
+
 fn clamp_value(v: &mut Value, min: f64, max: f64) {
     match v {
         Value::Number(n) => {
@@ -378,6 +396,24 @@ mod tests {
         assert_eq!(i64_param(&params, "n", 8), -4, "floats round");
         params.insert("n".to_string(), json!("x"));
         assert_eq!(i64_param(&params, "n", 8), 8, "non-numeric falls back");
+    }
+
+    #[test]
+    fn f64_param_falls_back_for_missing_and_non_numeric() {
+        let mut params = ParameterValues::new();
+        params.insert("x".to_string(), json!(0.25));
+        assert_eq!(f64_param(&params, "x", 0.5), 0.25);
+        params.insert("x".to_string(), json!("a"));
+        assert_eq!(f64_param(&params, "x", 0.5), 0.5, "non-numeric");
+        assert_eq!(f64_param(&params, "missing", 0.5), 0.5, "missing");
+    }
+
+    #[test]
+    fn f32_param_casts() {
+        let mut params = ParameterValues::new();
+        params.insert("x".to_string(), json!(0.75));
+        assert_eq!(f32_param(&params, "x", 0.5), 0.75_f32);
+        assert_eq!(f32_param(&params, "missing", 0.5), 0.5_f32);
     }
 
     #[test]

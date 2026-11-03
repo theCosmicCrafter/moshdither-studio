@@ -1066,11 +1066,6 @@ export function isVideoOnlyEffect(meta: Pick<EffectMeta, "media_type">): boolean
   return meta.media_type === "video";
 }
 
-/** Shared copy for the video-only-effect-on-a-still-image warning, shown as
- *  a tooltip on the stack row (EffectStack/index.tsx) and as an inline
- *  banner in the parameter panel (EffectStack/ParameterPanel.tsx) whenever
- *  `isVideoOnlyEffect` is true and the loaded media is a still image. Kept
- *  in one place so the two surfaces never drift out of sync. */
 /**
  * Effects that render nothing until a file-valued Select parameter is chosen.
  *
@@ -1103,6 +1098,11 @@ export function unsetSelectionWarning(
   return missing ? req.message : null;
 }
 
+/** Shared copy for the video-only-effect-on-a-still-image warning, shown as
+ *  a tooltip on the stack row (EffectStack/index.tsx) and as an inline
+ *  banner in the parameter panel (EffectStack/ParameterPanel.tsx) whenever
+ *  `isVideoOnlyEffect` is true and the loaded media is a still image. Kept
+ *  in one place so the two surfaces never drift out of sync. */
 export const VIDEO_ONLY_ON_IMAGE_WARNING =
   "No visible effect on a still image — this effect requires video.";
 

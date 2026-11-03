@@ -18,15 +18,26 @@ pub struct MonitorInfo {
 
 // ── Method 1: Cross-platform edge snapping ──────────────────────
 
+/// The single `main` webview window this app always embeds, or a typed error
+/// when the shell was asked before the window existed.
+fn main_window(app: &AppHandle) -> crate::error::Result<tauri::WebviewWindow> {
+    app.get_webview_window("main")
+        .ok_or_else(|| crate::error::AppError::Generic("Window not found".to_string()))
+}
+
+/// The monitor the `main` window is currently on.
+fn current_monitor(app: &AppHandle) -> crate::error::Result<tauri::Monitor> {
+    main_window(app)?
+        .current_monitor()
+        .map_err(crate::error::AppError::from)?
+        .ok_or_else(|| crate::error::AppError::Generic("No monitor detected".to_string()))
+}
+
 /// Returns the current monitor's position and size so the frontend can
 /// compute edge proximity locally (avoiding an IPC round-trip per move event).
 #[tauri::command]
-pub fn get_monitor_info(app: AppHandle) -> Result<MonitorInfo, String> {
-    let window = app.get_webview_window("main").ok_or("Window not found")?;
-    let monitor = window
-        .current_monitor()
-        .map_err(|e| e.to_string())?
-        .ok_or("No monitor detected")?;
+pub fn get_monitor_info(app: AppHandle) -> crate::error::Result<MonitorInfo> {
+    let monitor = current_monitor(&app)?;
 
     let pos = monitor.position();
     let size = monitor.size();
@@ -54,7 +65,7 @@ fn compute_snap_position(
     monitor_size: PhysicalSize<u32>,
     window_size: PhysicalSize<u32>,
     current_pos: PhysicalPosition<i32>,
-) -> Result<PhysicalPosition<i32>, String> {
+) -> crate::error::Result<PhysicalPosition<i32>> {
     Ok(match edge {
         "left" => PhysicalPosition::new(monitor_pos.x, current_pos.y),
         "right" => PhysicalPosition::new(
@@ -66,29 +77,34 @@ fn compute_snap_position(
             current_pos.x,
             monitor_pos.y + (monitor_size.height as i32 - window_size.height as i32),
         ),
-        _ => return Err(format!("Unknown edge: {edge}")),
+        _ => {
+            return Err(crate::error::AppError::Generic(format!(
+                "Unknown edge: {edge}"
+            )))
+        }
     })
 }
 
 /// Snaps the Tauri window to the specified display edge on the current monitor.
 /// `edge` must be one of: `"left"`, `"right"`, `"top"`, `"bottom"`.
 #[tauri::command]
-pub fn snap_to_edge(app: AppHandle, edge: String) -> Result<(), String> {
-    let window = app.get_webview_window("main").ok_or("Window not found")?;
-    let monitor = window
-        .current_monitor()
-        .map_err(|e| e.to_string())?
-        .ok_or("No monitor detected")?;
+pub fn snap_to_edge(app: AppHandle, edge: String) -> crate::error::Result<()> {
+    let window = main_window(&app)?;
+    let monitor = current_monitor(&app)?;
 
     let monitor_size = monitor.size();
     let monitor_pos = monitor.position();
-    let window_size = window.outer_size().map_err(|e| e.to_string())?;
-    let current_pos = window.outer_position().map_err(|e| e.to_string())?;
+    let window_size = window.outer_size().map_err(crate::error::AppError::from)?;
+    let current_pos = window
+        .outer_position()
+        .map_err(crate::error::AppError::from)?;
 
     let new_pos =
         compute_snap_position(&edge, *monitor_pos, *monitor_size, window_size, current_pos)?;
 
-    window.set_position(new_pos).map_err(|e| e.to_string())?;
+    window
+        .set_position(new_pos)
+        .map_err(crate::error::AppError::from)?;
     Ok(())
 }
 
@@ -173,7 +189,7 @@ mod tests {
             CURRENT_POS,
         )
         .unwrap_err();
-        assert!(err.contains("diagonal"));
+        assert!(err.to_string().contains("diagonal"));
     }
 }
 
@@ -187,7 +203,7 @@ mod tests {
 ///
 /// No-op on macOS / Linux.
 #[tauri::command]
-pub fn dock_window_appbar(app: AppHandle, edge: String, size: i32) -> Result<(), String> {
+pub fn dock_window_appbar(app: AppHandle, edge: String, size: i32) -> crate::error::Result<()> {
     // Each branch is a complete, terminal Result on its own platform -- not a
     // shared trailing Ok(()) after both -- because on non-Windows only the
     // `Err` branch survives cfg-stripping, and an unconditional Ok(()) after
@@ -206,14 +222,16 @@ pub fn dock_window_appbar(app: AppHandle, edge: String, size: i32) -> Result<(),
     #[cfg(not(target_os = "windows"))]
     {
         let _ = (&app, &edge, size);
-        Err("AppBar docking is only supported on Windows".into())
+        Err(crate::error::AppError::Generic(
+            "AppBar docking is only supported on Windows".to_string(),
+        ))
     }
 }
 
 /// Unregisters the AppBar, releasing the reserved screen space.
 /// No-op on macOS / Linux.
 #[tauri::command]
-pub fn undock_window_appbar(app: AppHandle) -> Result<(), String> {
+pub fn undock_window_appbar(app: AppHandle) -> crate::error::Result<()> {
     #[cfg(target_os = "windows")]
     {
         undock_appbar_win32(&app)?;
@@ -223,107 +241,95 @@ pub fn undock_window_appbar(app: AppHandle) -> Result<(), String> {
     #[cfg(not(target_os = "windows"))]
     {
         let _ = &app;
-        Err("AppBar docking is only supported on Windows".into())
+        Err(crate::error::AppError::Generic(
+            "AppBar docking is only supported on Windows".to_string(),
+        ))
     }
 }
 
 // ── Win32 AppBar implementation ─────────────────────────────────
 
 #[cfg(target_os = "windows")]
-fn dock_appbar_win32(app: &AppHandle, edge: &str, size: i32) -> Result<(), String> {
+fn appbar_data_for(
+    window: &tauri::WebviewWindow,
+) -> crate::error::Result<windows_sys::Win32::UI::Shell::APPBARDATA> {
+    let hwnd = window.hwnd().map_err(crate::error::AppError::from)?.0
+        as windows_sys::Win32::Foundation::HWND;
+    let mut abd: windows_sys::Win32::UI::Shell::APPBARDATA = unsafe { std::mem::zeroed() };
+    abd.cbSize = std::mem::size_of::<windows_sys::Win32::UI::Shell::APPBARDATA>() as u32;
+    abd.hWnd = hwnd;
+    Ok(abd)
+}
+
+#[cfg(target_os = "windows")]
+fn dock_appbar_win32(app: &AppHandle, edge: &str, size: i32) -> crate::error::Result<()> {
     use windows_sys::Win32::UI::Shell::{
         SHAppBarMessage, ABE_BOTTOM, ABE_LEFT, ABE_RIGHT, ABE_TOP, ABM_NEW, ABM_REMOVE, ABM_SETPOS,
-        APPBARDATA,
     };
 
-    let window = app.get_webview_window("main").ok_or("Window not found")?;
-    let hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as windows_sys::Win32::Foundation::HWND;
+    let window = main_window(app)?;
+    let mut abd = appbar_data_for(&window)?;
+    let screen = current_monitor(app)?.size().clone();
 
-    let monitor = window
-        .current_monitor()
-        .map_err(|e| e.to_string())?
-        .ok_or("No monitor detected")?;
-    let screen = monitor.size();
-
-    let abe = match edge {
-        "left" => ABE_LEFT,
-        "right" => ABE_RIGHT,
-        "top" => ABE_TOP,
-        "bottom" => ABE_BOTTOM,
-        _ => return Err(format!("Unknown edge: {edge}")),
+    // One match decides both the AppBar edge flag and the reserved rect —
+    // they are the same decision and previously could drift apart.
+    let w = screen.width as i32;
+    let h = screen.height as i32;
+    let (abe, rect) = match edge {
+        "left" => (ABE_LEFT, (0, 0, size, h)),
+        "right" => (ABE_RIGHT, (w - size, 0, w, h)),
+        "top" => (ABE_TOP, (0, 0, w, size)),
+        "bottom" => (ABE_BOTTOM, (0, h - size, w, h)),
+        _ => {
+            return Err(crate::error::AppError::Generic(format!(
+                "Unknown edge: {edge}"
+            )))
+        }
     };
+    abd.uEdge = abe;
+    (abd.rc.left, abd.rc.top, abd.rc.right, abd.rc.bottom) = rect;
 
     unsafe {
-        let mut abd: APPBARDATA = std::mem::zeroed();
-        abd.cbSize = std::mem::size_of::<APPBARDATA>() as u32;
-        abd.hWnd = hwnd;
         abd.uCallbackMessage = 0x8001; // WM_USER + 1 — custom callback message ID
 
         // Remove any previous registration before re-registering
         SHAppBarMessage(ABM_REMOVE, &mut abd);
 
-        // Register as a new AppBar
-        SHAppBarMessage(ABM_NEW, &mut abd);
-
-        // Set edge and rect
-        abd.uEdge = abe;
-        match edge {
-            "left" => {
-                abd.rc.left = 0;
-                abd.rc.top = 0;
-                abd.rc.right = size;
-                abd.rc.bottom = screen.height as i32;
-            }
-            "right" => {
-                abd.rc.left = screen.width as i32 - size;
-                abd.rc.top = 0;
-                abd.rc.right = screen.width as i32;
-                abd.rc.bottom = screen.height as i32;
-            }
-            "top" => {
-                abd.rc.left = 0;
-                abd.rc.top = 0;
-                abd.rc.right = screen.width as i32;
-                abd.rc.bottom = size;
-            }
-            "bottom" => {
-                abd.rc.left = 0;
-                abd.rc.top = screen.height as i32 - size;
-                abd.rc.right = screen.width as i32;
-                abd.rc.bottom = screen.height as i32;
-            }
-            _ => unreachable!(),
+        // Register as a new AppBar. The return value is a BOOL; 0 means the
+        // shell refused the registration and every message below is a no-op
+        // against an unregistered bar — report it instead of proceeding.
+        if SHAppBarMessage(ABM_NEW, &mut abd) == 0 {
+            return Err(crate::error::AppError::Generic(
+                "SHAppBarMessage(ABM_NEW) failed: the shell refused AppBar registration"
+                    .to_string(),
+            ));
         }
 
         SHAppBarMessage(ABM_SETPOS, &mut abd);
-
-        // Move + resize the Tauri window to match the reserved rect
-        window
-            .set_position(PhysicalPosition::new(abd.rc.left, abd.rc.top))
-            .map_err(|e| e.to_string())?;
-        window
-            .set_size(PhysicalSize::new(
-                (abd.rc.right - abd.rc.left) as u32,
-                (abd.rc.bottom - abd.rc.top) as u32,
-            ))
-            .map_err(|e| e.to_string())?;
     }
+
+    // Move + resize the Tauri window to match the reserved rect
+    window
+        .set_position(PhysicalPosition::new(abd.rc.left, abd.rc.top))
+        .map_err(crate::error::AppError::from)?;
+    window
+        .set_size(PhysicalSize::new(
+            (abd.rc.right - abd.rc.left) as u32,
+            (abd.rc.bottom - abd.rc.top) as u32,
+        ))
+        .map_err(crate::error::AppError::from)?;
 
     Ok(())
 }
 
 #[cfg(target_os = "windows")]
-fn undock_appbar_win32(app: &AppHandle) -> Result<(), String> {
-    use windows_sys::Win32::UI::Shell::{SHAppBarMessage, ABM_REMOVE, APPBARDATA};
+fn undock_appbar_win32(app: &AppHandle) -> crate::error::Result<()> {
+    use windows_sys::Win32::UI::Shell::{SHAppBarMessage, ABM_REMOVE};
 
-    let window = app.get_webview_window("main").ok_or("Window not found")?;
-    let hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as windows_sys::Win32::Foundation::HWND;
+    let window = main_window(app)?;
+    let mut abd = appbar_data_for(&window)?;
 
     unsafe {
-        let mut abd: APPBARDATA = std::mem::zeroed();
-        abd.cbSize = std::mem::size_of::<APPBARDATA>() as u32;
-        abd.hWnd = hwnd;
-
         SHAppBarMessage(ABM_REMOVE, &mut abd);
     }
 

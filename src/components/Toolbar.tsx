@@ -172,31 +172,37 @@ export default function Toolbar({ onFileLoaded }: Props) {
     }
   }, [setIsProcessing, setPreviewDataUrl, setStatusMessage]);
 
+  // Shared tail of every media-load path: refresh the preview, pull metadata
+  // for the info line, and mirror the new image into SAM3 when the bridge is
+  // running. Each step is best-effort -- a missing codec or a stopped bridge
+  // must never turn a successful load into an error.
+  const afterMediaLoaded = async (path: string, context: string): Promise<boolean> => {
+    const synced = await onFileLoaded();
+    try {
+      setMediaMetadata(await getMediaMetadata(path));
+    } catch (e) {
+      logger.warn("toolbar", `Failed to load metadata for ${context}`, { error: String(e) });
+    }
+    if (useAppStore.getState().sam3Ready) {
+      try {
+        await sam3LoadImage(await getFrameData());
+      } catch (e) {
+        logger.warn("sam3", `Failed to load ${context} into SAM3`, { err: String(e) });
+      }
+    }
+    return synced;
+  };
+
   const handleOpen = async () => {
     setStatusMessage("Opening file...");
     try {
       const path = await loadMediaFile();
       if (path) {
         setFilePath(path);
-        const synced = await onFileLoaded();
-
-        try {
-          const meta = await getMediaMetadata(path);
-          setMediaMetadata(meta);
-        } catch (e) {
-          logger.warn("toolbar", `Failed to load metadata`, { error: String(e) });
-        }
-
-        const state = useAppStore.getState();
-        if (state.sam3Ready) {
+        if (useAppStore.getState().sam3Ready) {
           setStatusMessage("Loading new image into SAM3...");
-          try {
-            const b64 = await getFrameData();
-            await sam3LoadImage(b64);
-          } catch (e) {
-            logger.warn("sam3", "Failed to load new image into SAM3", { err: String(e) });
-          }
         }
+        const synced = await afterMediaLoaded(path, "new image");
 
         // A failed preview sync used to read as "Loaded: <path> (preview sync
         // pending)" -- success-shaped text for a backend failure, which neither
@@ -239,19 +245,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
       setIsVideo(false);
       setProxyUrl(null);
       setAnimateSourceStillPath(null);
-      const synced = await onFileLoaded();
-      try {
-        setMediaMetadata(await getMediaMetadata(stillPath));
-      } catch (e) {
-        logger.warn("toolbar", `Failed to load metadata for reverted still`, { error: String(e) });
-      }
-      if (useAppStore.getState().sam3Ready) {
-        try {
-          await sam3LoadImage(await getFrameData());
-        } catch (e) {
-          logger.warn("toolbar", `Failed to load reverted still into SAM3`, { error: String(e) });
-        }
-      }
+      const synced = await afterMediaLoaded(stillPath, "reverted still");
       setStatusMessage(
         synced ? `Reverted to still: ${stillPath}` : `Reverted to still: ${stillPath} (preview sync pending)`
       );
@@ -308,18 +302,10 @@ export default function Toolbar({ onFileLoaded }: Props) {
         setProxyUrl(null);
       }
 
-      const synced = await onFileLoaded();
-
-      const refreshedState = useAppStore.getState();
-      if (refreshedState.sam3Ready) {
+      if (useAppStore.getState().sam3Ready) {
         setStatusMessage("Loading animated frame into SAM3...");
-        try {
-          const b64 = await getFrameData();
-          await sam3LoadImage(b64);
-        } catch (e) {
-          logger.warn("toolbar", `Failed to load animated frame into SAM3`, { error: String(e) });
-        }
       }
+      const synced = await afterMediaLoaded(videoPath, "animated frame");
 
       setStatusMessage(
         synced

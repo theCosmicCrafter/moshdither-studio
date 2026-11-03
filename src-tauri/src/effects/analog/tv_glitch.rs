@@ -177,35 +177,17 @@ impl Effect for TvGlitch {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let subcarrier_amplitude = params
-            .get("subcarrier_amplitude")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(40.0) as f32;
-        let video_noise = params
-            .get("video_noise")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(100.0) as i32;
-        let chroma_noise_amt = params
-            .get("chroma_noise")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(100.0) as i32;
-        let chroma_phase_noise = params
-            .get("chroma_phase_noise")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(15.0) as i32;
-        let chroma_loss = params
-            .get("chroma_loss")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.24) as f32;
-        let preemphasis = params
-            .get("preemphasis")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(1.0) as f32;
-        let scanlines_scale = params
-            .get("scanlines")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(1.5) as f32;
-        let time = params.get("time").and_then(|v| v.as_f64()).unwrap_or(0.0) as u64;
+        let subcarrier_amplitude =
+            crate::effects::params::f32_param(params, "subcarrier_amplitude", 40.0);
+        let video_noise = crate::effects::params::i64_param(params, "video_noise", 100) as i32;
+        let chroma_noise_amt =
+            crate::effects::params::i64_param(params, "chroma_noise", 100) as i32;
+        let chroma_phase_noise =
+            crate::effects::params::i64_param(params, "chroma_phase_noise", 15) as i32;
+        let chroma_loss = crate::effects::params::f32_param(params, "chroma_loss", 0.24);
+        let preemphasis = crate::effects::params::f32_param(params, "preemphasis", 1.0);
+        let scanlines_scale = crate::effects::params::f32_param(params, "scanlines", 1.5);
+        let time = crate::effects::params::u64_param(params, "time", 0);
         let w = input.width as usize;
         let h = input.height as usize;
         let mut rng = Rng::new(time.wrapping_mul(2654435761).wrapping_add(12345));
@@ -441,22 +423,6 @@ impl Effect for TvGlitch {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

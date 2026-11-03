@@ -52,6 +52,10 @@ impl Effect for RiseDatamosh {
         _m: Option<&Mask>,
         _params: &ParameterValues,
     ) -> Result<Frame> {
+        // Luma-band colour remap, faithful to the classic datamosher "rise":
+        // near-black clamps to black, each mid band gets a neon tint, and
+        // near-white stays white. process_video drops frames on top of this;
+        // the tint is what sells the effect, it is not incidental.
         let len = input.data.len();
         let mut out = input.data.clone();
         for i in (0..len).step_by(4) {

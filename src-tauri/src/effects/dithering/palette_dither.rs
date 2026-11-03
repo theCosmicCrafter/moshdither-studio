@@ -106,13 +106,10 @@ impl Effect for PaletteDither {
         let w = input.width as usize;
         let h = input.height as usize;
 
-        let scale = params.get("scale").and_then(|v| v.as_f64()).unwrap_or(4.0) as f32;
-        let angle = params.get("angle").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-        let palette_size = params
-            .get("palette_size")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(4.0) as usize;
-        let amount = params.get("amount").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+        let scale = crate::effects::params::f32_param(params, "scale", 4.0);
+        let angle = crate::effects::params::f32_param(params, "angle", 0.0);
+        let palette_size = crate::effects::params::usize_param(params, "palette_size", 4);
+        let amount = crate::effects::params::f32_param(params, "amount", 1.0);
 
         // Default palette (same as shader defaults)
         let palette: Vec<[u8; 3]> = vec![
@@ -194,22 +191,6 @@ impl Effect for PaletteDither {
         }
 
         Ok(output)
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
-        })
     }
 }
 

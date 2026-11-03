@@ -311,7 +311,7 @@ impl Effect for HistoricalPalettes {
             .iter()
             .find(|p| p.name == palette_name)
             .unwrap_or(&PALETTES[0]);
-        let mix = params.get("mix").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+        let mix = crate::effects::params::f32_param(params, "mix", 1.0);
         let mix = mix.clamp(0.0, 1.0);
         let mut data = input.data.clone();
 
@@ -329,22 +329,6 @@ impl Effect for HistoricalPalettes {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

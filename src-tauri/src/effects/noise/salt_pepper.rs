@@ -52,11 +52,8 @@ impl Effect for SaltPepperNoise {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let density = params
-            .get("density")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(self.density as f64) as f32;
-        let time = params.get("time").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
+        let density = crate::effects::params::f32_param(params, "density", self.density);
+        let time = crate::effects::params::usize_param(params, "time", 0) as u32;
         let mut data = input.data.clone();
         let count = (data.len() as f32 / 4.0 * density) as usize;
         for i in 0..count {
@@ -74,22 +71,6 @@ impl Effect for SaltPepperNoise {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

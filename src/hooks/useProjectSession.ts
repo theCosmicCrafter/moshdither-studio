@@ -215,10 +215,6 @@ export function useProjectSession() {
     [setStatusMessage]
   );
 
-  const clearAutoSave = useCallback(() => {
-    localStorage.removeItem(AUTO_SAVE_KEY);
-  }, []);
-
   const [autoSave] = useState(loadAutoSave);
   const [recentProjects] = useState(loadRecentProjects);
 

@@ -65,10 +65,7 @@ impl Effect for GlitchProfile {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let intensity = params
-            .get("intensity")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.7) as f32;
+        let intensity = crate::effects::params::f32_param(params, "intensity", 0.7);
 
         // A near-empty or zero-dimension frame's byte buffer has len <= 3,
         // which would make `len.saturating_sub(3)` produce an empty `0..0`
@@ -341,10 +338,7 @@ impl Effect for SmearProfile {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let strength = params
-            .get("strength")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.8) as f32;
+        let strength = crate::effects::params::f32_param(params, "strength", 0.8);
         let w = input.width as usize;
         let h = input.height as usize;
         let mut out = input.data.clone();
@@ -454,10 +448,7 @@ impl Effect for ExtremeProfile {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let aggression = params
-            .get("aggression")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.9) as f32;
+        let aggression = crate::effects::params::f32_param(params, "aggression", 0.9);
 
         // Same zero-dimension/near-empty-buffer guard as GlitchProfile above
         // -- `len.saturating_sub(3)` would otherwise hand `gen_range` an
@@ -524,10 +515,7 @@ impl Effect for ExtremeProfile {
         mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let aggression = params
-            .get("aggression")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.9) as f32;
+        let aggression = crate::effects::params::f32_param(params, "aggression", 0.9);
 
         // Phase 1: Aggressive I-frame removal
         let drop_interval = (15.0 - aggression * 10.0).max(2.0) as usize;
@@ -627,10 +615,7 @@ impl Effect for RainbowProfile {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let hue_speed = params
-            .get("hue_shift")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.5) as f32;
+        let hue_speed = crate::effects::params::f32_param(params, "hue_shift", 0.5);
         let w = input.width as usize;
         let h = input.height as usize;
         // Same category of bug as GlitchProfile/ExtremeProfile's corruption

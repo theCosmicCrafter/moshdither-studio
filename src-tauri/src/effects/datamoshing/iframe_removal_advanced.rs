@@ -115,11 +115,8 @@ impl Effect for IFrameRemovalAdvanced {
             .get("mode")
             .and_then(|v| v.as_str())
             .unwrap_or("automatic");
-        let threshold = params
-            .get("threshold")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(30.0) as f32;
-        let rate = params.get("rate").and_then(|v| v.as_f64()).unwrap_or(0.3) as f32;
+        let threshold = crate::effects::params::f32_param(params, "threshold", 30.0);
+        let rate = crate::effects::params::f32_param(params, "rate", 0.3);
         let start_frame = crate::effects::params::usize_param(params, "start_frame", 0);
         let end_frame = crate::effects::params::usize_param(params, "end_frame", 100);
         let frame_number = crate::effects::params::usize_param(params, "frame_number", 0);

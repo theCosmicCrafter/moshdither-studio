@@ -54,11 +54,8 @@ impl Effect for EdgeStretch {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let amount = params.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
-        let blur_radius = params
-            .get("blur_radius")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(5.0) as usize;
+        let amount = crate::effects::params::f32_param(params, "amount", 0.5);
+        let blur_radius = crate::effects::params::usize_param(params, "blur_radius", 5);
 
         let w = input.width as usize;
         let h = input.height as usize;
@@ -173,22 +170,6 @@ impl Effect for EdgeStretch {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

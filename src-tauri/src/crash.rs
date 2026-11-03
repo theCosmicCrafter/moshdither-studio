@@ -221,8 +221,10 @@ pub fn install_exception_handler() {
 
     unsafe extern "system" fn on_fault(info: *const EXCEPTION_POINTERS) -> i32 {
         // Deliberately minimal: the process is already broken, so this reads a
-        // couple of fields and writes a line. No allocation-heavy formatting,
-        // no locks that another thread might hold.
+        // couple of fields and writes a line. It does allocate (format! plus
+        // the module lookup and memory snapshot), which a faulting process can
+        // usually still do; what it avoids is locks another thread might hold
+        // and anything that could itself fault.
         let (code, address, access) = unsafe {
             if info.is_null() || (*info).ExceptionRecord.is_null() {
                 (0u32, 0usize, None)

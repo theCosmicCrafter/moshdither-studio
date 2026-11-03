@@ -116,22 +116,6 @@ impl Effect for RiemersmaDither {
             data,
         })
     }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
-        })
-    }
 }
 
 /// Map Hilbert index to (x, y) coordinates for curve order n.

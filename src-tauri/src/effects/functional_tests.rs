@@ -501,7 +501,7 @@ pub fn run_all_function_tests() -> FunctionTestReport {
         };
         // Create a tiny test video
         let test_video = std::env::temp_dir().join("mosh_test_probe.mp4");
-        let status = std::process::Command::new(&ffmpeg)
+        let status = crate::proc::command(&ffmpeg)
             .args([
                 "-y",
                 "-f",
@@ -535,7 +535,7 @@ pub fn run_all_function_tests() -> FunctionTestReport {
             _ => return Ok("Skipped: ffmpeg not available".to_string()),
         };
         let test_video = std::env::temp_dir().join("mosh_test_decode.mp4");
-        let status = std::process::Command::new(&ffmpeg)
+        let status = crate::proc::command(&ffmpeg)
             .args([
                 "-y",
                 "-f",

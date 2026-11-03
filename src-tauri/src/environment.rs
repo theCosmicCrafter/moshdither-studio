@@ -135,105 +135,56 @@ fn mosh_cli_path() -> Option<PathBuf> {
     None
 }
 
-fn copy_bundled_ffmpeg(app: &AppHandle) -> Result<(), String> {
-    let out_dir = bundled_ffmpeg_dir(app);
-    std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+/// Candidate locations for a bundled sidecar binary, in priority order: the
+/// development layout (`bin/` next to the target, then `src-tauri/bin/`),
+/// each with and without the target-triple suffix.
+fn bundled_binary_candidates(name: &str) -> [std::path::PathBuf; 4] {
+    let exe = exe_suffix();
+    [
+        Path::new("bin").join(format!("{name}-x86_64-pc-windows-msvc{exe}")),
+        Path::new("bin").join(format!("{name}{exe}")),
+        Path::new("src-tauri")
+            .join("bin")
+            .join(format!("{name}-x86_64-pc-windows-msvc{exe}")),
+        Path::new("src-tauri")
+            .join("bin")
+            .join(format!("{name}{exe}")),
+    ]
+}
 
-    let ffmpeg_out = out_dir.join(format!("ffmpeg{}", exe_suffix()));
-    let ffprobe_out = out_dir.join(format!("ffprobe{}", exe_suffix()));
-    if ffmpeg_out.exists() && ffprobe_out.exists() {
-        return Ok(());
-    }
-
-    // Try the bundled binaries in src-tauri/bin
-    let candidates = [
-        Path::new("bin").join(format!("ffmpeg-x86_64-pc-windows-msvc{}", exe_suffix())),
-        Path::new("bin").join(format!("ffmpeg{}", exe_suffix())),
-        Path::new("src-tauri")
-            .join("bin")
-            .join(format!("ffmpeg-x86_64-pc-windows-msvc{}", exe_suffix())),
-        Path::new("src-tauri")
-            .join("bin")
-            .join(format!("ffmpeg{}", exe_suffix())),
-    ];
-    let ffprobe_candidates = [
-        Path::new("bin").join(format!("ffprobe-x86_64-pc-windows-msvc{}", exe_suffix())),
-        Path::new("bin").join(format!("ffprobe{}", exe_suffix())),
-        Path::new("src-tauri")
-            .join("bin")
-            .join(format!("ffprobe-x86_64-pc-windows-msvc{}", exe_suffix())),
-        Path::new("src-tauri")
-            .join("bin")
-            .join(format!("ffprobe{}", exe_suffix())),
-    ];
-
-    for src in &candidates {
-        if src.exists() && !ffmpeg_out.exists() {
-            std::fs::copy(src, &ffmpeg_out).map_err(|e| e.to_string())?;
-            break;
+/// Copy each binary in `names` from the first existing bundle candidate into
+/// `out_dir`, skipping any already present. Fails if any binary is still
+/// missing afterwards.
+fn copy_bundled_binaries(out_dir: &Path, names: &[&str], label: &str) -> Result<(), String> {
+    std::fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
+    for name in names {
+        let out = out_dir.join(format!("{name}{}", exe_suffix()));
+        if out.exists() {
+            continue;
         }
-    }
-    for src in &ffprobe_candidates {
-        if src.exists() && !ffprobe_out.exists() {
-            std::fs::copy(src, &ffprobe_out).map_err(|e| e.to_string())?;
-            break;
+        for src in bundled_binary_candidates(name) {
+            if src.exists() {
+                std::fs::copy(&src, &out).map_err(|e| e.to_string())?;
+                break;
+            }
         }
-    }
-
-    if !ffmpeg_out.exists() || !ffprobe_out.exists() {
-        return Err("FFmpeg/FFprobe binaries not found in bundle".to_string());
+        if !out.exists() {
+            return Err(format!("{label} binary '{name}' not found in bundle"));
+        }
     }
     Ok(())
 }
 
+fn copy_bundled_ffmpeg(app: &AppHandle) -> Result<(), String> {
+    copy_bundled_binaries(
+        &bundled_ffmpeg_dir(app),
+        &["ffmpeg", "ffprobe"],
+        "FFmpeg/FFprobe",
+    )
+}
+
 fn copy_bundled_ffglitch(app: &AppHandle) -> Result<(), String> {
-    let out_dir = bundled_ffglitch_dir(app);
-    std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
-
-    let ffgac_out = out_dir.join(format!("ffgac{}", exe_suffix()));
-    let ffedit_out = out_dir.join(format!("ffedit{}", exe_suffix()));
-    if ffgac_out.exists() && ffedit_out.exists() {
-        return Ok(());
-    }
-
-    let candidates = [
-        Path::new("bin").join(format!("ffgac-x86_64-pc-windows-msvc{}", exe_suffix())),
-        Path::new("bin").join(format!("ffgac{}", exe_suffix())),
-        Path::new("src-tauri")
-            .join("bin")
-            .join(format!("ffgac-x86_64-pc-windows-msvc{}", exe_suffix())),
-        Path::new("src-tauri")
-            .join("bin")
-            .join(format!("ffgac{}", exe_suffix())),
-    ];
-    let ffedit_candidates = [
-        Path::new("bin").join(format!("ffedit-x86_64-pc-windows-msvc{}", exe_suffix())),
-        Path::new("bin").join(format!("ffedit{}", exe_suffix())),
-        Path::new("src-tauri")
-            .join("bin")
-            .join(format!("ffedit-x86_64-pc-windows-msvc{}", exe_suffix())),
-        Path::new("src-tauri")
-            .join("bin")
-            .join(format!("ffedit{}", exe_suffix())),
-    ];
-
-    for src in &candidates {
-        if src.exists() && !ffgac_out.exists() {
-            std::fs::copy(src, &ffgac_out).map_err(|e| e.to_string())?;
-            break;
-        }
-    }
-    for src in &ffedit_candidates {
-        if src.exists() && !ffedit_out.exists() {
-            std::fs::copy(src, &ffedit_out).map_err(|e| e.to_string())?;
-            break;
-        }
-    }
-
-    if !ffgac_out.exists() || !ffedit_out.exists() {
-        return Err("FFglitch binaries not found in bundle".to_string());
-    }
-    Ok(())
+    copy_bundled_binaries(&bundled_ffglitch_dir(app), &["ffgac", "ffedit"], "FFglitch")
 }
 
 fn run_command(cmd: &str, args: &[&str]) -> Result<(), String> {

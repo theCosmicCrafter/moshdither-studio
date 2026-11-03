@@ -73,10 +73,8 @@ impl Effect for HalftoneDither {
             .filter(|v| v.is_finite())
             .map(|v| v.round().clamp(2.0, 32.0) as u32)
             .unwrap_or(self.dot_size);
-        let screen_angle = params
-            .get("screen_angle")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(self.screen_angle as f64) as f32;
+        let screen_angle =
+            crate::effects::params::f32_param(params, "screen_angle", self.screen_angle);
         let mut data = vec![0u8; input.data.len()];
         let w = input.width;
         let h = input.height;
@@ -163,22 +161,6 @@ impl Effect for HalftoneDither {
             width: w,
             height: h,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

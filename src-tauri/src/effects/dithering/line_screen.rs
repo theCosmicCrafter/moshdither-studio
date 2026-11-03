@@ -94,18 +94,9 @@ impl Effect for LineScreen {
             .filter(|v| v.is_finite())
             .map(|v| v.round().clamp(2.0, 20.0) as usize)
             .unwrap_or(4);
-        let angle_deg = params
-            .get("angle")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(-45.0);
-        let threshold = params
-            .get("threshold")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.5) as f32;
-        let contrast = params
-            .get("contrast")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(1.2) as f32;
+        let angle_deg = crate::effects::params::f64_param(params, "angle", -45.0);
+        let threshold = crate::effects::params::f32_param(params, "threshold", 0.5);
+        let contrast = crate::effects::params::f32_param(params, "contrast", 1.2);
         let invert = params
             .get("invert")
             .and_then(|v| v.as_bool())
@@ -161,44 +152,15 @@ impl Effect for LineScreen {
                 // If the pixel falls within the line region, it's "on"
                 let is_line = phase < line_width_frac;
 
-                // Below the threshold there is too little tone to carry ink, so
-                // the pixel is left as bare paper.
-                if ink > threshold {
-                    if is_line {
-                        // Line color: black (or inverted: white)
-                        if invert {
-                            data[idx] = 255;
-                            data[idx + 1] = 255;
-                            data[idx + 2] = 255;
-                        } else {
-                            data[idx] = 0;
-                            data[idx + 1] = 0;
-                            data[idx + 2] = 0;
-                        }
-                    } else {
-                        // Background: white (or inverted: black)
-                        if invert {
-                            data[idx] = 0;
-                            data[idx + 1] = 0;
-                            data[idx + 2] = 0;
-                        } else {
-                            data[idx] = 255;
-                            data[idx + 1] = 255;
-                            data[idx + 2] = 255;
-                        }
-                    }
-                } else {
-                    // Below threshold: solid background
-                    if invert {
-                        data[idx] = 0;
-                        data[idx + 1] = 0;
-                        data[idx + 2] = 0;
-                    } else {
-                        data[idx] = 255;
-                        data[idx + 1] = 255;
-                        data[idx + 2] = 255;
-                    }
-                }
+                // Below the threshold there is too little tone to carry ink,
+                // so the pixel is left as bare paper. Inversion swaps the two
+                // channels, not the branch structure: ink is black on white
+                // paper normally, white on black inverted.
+                let is_ink = ink > threshold && is_line;
+                let v = if is_ink != invert { 0 } else { 255 };
+                data[idx] = v;
+                data[idx + 1] = v;
+                data[idx + 2] = v;
                 data[idx + 3] = a;
             }
         }
@@ -207,22 +169,6 @@ impl Effect for LineScreen {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

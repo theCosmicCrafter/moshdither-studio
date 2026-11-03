@@ -434,10 +434,7 @@ impl Effect for LutGrading {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let amount = params
-            .get("amount")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(self.amount as f64) as f32;
+        let amount = crate::effects::params::f32_param(params, "amount", self.amount);
         let lut_path = lut_path_from_params(params, &self.lut_path);
 
         // No LUT selected is a legitimate neutral state, not an error.
@@ -455,10 +452,7 @@ impl Effect for LutGrading {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let amount = params
-            .get("amount")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(self.amount as f64) as f32;
+        let amount = crate::effects::params::f32_param(params, "amount", self.amount);
         let lut_path = lut_path_from_params(params, &self.lut_path);
 
         if lut_path.is_empty() {

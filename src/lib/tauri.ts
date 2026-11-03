@@ -3,6 +3,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import type { EffectMeta } from "../store";
 import type { WatermarkSettings } from "../utils/watermark";
 import { getFallbackEffects, isTauriAvailable } from "./browserFallback";
+import { logger } from "../utils/logger";
 
 export { convertFileSrc };
 
@@ -705,6 +706,13 @@ export async function installUpdate(): Promise<string> {
   return invoke<string>("install_update");
 }
 
+/**
+ * Display text of `AppError::NoAudioStream` — the stable IPC contract for
+ * "the source video carries no audio stream". Compare with `===`, never
+ * `includes`: a generic ffmpeg stderr could contain the same words.
+ */
+export const NO_AUDIO_STREAM_MESSAGE = "Source video has no audio stream";
+
 // ── File IO ──────────────────────────────────────────────────
 
 /**
@@ -732,4 +740,19 @@ export async function writeFile(path: string, contents: string): Promise<void> {
  */
 export async function prepareCustomLut(path: string): Promise<string> {
   return invoke<string>("prepare_custom_lut", { path });
+}
+
+/**
+ * Absolute path of the shared log file, or `null` outside the Tauri shell.
+ * Null — not a rejection — because callers like the crash screen only show
+ * the path when one exists and have no recovery to run when there is none.
+ */
+export async function getLogPath(): Promise<string | null> {
+  if (!isTauriAvailable()) return null;
+  try {
+    return await invoke<string>("get_log_path");
+  } catch (err) {
+    logger.warn("ipc", "get_log_path failed", { error: String(err) });
+    return null;
+  }
 }

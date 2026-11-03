@@ -51,7 +51,7 @@ impl Effect for UniformNoise {
         params: &ParameterValues,
     ) -> Result<Frame> {
         let range = crate::effects::params::u64_param(params, "range", self.range as u64) as i16;
-        let time = params.get("time").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
+        let time = crate::effects::params::usize_param(params, "time", 0) as u32;
         let mut data = input.data.clone();
         for (i, chunk) in data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let seed = (i as u32)
@@ -68,22 +68,6 @@ impl Effect for UniformNoise {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }
