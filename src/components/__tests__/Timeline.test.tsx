@@ -41,7 +41,8 @@ function resetStore() {
     playbackSpeed: 1,
     audioFilePath: null,
     audioBpm: null,
-    isVideo: false,
+    isVideo: true,
+    mediaLoaded: true,
     mediaFps: 30,
     animateFps: 30,
     keyframes: {},
@@ -80,6 +81,17 @@ describe("Timeline", () => {
 
   // ── Duration input clamping ────────────────────────────────
   describe("Duration input clamping", () => {
+    beforeEach(() => {
+      // The duration field lives in the collapsed still strip.
+      useAppStore.setState({ isVideo: false, mediaLoaded: true });
+    });
+
+    it("renders the slim still strip with an animate-to-clip CTA", () => {
+      render(<Timeline />);
+      expect(screen.getByText(/Still · 1 frame/)).toBeInTheDocument();
+      expect(screen.getByText("Animate to clip")).toBeInTheDocument();
+    });
+
     it("clamps duration to minimum 0.1 on valid input", () => {
       render(<Timeline />);
       const durationInput = screen.getByTitle("Animation length (seconds)");

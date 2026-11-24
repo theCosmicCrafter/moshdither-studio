@@ -15,8 +15,8 @@ export interface PanelMeta {
 export const PANEL_REGISTRY: PanelMeta[] = [
   {
     id: "browser",
-    label: "Effects",
-    icon: "palette",
+    label: "Library",
+    icon: "auto_awesome",
     defaultZone: "left",
     minWidth: 220,
     minHeight: 200,
@@ -24,7 +24,7 @@ export const PANEL_REGISTRY: PanelMeta[] = [
   },
   {
     id: "stack",
-    label: "Stack",
+    label: "Layers",
     icon: "layers",
     defaultZone: "right",
     minWidth: 260,

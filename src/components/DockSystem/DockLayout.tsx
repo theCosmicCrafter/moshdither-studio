@@ -25,9 +25,12 @@ import { ErrorBoundary } from "../ErrorBoundary";
  * 3: the Timeline left the dock and became the transport strip under the
  *    workspace. A version-2 layout would restore a bottom tabset asking for
  *    a "timeline" component that no longer exists.
+ * 4: panel labels were renamed for the reskin ("Effects"→"Library",
+ *    "Stack"→"Layers") and tab names are baked into saved layout JSON — a
+ *    version-3 layout would keep showing the old names forever.
  */
 const LAYOUT_STORAGE_KEY = "moshdither.dockLayout";
-const LAYOUT_VERSION = 3;
+const LAYOUT_VERSION = 4;
 
 /** Component ids of every tab node currently docked in `model`. */
 function collectDockedTabIds(model: Model): string[] {
@@ -231,7 +234,7 @@ export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) 
   if (!model) return null;
 
   return (
-    <DockContext.Provider value={{ model, addPanel }}>
+    <DockContext.Provider value={{ model, addPanel, removePanel }}>
       <div
         className={`dock-layout flex flex-row h-full w-full min-h-0 overflow-hidden theme-${theme}`}
         style={{ ["--panel-opacity" as string]: panelOpacity }}

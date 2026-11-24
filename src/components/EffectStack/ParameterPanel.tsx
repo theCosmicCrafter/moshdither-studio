@@ -1,3 +1,4 @@
+import { useRef, useEffect } from "react";
 import { useAppStore, type AudioBinding } from "../../store";
 import { audioChannelName } from "../../engine/audio/channelName";
 import { PALETTE_PRESETS, fillPaletteParams } from "../../engine/palettePresets";
@@ -42,112 +43,62 @@ const AUDIO_SOURCES = [
   { id: "beatTreble", label: "Beat (Treble)" },
 ];
 
-function ParameterWheel({
+function FaderControl({
   value,
   min,
   max,
+  step,
+  label,
   onChange,
 }: {
   value: number;
   min: number;
   max: number;
+  step?: number;
+  label: string;
   onChange: (v: number) => void;
 }) {
-  const range = max - min;
-  const angle = range > 0 ? ((value - min) / range) * 270 - 135 : 0;
-
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const step = range > 0 ? range / 50 : 1;
-    const dir = e.deltaY > 0 ? -1 : 1;
-    const next = Math.max(min, Math.min(max, value + step * dir));
-    onChange(next);
-  };
-
-  const handleDrag = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const startY = e.clientY;
-    const startValue = value;
-    // Raw mousemove can fire far faster than the screen repaints (OS/mouse
-    // polling rate, sometimes 100-1000Hz) -- calling onChange synchronously
-    // on every event pushed a full store update (and, downstream, a real
-    // preview re-render/backend IPC call) on every single tick, which is
-    // what made dragging a slider on a CPU-preview dithering effect feel
-    // choppy. Coalesce to at most one commit per animation frame instead;
-    // the eye can't perceive more than that anyway, and the final value is
-    // still always committed on mouseup even if it lands between frames.
-    let rafId: number | null = null;
-    let pendingValue: number | null = null;
-    const flush = () => {
-      rafId = null;
-      if (pendingValue !== null) {
-        onChange(pendingValue);
-        pendingValue = null;
-      }
-    };
-    const handleMove = (ev: MouseEvent) => {
-      const delta = startY - ev.clientY;
-      const step = range > 0 ? range / 200 : 1;
-      const next = Math.max(min, Math.min(max, startValue + delta * step));
-      pendingValue = next;
-      if (rafId === null) {
-        rafId = requestAnimationFrame(flush);
-      }
-    };
-    const handleUp = () => {
-      window.removeEventListener("mousemove", handleMove);
-      window.removeEventListener("mouseup", handleUp);
-      if (rafId !== null) {
-        cancelAnimationFrame(rafId);
-        rafId = null;
-      }
-      flush();
-    };
-    window.addEventListener("mousemove", handleMove);
-    window.addEventListener("mouseup", handleUp);
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    const step = range > 0 ? range / 50 : 1;
-    if (e.key === "ArrowUp" || e.key === "ArrowRight") {
-      e.preventDefault();
-      onChange(Math.max(min, Math.min(max, value + step)));
-    } else if (e.key === "ArrowDown" || e.key === "ArrowLeft") {
-      e.preventDefault();
-      onChange(Math.max(min, Math.min(max, value - step)));
+  // Range inputs can fire `input` far faster than the screen repaints
+  // (OS/pointer polling rate), and every event used to push a full store
+  // update plus downstream preview/IPC work. Coalesce commits to one per
+  // animation frame. React maps onChange to the same `input` event, so a
+  // release commit has to hook pointerup/keyboard instead -- and unmount
+  // mid-drag flushes whatever is still pending.
+  const rafRef = useRef<number | null>(null);
+  const pendingRef = useRef<number | null>(null);
+  const flush = () => {
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    if (pendingRef.current !== null) {
+      onChange(pendingRef.current);
+      pendingRef.current = null;
     }
   };
+  const schedule = (v: number) => {
+    pendingRef.current = v;
+    if (rafRef.current === null) {
+      rafRef.current = requestAnimationFrame(flush);
+    }
+  };
+  const flushRef = useRef(flush);
+  flushRef.current = flush;
+  useEffect(() => () => flushRef.current(), []);
 
   return (
-    <div className="flex items-center gap-3 mt-1">
-      <div
-        className="relative w-10 h-10 rounded-full neo-panel flex items-center justify-center cursor-pointer border border-accent-pink/30"
-        onWheel={handleWheel}
-        onMouseDown={handleDrag}
-        onKeyDown={handleKeyDown}
-        title="Scroll or drag to adjust"
-        role="slider"
-        aria-label="Parameter wheel"
-        aria-valuemin={Number(min)}
-        aria-valuemax={Number(max)}
-        aria-valuenow={Number(value)}
-        tabIndex={0}
-      >
-        <div
-          className="w-1 h-3 bg-accent-pink absolute top-1 left-1/2 -translate-x-1/2 rounded-full origin-[50%_18px]"
-          style={{ transform: `rotate(${angle}deg)`, boxShadow: "0 0 8px #ffade0" }}
-        />
-        <div className="w-6 h-6 rounded-full neo-pressed flex items-center justify-center">
-          <span className="font-data-micro text-data-micro text-accent-teal">
-            {/* Precision follows the RANGE. A fixed 0 decimals read "0" for
-                every value below 0.5 on the 67 sliders whose whole range is
-                <= 2, so the face was blank of information exactly where fine
-                adjustment matters most. */}
-            {value.toFixed(max - min <= 2 ? 2 : max - min <= 20 ? 1 : 0)}
-          </span>
-        </div>
-      </div>
-    </div>
+    <input
+      type="range"
+      aria-label={`${label} fader`}
+      className="slider-track w-full cursor-pointer mt-1.5"
+      value={value}
+      min={min}
+      max={max}
+      step={step ?? "any"}
+      onInput={(e) => schedule(parseFloat((e.target as HTMLInputElement).value))}
+      onPointerUp={flush}
+      onKeyUp={flush}
+    />
   );
 }
 
@@ -190,11 +141,8 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
 
   return (
     <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4 custom-scrollbar">
-      <div
-        className="text-dense-lg font-semibold filigree-header"
-        style={{ color: "var(--text-secondary)", fontFamily: "var(--font-hand)" }}
-      >
-        {entry.effectName} Parameters
+      <div className="text-label-sm font-label-sm uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>
+        Parameters
       </div>
 
       {showVideoOnlyWarning && (
@@ -355,10 +303,12 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
               const max = param.max ?? 100;
               const val = Number(value);
               return (
-                <ParameterWheel
+                <FaderControl
                   value={val}
                   min={min}
                   max={max}
+                  step={param.step ?? undefined}
+                  label={param.name}
                   onChange={(v) => updateStackParams(entry.id, { [param.id]: v })}
                 />
               );

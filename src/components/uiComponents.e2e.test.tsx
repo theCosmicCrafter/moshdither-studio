@@ -102,14 +102,13 @@ describe("UI Components E2E", () => {
   describe("EffectStack", () => {
     it("shows empty state when no effects", () => {
       render(<EffectStack />);
-      expect(screen.getByText("Empty stack")).toBeInTheDocument();
       expect(screen.getByText(/No effects in stack/)).toBeInTheDocument();
     });
 
     it("shows effect count when stack has items", () => {
       useAppStore.getState().addToStack(mockEffectMeta("dithering.bayer", "Bayer Dither", "dithering"));
       render(<EffectStack />);
-      expect(screen.getByText(/1 effect in stack/)).toBeInTheDocument();
+      expect(screen.getByTestId("layers-count")).toHaveTextContent("1");
       expect(screen.getByText("Bayer Dither")).toBeInTheDocument();
     });
 
@@ -117,21 +116,22 @@ describe("UI Components E2E", () => {
       useAppStore.getState().addToStack(mockEffectMeta("dithering.bayer", "Bayer Dither", "dithering"));
       useAppStore.getState().addToStack(mockEffectMeta("analog.vhs", "VHS Effect", "analog"));
       render(<EffectStack />);
-      expect(screen.getByText(/2 effects in stack/)).toBeInTheDocument();
+      expect(screen.getByTestId("layers-count")).toHaveTextContent("2");
     });
 
-    it("removes effect on delete button click", () => {
+    it("removes effect via the layer actions menu", () => {
       useAppStore.getState().addToStack(mockEffectMeta("dithering.bayer", "Bayer Dither", "dithering"));
       render(<EffectStack />);
       expect(screen.getByText("Bayer Dither")).toBeInTheDocument();
-      fireEvent.click(screen.getByTitle("Remove"));
+      fireEvent.click(screen.getByTitle("Layer actions"));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Remove" }));
       expect(screen.queryByText("Bayer Dither")).not.toBeInTheDocument();
     });
 
     it("toggles effect visibility", () => {
       useAppStore.getState().addToStack(mockEffectMeta("dithering.bayer", "Bayer Dither", "dithering"));
       render(<EffectStack />);
-      const toggleBtn = screen.getByTitle("Disable");
+      const toggleBtn = screen.getByTitle("Disable layer");
       fireEvent.click(toggleBtn);
       expect(useAppStore.getState().effectStack[0].enabled).toBe(false);
     });
@@ -144,13 +144,13 @@ describe("UI Components E2E", () => {
       expect(useAppStore.getState().selectedStackId).not.toBeNull();
     });
 
-    it("moves effect up", () => {
+    it("moves effect up via the layer actions menu", () => {
       useAppStore.getState().addToStack(mockEffectMeta("dithering.bayer", "Bayer Dither", "dithering"));
       useAppStore.getState().addToStack(mockEffectMeta("analog.vhs", "VHS Effect", "analog"));
       render(<EffectStack />);
-      // Second effect should have a move-up button
-      const moveUpBtn = screen.getByTitle("Move Up");
-      fireEvent.click(moveUpBtn);
+      // Second card's kebab opens the menu for VHS (index 1).
+      fireEvent.click(screen.getAllByTitle("Layer actions")[1]);
+      fireEvent.click(screen.getByRole("menuitem", { name: "Move Up" }));
       const stack = useAppStore.getState().effectStack;
       expect(stack[0].effectName).toBe("VHS Effect");
       expect(stack[1].effectName).toBe("Bayer Dither");

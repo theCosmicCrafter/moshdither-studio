@@ -1,8 +1,12 @@
 import { useState } from "react";
 import { useAppStore, type EffectMeta } from "../../store";
 import { isVideoOnlyEffect, VIDEO_ONLY_ON_IMAGE_WARNING } from "../../utils/effectConverter";
+import { effectPipeline } from "../../lib/effectPipeline";
 
+// Datamosh first: it's the headline capability and the teal tick marks it as
+// the "codec truth" lane in the accent system.
 const CATEGORIES: { id: string; label: string; icon: string; color: string }[] = [
+  { id: "datamoshing", label: "Datamosh", icon: "auto_fix_high", color: "var(--accent-teal)" },
   { id: "dithering", label: "Dither", icon: "grain", color: "var(--cat-dithering)" },
   { id: "analog", label: "Analog", icon: "videocam", color: "var(--cat-analog)" },
   { id: "color", label: "Color", icon: "palette", color: "var(--cat-color)" },
@@ -10,7 +14,6 @@ const CATEGORIES: { id: string; label: string; icon: string; color: string }[] =
   { id: "glitch", label: "Glitch", icon: "broken_image", color: "var(--cat-glitch)" },
   { id: "noise", label: "Noise", icon: "texture", color: "var(--cat-noise)" },
   { id: "artistic", label: "Art", icon: "brush", color: "var(--cat-artistic)" },
-  { id: "datamoshing", label: "Mosh", icon: "auto_fix_high", color: "var(--cat-datamoshing)" },
   { id: "audio_reactive", label: "Audio", icon: "graphic_eq", color: "var(--cat-audio-reactive)" },
   { id: "segmentation", label: "Mask", icon: "masks", color: "var(--cat-segmentation)" },
   { id: "composite", label: "Comp", icon: "layers", color: "var(--cat-composite)" },
@@ -172,8 +175,18 @@ function EffectItem({
       title={isIncompatible ? VIDEO_ONLY_ON_IMAGE_WARNING : undefined}
     >
       <div className="flex-1 min-w-0">
-        <div className="text-label-md font-label-md text-on-surface group-hover:text-accent-pink transition-colors truncate">
-          {effect.name}
+        <div className="text-label-md font-label-md text-on-surface group-hover:text-accent-pink transition-colors truncate flex items-center gap-1.5">
+          <span className="truncate">{effect.name}</span>
+          {effectPipeline(effect) === "sim" && (
+            <span className="sim-chip" title="Pixel-domain simulation — not real codec corruption. True bitstream mosh uses the FFglitch modes in Export.">
+              sim
+            </span>
+          )}
+          {effectPipeline(effect) === "codec" && (
+            <span className="codec-chip" title="Real bitstream corruption via FFglitch">
+              codec
+            </span>
+          )}
         </div>
         <div className="text-label-sm font-label-sm text-on-surface-variant opacity-70 truncate">
           {effect.parameters.length} parameter

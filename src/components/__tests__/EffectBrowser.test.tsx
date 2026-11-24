@@ -340,7 +340,7 @@ describe("EffectBrowser — Media Type Compatibility Indicator", () => {
     useAppStore.getState().setMediaLoaded(true);
     useAppStore.getState().setIsVideo(false);
     render(<CategoryAccordion />);
-    fireEvent.click(screen.getByText("Mosh"));
+    fireEvent.click(screen.getByText("Datamosh"));
     expect(screen.getAllByTitle(VIDEO_ONLY_TITLE).length).toBeGreaterThan(0);
   });
 });

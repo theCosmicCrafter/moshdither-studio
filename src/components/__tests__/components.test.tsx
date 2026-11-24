@@ -535,29 +535,29 @@ describe("Component Test Suite", () => {
   describe("EffectStack", () => {
     it("shows empty state when no effects", () => {
       render(<EffectStack />);
-      expect(screen.getByText("Empty stack")).toBeInTheDocument();
       expect(screen.getByText(/No effects in stack/)).toBeInTheDocument();
     });
 
     it("shows effect count when stack has items", () => {
       useAppStore.getState().addToStack(mockEffectMeta("dithering.bayer", "Bayer Dither", "dithering"));
       render(<EffectStack />);
-      expect(screen.getByText(/1 effect in stack/)).toBeInTheDocument();
+      expect(screen.getByTestId("layers-count")).toHaveTextContent("1");
       expect(screen.getByText("Bayer Dither")).toBeInTheDocument();
     });
 
-    it("removes effect on delete button click", () => {
+    it("removes effect via the layer actions menu", () => {
       useAppStore.getState().addToStack(mockEffectMeta("dithering.bayer", "Bayer Dither", "dithering"));
       render(<EffectStack />);
       expect(screen.getByText("Bayer Dither")).toBeInTheDocument();
-      fireEvent.click(screen.getByTitle("Remove"));
+      fireEvent.click(screen.getByTitle("Layer actions"));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Remove" }));
       expect(screen.queryByText("Bayer Dither")).not.toBeInTheDocument();
     });
 
     it("toggles effect visibility", () => {
       useAppStore.getState().addToStack(mockEffectMeta("dithering.bayer", "Bayer Dither", "dithering"));
       render(<EffectStack />);
-      fireEvent.click(screen.getByTitle("Disable"));
+      fireEvent.click(screen.getByTitle("Disable layer"));
       expect(useAppStore.getState().effectStack[0].enabled).toBe(false);
     });
 
@@ -568,12 +568,13 @@ describe("Component Test Suite", () => {
       expect(useAppStore.getState().selectedStackId).not.toBeNull();
     });
 
-    it("moves effect up", () => {
+    it("moves effect up via the layer actions menu", () => {
       useAppStore.getState().addToStack(mockEffectMeta("dithering.bayer", "Bayer Dither", "dithering"));
       useAppStore.getState().addToStack(mockEffectMeta("analog.vhs", "VHS Effect", "analog"));
       render(<EffectStack />);
-      const moveUpBtn = screen.getByTitle("Move Up");
-      fireEvent.click(moveUpBtn);
+      // Second card's kebab opens the menu for VHS (index 1).
+      fireEvent.click(screen.getAllByTitle("Layer actions")[1]);
+      fireEvent.click(screen.getByRole("menuitem", { name: "Move Up" }));
       const stack = useAppStore.getState().effectStack;
       expect(stack[0].effectName).toBe("VHS Effect");
       expect(stack[1].effectName).toBe("Bayer Dither");
@@ -598,7 +599,8 @@ describe("Component Test Suite", () => {
       expect(screen.queryByText("Bayer Dither")).not.toBeInTheDocument();
 
       // Databend is real index 2 (last), filtered index 0 (only match).
-      fireEvent.click(screen.getByTitle("Move Up"));
+      fireEvent.click(screen.getByTitle("Layer actions"));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Move Up" }));
 
       const stack = useAppStore.getState().effectStack;
       expect(stack.map((e) => e.effectName)).toEqual([
@@ -611,55 +613,51 @@ describe("Component Test Suite", () => {
 
   // ── ParameterPanel / ParameterWheel drag throttling ─────────
   describe("ParameterPanel", () => {
-    it("coalesces a fast slider drag to one committed update per animation frame, not one per mousemove", () => {
+    it("coalesces a fast slider drag to one committed update per animation frame, not one per input event", () => {
       const meta = mockEffectMeta("dithering.bayer", "Bayer Dither", "dithering");
       useAppStore.getState().setAllEffects([meta]);
       useAppStore.getState().addToStack(meta);
       render(<ParameterPanel />);
 
-      const wheel = screen.getByLabelText("Parameter wheel");
-      fireEvent.mouseDown(wheel, { clientY: 100 });
+      const fader = screen.getByRole("slider");
 
-      // Five rapid drag ticks, synchronously, before any animation frame
+      // Five rapid input ticks, synchronously, before any animation frame
       // has had a chance to run.
-      for (let dy = 1; dy <= 5; dy++) {
-        fireEvent.mouseMove(window, { clientY: 100 - dy });
+      for (let i = 1; i <= 5; i++) {
+        fireEvent.input(fader, { target: { value: String(0.5 + i * 0.05) } });
       }
 
       // Old behavior: onChange (and therefore a full store update) fired
-      // synchronously on every mousemove -- so the value would already
-      // reflect the 5th tick here. Coalesced behavior: nothing has been
-      // committed to the store yet, only scheduled.
+      // synchronously on every input -- so the value would already reflect
+      // the 5th tick here. Coalesced behavior: nothing has been committed
+      // to the store yet, only scheduled.
       expect(useAppStore.getState().effectStack[0].params.intensity).toBe(0.5);
 
       return new Promise<void>((resolve) => {
         requestAnimationFrame(() => {
           // The frame that flushes the coalesced update must itself have
           // committed by the time this callback runs (rAF callbacks run in
-          // registration order).
+          // registration order). Only the LAST pending value lands.
           const value = useAppStore.getState().effectStack[0].params.intensity as number;
-          // delta = startY(100) - clientY(95) = 5, step = (max-min)/200 = 1/200
-          expect(value).toBeCloseTo(0.5 + 5 * (1 / 200), 5);
-          fireEvent.mouseUp(window);
+          expect(value).toBeCloseTo(0.75, 5);
           resolve();
         });
       });
     });
 
-    it("always commits the final drag value on mouseup, even if it lands between animation frames", () => {
+    it("commits the released value immediately on change, even if it lands between animation frames", () => {
       const meta = mockEffectMeta("dithering.bayer", "Bayer Dither", "dithering");
       useAppStore.getState().setAllEffects([meta]);
       useAppStore.getState().addToStack(meta);
       render(<ParameterPanel />);
 
-      const wheel = screen.getByLabelText("Parameter wheel");
-      fireEvent.mouseDown(wheel, { clientY: 100 });
-      fireEvent.mouseMove(window, { clientY: 90 });
-      fireEvent.mouseUp(window);
-
-      const value = useAppStore.getState().effectStack[0].params.intensity as number;
-      // delta = 100 - 90 = 10, step = 1/200
-      expect(value).toBeCloseTo(0.5 + 10 * (1 / 200), 5);
+      const fader = screen.getByRole("slider");
+      // An in-flight drag tick schedules but does not commit...
+      fireEvent.input(fader, { target: { value: "0.6" } });
+      expect(useAppStore.getState().effectStack[0].params.intensity).toBe(0.5);
+      // ...and releasing the pointer commits the pending value at once.
+      fireEvent.pointerUp(fader);
+      expect(useAppStore.getState().effectStack[0].params.intensity).toBe(0.6);
     });
 
     it("exposes a toggle parameter's on/off state via aria-pressed", () => {
@@ -937,7 +935,7 @@ describe("Component Test Suite", () => {
       const meta = getPanelMeta("browser");
       expect(meta).toBeDefined();
       expect(meta?.id).toBe("browser");
-      expect(meta?.label).toBe("Effects");
+      expect(meta?.label).toBe("Library");
     });
 
     it("getPanelMeta returns undefined for unknown id", () => {

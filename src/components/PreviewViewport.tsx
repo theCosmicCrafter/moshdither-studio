@@ -1214,23 +1214,23 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     setUseCpuPreview,
   ]);
 
-  let statusDotBg = "solar-bg animate-pulse-glow";
-  let statusText = "LIVE PREVIEW";
+  let statusDotBg = "bg-accent-pink";
+  let statusText = "GPU preview";
   if (useCpuPreview) {
     statusDotBg = "bg-accent-teal";
-    statusText = "EXACT";
+    statusText = "Exact · matches export";
   } else if (isApproximatePreview) {
     // With auto-exact on, this state lasts about half a second after you stop
     // moving, so it reports what is happening rather than asking for a click.
     statusDotBg = "bg-amber-400";
     statusText = !previewAutoExact
-      ? "APPROXIMATE (CLICK FOR EXACT)"
+      ? "≈ Approximate · click for exact"
       : isPlaying
-        ? "LIVE PREVIEW"
-        : "REFINING…";
+        ? "GPU preview"
+        : "≈ Refining…";
   } else if (stackCount > 0) {
-    statusDotBg = "bg-accent-pink animate-pulse-glow";
-    statusText = "ANIMATING";
+    statusDotBg = "bg-accent-pink";
+    statusText = "GPU preview";
   }
 
   let canvasCursor = "cursor-default";

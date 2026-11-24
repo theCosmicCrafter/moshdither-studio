@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useAppStore } from "../../store";
 import { isVideoOnlyEffect, VIDEO_ONLY_ON_IMAGE_WARNING } from "../../utils/effectConverter";
+import { effectPipeline } from "../../lib/effectPipeline";
 
 const CAT_COLORS: Record<string, string> = {
   dithering: "var(--cat-dithering)",
@@ -75,8 +76,18 @@ export default function EffectList() {
               style={{ background: color, opacity: 0.7 }}
             />
             <div className="flex-1 min-w-0">
-              <div className="text-label-md font-label-md text-on-surface group-hover:text-accent-pink transition-colors truncate">
-                {effect.name}
+              <div className="text-label-md font-label-md text-on-surface group-hover:text-accent-pink transition-colors truncate flex items-center gap-1.5">
+                <span className="truncate">{effect.name}</span>
+                {effectPipeline(effect) === "sim" && (
+                  <span className="sim-chip" title="Pixel-domain simulation — not real codec corruption. True bitstream mosh uses the FFglitch modes in Export.">
+                    sim
+                  </span>
+                )}
+                {effectPipeline(effect) === "codec" && (
+                  <span className="codec-chip" title="Real bitstream corruption via FFglitch">
+                    codec
+                  </span>
+                )}
               </div>
               <div className="text-label-sm font-label-sm text-on-surface-variant opacity-70 truncate">
                 {effect.parameters.length} parameter

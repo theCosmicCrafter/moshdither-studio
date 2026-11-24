@@ -398,6 +398,12 @@ export interface AppState {
   resetExport: () => void;
   setWatermark: (settings: Partial<WatermarkSettings>) => void;
   clearStack: () => void;
+  /**
+   * The MOSH button: replace the stack with 2-4 random compatible effects.
+   * One undo step for the whole replacement (built atomically like
+   * addToStack's entry shape, one pushHistory).
+   */
+  randomizeStack: () => void;
   replaceStack: (stack: StackEntry[]) => void;
   undo: () => void;
   redo: () => void;
@@ -1092,6 +1098,35 @@ export const useAppStore = create<AppState>((set, get) => ({
       effectStack: [],
       selectedStackId: null,
     })),
+  randomizeStack: () => {
+    const state = get();
+    // Codec effects can't randomize in — they're not stackable yet — and
+    // video-only effects are skipped on stills for the same reason the
+    // EffectList dims them.
+    const pool = state.allEffects.filter(
+      (e) =>
+        !e.id.startsWith("ffglitch.") &&
+        !(state.mediaLoaded && !state.isVideo && e.media_type === "video")
+    );
+    if (pool.length === 0) return;
+    const count = Math.min(pool.length, 2 + Math.floor(Math.random() * 3));
+    const picked = [...pool].sort(() => Math.random() - 0.5).slice(0, count);
+    const entries: StackEntry[] = picked.map((effect) => ({
+      id: nextStackId(),
+      effectId: effect.id,
+      effectName: effect.name,
+      params: Object.fromEntries((effect.parameters ?? []).map((p) => [p.id, p.default])),
+      enabled: true,
+      maskId: null,
+      maskB64: null,
+      maskMode: "inside",
+    }));
+    set((state) => ({
+      ...pushHistory(state),
+      effectStack: entries,
+      selectedStackId: entries[entries.length - 1].id,
+    }));
+  },
   replaceStack: (stack) =>
     set((state) => ({
       ...pushHistory(state),

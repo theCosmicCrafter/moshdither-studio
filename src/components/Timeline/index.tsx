@@ -55,6 +55,9 @@ export default function Timeline() {
   const setOutPoint = useAppStore((s) => s.setOutPoint);
   const clearInOut = useAppStore((s) => s.clearInOut);
   const isVideo = useAppStore((s) => s.isVideo);
+  const mediaLoaded = useAppStore((s) => s.mediaLoaded);
+  const setAnimateDialogOpen = useAppStore((s) => s.setAnimateDialogOpen);
+  const randomizeStack = useAppStore((s) => s.randomizeStack);
   const mediaFps = useAppStore((s) => s.mediaFps);
   const animateFps = useAppStore((s) => s.animateFps);
   const keyframes = useAppStore((s) => s.keyframes);
@@ -179,6 +182,63 @@ export default function Timeline() {
 
   const pct = (t: number) => `${(Math.max(0, Math.min(duration, t)) / duration) * 100}%`;
 
+  // Stills get a slim strip: the transport/in-out/scrubber row means nothing on
+  // a single frame, and its real estate is better spent surfacing the one
+  // thing a still can become -- a clip (AnimateAsVideoModal → real video,
+  // which unlocks video-only effects and codec mosh). Playback stays because
+  // keyframed params animate over the still's duration.
+  if (!isVideo) {
+    return (
+      <div
+        data-testid="transport-strip"
+        className="mx-1 mb-1 flex items-center gap-3 select-none flex-shrink-0 border-t border-outline-variant/30 bg-surface/60"
+        style={{ padding: "5px 12px" }}
+      >
+        <span className="font-mono text-[10px] text-on-surface-variant tracking-wide">
+          {mediaLoaded ? "Still · 1 frame" : "No media"}
+        </span>
+        {mediaLoaded && (
+          <>
+            <TButton icon={isPlaying ? "pause" : "play_arrow"} onClick={togglePlay} title={isPlaying ? "Pause" : "Play"} active />
+            <div className="flex items-center gap-1">
+              <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: 12 }}>timer</span>
+              <input
+                type="number"
+                min={0.1}
+                step={0.5}
+                value={duration}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value);
+                  setDuration(isNaN(val) ? 1 : Math.max(0.1, val));
+                }}
+                className="themed-select font-data-micro text-data-micro w-[56px] text-center"
+                title="Animation length (seconds)"
+              />
+              <span className="font-data-micro text-data-micro text-on-surface-variant">s</span>
+            </div>
+            <button
+              onClick={randomizeStack}
+              className="flex items-center gap-1.5 font-label-sm text-label-sm font-semibold tracking-wider text-accent-pink border border-accent-pink/40 rounded px-2.5 py-1 hover:bg-accent-pink/10 transition-colors"
+              title="Randomize the layer stack"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 14 }}>bolt</span>
+              MOSH
+            </button>
+            <div className="flex-1" />
+            <button
+              onClick={() => setAnimateDialogOpen(true)}
+              className="flex items-center gap-2 font-label-sm text-label-sm text-accent-pink border border-accent-pink/40 rounded px-2.5 py-1 hover:bg-accent-pink/10 transition-colors"
+              title="Convert this still to a real video clip — unlocks video-only effects and codec mosh"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 14 }}>movie</span>
+              Animate to clip
+            </button>
+          </>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div
       data-testid="transport-strip"
@@ -256,6 +316,15 @@ export default function Timeline() {
 
         {/* Spacer */}
         <div className="flex-1" />
+
+        <button
+          onClick={randomizeStack}
+          className="flex items-center gap-1 font-data-micro text-data-micro font-semibold tracking-wider text-accent-pink border border-accent-pink/40 rounded px-2 py-0.5 hover:bg-accent-pink/10 transition-colors"
+          title="Randomize the layer stack"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 13 }}>bolt</span>
+          MOSH
+        </button>
 
         {/* Transport buttons */}
         <div className="flex gap-1 items-center">
