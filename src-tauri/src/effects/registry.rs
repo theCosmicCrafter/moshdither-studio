@@ -18,6 +18,17 @@ impl EffectRegistry {
 
     fn register<E: Effect + 'static>(&mut self, effect: E) {
         let meta = effect.meta();
+        // The frontend falls back to the `ffglitch.` id-prefix when it can't
+        // read `pipeline` — so the namespace and the trait method must always
+        // agree. A codec effect under any other id would silently degrade to
+        // pass-through pixels; an ffglitch.* id without Codec would be
+        // dispatched as a pixel effect and moshed nothing.
+        debug_assert_eq!(
+            meta.id.starts_with("ffglitch."),
+            matches!(effect.pipeline(), Pipeline::Codec),
+            "pipeline/id-namespace mismatch for {}",
+            meta.id
+        );
         self.effects.insert(meta.id, Box::new(effect));
     }
 
@@ -222,5 +233,42 @@ impl EffectRegistry {
 impl Default for EffectRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The frontend reads `pipeline` from `list_effects` but falls back to the
+    /// `ffglitch.` id-prefix heuristic — so a codec effect that forgets to
+    /// override `pipeline()` must not be able to register silently. Both
+    /// directions are asserted: every codec effect lives under `ffglitch.*`
+    /// (a new codec namespace would need the frontend heuristic updated too),
+    /// and every `ffglitch.*` id reports `Pipeline::Codec`.
+    #[test]
+    fn pipeline_matches_id_namespace_for_all_registered_effects() {
+        let registry = EffectRegistry::new();
+        for (meta, pipeline) in registry.list_with_pipelines() {
+            assert_eq!(
+                meta.id.starts_with("ffglitch."),
+                matches!(pipeline, Pipeline::Codec),
+                "pipeline/id-namespace mismatch for {}",
+                meta.id
+            );
+        }
+    }
+
+    /// The count is a tripwire: registering a mode under the wrong namespace
+    /// or dropping modes from the spec table shows up here.
+    #[test]
+    fn all_ffglitch_modes_are_registered_as_codec() {
+        let registry = EffectRegistry::new();
+        let codecs = registry
+            .list_with_pipelines()
+            .into_iter()
+            .filter(|(_, p)| matches!(p, Pipeline::Codec))
+            .count();
+        assert_eq!(codecs, 25, "expected 25 ffglitch codec modes");
     }
 }

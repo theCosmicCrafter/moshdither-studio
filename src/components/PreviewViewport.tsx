@@ -85,6 +85,86 @@ async function prepareSourceTexture(
   return currentTex;
 }
 
+/** The docked mosh-preview clip. Lives outside PreviewViewport so its
+    `currentTime` subscription (per-frame during playback) re-renders only
+    this ~30-line subtree. The badge is honest on two axes: STALE when the
+    stack diverged from the render, OFF-SLICE when a paused playhead sits
+    outside the rendered window — before, scrubbing mid-render was
+    indistinguishable from a stale stack. */
+function MoshPreviewDock({
+  url,
+  stale,
+  range,
+  scopesVisible,
+  onClose,
+}: {
+  url: string;
+  stale: boolean;
+  range: { start: number; end: number } | null;
+  scopesVisible: boolean;
+  onClose: () => void;
+}) {
+  const currentTime = useAppStore((s) => s.currentTime);
+  const isPlaying = useAppStore((s) => s.isPlaying);
+  // Off-slice only matters while paused: during playback the docked clip is
+  // ambient and the playhead is outside the window almost always.
+  const offSlice =
+    !stale && !isPlaying && range !== null &&
+    (currentTime < range.start - 0.05 || currentTime > range.end + 0.05);
+  const rangeLabel = range
+    ? `rendered from ${range.start.toFixed(1)}–${range.end.toFixed(1)}s`
+    : "";
+  return (
+    <div
+      data-testid="mosh-preview-dock"
+      className={`absolute right-3 z-40 w-56 rounded-md overflow-hidden border border-accent-teal/40 bg-black/90 shadow-lg transition-opacity ${scopesVisible ? "bottom-[168px]" : "bottom-3"} ${stale ? "opacity-50" : ""}`}
+    >
+      <video
+        src={url}
+        autoPlay
+        loop
+        muted
+        playsInline
+        aria-label="Rendered mosh preview, looping"
+        className="w-full block"
+      />
+      <div className="flex items-center justify-between px-2 py-1">
+        {stale ? (
+          <span
+            className="sim-chip"
+            title="The stack changed since this render — re-render to preview the current settings"
+          >
+            STALE
+          </span>
+        ) : offSlice ? (
+          <span
+            className="sim-chip"
+            title={`Off-slice — ${rangeLabel}; the playhead is at a different part of the clip`}
+          >
+            OFF-SLICE
+          </span>
+        ) : (
+          <span
+            className="codec-chip"
+            title={`Rendered by the real export path — pixel and codec layers included${range ? ` (${rangeLabel})` : ""}`}
+          >
+            REAL MOSH
+          </span>
+        )}
+        <button
+          type="button"
+          aria-label="Close mosh preview"
+          title="Close mosh preview"
+          onClick={onClose}
+          className="material-symbols-outlined text-sm text-on-surface-variant hover:text-primary transition-colors"
+        >
+          close
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function PreviewViewport({ isDropTarget = false }: Props) {
   // Group read-only state into shallow-equal slices so reference-stable objects
   // (arrays/objects) don't force re-renders when their contents are unchanged.
@@ -196,6 +276,9 @@ function PreviewViewport({ isDropTarget = false }: Props) {
   // The stack signature the docked clip was rendered from — an edit after the
   // render makes the REAL MOSH badge a lie, so it dims and says STALE.
   const [moshPreviewSig, setMoshPreviewSig] = useState<string | null>(null);
+  // The source window the clip was rendered from — the badge can't tell a
+  // stale render from a scrubbed-away playhead without it.
+  const [moshPreviewRange, setMoshPreviewRange] = useState<{ start: number; end: number } | null>(null);
   // Filesystem path (not the asset URL) so the temp file can be cleaned up.
   const moshPreviewPathRef = useRef<string | null>(null);
   const mountedRef = useRef(true);
@@ -203,6 +286,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
   const clearMoshPreview = useCallback(() => {
     setMoshPreviewUrl(null);
     setMoshPreviewSig(null);
+    setMoshPreviewRange(null);
     const prev = moshPreviewPathRef.current;
     moshPreviewPathRef.current = null;
     if (prev) {
@@ -309,6 +393,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       }
       setMoshPreviewUrl(convertFileSrc(rendered));
       setMoshPreviewSig(cpuRenderSignature);
+      setMoshPreviewRange({ start: trimStart, end: trimEnd });
       s.setStatusMessage("Mosh preview rendered — real export path");
     } catch (err) {
       if (useAppStore.getState().exportCancelRequested) {
@@ -1661,43 +1746,16 @@ function PreviewViewport({ isDropTarget = false }: Props) {
             the canvas overlay, not the media plane, so it never contaminates
             what a screenshot or comparison would capture. Hidden during split
             view like the other overlays, and lifted above the scopes so the
-            two overlays never stack. */}
+            two overlays never stack. A child component so its per-frame
+            currentTime subscription doesn't re-render the viewport. */}
         {moshPreviewUrl && !showBeforeAfter && (
-          <div
-            data-testid="mosh-preview-dock"
-            className={`absolute right-3 z-40 w-56 rounded-md overflow-hidden border border-accent-teal/40 bg-black/90 shadow-lg transition-opacity ${scopesVisible ? "bottom-[168px]" : "bottom-3"} ${moshPreviewStale ? "opacity-50" : ""}`}
-          >
-            <video
-              src={moshPreviewUrl}
-              autoPlay
-              loop
-              muted
-              playsInline
-              aria-label="Rendered mosh preview, looping"
-              className="w-full block"
-            />
-            <div className="flex items-center justify-between px-2 py-1">
-              {moshPreviewStale ? (
-                <span
-                  className="sim-chip"
-                  title="The stack changed since this render — re-render to preview the current settings"
-                >
-                  STALE
-                </span>
-              ) : (
-                <span className="codec-chip" title="Rendered by the real export path — pixel and codec layers included">REAL MOSH</span>
-              )}
-              <button
-                type="button"
-                aria-label="Close mosh preview"
-                title="Close mosh preview"
-                onClick={clearMoshPreview}
-                className="material-symbols-outlined text-sm text-on-surface-variant hover:text-primary transition-colors"
-              >
-                close
-              </button>
-            </div>
-          </div>
+          <MoshPreviewDock
+            url={moshPreviewUrl}
+            stale={moshPreviewStale}
+            range={moshPreviewRange}
+            scopesVisible={scopesVisible}
+            onClose={clearMoshPreview}
+          />
         )}
 
         {/* Drop target overlay */}

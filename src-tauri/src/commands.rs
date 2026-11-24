@@ -1864,10 +1864,7 @@ pub fn extract_audio_from_video(
     let mut hasher = DefaultHasher::new();
     video_path.hash(&mut hasher);
     let hash = format!("{:016x}", hasher.finish());
-    let out_dir = std::env::temp_dir()
-        .join("moshdither-studio")
-        .join("extracted-audio");
-    std::fs::create_dir_all(&out_dir).map_err(|e| format!("Failed to create temp dir: {e}"))?;
+    let out_dir = mosh_temp_dir("extracted-audio")?;
     let out_path = out_dir.join(format!("{hash}.wav"));
 
     extract_audio_to_wav(&video_path, &out_path.to_string_lossy(), max_duration_secs)?;
@@ -3386,29 +3383,65 @@ fn ffglitch_params_or_empty(params: serde_json::Value) -> serde_json::Value {
 
 /// The app's shared scratch dir under the OS temp dir. `/tmp` is
 /// world-writable on POSIX, so a hostile local user could pre-plant
-/// `moshdither-studio` with open permissions and then race or replace the
-/// intermediates we encode→mosh→decode through it. Create it owner-only and
-/// tighten the permissions on a pre-existing dir as well — `DirBuilder`'s
-/// mode only applies to directories it actually creates. On Windows `%TEMP%`
-/// is already per-user so both blocks compile to no-ops.
+/// `moshdither-studio` and then race or replace the intermediates we
+/// encode→mosh→decode through it. On unix the leaf is uid-scoped
+/// (`moshdither-studio-<euid>`) so another local account cannot plant the
+/// name at all; ownership is then verified fail-closed — a dir we don't own
+/// is never tightened or trusted, we fall back to a per-process name instead
+/// (the cache simply won't be shared across runs). Windows `%TEMP%` is
+/// already per-user, so the leaf stays plain `moshdither-studio`.
+#[cfg(unix)]
+fn mosh_temp_dir(sub: &str) -> crate::error::Result<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    // SAFETY: geteuid takes no arguments and cannot fail.
+    let uid = unsafe { libc::geteuid() };
+    let root = mosh_temp_root(uid);
+    let dir = if sub.is_empty() { root } else { root.join(sub) };
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)
+        .map_err(|e| format!("temp dir {}: {e}", dir.display()))?;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| format!("temp dir {}: chmod 0700: {e}", dir.display()))?;
+    Ok(dir)
+}
+
+#[cfg(unix)]
+fn mosh_temp_root(uid: u32) -> PathBuf {
+    use std::os::unix::fs::MetadataExt;
+    // symlink_metadata, not metadata: a planted symlink pointing at a dir we
+    // own must fail the ownership check, not pass it via its target.
+    fn usable(path: &std::path::Path, uid: u32) -> bool {
+        match std::fs::symlink_metadata(path) {
+            Err(_) => true, // absent — safe to create
+            Ok(md) => md.uid() == uid && md.is_dir(),
+        }
+    }
+    let candidate = std::env::temp_dir().join(format!("moshdither-studio-{uid}"));
+    if usable(&candidate, uid) {
+        return candidate;
+    }
+    // Pre-planted by another uid (shared-mount leftover, root squash) — don't
+    // touch it; a per-process name is still inside the asset scope glob and
+    // cannot be pre-planted by a non-root user.
+    let pid = std::process::id();
+    for n in 0..16u32 {
+        let alt = std::env::temp_dir().join(format!("moshdither-studio-{uid}-p{pid}-{n}"));
+        if usable(&alt, uid) {
+            return alt;
+        }
+    }
+    // Practically unreachable; last resort still carries the uid leaf.
+    std::env::temp_dir().join(format!("moshdither-studio-{uid}-p{pid}-x"))
+}
+
+#[cfg(not(unix))]
 fn mosh_temp_dir(sub: &str) -> crate::error::Result<PathBuf> {
     let root = std::env::temp_dir().join("moshdither-studio");
     let dir = if sub.is_empty() { root } else { root.join(sub) };
-    let mut builder = std::fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder
-        .create(&dir)
+    std::fs::create_dir_all(&dir)
         .map_err(|e| format!("temp dir {}: {e}", dir.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
-    }
     Ok(dir)
 }
 
