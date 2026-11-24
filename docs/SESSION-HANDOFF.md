@@ -4,10 +4,56 @@ Living pass-down note. Update it at the end of every session and commit it.
 It lives in `docs/` on purpose: the previous handoff sat in `outputs/`, which is
 gitignored, so it never travelled with the branch.
 
-**Last updated:** 2026-11-23 · dev `0779ea6` (QC/DevOps audit COMPLETE: all 38
-findings in `docs/QC_DEVOPS_AUDIT_REPORT_2026-11-02.md` remediated;
-cargo/vitest/tsc/eslint gates green on the CI toolchain; tagged
-`checkpoint/20261123-232238-dev`)
+**Last updated:** 2026-11-24 · branch `feat/phase1-look-legit` @ `b3a26fa`
+(Phases 1+2 of the reskin megaplan COMPLETE — all gates green, production-audit
+verdict Pass)
+
+## Reskin megaplan progress (feat/phase1-look-legit)
+
+Three phases planned against `outputs/ui-proto/mock.html`. Phases 1 and 2 are
+done and audited; Phase 3 (full codec-effect stacking — stage-based render
+model, `pipeline` flag on Rust `EffectMeta`, `preview_ffglitch` segment
+previews) is the remaining work.
+
+**Phase 1 (`292b2db`, `e469d3f`, `7f2a158`):** token reskin in `index.css`
+(killed `--font-hand`, flattened `neo-*`/filigree, pink = single hero accent),
+`utils/effectPipeline.ts` provenance (`pixel|codec|sim`) driving `~sim`/`codec`
+chips, honest preview badge words, curated dock layout (`LAYOUT_VERSION` 5 —
+saved-layout bumps are how tab renames survive), permanent PanelRail toggles,
+layer-card kebab menu + eye toggles, fader params replacing the circular dial,
+stills collapse to a slim strip (duration + ⚡MOSH + Animate CTA).
+
+**Phase 2 (`77cafc9`, `13565e4`, `50baec7`, `b3a26fa`):** `lfos` store map +
+`resolveModulatedValue` (keyframes + LFO + audio at one resolution point →
+preview/export parity), per-param LFO editor in ParameterPanel, ParamLaneRow
+keyframe lanes in the timeline, presets persist per-entry keyframes + lfos
+(ids are regenerated on load — tracks ride on the entry), real CPU-rendered
+preset thumbnails, 5 animated-look default presets, LFO bake into per-frame
+export tracks (`effectConverter.ts`, no Rust changes).
+
+**Traps a future session must not regress:**
+
+- **`!isVideo` ≠ still.** It's also the no-media state. The still-strip gate is
+  `!isVideo && mediaLoaded`; the empty state must keep the full transport
+  strip (timeline.spec's assertions encode this).
+- **Hidden dock tabs stay mounted** with zero-size boxes. `page.$$` finds
+  their elements; click/selectOption then starve on visibility. E2E queries
+  must be `:visible`-scoped or timeout-bounded (see `stress-test.spec.ts`).
+- **Playwright evaluate runs in an isolated world** — store-seeding via
+  `import("/src/store")` hits a second store instance after HMR rewrites
+  module URLs. Seed via DOM (file drop on `.dropzone-btn`) or reload first.
+- **`presetMatchesCurrentStack`** compares saved vs live stacks per render —
+  saved-side signatures are WeakMap-cached; keep it that way (it runs on
+  every resolved-param write during playback).
+- **`mosh-verify` must be rebuilt after touching Rust** — real-backend.spec
+  throws on a stale binary by design.
+
+**Gates (this branch):** vitest 1435, tsc/eslint clean, build clean (314KB
+main/84KB gz), e2e 73 pass / 1 skip / 0 fail (real-backend + render-presets
+included — binary freshly built), secret-scan clean every commit.
+
+---
+
 
 ---
 
