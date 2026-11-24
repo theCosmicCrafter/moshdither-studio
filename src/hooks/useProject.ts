@@ -14,6 +14,8 @@ export interface ProjectFile {
     Record<string, { id: string; time: number; value: number; easing: string }[]>
   >;
   audioBindings: Record<string, Record<string, unknown>>;
+  /** Optional: projects saved before LFO modulators shipped carry none. */
+  lfos?: Record<string, Record<string, import("../store").LfoSpec>>;
   mediaFilePath: string | null;
   activeMask: string | null;
   audioFilePath?: string | null;
@@ -65,6 +67,7 @@ export function useProject() {
           effectStack: JSON.parse(JSON.stringify(store.effectStack)),
           keyframes: JSON.parse(JSON.stringify(store.keyframes)),
           audioBindings: JSON.parse(JSON.stringify(store.audioBindings)),
+          lfos: JSON.parse(JSON.stringify(store.lfos)),
           mediaFilePath: store.filePath,
           activeMask: store.activeMask,
           audioFilePath: store.audioFilePath,
@@ -145,7 +148,14 @@ export function useProject() {
           continue;
         }
         restored.push({
-          id: `${entry.effectId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          // Keep the saved stack-entry id when it survives the trip:
+          // keyframes, audio bindings and LFO specs are all keyed by it, so
+          // re-minting here orphaned every one of them on load. Mint only as
+          // a fallback for a malformed entry.
+          id:
+            typeof entry.id === "string" && entry.id
+              ? entry.id
+              : `${entry.effectId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           effectId: entry.effectId,
           effectName: effect.name ?? entry.effectName ?? entry.effectId,
           params: entry.params ? JSON.parse(JSON.stringify(entry.params)) : {},
@@ -166,6 +176,7 @@ export function useProject() {
         store.setAudioBindings(
           project.audioBindings as Record<string, Record<string, import("../store").AudioBinding>>
         );
+      if (project.lfos) store.setLfos(project.lfos);
       if (project.activeMask !== undefined) store.setActiveMask(project.activeMask);
 
       if (project.audioFilePath !== undefined) {

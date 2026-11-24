@@ -18,7 +18,7 @@ import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { rustToWebGL, stackToRenderPasses, stackToRustPayload } from "./effectConverter";
-import type { StackEntry, Keyframe } from "../store";
+import type { StackEntry, Keyframe, EffectMeta } from "../store";
 import { shaderRegistry } from "../engine/shaders";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -276,5 +276,131 @@ describe("stackToRustPayload keyframes", () => {
       s1: { amount: [kf(0, 1), kf(2, 9)] },
     });
     expect(out).toHaveLength(0);
+  });
+});
+
+/**
+ * LFO export parity. Rust `EffectCall` understands keyframes and audio
+ * bindings but has no LFO concept and cannot grow one from this side of the
+ * IPC -- so `stackToRustPayload` bakes each modulated parameter into a dense
+ * keyframe track on the same transport-time grid the backend evaluates
+ * (`trim_start + idx/fps`). What the file plays is then exactly what
+ * `resolveModulatedValue` showed in the preview, because the bake walks the
+ * same `modulatedParamValue`.
+ */
+describe("stackToRustPayload LFO bake", () => {
+  const entry = (id: string): StackEntry => ({
+    id,
+    effectId: "dither.bayer",
+    effectName: "Bayer",
+    params: { amount: 50 },
+    enabled: true,
+    maskId: null,
+    maskB64: null,
+    maskMode: "inside",
+  });
+
+  const meta: EffectMeta = {
+    id: "dither.bayer",
+    name: "Bayer",
+    category: "dithering",
+    media_type: "both",
+    parameters: [{ id: "amount", name: "Amount", type: "slider", default: 50, min: 0, max: 100 }],
+  };
+
+  const lfo = { id: "s1.amount", waveform: "sine" as const, rateHz: 1, depth: 0.5, offset: 50 };
+  const bake = { fps: 30, trimStart: 0, trimEnd: 1 };
+
+  it("does nothing without a bake grid -- preview callers' params are already resolved", () => {
+    const out = stackToRustPayload([entry("s1")], null, [], 0.5, undefined, undefined, {
+      lfos: { s1: { amount: lfo } },
+      effects: [meta],
+      // no bake
+    });
+    expect(out[0]).not.toHaveProperty("keyframes");
+  });
+
+  it("bakes one key per export frame on the trim_start + idx/fps grid", () => {
+    const out = stackToRustPayload([entry("s1")], null, [], undefined, undefined, undefined, {
+      lfos: { s1: { amount: lfo } },
+      effects: [meta],
+      bake,
+    });
+    const track = out[0].keyframes!.amount;
+    expect(track.length).toBeGreaterThanOrEqual(31);
+    expect(track[0].time).toBe(0);
+    expect(track[1].time).toBeCloseTo(1 / 30, 12);
+    expect(track.every((k) => k.easing === "linear")).toBe(true);
+  });
+
+  it("bakes exactly what resolveModulatedValue produces at each grid time", () => {
+    const out = stackToRustPayload([entry("s1")], null, [], undefined, undefined, undefined, {
+      lfos: { s1: { amount: lfo } },
+      effects: [meta],
+      bake,
+    });
+    const track = out[0].keyframes!.amount;
+    for (const k of track) {
+      // offset 50 + 0.5 * 100 * sin(2*pi*1*t), clamped to [0, 100]
+      const expected = Math.max(0, Math.min(100, 50 + 50 * Math.sin(2 * Math.PI * k.time)));
+      expect(k.value).toBeCloseTo(expected, 8);
+    }
+  });
+
+  it("combines a keyframe track with the LFO instead of dropping either", () => {
+    const out = stackToRustPayload([entry("s1")], null, [], undefined, {
+      s1: { amount: [{ id: "a", time: 0, value: 20, easing: "linear" }] },
+    }, undefined, {
+      lfos: { s1: { amount: { ...lfo, depth: 0.1 } } },
+      effects: [meta],
+      bake,
+    });
+    const track = out[0].keyframes!.amount;
+    // Centre is the keyframed 20 (held), wave is +-10 -- evaluated on the
+    // 1/30 grid, so the peak lands at t=7/30 or 8/30, not exactly 0.25.
+    for (const k of track) {
+      expect(k.value).toBeCloseTo(
+        Math.max(0, Math.min(100, 20 + 10 * Math.sin(2 * Math.PI * k.time))),
+        8
+      );
+    }
+    // The plain track was replaced by the bake, not appended beside it.
+    expect(track.length).toBeGreaterThanOrEqual(31);
+  });
+
+  it("keeps an audio binding beside the baked track -- the backend's audio pass wins, as in preview", () => {
+    const binding = {
+      source: "bass",
+      inputMin: 0,
+      inputMax: 1,
+      outputMin: 0,
+      outputMax: 100,
+      attack: 0.05,
+      decay: 0.2,
+      gateEnabled: false,
+      gateThreshold: 0.1,
+      invert: false,
+    };
+    const out = stackToRustPayload(
+      [entry("s1")],
+      null,
+      [],
+      undefined,
+      undefined,
+      { s1: { amount: binding } },
+      { lfos: { s1: { amount: lfo } }, effects: [meta], bake }
+    );
+    expect(out[0].audio_bindings).toEqual({ amount: binding });
+    expect(out[0].keyframes!.amount.length).toBeGreaterThanOrEqual(31);
+  });
+
+  it("bakes nothing for LFOs on other stack entries or disabled effects", () => {
+    const out = stackToRustPayload([entry("s1"), { ...entry("s2"), enabled: false }], null, [], undefined, undefined, undefined, {
+      lfos: { s2: { amount: lfo } },
+      effects: [meta],
+      bake,
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0]).not.toHaveProperty("keyframes");
   });
 });

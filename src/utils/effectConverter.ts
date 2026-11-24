@@ -1,6 +1,7 @@
 import { shaderRegistry } from "../engine/shaders";
 import { EffectShader, RenderPass } from "../engine/webgl2/types";
-import { EffectMeta, StackEntry, type Keyframe, type AudioBinding } from "../store";
+import { EffectMeta, StackEntry, type Keyframe, type AudioBinding, type LfoSpec } from "../store";
+import { exportFrameTimes, keyframeValueAt, modulatedParamValue } from "./lfo";
 
 /** Maps a Rust effect ID to its WebGL shader preview equivalent. */
 export interface WebGLMapping {
@@ -1151,7 +1152,26 @@ export function stackToRustPayload(
   /** Parameters driven by an audio feature, keyed by stack-entry id then
    *  parameter id. Pass the store's `audioBindings` when EXPORTING; the
    *  backend needs the baked audio too, which exportVideo already sends. */
-  audioBindings?: Record<string, Record<string, AudioBinding>>
+  audioBindings?: Record<string, Record<string, AudioBinding>>,
+  /** Per-param LFO modulation for export parity. The Rust `EffectCall` knows
+   *  keyframes and audio bindings but no LFO concept, so each modulated param
+   *  is baked into a dense keyframe track -- one key per export frame, on the
+   *  same transport-time grid the backend evaluates at -- carrying exactly
+   *  what `resolveModulatedValue` showed in the preview. A param that also
+   *  has an audio binding keeps its baked track; the backend's audio pass
+   *  overwrites it per frame, the same order the preview uses.
+   *
+   *  `bake` is the frame grid: fps is the DECODE fps (the clip's own rate for
+   *  video, the export fps for an animated still -- `segment.fps` in
+   *  commands.rs), trimStart/trimEnd the export range. Preview-side callers
+   *  that pass `time` leave it out: their params are already resolved for
+   *  that instant by useKeyframePlayback. */
+  modulation?: {
+    lfos?: Record<string, Record<string, LfoSpec>>;
+    /** Effect metadata, for the declared range each `depth` scales over. */
+    effects?: EffectMeta[];
+    bake?: { fps: number; trimStart: number; trimEnd: number };
+  }
 ): Array<{
   effect_id: string;
   params: Record<string, unknown>;
@@ -1160,12 +1180,15 @@ export function stackToRustPayload(
   keyframes?: Record<string, { time: number; value: number; easing: string }[]>;
   audio_bindings?: Record<string, AudioBinding>;
 }> {
+  const bakeTimes = modulation?.bake
+    ? exportFrameTimes(modulation.bake.fps, modulation.bake.trimStart, modulation.bake.trimEnd)
+    : undefined;
   return stack
     .filter((e) => e.enabled)
     .map((e) => {
       const bound = audioBindings?.[e.id];
       const tracks = keyframes?.[e.id];
-      const animated = tracks
+      const animated: Record<string, { time: number; value: number; easing: string }[]> = tracks
         ? Object.fromEntries(
             Object.entries(tracks)
               .filter(([, ks]) => ks.length > 0)
@@ -1176,14 +1199,41 @@ export function stackToRustPayload(
                   .map((k) => ({ time: k.time, value: k.value, easing: k.easing })),
               ])
           )
-        : undefined;
+        : {};
+      const entryLfos = modulation?.lfos?.[e.id];
+      if (entryLfos && bakeTimes) {
+        const meta = modulation?.effects?.find((m) => m.id === e.effectId);
+        for (const [paramId, spec] of Object.entries(entryLfos)) {
+          const def = meta?.parameters?.find((p) => p.id === paramId);
+          const track = tracks?.[paramId];
+          // The baked track REPLACES this param's plain keyframe track: each
+          // baked key already carries the keyframe-interpolated centre plus
+          // the LFO's wave, so emitting both would double-count nothing --
+          // Rust reads one track per param.
+          animated[paramId] = bakeTimes.map((t) => {
+            const resolved = modulatedParamValue({
+              keyframeValue: track ? keyframeValueAt(track, t) : null,
+              lfo: spec,
+              min: def?.min,
+              max: def?.max,
+              time: t,
+            });
+            // modulatedParamValue can't return null here (lfo is set), but a
+            // non-finite spec from a hand-edited file could resolve NaN —
+            // serde would reject the whole export over one key, so clamp.
+            const value =
+              resolved !== null && Number.isFinite(resolved) ? resolved : spec.offset;
+            return { time: t, value, easing: "linear" };
+          });
+        }
+      }
       return {
         effect_id: e.effectId,
         params: { ...e.params, ...(time !== undefined ? { time } : {}) },
         // Use snapshotted maskB64 if available; fall back to live resolution
         mask_b64: e.maskB64 ?? resolveMaskId(e.maskId, activeMask, sam3Masks),
         mask_mode: e.maskMode ?? "inside",
-        ...(animated && Object.keys(animated).length > 0 ? { keyframes: animated } : {}),
+        ...(Object.keys(animated).length > 0 ? { keyframes: animated } : {}),
         ...(bound && Object.keys(bound).length > 0 ? { audio_bindings: bound } : {}),
       };
     });

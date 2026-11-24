@@ -3,7 +3,7 @@
  * Tests render behavior, key interactions, and store integration.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
 import { useAppStore, type EffectMeta } from "../../store";
 
 // ── Mock external dependencies ──────────────────────────────
@@ -867,6 +867,18 @@ describe("Component Test Suite", () => {
       render(<PresetPanel />);
       expect(screen.getByText("Export")).toBeInTheDocument();
       expect(screen.getByText("Import")).toBeInTheDocument();
+    });
+
+    it("shows a fallback icon for presets without thumbnails", async () => {
+      // No canvas in jsdom and no media to render — a preset saved or
+      // imported without a thumbnail must still get a visible placeholder.
+      localStorage.setItem(
+        "moshdither_presets_v2",
+        JSON.stringify([{ id: "no-thumb", name: "NoThumb", createdAt: "x", stack: [] }])
+      );
+      render(<PresetPanel />);
+      const row = await screen.findByTitle("NoThumb");
+      expect(within(row).getByText("image")).toBeInTheDocument();
     });
   });
 

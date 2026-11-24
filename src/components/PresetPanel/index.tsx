@@ -1,5 +1,6 @@
-import { useState, useRef } from "react";
-import { usePresets } from "../../hooks/usePresets";
+import { useState, useRef, type CSSProperties } from "react";
+import { presetMatchesCurrentStack, usePresets } from "../../hooks/usePresets";
+import { useAppStore } from "../../store";
 
 export default function PresetPanel() {
   const {
@@ -13,6 +14,13 @@ export default function PresetPanel() {
   } = usePresets();
   const [name, setName] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // For the CURRENT marker: the live stack + animation state each preset is
+  // compared against (see presetMatchesCurrentStack).
+  const effectStack = useAppStore((s) => s.effectStack);
+  const keyframes = useAppStore((s) => s.keyframes);
+  const lfos = useAppStore((s) => s.lfos);
+  const ffglitchMode = useAppStore((s) => s.ffglitchMode);
 
   const handleSave = () => {
     savePreset(name);
@@ -171,13 +179,35 @@ export default function PresetPanel() {
             No saved presets
           </div>
         ) : (
-          presets.map((preset) => (
+          presets.map((preset) => {
+            const isCurrent = presetMatchesCurrentStack(
+              preset,
+              effectStack,
+              keyframes,
+              ffglitchMode,
+              lfos
+            );
+            const animated = preset.stack.some(
+              (e) =>
+                (e.keyframes && Object.keys(e.keyframes).length > 0) ||
+                (e.lfos && Object.keys(e.lfos).length > 0)
+            );
+            const thumbBox: CSSProperties = {
+              width: 56,
+              height: 32,
+              borderRadius: 2,
+              flexShrink: 0,
+              border: `1px solid ${isCurrent ? "var(--accent-pink)" : "var(--outline-variant)"}`,
+              boxSizing: "border-box",
+              overflow: "hidden",
+            };
+            return (
             <div
               key={preset.id}
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: 6,
+                gap: 8,
                 padding: "4px 6px",
                 borderRadius: 3,
                 background: "var(--surface-container-low)",
@@ -186,30 +216,58 @@ export default function PresetPanel() {
               onClick={() => loadPreset(preset)}
               title={preset.name}
             >
-              {preset.thumbnail && (
+              {preset.thumbnail ? (
                 <img
                   src={preset.thumbnail}
                   alt=""
-                  style={{
-                    width: 48,
-                    height: 27,
-                    borderRadius: 2,
-                    objectFit: "cover",
-                    flexShrink: 0,
-                  }}
+                  style={{ ...thumbBox, objectFit: "cover", display: "block" }}
                 />
+              ) : (
+                // No render captured (old save, import, no-media save) — the
+                // flat icon stands in rather than collapsing the row height.
+                <div
+                  aria-hidden
+                  style={{
+                    ...thumbBox,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: "var(--text-muted)",
+                    background: "var(--surface-container-lowest)",
+                  }}
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: 14 }}>
+                    image
+                  </span>
+                </div>
               )}
-              <span
-                style={{
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  flex: 1,
-                  fontSize: 11,
-                }}
-              >
-                {preset.name}
-              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  style={{
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    fontSize: 11,
+                    color: isCurrent ? "var(--accent-pink)" : "var(--text-primary)",
+                  }}
+                >
+                  {preset.name}
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 6,
+                    fontFamily: "var(--font-mono)",
+                    fontSize: 9,
+                    color: "var(--text-muted)",
+                    marginTop: 2,
+                  }}
+                >
+                  <span>{preset.stack.filter((e) => e.enabled).length} layers</span>
+                  {animated && <span style={{ color: "var(--accent-teal)" }}>ANIM</span>}
+                  {isCurrent && <span style={{ color: "var(--accent-pink)" }}>CURRENT</span>}
+                </div>
+              </div>
               <div style={{ display: "flex", gap: 2 }}>
                 <button
                   onClick={(e) => {
@@ -249,7 +307,8 @@ export default function PresetPanel() {
                 </button>
               </div>
             </div>
-          ))
+            );
+          })
         )}
       </div>
     </div>

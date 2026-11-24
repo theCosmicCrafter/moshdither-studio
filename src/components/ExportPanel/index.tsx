@@ -251,13 +251,28 @@ export default function ExportPanel() {
     );
 
     const state = useAppStore.getState();
+    // Use outPoint if set, otherwise use the user-set duration as the clip length
+    const trimEnd = typeof outPoint === "number" ? outPoint : state.duration;
     const stack = stackToRustPayload(
       activeEffects,
       state.activeMask,
       state.sam3Masks,
       undefined,
       state.keyframes,
-      state.audioBindings
+      state.audioBindings,
+      {
+        lfos: state.lfos,
+        effects: state.allEffects,
+        // The backend steps LFO-baked keyframes at the DECODE frame rate:
+        // the clip's own fps for video, `options.fps` for an animated still
+        // (see segment.fps in commands.rs). Passing the export fps for a
+        // video would land every baked value on the wrong transport times.
+        bake: {
+          fps: state.isVideo ? state.mediaFps : fps,
+          trimStart: inPoint ?? 0,
+          trimEnd,
+        },
+      }
     );
 
     const { width, height } = exportDimensions(
@@ -270,9 +285,6 @@ export default function ExportPanel() {
     )?.scale;
 
     const audioBakeJson = audioBakeData ? JSON.stringify(audioBakeData) : null;
-
-    // Use outPoint if set, otherwise use the user-set duration as the clip length
-    const trimEnd = typeof outPoint === "number" ? outPoint : state.duration;
 
     try {
       const outputPath = await exportVideo(filePath, stack, {
@@ -385,7 +397,26 @@ export default function ExportPanel() {
     // while a bitstream datamosh needs an ENCODED video to chew on. So the
     // render has to be encoded to an intermediate file before FFglitch sees it.
     const state = useAppStore.getState();
-    const stack = stackToRustPayload(activeEffects, state.activeMask, state.sam3Masks);
+    // Keyframes, audio bindings and baked LFOs ride the effects pre-render
+    // exactly like the main export -- passing them here is what makes an
+    // animated stack mosh the ANIMATED frames rather than the static ones.
+    const stack = stackToRustPayload(
+      activeEffects,
+      state.activeMask,
+      state.sam3Masks,
+      undefined,
+      state.keyframes,
+      state.audioBindings,
+      {
+        lfos: state.lfos,
+        effects: state.allEffects,
+        bake: {
+          fps: state.isVideo ? state.mediaFps : fps,
+          trimStart: inPoint ?? 0,
+          trimEnd: typeof outPoint === "number" ? outPoint : state.duration,
+        },
+      }
+    );
     const willRenderEffects = activeEffects.length > 0;
 
     const finalPath = await save({

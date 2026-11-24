@@ -1,5 +1,5 @@
 import React, { useRef, useCallback, useMemo, useState, useEffect } from "react";
-import { useAppStore, type EasingType } from "../../store";
+import { useAppStore, type EasingType, type Keyframe, type LfoSpec } from "../../store";
 import { getFileName } from "../../utils/fileName";
 import { formatTimecode as formatTime } from "../../utils/timecode";
 import { playbackFps } from "../../hooks/usePlaybackEngine";
@@ -36,6 +36,21 @@ const EASINGS: { id: EasingType; label: string }[] = [
   { id: "hold", label: "Hold" },
 ];
 
+/**
+ * One slim lane under the scrubber per MODULATED parameter -- a param earns
+ * a lane when it has at least one keyframe or an LFO spec, which keeps the
+ * strip at zero extra rows for the common un-animated stack. `key` is the
+ * `${stackId}.${paramId}` pair the menus and drags address markers by.
+ */
+interface ParamLane {
+  key: string;
+  stackId: string;
+  paramId: string;
+  label: string;
+  keys: Keyframe[];
+  lfo?: LfoSpec;
+}
+
 export default function Timeline() {
   const currentTime = useAppStore((s) => s.currentTime);
   const setCurrentTime = useAppStore((s) => s.setCurrentTime);
@@ -63,15 +78,33 @@ export default function Timeline() {
   const keyframes = useAppStore((s) => s.keyframes);
   const removeKeyframe = useAppStore((s) => s.removeKeyframe);
   const updateKeyframe = useAppStore((s) => s.updateKeyframe);
+  const lfos = useAppStore((s) => s.lfos);
+  const removeLfo = useAppStore((s) => s.removeLfo);
+  const effectStack = useAppStore((s) => s.effectStack);
+  const allEffects = useAppStore((s) => s.allEffects);
+  const selectStackItem = useAppStore((s) => s.selectStackItem);
 
   // The keyframe menu: which mark it is for and where on the bar it sits.
   // Right-click used to delete outright, with no way to choose an easing --
   // the store has had five easings since keyframes existed and nothing set
   // any but linear.
-  const [menu, setMenu] = useState<{ mark: KeyframeMark; leftPct: number } | null>(null);
+  const [menu, setMenu] = useState<{ mark: KeyframeMark; leftPct: number; laneKey?: string } | null>(
+    null
+  );
+  // LFO lane context menu: no keyframe to address, so it carries the lane's
+  // stack/param ids directly. Rendered by the lane that opened it.
+  const [lfoMenu, setLfoMenu] = useState<{
+    stackId: string;
+    paramId: string;
+    leftPct: number;
+    laneKey: string;
+  } | null>(null);
   useEffect(() => {
-    if (!menu) return;
-    const close = () => setMenu(null);
+    if (!menu && !lfoMenu) return;
+    const close = () => {
+      setMenu(null);
+      setLfoMenu(null);
+    };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") close();
     };
@@ -81,7 +114,7 @@ export default function Timeline() {
       window.removeEventListener("pointerdown", close);
       window.removeEventListener("keydown", onKey);
     };
-  }, [menu]);
+  }, [menu, lfoMenu]);
 
   const scrubberRef = useRef<HTMLDivElement>(null);
   const dragTarget = useRef<DragTarget | null>(null);
@@ -111,6 +144,43 @@ export default function Timeline() {
       .sort((a, b) => a[0] - b[0])
       .map(([time, refs]) => ({ time, refs }));
   }, [keyframes]);
+
+  // The per-param lanes. Computed before the still-mode branch on purpose:
+  // keyframes and LFOs animate a still over its duration exactly like a
+  // video, so the lanes are the ONLY time-aware UI stills get.
+  const lanes = useMemo<ParamLane[]>(() => {
+    const out: ParamLane[] = [];
+    for (const entry of effectStack) {
+      const tracks = keyframes[entry.id] ?? {};
+      const specs = lfos[entry.id] ?? {};
+      const paramIds = [...new Set([...Object.keys(tracks), ...Object.keys(specs)])];
+      if (paramIds.length === 0) continue;
+      const meta = allEffects.find((e) => e.id === entry.effectId);
+      // Declaration order, then whatever is left: lanes shouldn't reshuffle
+      // between renders just because a track gained its first keyframe.
+      const order = meta?.parameters.map((p) => p.id) ?? [];
+      paramIds.sort((a, b) => {
+        const ia = order.indexOf(a);
+        const ib = order.indexOf(b);
+        return (ia < 0 ? order.length : ia) - (ib < 0 ? order.length : ib) || a.localeCompare(b);
+      });
+      for (const paramId of paramIds) {
+        const keys = tracks[paramId] ?? [];
+        const lfo = specs[paramId];
+        if (keys.length === 0 && !lfo) continue;
+        const pname = meta?.parameters.find((p) => p.id === paramId)?.name ?? paramId;
+        out.push({
+          key: `${entry.id}.${paramId}`,
+          stackId: entry.id,
+          paramId,
+          label: `${entry.effectName} · ${pname}`,
+          keys: [...keys].sort((a, b) => a.time - b.time),
+          lfo,
+        });
+      }
+    }
+    return out;
+  }, [effectStack, keyframes, lfos, allEffects]);
 
   const timeAt = useCallback(
     (clientX: number): number | null => {
@@ -182,6 +252,62 @@ export default function Timeline() {
 
   const pct = (t: number) => `${(Math.max(0, Math.min(duration, t)) / duration) * 100}%`;
 
+  // One action funnel for both places a keyframe menu can be opened from:
+  // the merged diamonds on the scrubber and the per-param markers in a lane.
+  const handleMenuAction = (action: LaneMenuAction) => {
+    if (action.type === "easing") {
+      for (const r of action.mark.refs)
+        updateKeyframe(r.stackId, r.paramId, r.id, { easing: action.easing });
+    } else {
+      for (const r of action.mark.refs) removeKeyframe(r.stackId, r.paramId, r.id);
+    }
+    setMenu(null);
+  };
+
+  // Shared by the video strip (under the scrubber) and the stills strip --
+  // built once so both modes run the identical lane UI.
+  const lanesEl =
+    lanes.length > 0 ? (
+      <div
+        data-testid="param-lanes"
+        className="flex flex-col"
+        style={{ gap: 2, marginTop: 2 }}
+      >
+        {lanes.map((lane) => (
+          <ParamLaneRow
+            key={lane.key}
+            lane={lane}
+            duration={duration}
+            fps={fps}
+            currentTime={currentTime}
+            menu={menu?.laneKey === lane.key ? menu : null}
+            lfoMenu={lfoMenu?.laneKey === lane.key ? lfoMenu : null}
+            onSelect={() => selectStackItem(lane.stackId)}
+            onJump={(t) => setCurrentTime(Math.max(0, Math.min(duration, t)))}
+            onRetime={(keyId, t) =>
+              updateKeyframe(lane.stackId, lane.paramId, keyId, {
+                time: Math.max(0, Math.min(duration, t)),
+              })
+            }
+            onOpenMenu={(mark, leftPct) => setMenu({ mark, leftPct, laneKey: lane.key })}
+            onOpenLfoMenu={(leftPct) =>
+              setLfoMenu({
+                stackId: lane.stackId,
+                paramId: lane.paramId,
+                leftPct,
+                laneKey: lane.key,
+              })
+            }
+            onMenuAction={handleMenuAction}
+            onRemoveLfo={() => {
+              removeLfo(lane.stackId, lane.paramId);
+              setLfoMenu(null);
+            }}
+          />
+        ))}
+      </div>
+    ) : null;
+
   // Stills get a slim strip: the transport/in-out/scrubber row means nothing on
   // a single frame, and its real estate is better spent surfacing the one
   // thing a still can become -- a clip (AnimateAsVideoModal → real video,
@@ -191,9 +317,10 @@ export default function Timeline() {
     return (
       <div
         data-testid="transport-strip"
-        className="mx-1 mb-1 flex items-center gap-3 select-none flex-shrink-0 border-t border-outline-variant/30 bg-surface/60"
+        className="mx-1 mb-1 flex flex-col select-none flex-shrink-0 border-t border-outline-variant/30 bg-surface/60"
         style={{ padding: "5px 12px" }}
       >
+        <div className="flex items-center gap-3">
         <span className="font-mono text-[10px] text-on-surface-variant tracking-wide">
           {mediaLoaded ? "Still · 1 frame" : "No media"}
         </span>
@@ -236,6 +363,8 @@ export default function Timeline() {
             </button>
           </>
         )}
+        </div>
+        {lanesEl}
       </div>
     );
   }
@@ -499,57 +628,16 @@ export default function Timeline() {
           />
         )}
 
-        {/* Keyframe menu */}
-        {menu && (
-          <div
-            role="menu"
-            aria-label={`Keyframe at ${formatTime(menu.mark.time)}`}
-            onPointerDown={(e) => e.stopPropagation()}
-            className="absolute z-[10] neo-flat rounded-md bg-surface shadow-lg flex flex-col"
-            style={{
-              left: `${Math.min(92, Math.max(0, menu.leftPct))}%`,
-              bottom: 22,
-              minWidth: 150,
-              padding: 4,
-              border: "1px solid var(--outline-variant)",
-            }}
-          >
-            <div className="font-data-micro text-data-micro text-on-surface-variant px-2 py-1">
-              {formatTime(menu.mark.time)} · {menu.mark.refs.length} parameter{menu.mark.refs.length === 1 ? "" : "s"}
-            </div>
-            {EASINGS.map((ez) => {
-              const all = menu.mark.refs.every((r) => r.easing === ez.id);
-              const some = !all && menu.mark.refs.some((r) => r.easing === ez.id);
-              return (
-                <button
-                  key={ez.id}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={all}
-                  onClick={() => {
-                    for (const r of menu.mark.refs) updateKeyframe(r.stackId, r.paramId, r.id, { easing: ez.id });
-                    setMenu(null);
-                  }}
-                  className={`text-left font-label-sm text-label-sm rounded px-2 py-1 hover:bg-surface-variant/40 ${all ? "text-accent-teal" : "text-on-surface"}`}
-                >
-                  {all ? "● " : some ? "◐ " : "○ "}
-                  {ez.label}
-                </button>
-              );
-            })}
-            <div style={{ height: 1, background: "var(--outline-variant)", margin: "3px 4px" }} />
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                for (const r of menu.mark.refs) removeKeyframe(r.stackId, r.paramId, r.id);
-                setMenu(null);
-              }}
-              className="text-left font-label-sm text-label-sm rounded px-2 py-1 text-accent-pink hover:bg-surface-variant/40"
-            >
-              Delete keyframe{menu.mark.refs.length === 1 ? "" : "s"}
-            </button>
-          </div>
+        {/* Keyframe menu -- a menu opened by a LANE marker renders inside
+            that lane instead (menu.laneKey), so it stays anchored next to the
+            marker that owns it. */}
+        {menu && !menu.laneKey && (
+          <KeyframeContextMenu
+            mark={menu.mark}
+            leftPct={menu.leftPct}
+            style={{ bottom: 22 }}
+            onAction={handleMenuAction}
+          />
         )}
 
         {/* Playhead */}
@@ -563,6 +651,343 @@ export default function Timeline() {
             transform: "translateX(-50%)",
           }}
         />
+      </div>
+
+      {lanesEl}
+    </div>
+  );
+}
+
+/** What a keyframe context menu can ask the store for. One union shared by
+ *  the scrubber's merged diamonds and the lane markers, so both render the
+ *  identical menu and run the identical updates. */
+type LaneMenuAction =
+  | { type: "easing"; easing: EasingType; mark: KeyframeMark }
+  | { type: "delete"; mark: KeyframeMark };
+
+/**
+ * The easing/delete keyframe menu, extracted so a lane's marker and the
+ * scrubber's merged diamond can both pop it. `style` carries only the
+ * anchor position (left/bottom) -- the caller knows which container it's
+ * absolute inside.
+ */
+function KeyframeContextMenu({
+  mark,
+  leftPct,
+  style,
+  onAction,
+}: {
+  mark: KeyframeMark;
+  leftPct: number;
+  style?: React.CSSProperties;
+  onAction: (a: LaneMenuAction) => void;
+}) {
+  return (
+    <div
+      role="menu"
+      aria-label={`Keyframe at ${formatTime(mark.time)}`}
+      onPointerDown={(e) => e.stopPropagation()}
+      className="absolute z-[10] neo-flat rounded-md bg-surface shadow-lg flex flex-col"
+      style={{
+        left: `${Math.min(92, Math.max(0, leftPct))}%`,
+        minWidth: 150,
+        padding: 4,
+        border: "1px solid var(--outline-variant)",
+        ...style,
+      }}
+    >
+      <div className="font-data-micro text-data-micro text-on-surface-variant px-2 py-1">
+        {formatTime(mark.time)} · {mark.refs.length} parameter{mark.refs.length === 1 ? "" : "s"}
+      </div>
+      {EASINGS.map((ez) => {
+        const all = mark.refs.every((r) => r.easing === ez.id);
+        const some = !all && mark.refs.some((r) => r.easing === ez.id);
+        return (
+          <button
+            key={ez.id}
+            type="button"
+            role="menuitemradio"
+            aria-checked={all}
+            onClick={() => onAction({ type: "easing", easing: ez.id, mark })}
+            className={`text-left font-label-sm text-label-sm rounded px-2 py-1 hover:bg-surface-variant/40 ${all ? "text-accent-teal" : "text-on-surface"}`}
+          >
+            {all ? "● " : some ? "◐ " : "○ "}
+            {ez.label}
+          </button>
+        );
+      })}
+      <div style={{ height: 1, background: "var(--outline-variant)", margin: "3px 4px" }} />
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => onAction({ type: "delete", mark })}
+        className="text-left font-label-sm text-label-sm rounded px-2 py-1 text-accent-pink hover:bg-surface-variant/40"
+      >
+        Delete keyframe{mark.refs.length === 1 ? "" : "s"}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * One per-param lane: fixed-width label (click selects the stack entry, which
+ * is also the discoverable path to that param's editor), then a track with a
+ * diamond per keyframe -- click jumps the playhead, drag retimes the key
+ * (`updateKeyframe` re-sorts and keyframes sit outside undo, so per-move
+ * updates are the cheap correct call), right-click reuses the keyframe menu.
+ * An LFO shows as a teal chip on a faint tinted rail -- right-click removes.
+ */
+function ParamLaneRow({
+  lane,
+  duration,
+  fps,
+  currentTime,
+  menu,
+  lfoMenu,
+  onSelect,
+  onJump,
+  onRetime,
+  onOpenMenu,
+  onOpenLfoMenu,
+  onMenuAction,
+  onRemoveLfo,
+}: {
+  lane: ParamLane;
+  duration: number;
+  fps: number;
+  currentTime: number;
+  menu: { mark: KeyframeMark; leftPct: number } | null;
+  lfoMenu: { stackId: string; paramId: string; leftPct: number } | null;
+  onSelect: () => void;
+  onJump: (t: number) => void;
+  onRetime: (keyId: string, t: number) => void;
+  onOpenMenu: (mark: KeyframeMark, leftPct: number) => void;
+  onOpenLfoMenu: (leftPct: number) => void;
+  onMenuAction: (a: LaneMenuAction) => void;
+  onRemoveLfo: () => void;
+}) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  // `moved` separates click-to-jump from drag-to-retime: without it the
+  // click that follows every pointerup would snap the playhead to wherever
+  // a retime drag happened to end.
+  const dragRef = useRef<{ id: string; moved: boolean; startX: number } | null>(null);
+
+  const timeAt = (clientX: number): number | null => {
+    const el = trackRef.current;
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0) return null;
+    return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)) * duration;
+  };
+  const pct = (t: number) => `${(Math.max(0, Math.min(duration, t)) / duration) * 100}%`;
+
+  return (
+    <div
+      data-testid={`lane-${lane.key}`}
+      className="flex items-center"
+      style={{ height: 14, gap: 6 }}
+    >
+      <button
+        type="button"
+        onClick={onSelect}
+        title={`${lane.label} -- select this effect to edit it`}
+        className="text-on-surface-variant hover:text-accent-teal transition-colors"
+        style={{
+          width: 96,
+          fontSize: 8,
+          fontFamily: "var(--font-mono)",
+          textAlign: "right",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          flex: "none",
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          padding: 0,
+        }}
+      >
+        {lane.label}
+      </button>
+      <div
+        ref={trackRef}
+        data-testid={`lane-track-${lane.key}`}
+        className="relative flex-1"
+        style={{ height: "100%" }}
+      >
+        {/* Rail */}
+        <div
+          className="absolute left-0 right-0"
+          style={{ top: "50%", height: 1, background: "var(--outline-variant)", opacity: 0.35 }}
+        />
+
+        {/* LFO: teal chip on a faint rail tint; right-click removes */}
+        {lane.lfo && (
+          <>
+            <div
+              className="absolute top-0 bottom-0 left-0 right-0 rounded-sm pointer-events-none"
+              style={{ background: "color-mix(in srgb, var(--accent-teal) 5%, transparent)" }}
+            />
+            <button
+              type="button"
+              className="lfo-chip absolute"
+              data-testid={`lane-lfo-${lane.key}`}
+              style={{ left: 2, top: 2, cursor: "pointer", zIndex: 2 }}
+              title={`LFO ${lane.lfo.waveform} ${lane.lfo.rateHz}Hz -- click selects the effect, right-click removes`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelect();
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onOpenLfoMenu(4);
+              }}
+            >
+              LFO {lane.lfo.rateHz.toFixed(1)}Hz
+            </button>
+          </>
+        )}
+
+        {/* Keyframe diamonds */}
+        {lane.keys.map((k) => {
+          const atPlayhead = Math.abs(k.time - currentTime) < 0.01;
+          return (
+            <button
+              key={k.id}
+              type="button"
+              aria-label={`${lane.paramId} keyframe at ${formatTime(k.time)}`}
+              title={`Keyframe ${formatTime(k.time)} -- click jumps, drag retimes, right-click edits`}
+              className="absolute p-0 cursor-ew-resize"
+              style={{
+                left: pct(k.time),
+                top: 3,
+                width: 7,
+                height: 7,
+                zIndex: 3,
+                touchAction: "none",
+                transform: "translateX(-50%) rotate(45deg)",
+                background: atPlayhead ? "var(--accent-gold)" : "var(--accent-teal)",
+                border: "1px solid var(--surface)",
+              }}
+              onKeyDown={(e) => {
+                // Arrow-key retime: the non-dragging alternative to
+                // pointer-move (WCAG 2.5.7).
+                if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const next = Math.max(0, Math.min(duration, k.time + (e.key === "ArrowRight" ? 1 : -1) / fps));
+                  onRetime(k.id, next);
+                }
+              }}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                dragRef.current = { id: k.id, moved: false, startX: e.clientX };
+                try {
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                } catch {
+                  // jsdom has no pointer capture
+                }
+              }}
+              onPointerMove={(e) => {
+                const d = dragRef.current;
+                if (!d || d.id !== k.id) return;
+                // 3px dead zone: a jittery click must jump, not retime by
+                // a sub-frame amount and suppress the click.
+                if (!d.moved && Math.abs(e.clientX - d.startX) < 3) return;
+                const t = timeAt(e.clientX);
+                if (t === null) return;
+                d.moved = true;
+                onRetime(k.id, t);
+              }}
+              onPointerUp={(e) => {
+                try {
+                  e.currentTarget.releasePointerCapture(e.pointerId);
+                } catch {
+                  // see above
+                }
+              }}
+              onPointerCancel={() => {
+                dragRef.current = null;
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (dragRef.current?.moved) {
+                  dragRef.current = null;
+                  return;
+                }
+                dragRef.current = null;
+                onJump(k.time);
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onOpenMenu(
+                  {
+                    time: k.time,
+                    refs: [
+                      {
+                        stackId: lane.stackId,
+                        paramId: lane.paramId,
+                        id: k.id,
+                        easing: k.easing,
+                      },
+                    ],
+                  },
+                  (k.time / duration) * 100
+                );
+              }}
+            />
+          );
+        })}
+
+        {/* Playhead echo */}
+        <div
+          className="absolute top-0 bottom-0 pointer-events-none"
+          style={{
+            left: pct(currentTime),
+            width: 1,
+            background: "var(--on-surface)",
+            opacity: 0.45,
+          }}
+        />
+
+        {/* Menus opened by THIS lane render inside it, anchored above */}
+        {menu && (
+          <KeyframeContextMenu
+            mark={menu.mark}
+            leftPct={menu.leftPct}
+            style={{ bottom: "calc(100% + 4px)" }}
+            onAction={onMenuAction}
+          />
+        )}
+        {lfoMenu && (
+          <div
+            role="menu"
+            aria-label={`LFO on ${lane.paramId}`}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="absolute z-[10] neo-flat rounded-md bg-surface shadow-lg flex flex-col"
+            style={{
+              left: `${Math.min(92, Math.max(0, lfoMenu.leftPct))}%`,
+              bottom: "calc(100% + 4px)",
+              minWidth: 110,
+              padding: 4,
+              border: "1px solid var(--outline-variant)",
+            }}
+          >
+            <div className="font-data-micro text-data-micro text-on-surface-variant px-2 py-1">
+              LFO {lane.lfo?.waveform} {lane.lfo?.rateHz}Hz
+            </div>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={onRemoveLfo}
+              className="text-left font-label-sm text-label-sm rounded px-2 py-1 text-accent-pink hover:bg-surface-variant/40"
+            >
+              Remove LFO
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

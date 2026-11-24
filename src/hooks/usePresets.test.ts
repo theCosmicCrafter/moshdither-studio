@@ -18,12 +18,14 @@ vi.mock("../lib/browserFallback", () => ({
 
 vi.mock("./defaultPresets", () => ({ DEFAULT_PRESETS: [] }));
 
-import { useAppStore } from "../store";
+import { useAppStore, type KeyframeTrack } from "../store";
 import {
   PRESET_SCHEMA_VERSION,
   parsePresets,
+  presetMatchesCurrentStack,
   serialisePresets,
   usePresets,
+  type Preset,
 } from "./usePresets";
 
 const LEGACY_KEY = "moshdither_presets_v2";
@@ -298,5 +300,270 @@ describe("parsePresets", () => {
   it("treats a non-string (a mocked or failed read) as an empty library instead of throwing", () => {
     expect(parsePresets(undefined as never)).toEqual([]);
     expect(parsePresets({} as never)).toEqual([]);
+  });
+});
+
+function liveEntry(id: string, effectId = "glitch.databend") {
+  return {
+    id,
+    effectId,
+    effectName: effectId,
+    params: { amount: 0.2 },
+    enabled: true,
+    maskId: null,
+    maskMode: "inside" as const,
+  };
+}
+
+describe("animated presets (keyframes)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    loadPresetsFile.mockReset().mockResolvedValue("");
+    savePresetsFile.mockReset().mockResolvedValue(undefined);
+    getPresetsPath.mockReset().mockResolvedValue("C:/Users/x/Documents/MoshDither Studio/presets.json");
+    isTauriAvailable.mockReset().mockReturnValue(true);
+    useAppStore.setState({ effectStack: [], keyframes: {} });
+  });
+
+  it("captures each entry's live keyframes into the preset on save", async () => {
+    useAppStore.setState({
+      effectStack: [liveEntry("s1"), liveEntry("s2", "color.rgb_shift")],
+      keyframes: {
+        s1: {
+          amount: [
+            { id: "k1", time: 0, value: 0, easing: "linear" },
+            { id: "k2", time: 5, value: 0.9, easing: "easeIn" },
+          ],
+          // Empty tracks are not worth serialising.
+          other: [],
+        },
+      },
+    });
+    const { result } = renderHook(() => usePresets());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    act(() => result.current.savePreset("anim"));
+    const saved = result.current.presets.find((p) => p.name === "anim");
+    expect(saved?.stack[0].keyframes?.amount).toEqual([
+      { id: "k1", time: 0, value: 0, easing: "linear" },
+      { id: "k2", time: 5, value: 0.9, easing: "easeIn" },
+    ]);
+    expect(saved?.stack[0].keyframes?.other).toBeUndefined();
+    // Entries with no animation carry no field at all.
+    expect(saved?.stack[1].keyframes).toBeUndefined();
+    // The store copy must be a clone — later edits can't mutate the preset.
+    expect(saved?.stack[0].keyframes?.amount).not.toBe(
+      useAppStore.getState().keyframes.s1.amount
+    );
+  });
+
+  it("restores tracks remapped to the NEW entry ids on load", async () => {
+    const { result } = renderHook(() => usePresets());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    const preset = {
+      id: "p-anim",
+      name: "anim",
+      createdAt: "2026-01-01",
+      stack: [
+        {
+          ...liveEntry("preset-entry-a"),
+          keyframes: {
+            amount: [
+              { id: "k1", time: 0, value: 0, easing: "easeIn" },
+              { id: "k2", time: 5, value: 0.9, easing: "linear" },
+            ],
+          },
+        },
+        liveEntry("preset-entry-b", "color.rgb_shift"),
+      ],
+    };
+    act(() => result.current.loadPreset(preset as never));
+
+    const st = useAppStore.getState();
+    expect(st.effectStack).toHaveLength(2);
+    const newId = st.effectStack[0].id;
+    // loadPreset regenerates ids — the whole reason the store map cannot be
+    // keyed by whatever the file held.
+    expect(newId).not.toBe("preset-entry-a");
+    expect(Object.keys(st.keyframes)).toEqual([newId]);
+    expect(st.keyframes[newId].amount.map((k) => k.value)).toEqual([0, 0.9]);
+    // And the restored track is live, not decorative: easing rides on the
+    // segment's STARTING keyframe, so k1's easeIn at t=2.5/5 gives
+    // 0 + 0.9 * (0.5)^2.
+    expect(st.getKeyframeValue(newId, "amount", 2.5)).toBeCloseTo(0.225, 3);
+    // The loaded entries don't keep a stray `keyframes` field — animation
+    // lives in the store map, not on StackEntry.
+    expect("keyframes" in st.effectStack[0]).toBe(false);
+  });
+
+  it("clears stale tracks when the loaded preset carries no animation", async () => {
+    useAppStore.setState({
+      keyframes: { dead: { amount: [{ id: "k", time: 0, value: 1, easing: "linear" }] } },
+    });
+    const { result } = renderHook(() => usePresets());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    const preset = {
+      id: "p-static",
+      name: "static",
+      createdAt: "2026-01-01",
+      stack: [liveEntry("old-entry")],
+    };
+    act(() => result.current.loadPreset(preset as never));
+
+    // The replaced stack's ids are gone, so any tracks keyed to them would
+    // be orphans — an animation-free preset loads with an empty map.
+    expect(useAppStore.getState().keyframes).toEqual({});
+  });
+
+  it("drops malformed tracks from a hand-edited library instead of failing", async () => {
+    const { result } = renderHook(() => usePresets());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    const preset = {
+      id: "p-bad",
+      name: "bad",
+      createdAt: "2026-01-01",
+      stack: [
+        {
+          ...liveEntry("entry-a"),
+          keyframes: {
+            amount: "not-an-array",
+            badTime: [{ time: "soon", value: 1 }],
+            ok: [{ time: 0, value: 1, easing: "bogus" }],
+          },
+        },
+      ],
+    };
+    act(() => result.current.loadPreset(preset as never));
+
+    const st = useAppStore.getState();
+    const newId = st.effectStack[0].id;
+    // `amount` isn't an array and `badTime`'s only key has a non-numeric
+    // time — both drop. `ok` survives, easing coerced and id generated.
+    expect(st.keyframes[newId]).toEqual({
+      ok: [{ id: expect.any(String), time: 0, value: 1, easing: "linear" }],
+    });
+  });
+
+  it("round-trips entry keyframes through serialise/parse", () => {
+    const preset: Preset = {
+      id: "p",
+      name: "n",
+      createdAt: "x",
+      stack: [
+        {
+          ...liveEntry("e1"),
+          keyframes: { amount: [{ id: "k", time: 0, value: 1, easing: "easeInOut" }] },
+        },
+      ],
+    };
+    const back = parsePresets(serialisePresets([preset]));
+    expect(back[0].stack[0].keyframes?.amount).toEqual([
+      { id: "k", time: 0, value: 1, easing: "easeInOut" },
+    ]);
+  });
+
+  it("still parses presets saved before keyframes existed", () => {
+    // Every pre-animation library on disk has stack entries with no
+    // `keyframes` field — they must keep loading with animation absent.
+    const legacy = JSON.stringify({
+      version: 1,
+      presets: [{ id: "old", name: "Old", createdAt: "x", stack: [liveEntry("e")] }],
+    });
+    const back = parsePresets(legacy);
+    expect(back).toHaveLength(1);
+    expect(back[0].stack[0].keyframes).toBeUndefined();
+  });
+});
+
+describe("preset thumbnails", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    loadPresetsFile.mockReset().mockResolvedValue("");
+    savePresetsFile.mockReset().mockResolvedValue(undefined);
+    getPresetsPath.mockReset().mockResolvedValue("C:/Users/x/Documents/MoshDither Studio/presets.json");
+    isTauriAvailable.mockReset().mockReturnValue(true);
+    useAppStore.setState({ effectStack: [], keyframes: {}, mediaLoaded: false });
+  });
+
+  it("saves cleanly with no thumbnail when nothing can be rendered", async () => {
+    // jsdom has no canvas 2d context (placeholder → "") and no media is
+    // loaded (no CPU render) — the preset must still save, thumbnail-less.
+    useAppStore.setState({ effectStack: [liveEntry("s1")] });
+    const { result } = renderHook(() => usePresets());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    act(() => result.current.savePreset("no thumb"));
+    const saved = result.current.presets.find((p) => p.name === "no thumb");
+    expect(saved).toBeTruthy();
+    expect(saved?.thumbnail).toBeUndefined();
+  });
+
+  it("parses presets with and without the thumbnail field", () => {
+    const json = serialisePresets([
+      { id: "a", name: "a", createdAt: "x", stack: [], thumbnail: "data:image/png;base64,x" },
+      { id: "b", name: "b", createdAt: "x", stack: [] },
+    ]);
+    const back = parsePresets(json);
+    expect(back[0].thumbnail).toBe("data:image/png;base64,x");
+    expect(back[1].thumbnail).toBeUndefined();
+  });
+});
+
+describe("presetMatchesCurrentStack", () => {
+  const live = [liveEntry("live-a")];
+
+  it("is true for a preset describing the live stack (entry ids aside)", () => {
+    // A just-loaded preset has regenerated ids — matching must ignore them.
+    const preset = { id: "p", name: "n", createdAt: "x", stack: [liveEntry("file-id")] };
+    expect(presetMatchesCurrentStack(preset, live, {}, "classic", {})).toBe(true);
+  });
+
+  it("is false when a param differs", () => {
+    const preset = {
+      id: "p",
+      name: "n",
+      createdAt: "x",
+      stack: [{ ...liveEntry("file-id"), params: { amount: 0.9 } }],
+    };
+    expect(presetMatchesCurrentStack(preset, live, {}, "classic", {})).toBe(false);
+  });
+
+  it("is false when the saved animation differs from the live tracks", () => {
+    const preset: Preset = {
+      id: "p",
+      name: "n",
+      createdAt: "x",
+      stack: [
+        {
+          ...liveEntry("file-id"),
+          keyframes: { amount: [{ id: "k", time: 0, value: 0, easing: "linear" }] },
+        },
+      ],
+    };
+    // Preset has animation, the live entry has none.
+    expect(presetMatchesCurrentStack(preset, live, {}, "classic", {})).toBe(false);
+    // Same track on the live entry → back to true.
+    const keyframes: Record<string, KeyframeTrack> = {
+      "live-a": { amount: [{ id: "k", time: 0, value: 0, easing: "linear" }] },
+    };
+    expect(presetMatchesCurrentStack(preset, live, keyframes, "classic", {})).toBe(true);
+  });
+
+  it("compares ffglitchMode only when the preset carries one", () => {
+    const withMode = {
+      id: "p",
+      name: "n",
+      createdAt: "x",
+      stack: [liveEntry("file-id")],
+      ffglitchMode: "noise",
+    };
+    expect(presetMatchesCurrentStack(withMode, live, {}, "classic", {})).toBe(false);
+    expect(presetMatchesCurrentStack(withMode, live, {}, "noise", {})).toBe(true);
+    // Presets saved before the field existed stay matchable.
+    const withoutMode = { id: "p", name: "n", createdAt: "x", stack: [liveEntry("file-id")] };
+    expect(presetMatchesCurrentStack(withoutMode, live, {}, "classic", {})).toBe(true);
   });
 });

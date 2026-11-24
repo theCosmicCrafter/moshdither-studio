@@ -1,16 +1,40 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { sanitizeFfglitchParams } from "../lib/ffglitchModes";
-import { useAppStore, type StackEntry } from "../store";
+import { useAppStore, type Keyframe, type KeyframeTrack, type LfoSpec, type StackEntry } from "../store";
 import { migrateOverlayGuides } from "../utils/migrateOverlayGuides";
-import { getPresetsPath, loadPresetsFile, savePresetsFile } from "../lib/tauri";
+import { stackToRustPayload } from "../utils/effectConverter";
+import { applyEffectStack, getPresetsPath, loadPresetsFile, savePresetsFile } from "../lib/tauri";
 import { isTauriAvailable } from "../lib/browserFallback";
+import { logger } from "../utils/logger";
 import { DEFAULT_PRESETS } from "./defaultPresets";
+
+/**
+ * A stack entry as it appears inside a preset file.
+ *
+ * The animation tracks live ON the entry rather than in a top-level map:
+ * the store keys keyframes by stack-entry id, but `loadPreset` regenerates
+ * every entry id — so an id-keyed format would save data it could never
+ * restore. Embedding the tracks beside the params they animate sidesteps
+ * the id problem entirely and mirrors the `keyframes` field
+ * `stackToRustPayload` already attaches to each effect call at export.
+ * Optional: presets saved before animated looks existed have no field, and
+ * load just means "no animation".
+ */
+export interface PresetStackEntry extends StackEntry {
+  /** Per-parameter animation: paramId -> keyframe list, same shape as the
+   *  store's `keyframes[entryId]`. */
+  keyframes?: KeyframeTrack;
+  /** Per-parameter LFO specs — same per-entry reasoning as `keyframes`:
+   *  `lfos[entryId]` in the store could never survive the id regeneration
+   *  on load. */
+  lfos?: Record<string, LfoSpec>;
+}
 
 export interface Preset {
   id: string;
   name: string;
   createdAt: string;
-  stack: StackEntry[];
+  stack: PresetStackEntry[];
   thumbnail?: string; // base64 PNG data URL
   /** The FFglitch bitstream-datamosh mode this look was built with.
    *
@@ -59,7 +83,7 @@ function withDefaults(userPresets: Preset[]): Preset[] {
   const merged = [...userPresets];
   for (const preset of DEFAULT_PRESETS) {
     if (!existing.has(preset.id)) {
-      merged.push({ ...preset, thumbnail: generateThumbnail(preset.stack) });
+      merged.push({ ...preset, thumbnail: generatePlaceholderThumb(preset.stack) });
     }
   }
   return merged;
@@ -87,7 +111,18 @@ interface PresetFile {
 
 function isValidPreset(p: unknown): p is Preset {
   const preset = p as Preset | null;
-  return !!preset && !!preset.id && !!preset.name && Array.isArray(preset.stack);
+  if (!preset || !preset.id || !preset.name || !Array.isArray(preset.stack)) return false;
+  // Entries render unconditionally (name, effectId, params reads), so a
+  // malformed one would crash the panel every open — the file is
+  // user-editable, so reject bad entries at the door.
+  return preset.stack.every(
+    (e) =>
+      !!e &&
+      typeof e === "object" &&
+      typeof e.effectId === "string" &&
+      !!e.params &&
+      typeof e.params === "object"
+  );
 }
 
 /**
@@ -121,8 +156,80 @@ export function serialisePresets(presets: Preset[]): string {
   return JSON.stringify(file, null, 2);
 }
 
-/** Generate a simple gradient thumbnail based on preset effects. */
-function generateThumbnail(stack: StackEntry[]): string {
+/** Thumbnail geometry — matches the mock's 16:9 preset-strip cells. */
+const THUMB_W = 128;
+const THUMB_H = 72;
+
+/** Cover-fit a full-size render data URL into the thumbnail box. */
+function downscaleToThumb(dataUrl: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = THUMB_W;
+      canvas.height = THUMB_H;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        resolve(null);
+        return;
+      }
+      // Cover crop: fill the box, centre the overflow.
+      const scale = Math.max(THUMB_W / img.naturalWidth, THUMB_H / img.naturalHeight);
+      const w = img.naturalWidth * scale;
+      const h = img.naturalHeight * scale;
+      ctx.drawImage(img, (THUMB_W - w) / 2, (THUMB_H - h) / 2, w, h);
+      try {
+        resolve(canvas.toDataURL("image/png"));
+      } catch {
+        resolve(null);
+      }
+    };
+    img.onerror = () => resolve(null);
+    img.src = dataUrl;
+  });
+}
+
+/**
+ * Render the stack against the loaded media through the exact CPU pipeline
+ * (`apply_effect_stack`, the same path EXACT preview uses) and shrink the
+ * result to a thumbnail.
+ *
+ * `preview_scale` makes the backend *process* at ~256px, so the effect work
+ * is thumbnail-priced — and resolution-dependent looks (dither matrices,
+ * block sizes, halftone dots) actually read truer than they would shrunk
+ * from a 4K render. The returned frame is still full-resolution, which is
+ * what `downscaleToThumb` is for.
+ *
+ * Returns null whenever a real render is unavailable (no backend, no media,
+ * render error) — callers fall back to the procedural placeholder.
+ */
+async function renderPresetThumbnail(stack: StackEntry[]): Promise<string | null> {
+  const state = useAppStore.getState();
+  if (!isTauriAvailable() || !state.mediaLoaded) return null;
+  try {
+    // Params already hold playhead-interpolated values (useKeyframePlayback
+    // keeps them there), so the thumb matches what the preview shows.
+    const payload = stackToRustPayload(stack, state.activeMask, state.sam3Masks, state.currentTime);
+    const maxDim = Math.max(state.mediaInfo?.width ?? 0, state.mediaInfo?.height ?? 0);
+    const previewScale = maxDim > 0 ? Math.min(0.99, 256 / maxDim) : 0.25;
+    const dataUrl = await applyEffectStack(payload, null, previewScale);
+    return await downscaleToThumb(dataUrl);
+  } catch (err) {
+    logger.warn("presets", "Preset thumbnail render failed; keeping placeholder", {
+      error: String(err),
+    });
+    return null;
+  }
+}
+
+/**
+ * Procedural placeholder art: a flat bar strip derived from the stack's
+ * effect categories. It is generated synchronously, so it is what default
+ * presets ship with, what a saved preset gets the instant it is created
+ * (the real render patches over it asynchronously), and what remains when
+ * a real render cannot run.
+ */
+function generatePlaceholderThumb(stack: StackEntry[]): string {
   const canvas = document.createElement("canvas");
   canvas.width = 160;
   canvas.height = 90;
@@ -169,6 +276,159 @@ function generateThumbnail(stack: StackEntry[]): string {
   ctx.fillText(`${stack.filter((e) => e.enabled).length} fx`, 8, canvas.height - 8);
 
   return canvas.toDataURL("image/png");
+}
+
+// ── Keyframes in presets ────────────────────────────────────
+
+/**
+ * Deep-clone a store entry's tracks for the preset file, dropping empty
+ * ones. Returns undefined when the entry has no animation at all so the
+ * field stays absent rather than serialising `{}`.
+ */
+function captureKeyframeTrack(track: KeyframeTrack | undefined): KeyframeTrack | undefined {
+  if (!track) return undefined;
+  const clean: KeyframeTrack = {};
+  for (const [paramId, keys] of Object.entries(track)) {
+    if (keys.length > 0) clean[paramId] = JSON.parse(JSON.stringify(keys)) as Keyframe[];
+  }
+  return Object.keys(clean).length > 0 ? clean : undefined;
+}
+
+const EASING_TYPES = new Set(["linear", "easeIn", "easeOut", "easeInOut", "hold"]);
+
+/**
+ * Coerce whatever a preset file carries as `entry.keyframes` into a valid
+ * KeyframeTrack. The library is a user-editable JSON file, so the field may
+ * be absent, the wrong type, or hold malformed keys — drop what does not
+ * parse rather than poison the store's animation state. Tracks come back
+ * sorted by time, the invariant `setKeyframesForTrack` maintains.
+ */
+function sanitizeKeyframeTrack(raw: unknown): KeyframeTrack | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const clean: KeyframeTrack = {};
+  for (const [paramId, keys] of Object.entries(raw as Record<string, unknown>)) {
+    if (paramId === "__proto__" || paramId === "constructor" || paramId === "prototype") continue;
+    if (!Array.isArray(keys)) continue;
+    const track = keys
+      .filter(
+        (k): k is Keyframe =>
+          !!k && typeof k === "object" && Number.isFinite(k.time) && Number.isFinite(k.value)
+      )
+      .map((k, i) => ({
+        id: typeof k.id === "string" ? k.id : `kf-${i}`,
+        time: k.time,
+        value: k.value,
+        easing: EASING_TYPES.has(k.easing) ? k.easing : "linear",
+      }))
+      .sort((a, b) => a.time - b.time);
+    if (track.length > 0) clean[paramId] = track;
+  }
+  return Object.keys(clean).length > 0 ? clean : undefined;
+}
+
+const LFO_WAVEFORM_SET = new Set(["sine", "square", "triangle", "random"]);
+
+/**
+ * Coerce whatever a preset file carries as `entry.lfos` into valid
+ * LfoSpecs — same malformed-file posture as sanitizeKeyframeTrack.
+ */
+function sanitizeLfoMap(raw: unknown): Record<string, LfoSpec> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const clean: Record<string, LfoSpec> = {};
+  for (const [paramId, spec] of Object.entries(raw as Record<string, unknown>)) {
+    if (!spec || typeof spec !== "object") continue;
+    const s = spec as Record<string, unknown>;
+    if (
+      !LFO_WAVEFORM_SET.has(s.waveform as string) ||
+      !Number.isFinite(s.rateHz) ||
+      !Number.isFinite(s.depth) ||
+      !Number.isFinite(s.offset)
+    ) continue;
+    if (paramId === "__proto__" || paramId === "constructor" || paramId === "prototype") continue;
+    // Boundary clamps mirror the store's sanitizeLfo — a hand-edited file
+    // must not plant NaN/Infinity specs that later poison the export bake.
+    // The file's `id` is preserved (it seeds the random waveform); only a
+    // missing/non-string one is replaced.
+    clean[paramId] = {
+      id: typeof s.id === "string" && s.id ? s.id : paramId,
+      waveform: s.waveform as LfoSpec["waveform"],
+      rateHz: Math.max(0, Math.min(100, s.rateHz as number)),
+      depth: Math.max(0, Math.min(1, s.depth as number)),
+      offset: s.offset as number,
+    };
+  }
+  return Object.keys(clean).length > 0 ? clean : undefined;
+}
+
+// ── "Current" preset detection ──────────────────────────────
+
+/** JSON.stringify with sorted object keys, for order-insensitive compares. */
+function stableStringify(v: unknown): string {
+  if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";
+  if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;
+  const keys = Object.keys(v as Record<string, unknown>).sort();
+  return `{${keys
+    .map((k) => `${JSON.stringify(k)}:${stableStringify((v as Record<string, unknown>)[k])}`)
+    .join(",")}}`;
+}
+
+/** Order-insensitive signature of a keyframe track (keyframe ids ignored —
+ *  two tracks that evaluate identically are the same animation). */
+function trackSignature(track: KeyframeTrack | undefined): string {
+  if (!track) return "";
+  const parts: string[] = [];
+  for (const paramId of Object.keys(track).sort()) {
+    const rawKeys = track[paramId];
+    if (!Array.isArray(rawKeys)) continue;
+    const keys = [...rawKeys]
+      .sort((a, b) => a.time - b.time)
+      .map((k) => `${k.time}:${k.value}:${k.easing}`)
+      .join("|");
+    if (keys) parts.push(`${paramId}=${keys}`);
+  }
+  return parts.join(";");
+}
+
+/**
+ * Whether `preset` describes what is on the stack right now — the basis for
+ * the panel's CURRENT marker.
+ *
+ * Compared per position: effectId, enabled flag, params (key order may
+ * legitimately differ after a save/load round-trip) and animation tracks.
+ * Entry ids are skipped on purpose — a just-loaded preset regenerates them.
+ * `ffglitchMode` counts when the preset carries one; presets saved before
+ * the field existed stay matchable on the stack alone.
+ */
+export function presetMatchesCurrentStack(
+  preset: Preset,
+  stack: StackEntry[],
+  keyframes: Record<string, KeyframeTrack>,
+  ffglitchMode: string,
+  lfos: Record<string, Record<string, LfoSpec>>
+): boolean {
+  if (preset.stack.length !== stack.length) return false;
+  if (preset.ffglitchMode && preset.ffglitchMode !== ffglitchMode) return false;
+  for (let i = 0; i < stack.length; i++) {
+    const saved = preset.stack[i];
+    const live = stack[i];
+    if (saved.effectId !== live.effectId) return false;
+    if (!!saved.enabled !== !!live.enabled) return false;
+    // Modulated params are compared by track/LFO signature below — their
+    // `params` entries hold resolved values, which drift with the playhead
+    // and would flicker CURRENT off and on during playback.
+    const modulated = new Set([
+      ...Object.keys(saved.keyframes ?? {}),
+      ...Object.keys(sanitizeLfoMap(saved.lfos) ?? {}),
+      ...Object.keys(keyframes[live.id] ?? {}),
+      ...Object.keys(lfos[live.id] ?? {}),
+    ]);
+    const strip = (params: Record<string, unknown>) =>
+      Object.fromEntries(Object.entries(params).filter(([k]) => !modulated.has(k)));
+    if (stableStringify(strip(saved.params)) !== stableStringify(strip(live.params))) return false;
+    if (trackSignature(saved.keyframes) !== trackSignature(keyframes[live.id])) return false;
+    if (stableStringify(sanitizeLfoMap(saved.lfos) ?? {}) !== stableStringify(sanitizeLfoMap(lfos[live.id]) ?? {})) return false;
+  }
+  return true;
 }
 
 export function usePresets() {
@@ -269,24 +529,46 @@ export function usePresets() {
 
   const savePreset = useCallback(
     (name: string) => {
-      const thumbnail = generateThumbnail(effectStack);
+      const state = useAppStore.getState();
+      // Deep clone, folding each entry's live keyframe tracks into
+      // `entry.keyframes` (see PresetStackEntry for why they live there).
+      const stack: PresetStackEntry[] = effectStack.map((entry) => {
+        const clone = JSON.parse(JSON.stringify(entry)) as PresetStackEntry;
+        const tracks = captureKeyframeTrack(state.keyframes[entry.id]);
+        if (tracks) clone.keyframes = tracks;
+        const entryLfos = state.lfos[entry.id];
+        if (entryLfos && Object.keys(entryLfos).length > 0) {
+          clone.lfos = JSON.parse(JSON.stringify(entryLfos));
+        }
+        return clone;
+      });
       const preset: Preset = {
         id: `preset-${Date.now()}`,
         name: name.trim() || `Preset ${presets.length + 1}`,
         createdAt: new Date().toISOString(),
-        stack: JSON.parse(JSON.stringify(effectStack)), // deep clone
-        thumbnail,
-        ffglitchMode: useAppStore.getState().ffglitchMode,
-        ffglitchParams: useAppStore.getState().ffglitchParams[useAppStore.getState().ffglitchMode],
+        stack,
+        thumbnail: generatePlaceholderThumb(stack) || undefined,
+        ffglitchMode: state.ffglitchMode,
+        ffglitchParams: state.ffglitchParams[state.ffglitchMode],
       };
       setPresets((prev) => [preset, ...prev]);
       setStatusMessage(`Preset "${preset.name}" saved`);
+      // The placeholder is instant; the real render patches over it when it
+      // lands. Matching by id stays correct even if the preset is deleted
+      // (map over nothing) or the user saves again mid-render.
+      void renderPresetThumbnail(stack).then((real) => {
+        if (!real) return;
+        setPresets((prev) =>
+          prev.map((p) => (p.id === preset.id ? { ...p, thumbnail: real } : p))
+        );
+      });
     },
     [effectStack, presets.length, setStatusMessage]
   );
 
   const loadPreset = useCallback(
     (preset: Preset) => {
+      try {
       // Presets saved before the composition guides left the effect registry
       // still contain overlay.* entries. Those IDs no longer resolve in Rust,
       // and an unknown effect there aborts the whole render, so strip them and
@@ -296,12 +578,29 @@ export function usePresets() {
 
       // Replace the stack atomically — no clear+setTimeout+add race condition.
       // Deep clone the preset stack so edits to the loaded stack don't mutate the preset.
-      const newStack: StackEntry[] = migratedStack.map((entry) => ({
-        ...entry,
-        id: `${entry.effectId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        params: JSON.parse(JSON.stringify(entry.params)),
-      }));
+      // Migrated entries still carry `keyframes` (the migration spreads each
+      // entry), but the field is stripped here: live animation state belongs
+      // to the store's `keyframes` map, keyed by the NEW ids generated below.
+      const newStack: StackEntry[] = [];
+      const restoredKeyframes: Record<string, KeyframeTrack> = {};
+      const restoredLfos: Record<string, Record<string, LfoSpec>> = {};
+      for (const entry of migratedStack as PresetStackEntry[]) {
+        const { keyframes: rawTracks, lfos: rawLfos, ...base } = entry;
+        const id = `${entry.effectId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        newStack.push({ ...base, id, params: JSON.parse(JSON.stringify(entry.params)) });
+        const tracks = sanitizeKeyframeTrack(rawTracks);
+        if (tracks) restoredKeyframes[id] = tracks;
+        const entryLfos = sanitizeLfoMap(rawLfos);
+        if (entryLfos) restoredLfos[id] = entryLfos;
+      }
       replaceStack(newStack);
+      // A preset is the whole look, animation included — so the track map is
+      // replaced wholesale. Tracks keyed to the previous stack's ids would
+      // all be orphans anyway (every entry id was just regenerated), which
+      // is why an animation-free preset loads with an empty map rather than
+      // inheriting stale tracks from whatever was on the stack before.
+      useAppStore.getState().setKeyframes(restoredKeyframes);
+      useAppStore.getState().setLfos(restoredLfos);
       // Older presets have no mode; leave the current one alone rather than
       // silently resetting it to "classic".
       if (preset.ffglitchMode) {
@@ -316,6 +615,14 @@ export function usePresets() {
         }
       }
       setStatusMessage(`Preset "${preset.name}" loaded`);
+      } catch (err) {
+        // The library file is user-editable and shareable — a malformed
+        // entry must fail the load, not crash the panel.
+        logger.error("presets", `Preset "${preset.name}" failed to load`, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        setStatusMessage(`Preset "${preset.name}" failed to load`, "error");
+      }
     },
     [replaceStack, setStatusMessage]
   );

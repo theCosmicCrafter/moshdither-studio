@@ -535,6 +535,42 @@
     vertical-align: 1px;
     flex: none;
   }
+  /* Interactive modulator chips (LFO editor, lane markers) — same shell
+     language as .codec-chip/.sim-chip but these are buttons: honesty chips
+     stay non-interactive so "pipeline truth" and "modulation state" never
+     share a selector. */
+  .lfo-chip, .lfo-chip-off {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    font-family: var(--font-mono);
+    font-size: 8px;
+    letter-spacing: 0.07em;
+    text-transform: none;
+    border-radius: 3px;
+    padding: 0 4px;
+    cursor: pointer;
+    vertical-align: 1px;
+    flex: none;
+    background: none;
+  }
+  .lfo-chip {
+    color: var(--accent-teal);
+    border: 1px solid color-mix(in srgb, var(--accent-teal) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-teal) 7%, transparent);
+  }
+  .lfo-chip:hover {
+    background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
+  }
+  .lfo-chip-off {
+    color: var(--text-muted);
+    border: 1px solid var(--outline-variant);
+    text-transform: lowercase;
+  }
+  .lfo-chip-off:hover {
+    color: var(--accent-teal);
+    border-color: color-mix(in srgb, var(--accent-teal) 35%, transparent);
+  }
 
   /* Parameter readout */
   .param-readout {
@@ -564,7 +600,6 @@
     height: 3px;
     background: var(--surface-container-highest);
     border-radius: 2px;
-    outline: none;
   }
   .slider-track::-webkit-slider-thumb {
     -webkit-appearance: none;

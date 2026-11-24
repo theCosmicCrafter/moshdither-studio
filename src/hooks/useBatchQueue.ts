@@ -85,18 +85,35 @@ export function useBatchQueue() {
       try {
         const state = useAppStore.getState();
         const activeEffects = state.effectStack.filter((e) => e.enabled);
+        // Resolved before the payload so the LFO bake grid below lands on the
+        // exact trim range this job exports.
+        const trimStart =
+          job.trimStart ?? (typeof state.inPoint === "number" ? state.inPoint : undefined);
+        const trimEnd =
+          job.trimEnd ?? (typeof state.outPoint === "number" ? state.outPoint : state.duration);
         const stack = stackToRustPayload(
           activeEffects,
           state.activeMask,
           state.sam3Masks,
           undefined,
-          state.keyframes
+          state.keyframes,
+          state.audioBindings,
+          {
+            lfos: state.lfos,
+            effects: state.allEffects,
+            bake: {
+              // Decode fps: the clip's own rate for video, job.fps for a still.
+              // A bad job fps must not bake NaN times into the IPC payload.
+              fps: state.isVideo
+                ? state.mediaFps
+                : Number.isFinite(job.fps) && job.fps > 0
+                  ? job.fps
+                  : 30,
+              trimStart: trimStart ?? 0,
+              trimEnd,
+            },
+          }
         );
-
-        const trimStart =
-          job.trimStart ?? (typeof state.inPoint === "number" ? state.inPoint : undefined);
-        const trimEnd =
-          job.trimEnd ?? (typeof state.outPoint === "number" ? state.outPoint : state.duration);
         const watermark =
           job.watermark ?? (state.watermark.enabled ? state.watermark : undefined);
         const includeAudio = job.includeAudio ?? state.exportIncludeAudio;

@@ -1,6 +1,12 @@
 import { logger } from "../utils/logger";
 import { useEffect, useRef, useCallback, useState } from "react";
-import { useAppStore, type StackEntry, type KeyframeTrack, type AudioBinding } from "../store";
+import {
+  useAppStore,
+  type StackEntry,
+  type KeyframeTrack,
+  type AudioBinding,
+  type LfoSpec,
+} from "../store";
 import { loadMediaFromPath, loadMediaFromBase64 } from "../lib/tauri";
 import { migrateOverlayGuides } from "../utils/migrateOverlayGuides";
 
@@ -16,6 +22,8 @@ export interface ProjectSession {
   keyframes: Record<string, KeyframeTrack>;
   audioFilePath: string | null;
   audioBindings: Record<string, Record<string, AudioBinding>>;
+  /** Optional: autosaves written before LFO modulators shipped carry none. */
+  lfos?: Record<string, Record<string, LfoSpec>>;
   savedAt: string;
 }
 
@@ -87,6 +95,7 @@ export function useProjectSession() {
     keyframes: useAppStore.getState().keyframes,
     audioFilePath: useAppStore.getState().audioFilePath,
     audioBindings: useAppStore.getState().audioBindings,
+    lfos: useAppStore.getState().lfos,
   });
 
   // Subscribe to store updates and sync into ref (single subscription)
@@ -100,6 +109,7 @@ export function useProjectSession() {
       stateRef.current.keyframes = s.keyframes;
       stateRef.current.audioFilePath = s.audioFilePath;
       stateRef.current.audioBindings = s.audioBindings;
+      stateRef.current.lfos = s.lfos;
     });
     return unsub;
   }, []);
@@ -118,6 +128,7 @@ export function useProjectSession() {
         keyframes,
         audioFilePath,
         audioBindings,
+        lfos,
       } = stateRef.current;
       const mediaDataUrl = originalDataUrl ?? previewDataUrl;
 
@@ -131,6 +142,7 @@ export function useProjectSession() {
           keyframes: JSON.parse(JSON.stringify(keyframes)),
           audioFilePath,
           audioBindings: JSON.parse(JSON.stringify(audioBindings)),
+          lfos: JSON.parse(JSON.stringify(lfos)),
           savedAt: new Date().toISOString(),
         };
         saveAutoSave(session);
@@ -175,6 +187,9 @@ export function useProjectSession() {
       if (session.keyframes !== undefined) store.setKeyframes(session.keyframes);
       if (session.audioFilePath !== undefined) store.setAudioFilePath(session.audioFilePath);
       if (session.audioBindings !== undefined) store.setAudioBindings(session.audioBindings);
+      // Session ids survive restore untouched (setEffectStack keeps them), so
+      // the LFO map reconnects to its stack entries as-is.
+      if (session.lfos !== undefined) store.setLfos(session.lfos);
 
       // 3. Reload media file or base64 data into memory
       let mediaRestored = false;
