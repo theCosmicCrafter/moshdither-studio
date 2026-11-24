@@ -24,5 +24,13 @@ export function effectPipeline(meta: { id: string; category: string }): EffectPi
   // corruption — see the doc comments in src-tauri/src/effects/datamoshing/*.
   // Real bitstream mosh is only reachable via the FFglitch subprocess path.
   if (meta.category === "datamoshing") return "sim";
+  // Corruption sims outside the datamoshing category — self-described in
+  // their Rust doc comments as simulating codec/file-format damage.
+  if (SIM_EFFECT_IDS.has(meta.id)) return "sim";
   return "pixel";
 }
+
+const SIM_EFFECT_IDS = new Set([
+  "glitch.macroblock_glitch", // "simulates H.264-style block corruption"
+  "glitch.png_chunk",         // "simulates ... byte-level PNG corruption"
+]);

@@ -14,6 +14,9 @@ export const DEFAULT_LAYOUT: IJsonModel = {
         type: "tabset",
         weight: 20,
         id: "left-zone",
+        // Rail toggles can empty this zone; keep the tabset alive so
+        // addPanel("left-zone") keeps resolving instead of silent no-op.
+        enableDeleteWhenEmpty: false,
         children: [
           { type: "tab", id: "browser", name: "Library", component: "browser" },
         ]
@@ -42,6 +45,7 @@ export const DEFAULT_LAYOUT: IJsonModel = {
         type: "tabset",
         weight: 20,
         id: "right-zone",
+        enableDeleteWhenEmpty: false,
         children: [
           { type: "tab", id: "stack", name: "Layers", component: "stack" },
           { type: "tab", id: "mask", name: "Mask", component: "mask" },

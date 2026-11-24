@@ -30,7 +30,7 @@ import { ErrorBoundary } from "../ErrorBoundary";
  *    version-3 layout would keep showing the old names forever.
  */
 const LAYOUT_STORAGE_KEY = "moshdither.dockLayout";
-const LAYOUT_VERSION = 4;
+const LAYOUT_VERSION = 5;
 
 /** Component ids of every tab node currently docked in `model`. */
 function collectDockedTabIds(model: Model): string[] {
@@ -178,12 +178,17 @@ export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) 
     const panelMeta = PANEL_REGISTRY.find((p) => p.id === panelId);
     if (!panelMeta) return;
 
+    // Layouts saved before LAYOUT_VERSION 5 can have a destroyed zone
+    // (empty tabsets were tidied away); center-zone is enableClose:false so
+    // it always survives. Land the panel there rather than no-op.
+    const preferred = panelMeta.defaultZone === "right" ? "right-zone" : "left-zone";
+    const targetZone = model.getNodeById(preferred) ? preferred : "center-zone";
     model.doAction(Actions.addNode({
       type: "tab",
       id: panelId,
       component: panelId,
       name: panelMeta.label
-    }, panelMeta.defaultZone === "right" ? "right-zone" : "left-zone", DockLocation.CENTER, -1));
+    }, targetZone, DockLocation.CENTER, -1));
   };
 
   // PanelRail's icons are `draggable` with directional hints suggesting a

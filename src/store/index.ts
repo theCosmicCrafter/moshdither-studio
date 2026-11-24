@@ -1108,7 +1108,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         !e.id.startsWith("ffglitch.") &&
         !(state.mediaLoaded && !state.isVideo && e.media_type === "video")
     );
-    if (pool.length === 0) return;
+    if (pool.length === 0) {
+      state.setStatusMessage("No effects available to randomize", "info");
+      return;
+    }
     const count = Math.min(pool.length, 2 + Math.floor(Math.random() * 3));
     const picked = [...pool].sort(() => Math.random() - 0.5).slice(0, count);
     const entries: StackEntry[] = picked.map((effect) => ({

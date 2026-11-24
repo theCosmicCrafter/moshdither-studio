@@ -49,14 +49,19 @@ function FaderControl({
   max,
   step,
   label,
-  onChange,
+  onLive,
+  onCommit,
 }: {
   value: number;
   min: number;
   max: number;
   step?: number;
   label: string;
-  onChange: (v: number) => void;
+  // Live commits (per animation frame) must not push undo history —
+  // a drag would flood ~120 entries. Only onCommit (release/unmount)
+  // writes history.
+  onLive: (v: number) => void;
+  onCommit: (v: number) => void;
 }) {
   // Range inputs can fire `input` far faster than the screen repaints
   // (OS/pointer polling rate), and every event used to push a full store
@@ -66,20 +71,28 @@ function FaderControl({
   // mid-drag flushes whatever is still pending.
   const rafRef = useRef<number | null>(null);
   const pendingRef = useRef<number | null>(null);
+  const liveRef = useRef(onLive);
+  liveRef.current = onLive;
   const flush = () => {
     if (rafRef.current !== null) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
     if (pendingRef.current !== null) {
-      onChange(pendingRef.current);
+      onCommit(pendingRef.current);
       pendingRef.current = null;
+    }
+  };
+  const flushLive = () => {
+    rafRef.current = null;
+    if (pendingRef.current !== null) {
+      liveRef.current(pendingRef.current);
     }
   };
   const schedule = (v: number) => {
     pendingRef.current = v;
     if (rafRef.current === null) {
-      rafRef.current = requestAnimationFrame(flush);
+      rafRef.current = requestAnimationFrame(flushLive);
     }
   };
   const flushRef = useRef(flush);
@@ -109,6 +122,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
   const mediaLoaded = useAppStore((s) => s.mediaLoaded);
   const isVideo = useAppStore((s) => s.isVideo);
   const updateStackParams = useAppStore((s) => s.updateStackParams);
+  const updateStackParamsSilent = useAppStore((s) => s.updateStackParamsSilent);
   const audioBindings = useAppStore((s) =>
     entry?.id ? s.audioBindings[entry.id] : undefined
   );
@@ -308,7 +322,8 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                   max={max}
                   step={param.step ?? undefined}
                   label={param.name}
-                  onChange={(v) => updateStackParams(entry.id, { [param.id]: v })}
+                  onLive={(v) => updateStackParamsSilent(entry.id, { [param.id]: v })}
+                  onCommit={(v) => updateStackParams(entry.id, { [param.id]: v })}
                 />
               );
             })()}
