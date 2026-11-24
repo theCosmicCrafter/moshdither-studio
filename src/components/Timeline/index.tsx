@@ -313,7 +313,10 @@ export default function Timeline() {
   // thing a still can become -- a clip (AnimateAsVideoModal → real video,
   // which unlocks video-only effects and codec mosh). Playback stays because
   // keyframed params animate over the still's duration.
-  if (!isVideo) {
+  // mediaLoaded matters: isVideo is also false before anything loads, and the
+  // empty state keeps the full transport (in/out, frame step, speed, and the
+  // animation-length field below) rather than this strip.
+  if (!isVideo && mediaLoaded) {
     return (
       <div
         data-testid="transport-strip"
@@ -485,6 +488,32 @@ export default function Timeline() {
               <option value={4}>4x</option>
             </select>
           </div>
+
+          {/* Animation length — reached only in the no-media state (a still
+              takes the slim strip branch above; a video's length is the
+              video's). It stays editable before anything loads so an
+              animation can be sized ahead of the first drop. */}
+          {!isVideo && (
+            <div className="flex items-center gap-1 ml-1">
+              <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: 12 }}>
+                timer
+              </span>
+              <input
+                type="number"
+                min={0.1}
+                max={120}
+                step={0.5}
+                value={duration}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value);
+                  setDuration(isNaN(val) ? 1 : Math.min(120, Math.max(0.1, val)));
+                }}
+                className="themed-select font-label-sm text-label-sm w-[60px] text-center"
+                title="Animation length (seconds)"
+              />
+              <span className="font-data-micro text-data-micro text-on-surface-variant">s</span>
+            </div>
+          )}
 
         </div>
 
