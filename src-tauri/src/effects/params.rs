@@ -559,9 +559,13 @@ mod slider_range_tests {
         //     sorted", so there is nothing above it to leave headroom for
         //   * spectrum.bar_count = 7 -- there are exactly 7 frequency bands
         //   * pixelate.min_block = 1, slice_shift repeat = 0 -- minimum/off
+        //   * 10x ffglitch.* frame edges = 0 or 1 -- the codec modes mirror
+        //     mosh_cli.py's own params.get() defaults verbatim: "from frame 0"
+        //     IS the minimum for a frame index, and the 1-minimum frame
+        //     params are the script's defaults, not unreviewed ends
         // Raise this only after checking what the new one actually is.
         assert!(
-            at_end.len() <= 26,
+            at_end.len() <= 36,
             "{} sliders now default to an end of their range; review the new ones:\n  {}",
             at_end.len(),
             at_end.join("\n  ")

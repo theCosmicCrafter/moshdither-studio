@@ -31,8 +31,10 @@ export default function VerificationPanel() {
   const filteredResults = useMemo(() => {
     if (!report) return [];
     return report.results.filter((r) => {
-      if (filter === "passed" && !r.overall_pass) return false;
-      if (filter === "failed" && r.overall_pass) return false;
+      // Skipped (codec) effects were never evaluated — they belong under
+      // "all", not inside either verdict bucket.
+      if (filter === "passed" && (!r.overall_pass || r.skipped)) return false;
+      if (filter === "failed" && (r.overall_pass || r.skipped)) return false;
       if (search && !r.effect_id.includes(search) && !r.effect_name.toLowerCase().includes(search.toLowerCase()))
         return false;
       return true;
@@ -41,9 +43,13 @@ export default function VerificationPanel() {
 
   const categoryStats = useMemo(() => {
     if (!report) return [];
-    const cats: Record<string, { total: number; passed: number }> = {};
+    const cats: Record<string, { total: number; passed: number; skipped: number }> = {};
     for (const r of report.results) {
-      if (!cats[r.category]) cats[r.category] = { total: 0, passed: 0 };
+      if (!cats[r.category]) cats[r.category] = { total: 0, passed: 0, skipped: 0 };
+      if (r.skipped) {
+        cats[r.category].skipped++;
+        continue;
+      }
       cats[r.category].total++;
       if (r.overall_pass) cats[r.category].passed++;
     }
@@ -52,7 +58,9 @@ export default function VerificationPanel() {
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [report]);
 
-  const passRate = report ? Math.round((report.passed / report.total_effects) * 100) : 0;
+  // Skipped effects were never run, so they don't belong in the rate either.
+  const evaluated = report ? report.total_effects - (report.skipped ?? 0) : 0;
+  const passRate = report ? Math.round((report.passed / Math.max(evaluated, 1)) * 100) : 0;
 
   return (
     <div
@@ -120,6 +128,9 @@ export default function VerificationPanel() {
             <StatBadge label="Total" value={report.total_effects} color="var(--text-primary)" />
             <StatBadge label="Passed" value={report.passed} color="var(--accent-teal, #4ade80)" />
             <StatBadge label="Failed" value={report.failed} color="var(--accent-pink)" />
+            {(report.skipped ?? 0) > 0 && (
+              <StatBadge label="Skipped" value={report.skipped ?? 0} color="var(--text-muted)" />
+            )}
             <StatBadge label="Pass Rate" value={`${passRate}%`} color="var(--accent-cyan)" />
           </div>
 
@@ -143,6 +154,7 @@ export default function VerificationPanel() {
                 }}
               >
                 {cat.name}: {cat.passed}/{cat.total}
+                {cat.skipped > 0 ? ` (+${cat.skipped} skipped)` : ""}
               </span>
             ))}
           </div>
@@ -297,13 +309,19 @@ function ResultRow({ result }: { result: EffectVerificationResult }) {
               fontWeight: 700,
               padding: "1px 4px",
               borderRadius: 2,
-              background: result.overall_pass
-                ? "rgba(74, 222, 128, 0.15)"
-                : "rgba(255, 80, 80, 0.15)",
-              color: result.overall_pass ? "var(--accent-teal, #4ade80)" : "var(--accent-pink)",
+              background: result.skipped
+                ? "var(--surface-container-low)"
+                : result.overall_pass
+                  ? "rgba(74, 222, 128, 0.15)"
+                  : "rgba(255, 80, 80, 0.15)",
+              color: result.skipped
+                ? "var(--text-muted)"
+                : result.overall_pass
+                  ? "var(--accent-teal, #4ade80)"
+                  : "var(--accent-pink)",
             }}
           >
-            {result.overall_pass ? "PASS" : "FAIL"}
+            {result.skipped ? "SKIP" : result.overall_pass ? "PASS" : "FAIL"}
           </span>
         </td>
         <td style={{ padding: "3px 6px" }}>

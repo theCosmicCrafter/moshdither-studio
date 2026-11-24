@@ -20,6 +20,12 @@ export interface EffectMeta {
   name: string;
   category: string;
   media_type: string;
+  /** Engine that produces the output — Rust sends this on every effect since
+   * the codec layers landed. Optional so browser-fallback metas and older
+   * payloads still typecheck; `effectPipeline` falls back to its heuristics
+   * when it is absent. "sim" is a frontend-only refinement of "pixel" — see
+   * src/lib/effectPipeline.ts. */
+  pipeline?: "pixel" | "codec";
   parameters: ParameterDef[];
 }
 
@@ -143,7 +149,6 @@ export interface AppState {
   // Media
   mediaLoaded: boolean;
   mediaInfo: { width: number; height: number } | null;
-  mediaMetadata: Record<string, unknown> | null;
   previewDataUrl: string | null;
   originalDataUrl: string | null;
   filePath: string | null;
@@ -357,7 +362,6 @@ export interface AppState {
   // Actions
   setMediaLoaded: (loaded: boolean) => void;
   setMediaInfo: (info: { width: number; height: number } | null) => void;
-  setMediaMetadata: (meta: Record<string, unknown> | null) => void;
   setPreviewDataUrl: (url: string | null) => void;
   setOriginalDataUrl: (url: string | null) => void;
   setFilePath: (path: string | null) => void;
@@ -665,7 +669,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   duration: 10,
   mediaLoaded: false,
   mediaInfo: null,
-  mediaMetadata: null,
   previewDataUrl: null,
   originalDataUrl: null,
   filePath: null,
@@ -837,7 +840,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     }),
   setMediaLoaded: (loaded) => set({ mediaLoaded: loaded }),
   setMediaInfo: (info) => set({ mediaInfo: info }),
-  setMediaMetadata: (meta) => set({ mediaMetadata: meta }),
   setPreviewDataUrl: (url) => set({ previewDataUrl: url }),
   setOriginalDataUrl: (url) => set({ originalDataUrl: url }),
   setFilePath: (path) => set({ filePath: path }),
@@ -1598,10 +1600,5 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 }));
 
-/**
- * Easing lives in `utils/lfo.ts` with the rest of the modulation math, so the
- * export bake and the store resolver share one implementation. Re-exported
- * here to keep the long-standing `import { applyEasing } from "./index"`
- * surface intact.
- */
-export { applyEasing } from "../utils/lfo";
+// `applyEasing` lives in utils/lfo.ts — import it from there, not through the
+// store (the re-export existed only for tests, which now point at the source).

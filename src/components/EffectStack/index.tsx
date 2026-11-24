@@ -135,6 +135,11 @@ export default function EffectStack() {
             const effectMeta = allEffects.find((e) => e.id === entry.effectId);
             const isVideoOnlyOnImage =
               showVideoOnlyWarnings && !!effectMeta && isVideoOnlyEffect(effectMeta);
+            // Codec layers corrupt the encoded file at export — a mask has no
+            // frame pass to gate, so the selectors are hidden rather than
+            // writing a mask_b64 the codec stage would silently ignore.
+            const isCodecEntry =
+              !!effectMeta && effectPipeline(effectMeta) === "codec";
 
             return (
               <div
@@ -247,6 +252,15 @@ export default function EffectStack() {
                     onClick={(e) => e.stopPropagation()}
                     className="mt-3 pt-3 border-t border-outline-variant/30 overflow-y-auto max-h-[340px] custom-scrollbar"
                   >
+                    {isCodecEntry ? (
+                      <div
+                        data-testid="codec-mask-note"
+                        className="text-data-micro font-data-micro mb-3"
+                        style={{ color: "var(--text-muted)" }}
+                      >
+                        Codec layer — masks don't apply to bitstream corruption.
+                      </div>
+                    ) : (
                     <div className="flex items-center gap-2 mb-3">
                       <select
                         value={entry.maskId ?? ""}
@@ -280,6 +294,7 @@ export default function EffectStack() {
                         </select>
                       )}
                     </div>
+                    )}
                     <ParameterPanel stackId={entry.id} />
                   </div>
                 )}

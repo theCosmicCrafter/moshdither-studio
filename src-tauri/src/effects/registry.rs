@@ -132,6 +132,14 @@ impl EffectRegistry {
         self.register(super::datamoshing::ExtremeProfile);
         self.register(super::datamoshing::RainbowProfile);
 
+        // Codec-corruption layers: the 25 FFglitch modes, one parameterised
+        // struct over the spec table in effects/ffglitch.rs. These declare
+        // Pipeline::Codec — they mosh the encoded file at export time, not
+        // frames inside process_video.
+        for effect in super::ffglitch::ffglitch_modes() {
+            self.register(effect);
+        }
+
         // Segmentation
         self.register(super::segmentation::MaskIsolate);
 
@@ -180,6 +188,17 @@ impl EffectRegistry {
 
     pub fn list(&self) -> Vec<EffectMeta> {
         self.effects.values().map(|e| e.meta()).collect()
+    }
+
+    /// `(meta, pipeline)` for every registered effect. `pipeline()` lives on
+    /// the trait object, not `EffectMeta`, so `list()` alone cannot answer
+    /// it — the `list_effects` command joins them here rather than doing a
+    /// second `get()` per id.
+    pub fn list_with_pipelines(&self) -> Vec<(EffectMeta, Pipeline)> {
+        self.effects
+            .values()
+            .map(|e| (e.meta(), e.pipeline()))
+            .collect()
     }
 
     pub fn list_by_category(&self, category: EffectCategory) -> Vec<EffectMeta> {

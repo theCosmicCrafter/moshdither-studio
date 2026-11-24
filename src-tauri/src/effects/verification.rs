@@ -8,7 +8,7 @@
 //!
 //! Results are returned as a structured JSON-serializable report.
 
-use crate::effects::types::{Frame, Mask, ParamType, ParameterDef, VideoSegment};
+use crate::effects::types::{Frame, Mask, ParamType, ParameterDef, Pipeline, VideoSegment};
 use crate::effects::{blend_mask, clamp_params, EffectRegistry};
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +20,13 @@ pub struct EffectVerificationResult {
     pub category: String,
     pub checks: VerificationChecks,
     pub overall_pass: bool,
+    /// True when the effect was deliberately NOT run through the frame-domain
+    /// checks — codec-pipeline effects corrupt the bitstream at export, so
+    /// pass-through `process_*` methods would only fail here for the wrong
+    /// reason. `#[serde(default)]` keeps reports written before this field
+    /// existed deserializable.
+    #[serde(default)]
+    pub skipped: bool,
     pub error_message: Option<String>,
     pub duration_ms: u64,
 }
@@ -38,6 +45,11 @@ pub struct VerificationReport {
     pub total_effects: usize,
     pub passed: usize,
     pub failed: usize,
+    /// Effects skipped rather than verified — currently the codec-pipeline
+    /// (FFglitch) layers. Counted separately so `failed` stays honest:
+    /// a skipped effect did not fail, it was never evaluated.
+    #[serde(default)]
+    pub skipped: usize,
     pub results: Vec<EffectVerificationResult>,
     pub summary: String,
     pub timestamp: String,
@@ -464,6 +476,7 @@ pub fn verify_effect(effect_id: &str, registry: &EffectRegistry) -> EffectVerifi
                     mask_outside_correct: false,
                 },
                 overall_pass: false,
+                skipped: false,
                 error_message: Some("Effect not found in registry".to_string()),
                 duration_ms: 0,
             };
@@ -471,6 +484,38 @@ pub fn verify_effect(effect_id: &str, registry: &EffectRegistry) -> EffectVerifi
     };
 
     let meta = effect.meta();
+
+    // Codec-pipeline effects corrupt the compressed bitstream at export time
+    // (apply_codec_to_segment in commands.rs); their process_* methods are
+    // deliberate pass-throughs, so every frame-domain check below would fail
+    // for reasons that say nothing about the effect. Skipping them here is
+    // also what keeps NEEDS_INPUT_EFFECTS honest: exempting 25 modes from
+    // `non_empty_output` would trip the over-broad assertions in
+    // `needs_input_allowlist_matches_actual_behaviour` and hide genuinely
+    // broken effects behind the same exemption.
+    if effect.pipeline() == Pipeline::Codec {
+        return EffectVerificationResult {
+            effect_id: meta.id,
+            effect_name: meta.name,
+            category: format!("{:?}", meta.category),
+            checks: VerificationChecks {
+                no_crash: false,
+                non_empty_output: false,
+                animates: false,
+                mask_inside_correct: false,
+                mask_outside_correct: false,
+            },
+            overall_pass: false,
+            skipped: true,
+            error_message: Some(
+                "codec-pipeline effect: runs on the encoded bitstream at export, \
+                 not on frames — nothing this harness checks applies"
+                    .to_string(),
+            ),
+            duration_ms: start.elapsed().as_millis() as u64,
+        };
+    }
+
     let test_frame = make_test_frame();
     let base_params = build_default_params(&meta.id, &meta.parameters);
     let mask = make_half_mask(test_frame.width, test_frame.height);
@@ -628,6 +673,7 @@ pub fn verify_effect(effect_id: &str, registry: &EffectRegistry) -> EffectVerifi
         category: format!("{:?}", meta.category),
         checks,
         overall_pass,
+        skipped: false,
         error_message,
         duration_ms: start.elapsed().as_millis() as u64,
     }
@@ -645,17 +691,27 @@ pub fn verify_all_effects(registry: &EffectRegistry) -> VerificationReport {
     }
 
     let passed = results.iter().filter(|r| r.overall_pass).count();
-    let failed = total - passed;
+    let skipped = results.iter().filter(|r| r.skipped).count();
+    // Skipped effects are neither passed nor failed — they were not evaluated.
+    let failed = total - passed - skipped;
 
-    let summary = format!(
-        "{}/{} effects passed verification ({} failed)",
-        passed, total, failed
-    );
+    let summary = if skipped > 0 {
+        format!(
+            "{}/{} effects passed verification ({} failed, {} skipped)",
+            passed, total, failed, skipped
+        )
+    } else {
+        format!(
+            "{}/{} effects passed verification ({} failed)",
+            passed, total, failed
+        )
+    };
 
     VerificationReport {
         total_effects: total,
         passed,
         failed,
+        skipped,
         results,
         summary,
         timestamp: std::time::SystemTime::now()
@@ -679,14 +735,18 @@ mod tests {
             "Expected 50+ effects, got {}",
             report.total_effects
         );
-        // At least 80% should pass
-        let pass_rate = report.passed as f64 / report.total_effects as f64;
+        // At least 80% of the evaluated effects should pass. Skipped
+        // (codec-pipeline) effects were never run, so they don't count
+        // against the rate either way.
+        let evaluated = report.total_effects - report.skipped;
+        let pass_rate = report.passed as f64 / evaluated.max(1) as f64;
         assert!(
             pass_rate > 0.8,
-            "Pass rate too low: {:.1}% ({} passed, {} failed)",
+            "Pass rate too low: {:.1}% ({} passed, {} failed, {} skipped)",
             pass_rate * 100.0,
             report.passed,
-            report.failed
+            report.failed,
+            report.skipped
         );
     }
 
@@ -727,7 +787,13 @@ mod tests {
             report.total_effects, report.passed, report.failed
         );
         for r in &report.results {
-            let status = if r.overall_pass { "PASS" } else { "FAIL" };
+            let status = if r.skipped {
+                "SKIP"
+            } else if r.overall_pass {
+                "PASS"
+            } else {
+                "FAIL"
+            };
             let checks = format!(
                 "crash:{} output:{} anim:{} mask_in:{} mask_out:{}",
                 r.checks.no_crash as u8,
@@ -770,6 +836,11 @@ mod allowlist_tests {
         let mut missing = Vec::new();
 
         for result in &report.results {
+            // Codec-pipeline effects were never evaluated — their empty
+            // checks say nothing about needing external input.
+            if result.skipped {
+                continue;
+            }
             let listed = NEEDS_INPUT_EFFECTS.contains(&result.effect_id.as_str());
             match (listed, result.checks.non_empty_output) {
                 (true, true) => over_broad.push(result.effect_id.clone()),

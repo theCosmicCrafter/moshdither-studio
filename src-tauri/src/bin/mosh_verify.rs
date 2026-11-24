@@ -12,7 +12,9 @@
 use std::env;
 use std::process::ExitCode;
 
-use moshdither_studio_lib::effects::types::{Frame, Mask, MediaType, ParameterDef, VideoSegment};
+use moshdither_studio_lib::effects::types::{
+    Frame, Mask, MediaType, ParameterDef, Pipeline, VideoSegment,
+};
 use moshdither_studio_lib::effects::{
     clamp_params, functional_tests, verification, EffectRegistry,
 };
@@ -139,16 +141,18 @@ fn cmd_verify_all(args: &[String]) -> ExitCode {
             results.push(verification::verify_effect(&meta.id, &registry));
         }
         let passed = results.iter().filter(|r| r.overall_pass).count();
+        let skipped = results.iter().filter(|r| r.skipped).count();
         let total = results.len();
-        let failed = total - passed;
+        let failed = total - passed - skipped;
         verification::VerificationReport {
             total_effects: total,
             passed,
             failed,
+            skipped,
             results,
             summary: format!(
-                "{}/{} effects passed verification ({} failed)",
-                passed, total, failed
+                "{}/{} effects passed verification ({} failed, {} skipped)",
+                passed, total, failed, skipped
             ),
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -170,12 +174,18 @@ fn cmd_verify_all(args: &[String]) -> ExitCode {
             // Text format
             println!("=== MoshDither Studio Verification Report ===");
             println!(
-                "Total: {} | Passed: {} | Failed: {}",
-                report.total_effects, report.passed, report.failed
+                "Total: {} | Passed: {} | Failed: {} | Skipped: {}",
+                report.total_effects, report.passed, report.failed, report.skipped
             );
             println!();
             for r in &report.results {
-                let status = if r.overall_pass { "PASS" } else { "FAIL" };
+                let status = if r.skipped {
+                    "SKIP"
+                } else if r.overall_pass {
+                    "PASS"
+                } else {
+                    "FAIL"
+                };
                 println!(
                     "  {} {} — {} [crash:{} output:{} anim:{} mask_in:{} mask_out:{}] {}ms",
                     status,
@@ -219,7 +229,9 @@ fn cmd_verify_effect(args: &[String]) -> ExitCode {
         serde_json::to_string_pretty(&result).unwrap_or_default()
     );
 
-    if result.overall_pass {
+    // A skipped (codec-pipeline) result is not a failure — the frame-domain
+    // checks don't apply to it, which is exactly what `skipped` says.
+    if result.overall_pass || result.skipped {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
@@ -592,6 +604,20 @@ fn cmd_render_all(args: &[String]) -> ExitCode {
                 continue;
             }
         };
+
+        // Codec-pipeline effects pass frames through unchanged — the real
+        // mosh happens on the encoded file at export — so a rendered frame
+        // here would just be the input, and would look like the effect did
+        // nothing.
+        if effect.pipeline() == Pipeline::Codec {
+            eprintln!(
+                "  SKIP {} — codec-pipeline effect (runs on the encoded file at export)",
+                meta.id
+            );
+            stats.skipped += 1;
+            report_lines.push(format!("SKIP|{}|codec-pipeline", meta.id));
+            continue;
+        }
 
         let safe_name = sanitize_filename(&meta.id);
         let mut base = build_default_params(&meta.id, &meta.parameters);
@@ -1667,6 +1693,15 @@ fn cmd_animate_all(args: &[String]) -> ExitCode {
                 continue;
             }
         };
+
+        // Codec-pipeline effects pass frames through unchanged — animating
+        // them here would produce an N-frame copy of the input.
+        if effect.pipeline() == Pipeline::Codec {
+            eprintln!("  SKIP {} — codec-pipeline effect", meta.id);
+            skip_count += 1;
+            report_lines.push(format!("SKIP|{}|codec-pipeline", meta.id));
+            continue;
+        }
 
         let safe_name = sanitize_filename(&meta.id);
         let base_params = build_default_params(&meta.id, &meta.parameters);

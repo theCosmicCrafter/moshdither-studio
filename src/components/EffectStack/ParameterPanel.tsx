@@ -4,6 +4,7 @@ import { audioChannelName } from "../../engine/audio/channelName";
 import { PALETTE_PRESETS, fillPaletteParams } from "../../engine/palettePresets";
 
 import { isVideoOnlyEffect, VIDEO_ONLY_ON_IMAGE_WARNING, unsetSelectionWarning } from "../../utils/effectConverter";
+import { effectPipeline } from "../../lib/effectPipeline";
 
 /**
  * Parameters that a dedicated panel already picks better than a generic control
@@ -156,12 +157,33 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
 
   const showVideoOnlyWarning = mediaLoaded && !isVideo && isVideoOnlyEffect(effectMeta);
   const selectionWarning = unsetSelectionWarning(entry.effectId, entry.params);
+  // Codec layers corrupt the encoded bitstream at export — there is no
+  // per-frame moment where a keyframe, LFO, audio binding or mask could
+  // apply, so those affordances are hidden rather than silently ignored.
+  const isCodecEntry = effectPipeline(effectMeta) === "codec";
 
   return (
     <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4 custom-scrollbar">
       <div className="text-label-sm font-label-sm uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>
         Parameters
       </div>
+
+      {isCodecEntry && (
+        <div
+          data-testid="codec-layer-note"
+          className="text-dense-sm"
+          style={{
+            padding: "6px 8px",
+            borderRadius: 3,
+            background: "rgba(120, 200, 255, 0.08)",
+            border: "1px solid rgba(120, 200, 255, 0.25)",
+            color: "var(--text-secondary)",
+          }}
+        >
+          Codec layer — corrupts the encoded file at export. Static params
+          apply; masks, keyframes, LFOs and audio bindings do not.
+        </div>
+      )}
 
       {showVideoOnlyWarning && (
         <div
@@ -293,7 +315,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                 {param.name}
               </label>
               <div className="flex items-center gap-1">
-                {typeof value === "number" && (
+                {typeof value === "number" && !isCodecEntry && (
                   <KeyframeButton
                     stackId={entry.id}
                     paramId={param.id}
@@ -350,7 +372,9 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                     onCommit={(v) => writeBase(v, true)}
                   />
                   {/* Per-param LFO modulator: + chip, expands to a compact
-                      editor. Rides alongside the audio binding below. */}
+                      editor. Rides alongside the audio binding below.
+                      Hidden on codec layers — nothing evaluates it. */}
+                  {!isCodecEntry && (
                   <LfoControl
                     stackId={entry.id}
                     paramId={param.id}
@@ -363,12 +387,14 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                     onSetSilent={setLfoSilent}
                     onRemove={removeLfo}
                   />
+                  )}
                 </>
               );
             })()}
 
-            {/* Audio binding for slider parameters */}
-            {audioEnabled && String(param.type).toLowerCase() === "slider" && (
+            {/* Audio binding for slider parameters — not on codec layers,
+                where no per-frame pass exists to consume it. */}
+            {audioEnabled && !isCodecEntry && String(param.type).toLowerCase() === "slider" && (
               <AudioBindingControl
                 stackId={entry.id}
                 paramId={param.id}

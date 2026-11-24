@@ -572,6 +572,18 @@ export async function applyFfglitch(
 }
 
 /**
+ * A unique output path inside the mosh-preview cache dir for the "Render
+ * mosh preview" affordance. The caller runs a normal (trimmed, downscaled)
+ * exportVideo into it — codec layers and all — and plays the file back via
+ * convertFileSrc. The name carries the `.moshdither-fx-tmp.` marker so
+ * removeExportTemp can clean it up.
+ */
+export async function codecPreviewPath(): Promise<string> {
+  if (!isTauriAvailable()) throw new Error("Mosh preview needs the desktop app.");
+  return invoke("codec_preview_path");
+}
+
+/**
  * Delete an intermediate render left by a two-stage export. The backend refuses
  * anything that is not one of its own `.moshdither-fx-tmp.` files, so this
  * cannot remove a user's media. Cleanup failure is not worth failing an
@@ -606,6 +618,10 @@ export interface EffectVerificationResult {
   category: string;
   checks: VerificationChecks;
   overall_pass: boolean;
+  /** Codec-pipeline effects are reported skipped rather than run through the
+   *  frame-domain checks — their pass-throughs would only fail for the wrong
+   *  reason. */
+  skipped?: boolean;
   error_message: string | null;
   duration_ms: number;
 }
@@ -614,6 +630,7 @@ export interface VerificationReport {
   total_effects: number;
   passed: number;
   failed: number;
+  skipped?: number;
   results: EffectVerificationResult[];
   summary: string;
   timestamp: string;

@@ -17,8 +17,23 @@
 
 export type EffectPipeline = "pixel" | "codec" | "sim";
 
-export function effectPipeline(meta: { id: string; category: string }): EffectPipeline {
-  // FFglitch-backed effects are prefixed once they become stackable (Phase 3).
+export function effectPipeline(meta: {
+  id: string;
+  category: string;
+  pipeline?: "pixel" | "codec";
+}): EffectPipeline {
+  // The backend declares the real pipeline on every registered effect. Trust
+  // it — Rust knows which effects it built as pass-throughs — and keep the
+  // heuristics below for browser-fallback metas and older payloads that
+  // carry no `pipeline` field.
+  if (meta.pipeline === "codec") return "codec";
+  if (meta.pipeline === "pixel") {
+    // "sim" stays a frontend refinement: Rust only knows pixel vs codec, and
+    // the datamoshing.* stack effects ARE pixel effects that merely imitate
+    // bitstream corruption. The chip must keep saying ~sim.
+    if (meta.category === "datamoshing" || SIM_EFFECT_IDS.has(meta.id)) return "sim";
+    return "pixel";
+  }
   if (meta.id.startsWith("ffglitch.")) return "codec";
   // Every datamoshing.* stack effect is a pixel-domain simulation of codec
   // corruption — see the doc comments in src-tauri/src/effects/datamoshing/*.

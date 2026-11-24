@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useAppStore } from "../../store";
 import { formatTimecode } from "../../utils/timecode";
-import { exportVideo, applyFfglitch, previewFfglitch, cancelExport, removeExportTemp } from "../../lib/tauri";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { exportVideo, applyFfglitch, previewFfglitch, cancelExport, removeExportTemp, convertFileSrc } from "../../lib/tauri";
 import { stackToRustPayload } from "../../utils/effectConverter";
 import { useBatchQueue } from "../../hooks/useBatchQueue";
 import type { WatermarkSettings } from "../../utils/watermark";
@@ -244,6 +243,7 @@ export default function ExportPanel() {
           if (cancelling) return;
           if (stage === "decoding") setStatusMessage("Decoding video...");
           else if (stage === "effects") setStatusMessage("Applying effects...");
+          else if (stage === "codec") setStatusMessage("Datamoshing (codec layer)...");
           else if (stage === "encoding") setStatusMessage("Encoding video...");
           else if (stage === "done") setStatusMessage("Export complete!");
         }

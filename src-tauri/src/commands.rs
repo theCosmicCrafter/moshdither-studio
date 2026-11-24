@@ -1,6 +1,6 @@
 use crate::effects::{
     blend_mask, functional_tests::run_all_function_tests, verification::verify_all_effects, Effect,
-    EffectCategory, EffectMeta, EffectRegistry, Frame, Mask, VideoSegment,
+    EffectCategory, EffectMeta, EffectRegistry, Frame, Mask, Pipeline, VideoSegment,
 };
 use crate::error::AppError;
 use crate::ffmpeg::{
@@ -229,11 +229,28 @@ pub async fn load_media_from_base64(
     Ok("loaded".to_string())
 }
 
+/// One item in the `list_effects` payload: the effect's `EffectMeta`
+/// flattened with its `pipeline`, so the JSON is
+/// `{ id, name, category, media_type, parameters, pipeline }`. The pipeline
+/// lives on the trait rather than on `EffectMeta` (see `Pipeline`'s doc), so
+/// the join happens here — the registry's `list_with_pipelines` avoids a
+/// second lookup per id.
+#[derive(serde::Serialize)]
+pub struct ListedEffect {
+    #[serde(flatten)]
+    meta: EffectMeta,
+    pipeline: Pipeline,
+}
+
 /// Get metadata for all available effects.
 #[tauri::command]
-pub fn list_effects(state: State<'_, AppState>) -> crate::error::Result<Vec<EffectMeta>> {
+pub fn list_effects(state: State<'_, AppState>) -> crate::error::Result<Vec<ListedEffect>> {
     let registry = lock_state(&state.registry, "registry")?;
-    Ok(registry.list())
+    Ok(registry
+        .list_with_pipelines()
+        .into_iter()
+        .map(|(meta, pipeline)| ListedEffect { meta, pipeline })
+        .collect())
 }
 
 /// Get effects filtered by category.
@@ -1103,14 +1120,27 @@ fn export_video_blocking(
             .get(&call.effect_id)
             .ok_or_else(|| format!("Effect '{}' not found", call.effect_id))?;
         tracing::debug!(
-            "Export effect {}/{}: {} (temporal={})",
+            "Export effect {}/{}: {} (temporal={}, pipeline={:?})",
             effect_idx + 1,
             stack.len(),
             call.effect_id,
-            effect.is_temporal()
+            effect.is_temporal(),
+            effect.pipeline()
         );
 
-        apply_effect_to_segment(effect, call, &mut segment, &ctx, effect_idx, stack.len())?;
+        match effect.pipeline() {
+            // Pixel layers run on the decoded frames in place.
+            Pipeline::Pixel => {
+                apply_effect_to_segment(effect, call, &mut segment, &ctx, effect_idx, stack.len())?
+            }
+            // Codec layers corrupt the compressed bitstream: the segment makes
+            // a round trip through a temp mp4 and the FFglitch sidecar. It
+            // reuses `ctx.cancel` and deliberately never touches the export
+            // semaphore — this thread already holds the only permit.
+            Pipeline::Codec => {
+                apply_codec_to_segment(effect, call, &mut segment, &ctx, effect_idx, stack.len())?
+            }
+        }
 
         tracing::debug!("Export effect {}/{} done", effect_idx + 1, stack.len());
         let pct = 5 + ((effect_idx + 1) as f64 / stack.len() as f64 * 80.0) as u32;
@@ -1537,6 +1567,156 @@ fn apply_effect_to_segment(
                 mode,
             )?;
         }
+    }
+    Ok(())
+}
+
+/// Apply one codec-pipeline (FFglitch) stack entry to the segment.
+///
+/// Codec effects corrupt the compressed bitstream, so the segment makes a
+/// round trip through an encoded file: encode the in-flight frames to a temp
+/// mp4, run the FFglitch sidecar over THAT file, then decode the moshed file
+/// back into the segment for the next layer. Both temp files are deleted on
+/// every exit path, and `ctx.cancel` is honoured before and after each
+/// subprocess — the sidecar itself polls it via `run_ffglitch_subprocess`.
+///
+/// Params get the same `clamp_for_effect` normalisation as the pixel path,
+/// which is what turns the Select control's index into the option name
+/// `mosh_cli.py` reads. Masks, keyframes and audio bindings deliberately do
+/// not apply — corruption happens on the bitstream, not frames — and the
+/// ParameterPanel hides those controls for codec entries.
+fn apply_codec_to_segment(
+    effect: &dyn Effect,
+    call: &EffectCall,
+    segment: &mut VideoSegment,
+    ctx: &EffectPassCtx<'_>,
+    effect_idx: usize,
+    stack_len: usize,
+) -> crate::error::Result<()> {
+    let mode = call.effect_id.strip_prefix("ffglitch.").ok_or_else(|| {
+        format!(
+            "codec effect '{}' does not use the ffglitch.* id convention",
+            call.effect_id
+        )
+    })?;
+
+    let params = serde_json::Value::Object(crate::effects::clamp_for_effect(effect, &call.params));
+    validate_ffglitch_extra_paths(mode, &params)?;
+
+    if ctx.cancel.load(Ordering::Relaxed) {
+        return Err(crate::ffmpeg::EXPORT_CANCELLED.into());
+    }
+
+    let pct = 5 + ((effect_idx + 1) as f64 / stack_len as f64 * 80.0) as u32;
+    emit_export_progress(
+        ctx.app_handle,
+        ExportProgress {
+            stage: "codec",
+            progress: pct,
+            total: Some(stack_len),
+            current: Some(effect_idx + 1),
+            ..Default::default()
+        },
+    );
+
+    // Marked like the two-stage export's intermediate so a stray file left by
+    // a crash is still one `remove_export_temp` recognises — and never
+    // mistaken for a user file.
+    let temp_dir = std::env::temp_dir().join("moshdither-studio");
+    std::fs::create_dir_all(&temp_dir).map_err(|e| format!("codec stage: temp dir: {e}"))?;
+    let nonce = format!(
+        "{}-{}-{}",
+        std::process::id(),
+        rand::random::<u32>(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let pre_path = temp_dir.join(format!("codec-pre-{nonce}{EXPORT_TEMP_MARKER}mp4"));
+    let post_path = temp_dir.join(format!("codec-post-{nonce}{EXPORT_TEMP_MARKER}mp4"));
+
+    let before_count = segment.frames.len();
+    let fps = segment.fps;
+
+    let result = (|| -> crate::error::Result<VideoSegment> {
+        // The sidecar reads the bitstream, so the intermediate needs real
+        // inter-frame coding: libx264/yuv420p mp4, no audio (the track is
+        // muxed from the source at final encode).
+        encode_video(
+            segment,
+            &pre_path.to_string_lossy(),
+            "libx264",
+            Some(fps),
+            None,
+            None,
+            Some("good"),
+            Some(false),
+            None,
+            None,
+            None,
+            None,
+            Some(ctx.cancel),
+            Some(Duration::from_secs(1800)),
+            Some("mp4"),
+        )?;
+        if ctx.cancel.load(Ordering::Relaxed) {
+            return Err(crate::ffmpeg::EXPORT_CANCELLED.into());
+        }
+        run_ffglitch_file(&pre_path, &post_path, mode, &params, ctx.cancel)?;
+        if ctx.cancel.load(Ordering::Relaxed) {
+            return Err(crate::ffmpeg::EXPORT_CANCELLED.into());
+        }
+        // Headroom past the input count: frame-multiplying moshes return MORE
+        // frames than they were given, and the 10k decode default would
+        // silently cap a long export. The memory budget still bounds it.
+        crate::ffmpeg::decode_video_cancellable(
+            &post_path.to_string_lossy(),
+            Some(before_count.saturating_add(1024)),
+            None,
+            Some(ctx.cancel),
+        )
+    })();
+
+    // Temp files go on every exit path, Ok and Err alike.
+    let _ = std::fs::remove_file(&pre_path);
+    let _ = std::fs::remove_file(&post_path);
+
+    let processed = result?;
+    if processed.frames.is_empty() {
+        return Err(format!(
+            "{} produced no decodable frames — the corruption left nothing the \
+             decoder could read. Try a milder mode or a different source.",
+            call.effect_id
+        )
+        .into());
+    }
+    let after_count = processed.frames.len();
+    *segment = VideoSegment {
+        frames: processed.frames,
+        // Keep the export's frame rate, not whatever the mosh file reports:
+        // downstream layers and the final encode are timed on it.
+        fps,
+    };
+    if after_count != before_count {
+        // Several modes are SUPPOSED to change the frame count (repeat, bloom,
+        // stutter), so this is a warning, not an error — same stance as the
+        // frame-count mismatch warning in apply_effect_to_segment.
+        let message = format!(
+            "{} changed the frame count from {} to {} frames; the rest of the \
+             stack and the audio continue from the new count.",
+            call.effect_id, before_count, after_count
+        );
+        tracing::warn!("{}", message);
+        emit_export_progress(
+            ctx.app_handle,
+            ExportProgress {
+                stage: "codec",
+                progress: pct,
+                warning: Some(message),
+                ..Default::default()
+            },
+        );
     }
     Ok(())
 }
@@ -2993,6 +3173,132 @@ fn run_cancellable(
 /// same "await that can never resolve" defect class as the mask-texture
 /// freeze already fixed, plus a Cancel button with no actual path to the
 /// subprocess it claimed to cancel.
+/// The file-level half of `apply_ffglitch`, factored so the export's codec
+/// stage (`apply_codec_to_segment`) can mosh a segment it just encoded
+/// without going through the command layer — which would deadlock on the
+/// 1-permit export semaphore that thread already holds.
+///
+/// Does the whole "locate a runner → check ffgac/ffedit → write the config
+/// JSON → run the subprocess → verify the output exists and is non-empty"
+/// chain. The temp config is removed on every exit path, including a panic
+/// in the subprocess runner; a 0-byte output is removed too.
+fn run_ffglitch_file(
+    input: &Path,
+    output: &Path,
+    mode: &str,
+    params: &serde_json::Value,
+    cancel: &AtomicBool,
+) -> crate::error::Result<()> {
+    // Same low-memory refusal as apply_ffglitch's early check, repeated here
+    // for the codec-stage caller that skips that wrapper: the sidecar
+    // imports numpy before it reads a single argument, and when the commit
+    // limit is exhausted the only symptom used to be a cryptic OpenBLAS
+    // error on stderr (see apply_ffglitch).
+    if let Some(notice) = crate::sysmem::low_memory_notice() {
+        return Err(notice.into());
+    }
+
+    // Prefer the bundled sidecar: it carries its own interpreter and numpy, so
+    // datamoshing works on a machine with no Python at all. The interpreter
+    // path stays as the dev fallback (and as an escape hatch if someone wants
+    // to run a modified mosh_cli.py).
+    let sidecar = locate_mosh_sidecar();
+    let (program, script) = match &sidecar {
+        Some(exe) => (exe.to_string_lossy().into_owned(), None),
+        None => {
+            let python = find_python().ok_or(
+                "Datamoshing is unavailable: the datamosh component (mosh-cli) is missing and no \
+                 compatible Python interpreter was found. Please reinstall the application.",
+            )?;
+            let cli = locate_mosh_cli().ok_or(
+                "mosh_cli.py not found. Expected at ./packages/python-backend/mosh_cli.py",
+            )?;
+            (python, Some(cli))
+        }
+    };
+
+    let ffgac = ffgac_binary()?;
+    let ffedit = ffedit_binary()?;
+    if !Path::new(&ffgac).exists() || !Path::new(&ffedit).exists() {
+        return Err("FFglitch binaries (ffgac / ffedit) not found. Download them from ffglitch.org and place in src-tauri/bin/".into());
+    }
+
+    let ffmpeg = ffmpeg_binary()?;
+
+    let config = serde_json::json!({
+        "input": input.to_string_lossy(),
+        "output": output.to_string_lossy(),
+        "mode": mode,
+        "params": params,
+    });
+
+    let temp_config = std::env::temp_dir().join(format!(
+        "ffglitch_config_{}_{}_{}.json",
+        std::process::id(),
+        rand::random::<u32>(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::write(&temp_config, config.to_string())?;
+    // Drop guard so even a panic in the subprocess runner cannot leak the
+    // config JSON into the temp dir.
+    struct TempConfigGuard(PathBuf);
+    impl Drop for TempConfigGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let _config_guard = TempConfigGuard(temp_config);
+
+    // Not `output`: that name is the destination &Path parameter.
+    let proc_output = run_ffglitch_subprocess(
+        &program,
+        script.as_deref(),
+        &_config_guard.0.to_string_lossy(),
+        &ffgac,
+        &ffedit,
+        &ffmpeg,
+        cancel,
+    )
+    .map_err(AppError::Generic)?;
+
+    if !proc_output.status.success() {
+        // Clean up 0-byte output file if it was created
+        if let Ok(meta) = std::fs::metadata(output) {
+            if meta.len() == 0 {
+                let _ = std::fs::remove_file(output);
+            }
+        }
+        return Err(format!(
+            "FFglitch failed: {}{}",
+            String::from_utf8_lossy(&proc_output.stderr),
+            crate::sysmem::low_memory_suffix()
+        )
+        .into());
+    }
+
+    // Verify the output file exists and has non-zero size
+    match std::fs::metadata(output) {
+        Ok(meta) if meta.len() > 0 => Ok(()),
+        Ok(_) => {
+            // 0-byte file — remove it and report error with stderr
+            let _ = std::fs::remove_file(output);
+            Err(format!(
+                "FFglitch produced a 0-byte output file. stderr: {}",
+                String::from_utf8_lossy(&proc_output.stderr)
+            )
+            .into())
+        }
+        Err(_) => Err(format!(
+            "FFglitch completed but output file was not created. stderr: {}",
+            String::from_utf8_lossy(&proc_output.stderr)
+        )
+        .into()),
+    }
+}
+
 /// `program` is either the bundled `mosh-cli` sidecar (in which case `script` is
 /// None, because the entry point is compiled in) or a Python interpreter (in
 /// which case `script` is `mosh_cli.py`).
@@ -3126,6 +3432,35 @@ pub fn remove_export_temp(path: String) -> crate::error::Result<()> {
     Ok(())
 }
 
+/// A unique output path inside the mosh-preview cache dir, for the "Render
+/// mosh preview" affordance in PreviewViewport: the frontend writes a real
+/// (short, downscaled) `export_video` here — codec layers included — and
+/// plays the result back through the asset protocol.
+///
+/// Returns a path rather than rendering anything itself: the preview IS the
+/// normal export path on a trimmed range, so it needs no dedicated pipeline.
+/// The name carries `EXPORT_TEMP_MARKER` so `remove_export_temp` can clean it
+/// up, and the directory is inside the asset-protocol scope (same one
+/// `preview_ffglitch` writes to).
+#[tauri::command]
+pub fn codec_preview_path() -> crate::error::Result<String> {
+    let dir = std::env::temp_dir()
+        .join("moshdither-studio")
+        .join("mosh-preview");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create preview dir: {e}"))?;
+    let name = format!(
+        "codec-preview-{}-{:08x}-{}{}mp4",
+        std::process::id(),
+        rand::random::<u32>(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+        EXPORT_TEMP_MARKER
+    );
+    Ok(dir.join(name).to_string_lossy().into_owned())
+}
+
 /// Apply an FFglitch datamoshing effect by delegating to the Python mosh_cli.py.
 /// Render a SHORT moshed clip so a datamosh mode can be seen before committing.
 ///
@@ -3242,7 +3577,6 @@ pub async fn apply_ffglitch(
 ) -> crate::error::Result<String> {
     let validated_input = validate_io_path(&input_path, true)?;
     let validated_output = validate_io_path(&output_path, false)?;
-    let input_path = validated_input.to_string_lossy().into_owned();
     let output_path = validated_output.to_string_lossy().into_owned();
     let params = ffglitch_params_or_empty(params);
 
@@ -3253,55 +3587,11 @@ pub async fn apply_ffglitch(
     // "OpenBLAS error: Memory allocation still failed" on stderr, or ffgac
     // exiting -22 opening a file that is right there. Refuse with the
     // reason instead. (Observed 2026-09-10, commit limit exhausted by
-    // another app -- see sysmem.rs.)
+    // another app -- see sysmem.rs.) run_ffglitch_file repeats this check
+    // inside the worker for the codec-stage caller that skips this wrapper.
     if let Some(notice) = crate::sysmem::low_memory_notice() {
         return Err(notice.into());
     }
-
-    // Prefer the bundled sidecar: it carries its own interpreter and numpy, so
-    // datamoshing works on a machine with no Python at all. The interpreter
-    // path stays as the dev fallback (and as an escape hatch if someone wants
-    // to run a modified mosh_cli.py).
-    let sidecar = locate_mosh_sidecar();
-    let (program, script) = match &sidecar {
-        Some(exe) => (exe.to_string_lossy().into_owned(), None),
-        None => {
-            let python = find_python().ok_or(
-                "Datamoshing is unavailable: the datamosh component (mosh-cli) is missing and no \
-                 compatible Python interpreter was found. Please reinstall the application.",
-            )?;
-            let cli = locate_mosh_cli().ok_or(
-                "mosh_cli.py not found. Expected at ./packages/python-backend/mosh_cli.py",
-            )?;
-            (python, Some(cli))
-        }
-    };
-
-    let ffgac = ffgac_binary()?;
-    let ffedit = ffedit_binary()?;
-    if !Path::new(&ffgac).exists() || !Path::new(&ffedit).exists() {
-        return Err("FFglitch binaries (ffgac / ffedit) not found. Download them from ffglitch.org and place in src-tauri/bin/".into());
-    }
-
-    let ffmpeg = ffmpeg_binary()?;
-
-    let config = serde_json::json!({
-        "input": input_path,
-        "output": output_path,
-        "mode": mode,
-        "params": params,
-    });
-
-    let temp_config = std::env::temp_dir().join(format!(
-        "ffglitch_config_{}_{}_{}.json",
-        std::process::id(),
-        rand::random::<u32>(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    std::fs::write(&temp_config, config.to_string())?;
 
     // Serialize against export_video (this file, ~line 615): the two
     // commands share one export_cancel AtomicBool, so without this permit a
@@ -3310,79 +3600,22 @@ pub async fn apply_ffglitch(
     // resetting the flag so a stale `true` left over from a previously
     // cancelled operation can't immediately abort this new one, and so this
     // reset can't race a still-running or queued export_video call.
-    // The temp config exists from this point on; every error path below must
-    // remove it before propagating or it leaks into the temp dir.
-    let permit = match state.export_semaphore.clone().acquire_owned().await {
-        Ok(permit) => permit,
-        Err(e) => {
-            let _ = std::fs::remove_file(&temp_config);
-            return Err(e.into());
-        }
-    };
+    let permit = state.export_semaphore.clone().acquire_owned().await?;
     let cancel = state.export_cancel.clone();
     cancel.store(false, Ordering::Relaxed);
 
     // Run the blocking Python process on a spawn_blocking task to avoid
     // blocking the Tauri async runtime (which can cause command timeouts
-    // and leave 0-byte output files).
-    let temp_config_path = temp_config.to_string_lossy().to_string();
-    let output_path_clone = output_path.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    // and leave 0-byte output files). The permit moves in and is held for
+    // the whole sidecar run; run_ffglitch_file does the runner→config→
+    // subprocess→output-check chain and cleans its temp config itself.
+    tauri::async_runtime::spawn_blocking(move || {
         let _permit = permit;
-        run_ffglitch_subprocess(
-            &program,
-            script.as_deref(),
-            &temp_config_path,
-            &ffgac,
-            &ffedit,
-            &ffmpeg,
-            &cancel,
-        )
-        .map(|output| (output, output_path_clone))
+        run_ffglitch_file(&validated_input, &validated_output, &mode, &params, &cancel)
     })
-    .await;
+    .await??;
 
-    let _ = std::fs::remove_file(&temp_config);
-
-    let (output, output_path) = result??;
-
-    if !output.status.success() {
-        // Clean up 0-byte output file if it was created
-        let op = Path::new(&output_path);
-        if op.exists() {
-            if let Ok(meta) = std::fs::metadata(op) {
-                if meta.len() == 0 {
-                    let _ = std::fs::remove_file(op);
-                }
-            }
-        }
-        return Err(format!(
-            "FFglitch failed: {}{}",
-            String::from_utf8_lossy(&output.stderr),
-            crate::sysmem::low_memory_suffix()
-        )
-        .into());
-    }
-
-    // Verify the output file exists and has non-zero size
-    let op = Path::new(&output_path);
-    match std::fs::metadata(op) {
-        Ok(meta) if meta.len() > 0 => Ok(output_path),
-        Ok(_) => {
-            // 0-byte file — remove it and report error with stderr
-            let _ = std::fs::remove_file(op);
-            Err(format!(
-                "FFglitch produced a 0-byte output file. stderr: {}",
-                String::from_utf8_lossy(&output.stderr)
-            )
-            .into())
-        }
-        Err(_) => Err(format!(
-            "FFglitch completed but output file was not created. stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )
-        .into()),
-    }
+    Ok(output_path)
 }
 
 /// Generate a low-resolution proxy video for smooth preview editing.
