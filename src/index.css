@@ -114,10 +114,6 @@
   --font-body: "Geist Variable", system-ui, sans-serif;
   --font-display: "Geist Variable", system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", "Fira Code", monospace;
-  /* Reskin: handwriting display font retired. --font-hand is kept as a token
-     so components referencing it compile, but it now resolves to the body
-     sans; usages are removed in a follow-up pass. */
-  --font-hand: var(--font-body);
 
   /* Cyber-Urban shadows */
   --neo-dark: rgba(0, 0, 0, 0.35);
@@ -1008,11 +1004,6 @@
 /* Hidden image */
 .preview-hidden {
   display: none;
-}
-
-/* Toolbar header logo */
-.toolbar-logo {
-  font-family: var(--font-hand);
 }
 
 /* Toolbar menu icon */

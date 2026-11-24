@@ -51,6 +51,19 @@ interface ParamLane {
   lfo?: LfoSpec;
 }
 
+/** clientX -> timeline seconds, clamped to the element's width; null when the element is unmeasurable. */
+function timeAtClientX(clientX: number, el: HTMLElement | null, duration: number): number | null {
+  if (!el) return null;
+  const rect = el.getBoundingClientRect();
+  if (rect.width <= 0) return null;
+  return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)) * duration;
+}
+
+/** seconds -> clamped percent-of-duration string for position styles. */
+function pctOfDuration(t: number, duration: number): string {
+  return `${(Math.max(0, Math.min(duration, t)) / duration) * 100}%`;
+}
+
 export default function Timeline() {
   const currentTime = useAppStore((s) => s.currentTime);
   const setCurrentTime = useAppStore((s) => s.setCurrentTime);
@@ -183,14 +196,7 @@ export default function Timeline() {
   }, [effectStack, keyframes, lfos, allEffects]);
 
   const timeAt = useCallback(
-    (clientX: number): number | null => {
-      const el = scrubberRef.current;
-      if (!el) return null;
-      const rect = el.getBoundingClientRect();
-      if (rect.width <= 0) return null;
-      const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-      return pct * duration;
-    },
+    (clientX: number): number | null => timeAtClientX(clientX, scrubberRef.current, duration),
     [duration]
   );
 
@@ -250,7 +256,7 @@ export default function Timeline() {
     }
   }, []);
 
-  const pct = (t: number) => `${(Math.max(0, Math.min(duration, t)) / duration) * 100}%`;
+  const pct = (t: number) => pctOfDuration(t, duration);
 
   // One action funnel for both places a keyframe menu can be opened from:
   // the merged diamonds on the scrubber and the per-param markers in a lane.
@@ -801,14 +807,9 @@ function ParamLaneRow({
   // a retime drag happened to end.
   const dragRef = useRef<{ id: string; moved: boolean; startX: number } | null>(null);
 
-  const timeAt = (clientX: number): number | null => {
-    const el = trackRef.current;
-    if (!el) return null;
-    const rect = el.getBoundingClientRect();
-    if (rect.width <= 0) return null;
-    return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)) * duration;
-  };
-  const pct = (t: number) => `${(Math.max(0, Math.min(duration, t)) / duration) * 100}%`;
+  const timeAt = (clientX: number): number | null =>
+    timeAtClientX(clientX, trackRef.current, duration);
+  const pct = (t: number) => pctOfDuration(t, duration);
 
   return (
     <div

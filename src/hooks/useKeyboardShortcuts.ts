@@ -1,7 +1,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useRef } from "react";
 import { useAppStore } from "../store";
-import { eventToKeyString, getAllBindings } from "../utils/keyboardShortcuts";
+import { getAllBindings, matchesBinding } from "../utils/keyboardShortcuts";
 import { getCommands } from "../utils/commands";
 import { formatTimecode } from "../utils/timecode";
 import { isTauriAvailable } from "../lib/browserFallback";
@@ -13,6 +13,22 @@ import { useProject } from "./useProject";
  * keyboardShortcuts utility so the KeyboardShortcutsEditor has effect.
  * Mount once at the app level.
  */
+// Number keys jump to library categories in the accordion's visual order.
+// Category ids are the accordion's namespace (e.g. "pixel_geometry"), not
+// the effect-id prefix ("pixel_geo") — writing the prefix once made key 5
+// select a category that exists nowhere.
+const CATEGORY_KEYMAP: Record<string, [string, string]> = {
+  "1": ["datamoshing", "Datamosh"],
+  "2": ["dithering", "Dither"],
+  "3": ["analog", "Analog"],
+  "4": ["color", "Color"],
+  "5": ["pixel_geometry", "Pixel"],
+  "6": ["glitch", "Glitch"],
+  "7": ["noise", "Noise"],
+  "8": ["artistic", "Art"],
+  "9": ["audio_reactive", "Audio"],
+};
+
 export function useKeyboardShortcuts() {
   const undo = useAppStore((s) => s.undo);
   const redo = useAppStore((s) => s.redo);
@@ -51,10 +67,9 @@ export function useKeyboardShortcuts() {
         e.target instanceof HTMLTextAreaElement ||
         e.target instanceof HTMLSelectElement;
 
-      const keyString = eventToKeyString(e);
       const bindings = getAllBindings();
       const matchedCommand = Object.entries(bindings).find(
-        ([, binding]) => binding === keyString
+        ([, binding]) => matchesBinding(e, binding)
       )?.[0];
 
       // Hardcoded transport + editing shortcuts remain active regardless of binding config.
@@ -81,10 +96,19 @@ export function useKeyboardShortcuts() {
           case "app:open":
             void openProject();
             break;
-          case "app:export":
-            // Export is handled by the toolbar; this is reserved for future wiring
-            setStatusMessage("Export shortcut triggered (use toolbar to export)");
+          case "app:export": {
+            // Same open-or-trigger funnel as the toolbar/status-bar Export
+            // buttons: the panel must be docked to receive the trigger.
+            const st = useAppStore.getState();
+            if (!st.mediaLoaded) {
+              setStatusMessage("Export needs loaded media");
+            } else if (!st.dockedPanels.includes("export")) {
+              st.triggerLayoutAction("add", "export");
+            } else {
+              st.triggerExport();
+            }
             break;
+          }
           case "view:fullscreen":
             void toggleFullscreen();
             break;
@@ -112,6 +136,18 @@ export function useKeyboardShortcuts() {
             break;
           }
         }
+        return;
+      }
+
+      const category = CATEGORY_KEYMAP[e.key];
+      if (category && !isInput && !isMeta) {
+        // Writing "" first forces a transition even when the category is
+        // already active — the accordion's subscription only reacts to
+        // changes, so a repeat press after a manual collapse still
+        // re-expands it.
+        setActiveCategory("");
+        setActiveCategory(category[0]);
+        setStatusMessage(`Category: ${category[1]}`);
         return;
       }
 
@@ -254,61 +290,6 @@ export function useKeyboardShortcuts() {
             e.preventDefault();
             toggleTheme();
             setStatusMessage("Theme toggled");
-          }
-          break;
-
-        case "1":
-          if (!isInput && !isMeta) {
-            setActiveCategory("dithering");
-            setStatusMessage("Category: Dithering");
-          }
-          break;
-        case "2":
-          if (!isInput && !isMeta) {
-            setActiveCategory("analog");
-            setStatusMessage("Category: Analog");
-          }
-          break;
-        case "3":
-          if (!isInput && !isMeta) {
-            setActiveCategory("color");
-            setStatusMessage("Category: Color");
-          }
-          break;
-        case "4":
-          if (!isInput && !isMeta) {
-            setActiveCategory("glitch");
-            setStatusMessage("Category: Glitch");
-          }
-          break;
-        case "5":
-          if (!isInput && !isMeta) {
-            setActiveCategory("pixel_geo");
-            setStatusMessage("Category: Pixel Geometry");
-          }
-          break;
-        case "6":
-          if (!isInput && !isMeta) {
-            setActiveCategory("datamoshing");
-            setStatusMessage("Category: Datamoshing");
-          }
-          break;
-        case "7":
-          if (!isInput && !isMeta) {
-            setActiveCategory("noise");
-            setStatusMessage("Category: Noise");
-          }
-          break;
-        case "8":
-          if (!isInput && !isMeta) {
-            setActiveCategory("artistic");
-            setStatusMessage("Category: Artistic");
-          }
-          break;
-        case "9":
-          if (!isInput && !isMeta) {
-            setActiveCategory("segmentation");
-            setStatusMessage("Category: Segmentation");
           }
           break;
 

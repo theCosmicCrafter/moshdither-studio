@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAppStore, type EffectMeta } from "../../store";
 import { isVideoOnlyEffect, VIDEO_ONLY_ON_IMAGE_WARNING } from "../../utils/effectConverter";
 import { effectPipeline } from "../../lib/effectPipeline";
@@ -21,13 +21,30 @@ const CATEGORIES: { id: string; label: string; icon: string; color: string }[] =
 
 export default function CategoryAccordion() {
   const allEffects = useAppStore((s) => s.allEffects);
-  const activeCategory = useAppStore((s) => s.activeCategory);
   const setActiveCategory = useAppStore((s) => s.setActiveCategory);
   const searchQuery = useAppStore((s) => s.searchQuery);
   const addToStack = useAppStore((s) => s.addToStack);
   const effectStack = useAppStore((s) => s.effectStack);
 
-  const [expanded, setExpanded] = useState<string | null>(activeCategory);
+  const [expanded, setExpanded] = useState<string | null>(
+    useAppStore.getState().activeCategory || null
+  );
+
+  // The number-key category shortcuts write `activeCategory` from outside;
+  // this subscription is what makes them expand a section. A "seen" ref
+  // gates on real transitions only — the store is written constantly
+  // (playhead ticks every frame), and reacting to every write would
+  // re-expand a section the user just collapsed.
+  const seenCategory = useRef(useAppStore.getState().activeCategory);
+  useEffect(
+    () =>
+      useAppStore.subscribe((s) => {
+        if (s.activeCategory === seenCategory.current) return;
+        seenCategory.current = s.activeCategory;
+        if (s.activeCategory) setExpanded(s.activeCategory);
+      }),
+    []
+  );
 
   const isSearching = searchQuery.trim().length > 0;
 
@@ -52,8 +69,14 @@ export default function CategoryAccordion() {
 
   // Search mode: flat grouped list of matching effects
   if (isSearching) {
+    const anyMatch = CATEGORIES.some((cat) => effectsForCategory(cat.id).length > 0);
     return (
       <div className="flex-1 overflow-y-auto custom-scrollbar px-2 py-2 space-y-3">
+        {!anyMatch && (
+          <div className="text-center py-4 font-body-sm text-body-sm text-on-surface-variant">
+            No effects found
+          </div>
+        )}
         {CATEGORIES.map((cat) => {
           const effects = effectsForCategory(cat.id);
           if (effects.length === 0) return null;

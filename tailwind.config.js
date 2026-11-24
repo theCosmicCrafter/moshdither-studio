@@ -114,7 +114,6 @@ export default {
       fontFamily: {
         display: ["Geist Variable", "system-ui", "sans-serif"],
         mono: ["JetBrains Mono Variable", "Fira Code", "monospace"],
-        hand: ["Architects Daughter", "cursive"],
         // Typographic role aliases — all resolve to the variable Geist face
         "label-md": ["Geist Variable", "system-ui", "sans-serif"],
         "label-sm": ["Geist Variable", "system-ui", "sans-serif"],

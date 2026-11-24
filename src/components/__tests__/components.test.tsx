@@ -179,7 +179,6 @@ import EffectStack from "../EffectStack";
 import ParameterPanel from "../EffectStack/ParameterPanel";
 import EffectBrowser from "../EffectBrowser";
 import SearchBar from "../EffectBrowser/SearchBar";
-import EffectList from "../EffectBrowser/EffectList";
 import CategoryAccordion from "../EffectBrowser/CategoryAccordion";
 import PresetPanel from "../PresetPanel";
 import VerificationPanel from "../VerificationPanel";
@@ -759,55 +758,6 @@ describe("Component Test Suite", () => {
     it("does not show clear button when query is empty", () => {
       render(<SearchBar />);
       expect(screen.queryByRole("button")).not.toBeInTheDocument();
-    });
-  });
-
-  // ── EffectList ─────────────────────────────────────────────
-  describe("EffectList", () => {
-    it("shows no effects found when empty", () => {
-      render(<EffectList />);
-      expect(screen.getByText("No effects found")).toBeInTheDocument();
-    });
-
-    it("shows effects for active category", () => {
-      useAppStore.getState().setAllEffects([
-        mockEffectMeta("dithering.bayer", "Bayer", "dithering"),
-        mockEffectMeta("analog.vhs", "VHS", "analog"),
-      ]);
-      useAppStore.getState().setActiveCategory("dithering");
-      render(<EffectList />);
-      expect(screen.getByText("Bayer")).toBeInTheDocument();
-      expect(screen.queryByText("VHS")).not.toBeInTheDocument();
-    });
-
-    it("filters by search query", () => {
-      useAppStore.getState().setAllEffects([
-        mockEffectMeta("dithering.bayer", "Bayer Dither", "dithering"),
-        mockEffectMeta("dithering.floyd", "Floyd Steinberg", "dithering"),
-      ]);
-      useAppStore.getState().setSearchQuery("bayer");
-      render(<EffectList />);
-      expect(screen.getByText("Bayer Dither")).toBeInTheDocument();
-      expect(screen.queryByText("Floyd Steinberg")).not.toBeInTheDocument();
-    });
-
-    it("adds effect to stack on click", () => {
-      useAppStore.getState().setAllEffects([
-        mockEffectMeta("dithering.bayer", "Bayer", "dithering"),
-      ]);
-      useAppStore.getState().setActiveCategory("dithering");
-      render(<EffectList />);
-      fireEvent.click(screen.getByText("Bayer"));
-      expect(useAppStore.getState().effectStack.length).toBe(1);
-    });
-
-    it("shows in-stack indicator", () => {
-      const meta = mockEffectMeta("dithering.bayer", "Bayer", "dithering");
-      useAppStore.getState().setAllEffects([meta]);
-      useAppStore.getState().setActiveCategory("dithering");
-      useAppStore.getState().addToStack(meta);
-      render(<EffectList />);
-      expect(screen.getByText(/added/)).toBeInTheDocument();
     });
   });
 

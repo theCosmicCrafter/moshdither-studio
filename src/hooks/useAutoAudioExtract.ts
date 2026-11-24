@@ -1,8 +1,7 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { logger } from "../utils/logger";
 import { useEffect, useRef } from "react";
 import { AudioFeatureExtractor } from "../engine/audio/AudioFeatureExtractor";
-import { extractAudioFromVideo, NO_AUDIO_STREAM_MESSAGE } from "../lib/tauri";
+import { extractAudioFromVideo, convertFileSrc, NO_AUDIO_STREAM_MESSAGE } from "../lib/tauri";
 import { useAppStore } from "../store";
 
 /**
