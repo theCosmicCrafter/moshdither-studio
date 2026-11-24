@@ -1600,7 +1600,8 @@ fn apply_codec_to_segment(
         )
     })?;
 
-    let params = serde_json::Value::Object(crate::effects::clamp_for_effect(effect, &call.params));
+    let params =
+        clamp_ffglitch_mode_params(effect, &serde_json::Value::Object(call.params.clone()));
     validate_ffglitch_extra_paths(mode, &params)?;
 
     if ctx.cancel.load(Ordering::Relaxed) {
@@ -1622,8 +1623,7 @@ fn apply_codec_to_segment(
     // Marked like the two-stage export's intermediate so a stray file left by
     // a crash is still one `remove_export_temp` recognises — and never
     // mistaken for a user file.
-    let temp_dir = std::env::temp_dir().join("moshdither-studio");
-    std::fs::create_dir_all(&temp_dir).map_err(|e| format!("codec stage: temp dir: {e}"))?;
+    let temp_dir = mosh_temp_dir("")?;
     let nonce = format!(
         "{}-{}-{}",
         std::process::id(),
@@ -1637,7 +1637,21 @@ fn apply_codec_to_segment(
     let post_path = temp_dir.join(format!("codec-post-{nonce}{EXPORT_TEMP_MARKER}mp4"));
 
     let before_count = segment.frames.len();
+    let before_dims = segment.frames.first().map(|f| (f.width, f.height));
     let fps = segment.fps;
+
+    // Drop guard — a panic inside encode/mosh/decode unwinds past
+    // statement-level cleanup, so deletion lives in Drop the same way
+    // TempConfigGuard does for the sidecar's config file.
+    struct TempFilesGuard(Vec<PathBuf>);
+    impl Drop for TempFilesGuard {
+        fn drop(&mut self) {
+            for p in &self.0 {
+                let _ = std::fs::remove_file(p);
+            }
+        }
+    }
+    let _temps = TempFilesGuard(vec![pre_path.clone(), post_path.clone()]);
 
     let result = (|| -> crate::error::Result<VideoSegment> {
         // The sidecar reads the bitstream, so the intermediate needs real
@@ -1678,10 +1692,6 @@ fn apply_codec_to_segment(
         )
     })();
 
-    // Temp files go on every exit path, Ok and Err alike.
-    let _ = std::fs::remove_file(&pre_path);
-    let _ = std::fs::remove_file(&post_path);
-
     let processed = result?;
     if processed.frames.is_empty() {
         return Err(format!(
@@ -1692,21 +1702,17 @@ fn apply_codec_to_segment(
         .into());
     }
     let after_count = processed.frames.len();
+    let after_dims = processed.frames.first().map(|f| (f.width, f.height));
     *segment = VideoSegment {
         frames: processed.frames,
         // Keep the export's frame rate, not whatever the mosh file reports:
         // downstream layers and the final encode are timed on it.
         fps,
     };
-    if after_count != before_count {
-        // Several modes are SUPPOSED to change the frame count (repeat, bloom,
-        // stutter), so this is a warning, not an error — same stance as the
-        // frame-count mismatch warning in apply_effect_to_segment.
-        let message = format!(
-            "{} changed the frame count from {} to {} frames; the rest of the \
-             stack and the audio continue from the new count.",
-            call.effect_id, before_count, after_count
-        );
+    // Several modes are SUPPOSED to change the frame count or resolution
+    // (repeat, bloom, stretch), so these are warnings, not errors — same
+    // stance as the frame-count mismatch warning in apply_effect_to_segment.
+    let codec_warning = |message: String| {
         tracing::warn!("{}", message);
         emit_export_progress(
             ctx.app_handle,
@@ -1717,6 +1723,22 @@ fn apply_codec_to_segment(
                 ..Default::default()
             },
         );
+    };
+    if after_count != before_count {
+        codec_warning(format!(
+            "{} changed the frame count from {} to {} frames; the rest of the \
+             stack and the audio continue from the new count.",
+            call.effect_id, before_count, after_count
+        ));
+    }
+    if let (Some((bw, bh)), Some((aw, ah))) = (before_dims, after_dims) {
+        if aw != bw || ah != bh {
+            codec_warning(format!(
+                "{} changed the resolution from {}x{} to {}x{}; downstream \
+                 layers and the final encode run at the new size.",
+                call.effect_id, bw, bh, aw, ah
+            ));
+        }
     }
     Ok(())
 }
@@ -2905,8 +2927,7 @@ pub async fn prepare_custom_lut(path: String) -> crate::error::Result<String> {
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or("Invalid LUT file name")?;
-    let dest_dir = std::env::temp_dir().join("moshdither-studio").join("luts");
-    std::fs::create_dir_all(&dest_dir)?;
+    let dest_dir = mosh_temp_dir("luts")?;
     let dest = dest_dir.join(file_name);
     std::fs::copy(&validated, &dest)?;
 
@@ -3198,6 +3219,22 @@ fn run_ffglitch_file(
         return Err(notice.into());
     }
 
+    // Params reach this funnel from three callers: the codec stack stage
+    // (schema-clamped upstream), and the direct apply_ffglitch/preview_ffglitch
+    // commands (arbitrary webview JSON — tomato.py multiplies some values into
+    // list lengths, so an unclamped `1e9` is a memory DoS in the sidecar).
+    // Clamp + filter against the registered mode's schema. Modes with no
+    // registered effect (motion_transfer, combine — they take file-path params
+    // no schema declares) pass through unchanged; their paths are already
+    // guarded by validate_ffglitch_extra_paths.
+    let clamped_params;
+    let params = if let Some(effect) = EffectRegistry::new().get(&format!("ffglitch.{mode}")) {
+        clamped_params = clamp_ffglitch_mode_params(effect, params);
+        &clamped_params
+    } else {
+        params
+    };
+
     // Prefer the bundled sidecar: it carries its own interpreter and numpy, so
     // datamoshing works on a machine with no Python at all. The interpreter
     // path stays as the dev fallback (and as an escape hatch if someone wants
@@ -3347,6 +3384,54 @@ fn ffglitch_params_or_empty(params: serde_json::Value) -> serde_json::Value {
     }
 }
 
+/// The app's shared scratch dir under the OS temp dir. `/tmp` is
+/// world-writable on POSIX, so a hostile local user could pre-plant
+/// `moshdither-studio` with open permissions and then race or replace the
+/// intermediates we encode→mosh→decode through it. Create it owner-only and
+/// tighten the permissions on a pre-existing dir as well — `DirBuilder`'s
+/// mode only applies to directories it actually creates. On Windows `%TEMP%`
+/// is already per-user so both blocks compile to no-ops.
+fn mosh_temp_dir(sub: &str) -> crate::error::Result<PathBuf> {
+    let root = std::env::temp_dir().join("moshdither-studio");
+    let dir = if sub.is_empty() { root } else { root.join(sub) };
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder
+        .create(&dir)
+        .map_err(|e| format!("temp dir {}: {e}", dir.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
+    Ok(dir)
+}
+
+/// Clamp a codec mode's params against its registered schema: ranges AND
+/// keys. `mosh_cli.py` multiplies some params into list lengths (tomato.py's
+/// `[x] * repeat`), so a webview-supplied `1e9` must not reach the sidecar
+/// unbounded — and undeclared keys ride through to its `params.get` reads
+/// unchecked, so they are filtered rather than forwarded.
+/// `apply_codec_to_segment` already calls `clamp_for_effect`; calling this
+/// a second time is idempotent.
+fn clamp_ffglitch_mode_params(
+    effect: &dyn Effect,
+    params: &serde_json::Value,
+) -> serde_json::Value {
+    let Some(obj) = params.as_object() else {
+        return params.clone();
+    };
+    let mut clamped = crate::effects::clamp_for_effect(effect, obj);
+    let meta = effect.meta();
+    clamped.retain(|k, _| meta.parameters.iter().any(|p| &p.id == k));
+    serde_json::Value::Object(clamped)
+}
+
 /// Validates the extra file-path parameters that the motion_transfer/combine
 /// modes forward to mosh_cli.py (params.motionUrl / params.combineVideos).
 /// mosh_cli.py feeds these straight into FFglitch/ffmpeg as further input
@@ -3444,10 +3529,7 @@ pub fn remove_export_temp(path: String) -> crate::error::Result<()> {
 /// `preview_ffglitch` writes to).
 #[tauri::command]
 pub fn codec_preview_path() -> crate::error::Result<String> {
-    let dir = std::env::temp_dir()
-        .join("moshdither-studio")
-        .join("mosh-preview");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create preview dir: {e}"))?;
+    let dir = mosh_temp_dir("mosh-preview")?;
     let name = format!(
         "codec-preview-{}-{:08x}-{}{}mp4",
         std::process::id(),
@@ -3494,10 +3576,7 @@ pub async fn preview_ffglitch(
     let seconds = duration_secs.unwrap_or(2.0).clamp(0.5, 10.0);
     let start = start_secs.unwrap_or(0.0).max(0.0);
 
-    let dir = std::env::temp_dir()
-        .join("moshdither-studio")
-        .join("mosh-preview");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create preview dir: {e}"))?;
+    let dir = mosh_temp_dir("mosh-preview")?;
 
     // Keyed by everything that changes the result, so a cache hit is always the
     // right clip. The source path is hashed rather than embedded: it can be long,

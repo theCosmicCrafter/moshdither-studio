@@ -378,7 +378,7 @@
   }
 
   /* Accent fills — gradients retired in the reskin; pink is the sole hero.
-     The diagonal gradient survives only on the logo mark (toolbar-logo). */
+     The solar-* utilities survive only for the logo mark and flat fills. */
   .solar-text {
     color: var(--accent-pink);
   }

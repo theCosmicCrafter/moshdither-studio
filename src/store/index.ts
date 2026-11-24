@@ -1209,7 +1209,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const state = get();
     // Codec effects can't randomize in — they're not stackable yet — and
     // video-only effects are skipped on stills for the same reason the
-    // EffectList dims them.
+    // effect browser dims them.
     const pool = state.allEffects.filter(
       (e) =>
         !e.id.startsWith("ffglitch.") &&

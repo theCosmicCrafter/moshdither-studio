@@ -175,8 +175,11 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
           style={{
             padding: "6px 8px",
             borderRadius: 3,
-            background: "rgba(120, 200, 255, 0.08)",
-            border: "1px solid rgba(120, 200, 255, 0.25)",
+            // Same accent-teal codec-truth token the chips use, washed —
+            // hardcoded rgba(120,200,255) read as a foreign blue and vanished
+            // against the light theme's surfaces.
+            background: "color-mix(in srgb, var(--accent-teal) 8%, transparent)",
+            border: "1px solid color-mix(in srgb, var(--accent-teal) 25%, transparent)",
             color: "var(--text-secondary)",
           }}
         >

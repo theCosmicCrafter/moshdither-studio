@@ -144,9 +144,11 @@ test("real backend: verify-all passes for every effect", () => {
   expect(res.status, `verify-all exit code: ${res.stderr}`).toBe(0);
   expect(res.stdout, "verify-all should produce JSON").toContain("summary");
   expect(res.stdout, "all effects should pass verification").toMatch(
-    /"summary":\s*"\d+\/\d+ effects passed verification \(0 failed\)"/
+    /"summary":\s*"\d+\/\d+ effects passed verification \(0 failed(, \d+ skipped)?\)"/
   );
-  // Parse and assert no failures.
+  // Parse and assert no failures. Codec-pipeline effects are reported as
+  // skipped — the frame-domain checks don't apply to them — which is not a
+  // failure.
   const parsed = JSON.parse(res.stdout);
   expect(parsed.failed ?? parsed.failures ?? 0).toBe(0);
 });
@@ -248,10 +250,16 @@ test("real backend: render-all on real image and video produces output files", (
       expect(sz, `${f} should be non-empty`).toBeGreaterThan(5000);
     }
 
-    // CSV report should exist and have one row per render.
+    // CSV report should exist and have one row per render — plus one SKIP
+    // row per codec-pipeline effect (they run on the encoded bitstream at
+    // export, not on frames, so render-all deliberately skips them).
     const csv = readFileSync(join(outDir, "render-report.csv"), "utf8");
-    const rows = csv.trim().split("\n").length;
-    expect(rows - 1, "CSV row count should match total renders").toBe(imgCount + vidCount);
+    const lines = csv.trim().split("\n");
+    const skipRows = lines.filter((l) => l.startsWith("SKIP|")).length;
+    expect(
+      lines.length - 1,
+      "CSV row count should match renders + skips"
+    ).toBe(imgCount + vidCount + skipRows);
   } finally {
     rmSync(outDir, { recursive: true, force: true });
   }

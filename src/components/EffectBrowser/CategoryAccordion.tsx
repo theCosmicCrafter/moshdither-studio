@@ -113,7 +113,7 @@ export default function CategoryAccordion() {
 
   return (
     <div className="flex-1 overflow-y-auto custom-scrollbar">
-      {CATEGORIES.map((cat) => {
+      {CATEGORIES.map((cat, idx) => {
         const isExpanded = expanded === cat.id;
         const effects = effectsForCategory(cat.id);
         return (
@@ -135,6 +135,16 @@ export default function CategoryAccordion() {
                 </span>
               </div>
               <div className="flex items-center gap-2">
+                {/* Digit keys 1–9 expand the first nine categories — the badge
+                    makes the shortcut discoverable (see useKeyboardShortcuts). */}
+                {idx < 9 && (
+                  <span
+                    className="text-data-micro font-data-micro text-on-surface-variant opacity-40"
+                    title={`Press ${idx + 1} to jump to this category`}
+                  >
+                    {idx + 1}
+                  </span>
+                )}
                 {effects.length > 0 && (
                   <span className="text-data-micro font-data-micro text-on-surface-variant opacity-60">
                     {effects.length}

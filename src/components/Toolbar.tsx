@@ -91,22 +91,39 @@ export default function Toolbar({ onFileLoaded }: Props) {
   const fileMenuRef = useClickOutside<HTMLDivElement>(fileMenuOpen, () => setFileMenuOpen(false));
 
   // Menu-bar keyboard pattern: once focus is inside a menu, arrows rove the
-  // enabled items (Home/End jump); Escape closes (edit/view already handled
-  // it, file did not); ArrowDown on a trigger opens its menu and lands on the
-  // first item. Standard WAI-ARIA menubar behaviour, same for all three menus.
+  // enabled items (Home/End jump); Escape closes and returns focus to the
+  // trigger; Tab closes so a menu can't stay painted open with focus gone;
+  // ArrowDown on a trigger opens its menu and lands on the first item.
+  // Standard WAI-ARIA menubar behaviour, same for all three menus.
   const menuKeyDown = (close: () => void) => (e: React.KeyboardEvent<HTMLElement>) => {
     if (e.key === "Escape") {
       e.stopPropagation();
       close();
+      // APG: Escape returns focus to the menubar trigger that opened the menu.
+      e.currentTarget
+        .querySelector<HTMLElement>('[aria-haspopup="menu"]')
+        ?.focus();
       return;
     }
+    if (e.key === "Tab") {
+      // Focus is leaving the menu — close it so aria-expanded can't lie
+      // about a menu nobody can see.
+      close();
+      return;
+    }
+    // Form controls inside a menu (e.g. the View menu's opacity slider) keep
+    // their native arrow-key behaviour — roving would hijack it.
+    if (e.target instanceof HTMLInputElement) return;
     const items = Array.from(
-      e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])')
+      e.currentTarget.querySelectorAll<HTMLElement>('[role^="menuitem"]:not([disabled])')
     );
     if (items.length === 0) return;
     const idx = items.indexOf(document.activeElement as HTMLElement);
     const move = (i: number) => {
       e.preventDefault();
+      // Home/End/arrows also live in the global shortcuts (playhead seek) —
+      // a menu that consumed them must stop them reaching the window listener.
+      e.stopPropagation();
       items[(i + items.length) % items.length].focus();
     };
     if (e.key === "ArrowDown") move(idx + 1);
@@ -121,9 +138,15 @@ export default function Toolbar({ onFileLoaded }: Props) {
       open();
       requestAnimationFrame(() => {
         ref.current
-          ?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled])')
+          ?.querySelector<HTMLElement>('[role^="menuitem"]:not([disabled])')
           ?.focus();
       });
+    };
+  // Focus leaving a menu wrapper entirely (Tab, click elsewhere) closes it —
+  // the mousedown-only useClickOutside can't see keyboard navigation.
+  const closeMenuOnBlur =
+    (close: () => void) => (e: React.FocusEvent<HTMLElement>) => {
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) close();
     };
 
   const dockedPanels = useAppStore((s) => s.dockedPanels) || [];
@@ -482,7 +505,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
           />
         ) : null}
         <span
-          className={`solar-text filigree-header cursor-default toolbar-logo ${theme === "custom" ? "hidden ml-2" : "ml-6"}`}
+          className={`solar-text filigree-header cursor-default ${theme === "custom" ? "hidden ml-2" : "ml-6"}`}
           style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.06em" }}
           aria-hidden="true"
         >
@@ -493,6 +516,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
             ref={fileMenuRef}
             className="relative"
             onKeyDown={menuKeyDown(() => setFileMenuOpen(false))}
+            onBlur={closeMenuOnBlur(() => setFileMenuOpen(false))}
           >
             <button
               onClick={() => setFileMenuOpen((v) => !v)}
@@ -548,7 +572,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                     Revert to Still
                   </button>
                 )}
-                <div className="border-t border-outline/10 my-1" />
+                <div className="border-t border-outline/10 my-1" role="separator" />
                 <button
                   onClick={() => { handleExport(); setFileMenuOpen(false); }}
                   disabled={!mediaLoaded}
@@ -581,7 +605,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                     the command palette, not even the shortcuts editor that is
                     supposed to document keystrokes. A save format a user cannot
                     find is a save format they do not have. */}
-                <div className="border-t border-outline/10 my-1" />
+                <div className="border-t border-outline/10 my-1" role="separator" />
                 <button
                   onClick={() => { void saveProject(false); setFileMenuOpen(false); }}
                   className="w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors"
@@ -609,7 +633,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   Open Project
                   <span className="ml-auto opacity-50 font-code-sm text-code-sm">Ctrl+O</span>
                 </button>
-                <div className="border-t border-outline/10 my-1" />
+                <div className="border-t border-outline/10 my-1" role="separator" />
                 <button
                   onClick={() => { handleSaveImage(); setFileMenuOpen(false); }}
                   disabled={!mediaLoaded || stackCount === 0}
@@ -635,6 +659,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
             ref={editMenuRef}
             className="relative"
             onKeyDown={menuKeyDown(() => setEditMenuOpen(false))}
+            onBlur={closeMenuOnBlur(() => setEditMenuOpen(false))}
           >
             <button
               onClick={() => setEditMenuOpen((v) => !v)}
@@ -651,7 +676,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
               </span>
             </button>
             {editMenuOpen && (
-              <div role="menu" className="absolute left-0 top-full mt-1 z-[200] min-w-[200px] neo-flat rounded-lg bg-surface/90 backdrop-blur-xl border border-outline/20 py-1 shadow-xl">
+              <div role="menu" aria-label="Edit menu" className="absolute left-0 top-full mt-1 z-[200] min-w-[200px] neo-flat rounded-lg bg-surface/90 backdrop-blur-xl border border-outline/20 py-1 shadow-xl">
                 <button
                   role="menuitem"
                   onClick={() => { handleUndo(); setEditMenuOpen(false); }}
@@ -662,6 +687,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   Undo
                 </button>
                 <button
+                  role="menuitem"
                   onClick={() => { handleRedo(); setEditMenuOpen(false); }}
                   disabled={!canRedo}
                   className={`w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors ${canRedo ? "toolbar-enabled" : "toolbar-disabled"}`}
@@ -670,6 +696,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   Redo
                 </button>
                 <button
+                  role="menuitem"
                   onClick={() => { handleClearAll(); setEditMenuOpen(false); }}
                   disabled={stackCount === 0}
                   className={`w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors ${stackCount > 0 ? "toolbar-enabled" : "toolbar-disabled"}`}
@@ -677,8 +704,8 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   <span className="material-symbols-outlined menu-item-icon">delete_sweep</span>
                   Clear Stack
                 </button>
-                <div className="border-t border-outline/10 my-1" />
-                <div className="px-3 py-1 font-label-sm text-label-sm text-on-surface-variant uppercase">
+                <div className="border-t border-outline/10 my-1" role="separator" />
+                <div role="presentation" className="px-3 py-1 font-label-sm text-label-sm text-on-surface-variant uppercase">
                   Panels
                 </div>
                 {PANEL_REGISTRY.filter((p) => p.id !== "verify").map((p) => {
@@ -686,6 +713,8 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   return (
                     <button
                       key={p.id}
+                      role="menuitemcheckbox"
+                      aria-checked={isDocked}
                       onClick={() => {
                         if (isDocked) {
                           triggerLayoutAction("remove", p.id);
@@ -700,6 +729,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                         {p.label}
                       </span>
                       <span
+                        aria-hidden="true"
                         className={`material-symbols-outlined ${isDocked ? "panel-checkbox-on" : "panel-checkbox-off"}`}
                       >
                         {isDocked ? "check_box" : "check_box_outline_blank"}
@@ -709,6 +739,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                 })}
                 <div className="border-t border-outline/10 mt-1 pt-1 flex gap-2 px-3">
                   <button
+                    role="menuitem"
                     onClick={() => {
                       PANEL_REGISTRY.filter((p) => p.id !== "verify").forEach((p) => {
                         if (!dockedIds.has(p.id)) {
@@ -721,6 +752,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                     Show All
                   </button>
                   <button
+                    role="menuitem"
                     onClick={() => {
                       PANEL_REGISTRY.forEach((p) => {
                         useAppStore.getState().triggerLayoutAction("remove", p.id);
@@ -738,6 +770,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
             ref={viewMenuRef}
             className="relative"
             onKeyDown={menuKeyDown(() => setViewMenuOpen(false))}
+            onBlur={closeMenuOnBlur(() => setViewMenuOpen(false))}
           >
             <button
               onClick={() => setViewMenuOpen((v) => !v)}
@@ -754,16 +787,18 @@ export default function Toolbar({ onFileLoaded }: Props) {
               </span>
             </button>
             {viewMenuOpen && (
-              <div role="menu" className="absolute left-0 top-full mt-1 z-[200] min-w-[220px] neo-flat rounded-lg bg-surface/90 backdrop-blur-xl border border-outline/20 py-2 shadow-xl">
+              <div role="menu" aria-label="View menu" className="absolute left-0 top-full mt-1 z-[200] min-w-[220px] neo-flat rounded-lg bg-surface/90 backdrop-blur-xl border border-outline/20 py-2 shadow-xl">
                 <button
+                  role="menuitemcheckbox"
+                  aria-checked={showBeforeAfter}
                   onClick={() => { setShowBeforeAfter(!showBeforeAfter); setViewMenuOpen(false); }}
                   className="w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors"
                 >
                   <span className="material-symbols-outlined menu-item-icon">{showBeforeAfter ? "toggle_on" : "toggle_off"}</span>
                   Before/After Split
                 </button>
-                <div className="border-t border-outline/20 my-1" />
-                <div className="px-3 py-1.5">
+                <div className="border-t border-outline/20 my-1" role="separator" />
+                <div className="px-3 py-1.5" role="presentation">
                   <LabeledSlider
                     layout="stacked"
                     icon="opacity"
@@ -779,13 +814,15 @@ export default function Toolbar({ onFileLoaded }: Props) {
                     unit="%"
                   />
                 </div>
-                <div className="border-t border-outline/20 my-1" />
-                <div className="px-3 py-1 font-label-sm text-label-sm uppercase text-on-surface-variant/70">
+                <div className="border-t border-outline/20 my-1" role="separator" />
+                <div role="presentation" className="px-3 py-1 font-label-sm text-label-sm uppercase text-on-surface-variant/70">
                   Theme Presets
                 </div>
                 {(["cosmic", "dark", "high-contrast", "light", "custom"] as const).map((t) => (
                   <button
                     key={t}
+                    role="menuitemradio"
+                    aria-checked={theme === t}
                     onClick={() => {
                       if (t === "custom") {
                         useAppStore.getState().setCustomUiModalOpen(true);
@@ -800,9 +837,10 @@ export default function Toolbar({ onFileLoaded }: Props) {
                     {theme === t && <span className="material-symbols-outlined text-xs">check</span>}
                   </button>
                 ))}
-                <div className="border-t border-outline/20 my-1" />
+                <div className="border-t border-outline/20 my-1" role="separator" />
 
                 <button
+                  role="menuitem"
                   onClick={() => {
                     useAppStore.getState().triggerLayoutAction("reset");
                     setViewMenuOpen(false);

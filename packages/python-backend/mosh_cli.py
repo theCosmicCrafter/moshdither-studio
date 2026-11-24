@@ -347,7 +347,12 @@ def main():
                     if isinstance(combine_videos, str):
                         combine_videos = [combine_videos]
                     # Normalize and clean paths
-                    combine_videos = [v.replace('media://', '') for v in combine_videos if v]
+                    # Rust validates these paths after strip_prefix("media://")
+                    # — prefix-only. replace() strips EVERY occurrence, which on
+                    # POSIX (where ':' is a legal filename char) could validate
+                    # one canonical path and open another. removeprefix mirrors
+                    # the validator's semantics exactly.
+                    combine_videos = [v.removeprefix('media://') for v in combine_videos if v]
                     if len(combine_videos) < 2:
                         raise ValueError("At least 2 video paths are required for combine mode")
                     basic_modes.library(combine_videos, temp_corrupted, mode=7, gop=gop)

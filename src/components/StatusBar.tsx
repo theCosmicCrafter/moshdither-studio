@@ -7,6 +7,7 @@ export default function StatusBar() {
   const effectStack = useAppStore((s) => s.effectStack);
   const mediaLoaded = useAppStore((s) => s.mediaLoaded);
   const dockedPanels = useAppStore((s) => s.dockedPanels);
+  const exportIsRunning = useAppStore((s) => s.exportIsRunning);
   const triggerExport = useAppStore((s) => s.triggerExport);
   const triggerLayoutAction = useAppStore((s) => s.triggerLayoutAction);
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
@@ -14,10 +15,9 @@ export default function StatusBar() {
   // Same open-or-trigger flow as Toolbar's export: the panel must be mounted
   // to receive the trigger, so a hidden Export panel opens instead of firing.
   const handleExportClick = () => {
-    if (!mediaLoaded) {
-      setStatusMessage("Load media first — nothing to export yet");
-      return;
-    }
+    // The button's disabled state already covers this — a second export
+    // trigger would silently no-op in the panel while claiming it started.
+    if (exportIsRunning) return;
     if (!dockedPanels.includes("export")) {
       triggerLayoutAction("add", "export");
       setStatusMessage("Export panel opened");
@@ -82,10 +82,17 @@ export default function StatusBar() {
         </span>
         <span className="text-outline-variant">|</span>
         <button
+          type="button"
           onClick={handleExportClick}
-          disabled={!mediaLoaded || isProcessing}
-          title="Export — opens the Export panel if it isn't docked"
-          className="flex items-center gap-1 font-label-sm text-label-sm font-semibold tracking-wider text-on-primary bg-accent-pink rounded px-2 py-0.5 disabled:opacity-40 disabled:cursor-not-allowed hover:enabled:brightness-110 transition-colors"
+          disabled={!mediaLoaded || isProcessing || exportIsRunning}
+          title={
+            !mediaLoaded
+              ? "Load media first — nothing to export yet"
+              : exportIsRunning
+                ? "An export is already running"
+                : "Export — opens the Export panel if it isn't docked"
+          }
+          className="flex items-center gap-1 font-label-sm text-label-sm font-semibold tracking-wider text-surface-main bg-accent-pink rounded px-2 py-0.5 disabled:opacity-60 disabled:cursor-not-allowed hover:enabled:brightness-110 transition-colors"
         >
           <span className="material-symbols-outlined" style={{ fontSize: 12 }}>file_download</span>
           Export

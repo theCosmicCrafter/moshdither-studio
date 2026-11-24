@@ -170,7 +170,6 @@ export default {
       animation: {
         "fade-in": "fadeIn 0.2s ease-in-out",
         "slide-up": "slideUp 0.3s ease-out",
-        scanline: "scanline 3s linear infinite",
         // `pulse-glow` and `shimmer` are intentionally absent: index.css owns
         // both the `@keyframes` and the `.animate-pulse-glow` class for them.
         // Declaring them here too produced a second, competing definition --
@@ -185,10 +184,6 @@ export default {
         slideUp: {
           "0%": { opacity: "0", transform: "translateY(10px)" },
           "100%": { opacity: "1", transform: "translateY(0)" },
-        },
-        scanline: {
-          "0%": { top: "0%" },
-          "100%": { top: "100%" },
         },
       },
     },

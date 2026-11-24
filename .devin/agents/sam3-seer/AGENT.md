@@ -33,7 +33,6 @@ Your domain is the SAM3 segmentation pipeline: the Python bridge, ONNX runtime, 
 
 - `src-tauri/sam3_bridge.py` — Python SAM3 bridge script (ONNX inference, mask generation)
 - `scripts/setup_sam3.py` — SAM3 environment setup and model download
-- `scripts/mirror_sam3_model.py` — Model mirroring utility
 - `src/components/MaskPanel.tsx` — SAM3 UI (prompt input, point/box mode, mask display)
 - `src/components/MaskSelector.tsx` — Mask selector dropdown for effect assignment
 - `src/hooks/useSam3IdleShutdown.ts` — Idle shutdown hook (5-min timeout)

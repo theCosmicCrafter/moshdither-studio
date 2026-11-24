@@ -157,6 +157,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
   );
   const allEffects = useAppStore((s) => s.allEffects);
   const exportIsRunning = useAppStore((s) => s.exportIsRunning);
+  const scopesVisible = useAppStore((s) => s.scopesVisible);
 
   // Heavy signature computation is memoised against the (immutable) effect stack.
   const cpuRenderSignature = useMemo(
@@ -192,11 +193,16 @@ function PreviewViewport({ isDropTarget = false }: Props) {
   const [moshPreviewUrl, setMoshPreviewUrl] = useState<string | null>(null);
   const [moshPreviewBusy, setMoshPreviewBusy] = useState(false);
   const [moshPreviewStage, setMoshPreviewStage] = useState<string | null>(null);
+  // The stack signature the docked clip was rendered from — an edit after the
+  // render makes the REAL MOSH badge a lie, so it dims and says STALE.
+  const [moshPreviewSig, setMoshPreviewSig] = useState<string | null>(null);
   // Filesystem path (not the asset URL) so the temp file can be cleaned up.
   const moshPreviewPathRef = useRef<string | null>(null);
+  const mountedRef = useRef(true);
 
   const clearMoshPreview = useCallback(() => {
     setMoshPreviewUrl(null);
+    setMoshPreviewSig(null);
     const prev = moshPreviewPathRef.current;
     moshPreviewPathRef.current = null;
     if (prev) {
@@ -214,9 +220,18 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileName]);
 
-  // The temp file has no owner once the component unmounts.
+  // The docked clip goes stale the moment the stack diverges from what
+  // rendered it — same invalidation rule as an NLE's rendered preview.
+  const moshPreviewStale =
+    moshPreviewUrl !== null && moshPreviewSig !== cpuRenderSignature;
+
+  // The temp file has no owner once the component unmounts — and an in-flight
+  // render that resolves post-unmount would orphan it entirely, so completions
+  // check mountedRef and delete their own output instead of parking it.
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
       const prev = moshPreviewPathRef.current;
       moshPreviewPathRef.current = null;
       if (prev) removeExportTemp(prev).catch(() => {});
@@ -230,6 +245,11 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       s.setStatusMessage("Mosh preview needs a video clip");
       return;
     }
+    // The preview IS an export_video call — it holds the export semaphore —
+    // so it must own exportIsRunning. Without this, a real export started
+    // during the render queues on the permit and the finally-block's
+    // resetExport() then clears the running export's state mid-flight.
+    s.setExportIsRunning(true);
     setMoshPreviewBusy(true);
     setMoshPreviewStage("decoding");
     // ~2s from the playhead is enough to read a mosh — smear needs a handful
@@ -272,6 +292,12 @@ function PreviewViewport({ isDropTarget = false }: Props) {
         processingScale: 720,
         fps: s.mediaFps,
       });
+      if (!mountedRef.current) {
+        // Unmounted mid-render — the unmount cleanup already ran with no
+        // path to clean, so this completion deletes its own output.
+        removeExportTemp(rendered).catch(() => {});
+        return;
+      }
       // Replace the previous preview only once the new one rendered, so a
       // failed re-render doesn't take the working preview down with it.
       const prev = moshPreviewPathRef.current;
@@ -282,6 +308,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
         );
       }
       setMoshPreviewUrl(convertFileSrc(rendered));
+      setMoshPreviewSig(cpuRenderSignature);
       s.setStatusMessage("Mosh preview rendered — real export path");
     } catch (err) {
       if (useAppStore.getState().exportCancelRequested) {
@@ -293,12 +320,14 @@ function PreviewViewport({ isDropTarget = false }: Props) {
         );
       }
     } finally {
-      (await unlistenPromise)();
+      // A rejected listen() must not skip the busy/state resets below.
+      const unlisten = await unlistenPromise.catch(() => null);
+      unlisten?.();
       setMoshPreviewBusy(false);
       setMoshPreviewStage(null);
       useAppStore.getState().resetExport();
     }
-  }, [moshPreviewBusy]);
+  }, [moshPreviewBusy, cpuRenderSignature]);
 
   const cancelMoshPreview = useCallback(() => {
     // Same flag + command the Export panel's Cancel uses — the preview IS an
@@ -1324,7 +1353,11 @@ function PreviewViewport({ isDropTarget = false }: Props) {
   let statusText = "GPU preview";
   if (useCpuPreview) {
     statusDotBg = "bg-accent-teal";
-    statusText = "Exact · matches export";
+    // Codec layers pass through every frame-domain preview — "matches
+    // export" would claim the mosh is already baked in.
+    statusText = stackHasCodecLayer
+      ? "Exact · codec applies at export"
+      : "Exact · matches export";
   } else if (isApproximatePreview) {
     // With auto-exact on, this state lasts about half a second after you stop
     // moving, so it reports what is happening rather than asking for a click.
@@ -1362,7 +1395,13 @@ function PreviewViewport({ isDropTarget = false }: Props) {
                 s.setUseCpuPreview(!s.useCpuPreview);
               }}
               className="text-label-sm font-label-sm text-on-surface-variant flex items-center gap-2 neo-flat px-3 py-1 rounded-full cursor-pointer hover:border-accent-teal/40 transition-colors"
-              title={useCpuPreview ? "Click to switch to fast WebGL GPU preview" : "Click to switch to 100% exact Rust CPU preview (exact saved output)"}
+              title={
+                useCpuPreview
+                  ? stackHasCodecLayer
+                    ? "Pixel layers are exact — codec layers pass through and apply at export. Click to switch to GPU preview"
+                    : "Click to switch to fast WebGL GPU preview"
+                  : "Click to switch to 100% exact Rust CPU preview (exact saved output)"
+              }
             >
               <span className={`w-2 h-2 rounded-full ${statusDotBg}`} />
               {statusText}
@@ -1371,7 +1410,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
               <button
                 type="button"
                 data-testid="render-mosh-preview"
-                disabled={moshPreviewBusy || exportIsRunning}
+                disabled={exportIsRunning && !moshPreviewBusy}
                 onClick={moshPreviewBusy ? cancelMoshPreview : renderMoshPreview}
                 className="text-label-sm font-label-sm text-on-surface-variant flex items-center gap-2 neo-flat px-3 py-1 rounded-full cursor-pointer hover:border-accent-teal/40 transition-colors disabled:opacity-60"
                 title={
@@ -1620,11 +1659,13 @@ function PreviewViewport({ isDropTarget = false }: Props) {
 
         {/* Docked mosh-preview clip — the real export output, looped. Sits in
             the canvas overlay, not the media plane, so it never contaminates
-            what a screenshot or comparison would capture. */}
-        {moshPreviewUrl && (
+            what a screenshot or comparison would capture. Hidden during split
+            view like the other overlays, and lifted above the scopes so the
+            two overlays never stack. */}
+        {moshPreviewUrl && !showBeforeAfter && (
           <div
             data-testid="mosh-preview-dock"
-            className="absolute bottom-3 right-3 z-40 w-56 rounded-md overflow-hidden border border-accent-teal/40 bg-black/90 shadow-lg"
+            className={`absolute right-3 z-40 w-56 rounded-md overflow-hidden border border-accent-teal/40 bg-black/90 shadow-lg transition-opacity ${scopesVisible ? "bottom-[168px]" : "bottom-3"} ${moshPreviewStale ? "opacity-50" : ""}`}
           >
             <video
               src={moshPreviewUrl}
@@ -1632,10 +1673,20 @@ function PreviewViewport({ isDropTarget = false }: Props) {
               loop
               muted
               playsInline
+              aria-label="Rendered mosh preview, looping"
               className="w-full block"
             />
             <div className="flex items-center justify-between px-2 py-1">
-              <span className="codec-chip" title="Rendered by the real export path — pixel and codec layers included">REAL MOSH</span>
+              {moshPreviewStale ? (
+                <span
+                  className="sim-chip"
+                  title="The stack changed since this render — re-render to preview the current settings"
+                >
+                  STALE
+                </span>
+              ) : (
+                <span className="codec-chip" title="Rendered by the real export path — pixel and codec layers included">REAL MOSH</span>
+              )}
               <button
                 type="button"
                 aria-label="Close mosh preview"

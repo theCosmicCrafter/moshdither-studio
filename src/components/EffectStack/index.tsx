@@ -207,7 +207,7 @@ export default function EffectStack() {
                           );
                         if (pipeline === "codec")
                           return (
-                            <span className="codec-chip" title="Real bitstream corruption via FFglitch">
+                            <span className="codec-chip" title="Real bitstream corruption via FFglitch — passes through unchanged in live preview; use Render mosh preview to see it">
                               codec
                             </span>
                           );
@@ -255,7 +255,7 @@ export default function EffectStack() {
                     {isCodecEntry ? (
                       <div
                         data-testid="codec-mask-note"
-                        className="text-data-micro font-data-micro mb-3"
+                        className="text-dense-sm mb-3"
                         style={{ color: "var(--text-muted)" }}
                       >
                         Codec layer — masks don't apply to bitstream corruption.

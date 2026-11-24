@@ -20,7 +20,7 @@ repos:
         # safe to block a commit on, but it is not a guarantee: a revoked key or
         # a provider it cannot reach will pass. `npm run secret-scan:history` is
         # the deeper sweep.
-        entry: powershell -ExecutionPolicy Bypass -File scripts/pre-commit.ps1
+        entry: powershell -ExecutionPolicy Bypass -File scripts/secret-scan.ps1
         language: system
         pass_filenames: false
         always_run: true
