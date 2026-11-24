@@ -2,13 +2,9 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useAppStore } from "../store";
 import {
   listEffects,
-  getFrameData,
-  getMediaInfo,
-  getMediaMetadata,
   loadMediaFromPath,
-  convertFileSrc,
-  generateProxy,
 } from "../lib/tauri";
+import { refreshMediaState } from "../lib/mediaRefresh";
 import { isTauriAvailable } from "../lib/browserFallback";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -41,16 +37,8 @@ export default function AppLayout() {
   const { autoSave, recentProjects, restoreSession, clearAutoSave } = useProjectSession();
   const [showRecovery, setShowRecovery] = useState(!!autoSave);
   const setAllEffects = useAppStore((s) => s.setAllEffects);
-  const setPreviewDataUrl = useAppStore((s) => s.setPreviewDataUrl);
-  const setOriginalDataUrl = useAppStore((s) => s.setOriginalDataUrl);
-  const setMediaLoaded = useAppStore((s) => s.setMediaLoaded);
-  const setMediaInfo = useAppStore((s) => s.setMediaInfo);
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
   const setFilePath = useAppStore((s) => s.setFilePath);
-  const setIsVideo = useAppStore((s) => s.setIsVideo);
-  const setDuration = useAppStore((s) => s.setDuration);
-  const setMediaFps = useAppStore((s) => s.setMediaFps);
-  const setProxyUrl = useAppStore((s) => s.setProxyUrl);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const [isDropTarget, setIsDropTarget] = useState(false);
 
@@ -150,77 +138,13 @@ export default function AppLayout() {
   }, [setAllEffects, setStatusMessage]);
 
   // Refresh preview on demand (called after file load / effect apply).
-  // Mirrors PreviewViewport's refreshPreviewFromBackend so isVideo/proxyUrl
-  // stay accurate no matter which "open a file" path the user takes (File
-  // menu, native OS drag-drop here, or the dropzone/HTML5 drop in
-  // PreviewViewport) -- callers like Toolbar's "Animate as Video" gate their
-  // own enabled state on isVideo, so a stale value here silently breaks that.
-  const refreshPreview = useCallback(async (): Promise<boolean> => {
-    try {
-      const info = await getMediaInfo();
-      if (info.loaded) {
-        const path = useAppStore.getState().filePath;
-        const isVideoFile =
-          !!path && /\.(mp4|avi|mov|mkv|webm|m4v|flv|wmv|mpeg|mpg)$/i.test(path);
-        setMediaLoaded(true);
-        setMediaInfo({ width: info.width, height: info.height });
-        setIsVideo(isVideoFile);
-
-        // Always use backend-generated PNG data URL for reliability in dev/prod.
-        const frame = await getFrameData();
-        setPreviewDataUrl(frame);
-        setOriginalDataUrl(frame);
-
-        if (isVideoFile && path) {
-          // The clip's real length. Without this `duration` stays at the store
-          // default of 10, so the timeline claims every video is ten seconds,
-          // playback stops there, and an export with no out-point set TRIMS
-          // there -- a 35-second clip exported as 10.
-          try {
-            const meta = await getMediaMetadata(path);
-            if (typeof meta.duration === "number" && meta.duration > 0) {
-              setDuration(meta.duration);
-            }
-            // The clip's real frame rate, so frame stepping and the frame
-            // counter land on actual frames. Everything assumed 30 before,
-            // so a 24 fps clip showed frame numbers that did not exist.
-            setMediaFps(typeof meta.fps === "number" && meta.fps > 0 ? meta.fps : 30);
-          } catch (err) {
-            // A probe failure must not block loading the media; the timeline
-            // just keeps whatever length it had.
-            logger.warn("metadata", "Could not read media duration", { err: String(err) });
-          }
-          try {
-            const proxy = await generateProxy(path, 1280, 28);
-            setProxyUrl(convertFileSrc(proxy));
-          } catch (err) {
-            logger.warn("proxy", "Proxy generation failed", { err: String(err) });
-            setProxyUrl(null);
-          }
-        } else {
-          setProxyUrl(null);
-          setMediaFps(30);
-        }
-        return true;
-      }
-      return false;
-    } catch (err) {
-      logger.error("preview", "refreshPreview failed", { err: String(err) });
-      const msg = err instanceof Error ? err.message : String(err);
-      setStatusMessage(`Preview refresh failed: ${msg}`);
-      return false;
-    }
-  }, [
-    setMediaLoaded,
-    setMediaInfo,
-    setPreviewDataUrl,
-    setOriginalDataUrl,
-    setStatusMessage,
-    setIsVideo,
-    setDuration,
-    setMediaFps,
-    setProxyUrl,
-  ]);
+  // One shared implementation (lib/mediaRefresh) serves every load path —
+  // File menu, native OS drag-drop here, the dropzone/HTML5 drop in
+  // PreviewViewport — so isVideo/duration/proxyUrl stay accurate no matter
+  // which "open a file" path the user takes. Callers like Toolbar's
+  // "Animate as Video" gate their own enabled state on isVideo, so a stale
+  // value here silently breaks that.
+  const refreshPreview = useCallback(refreshMediaState, []);
 
   // Honour a reload request raised from anywhere in the app.
   //

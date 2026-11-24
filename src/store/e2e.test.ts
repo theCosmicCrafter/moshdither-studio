@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { AudioBinding, EffectMeta, Keyframe } from "./index";
-import { applyEasing, useAppStore } from "./index";
+import { useAppStore } from "./index";
+import { applyEasing } from "../utils/lfo";
 
 function mockEffect(id: string, params: Array<{ id: string; default: number }>): EffectMeta {
   return {

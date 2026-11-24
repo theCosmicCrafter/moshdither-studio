@@ -206,7 +206,6 @@ function resetStore() {
     duration: 10,
     mediaLoaded: false,
     mediaInfo: null,
-    mediaMetadata: null,
     previewDataUrl: null,
     originalDataUrl: null,
     filePath: null,

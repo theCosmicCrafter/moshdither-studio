@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { useAppStore, applyEasing } from "./index";
+import { useAppStore } from "./index";
 import type { Keyframe } from "./index";
+import { applyEasing } from "../utils/lfo";
 
 describe("Store Stress Tests — Trying to Break Things", () => {
   beforeEach(() => {

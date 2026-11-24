@@ -1,1 +1,0 @@
-//! Audio/DSP engine — frame-as-audio processing (replaces Audacity).

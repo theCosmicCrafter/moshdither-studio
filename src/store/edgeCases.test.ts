@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { useAppStore, applyEasing, type Keyframe } from "./index";
+import { useAppStore, type Keyframe } from "./index";
+import { applyEasing } from "../utils/lfo";
 
 function makeKf(time: number, value: number, easing: Keyframe["easing"] = "linear"): Keyframe {
   return { id: `kf-${time}-${value}`, time, value, easing };
