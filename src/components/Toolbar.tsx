@@ -91,6 +91,43 @@ export default function Toolbar({ onFileLoaded }: Props) {
   const viewMenuRef = useClickOutside<HTMLDivElement>(viewMenuOpen, () => setViewMenuOpen(false));
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const fileMenuRef = useClickOutside<HTMLDivElement>(fileMenuOpen, () => setFileMenuOpen(false));
+
+  // Menu-bar keyboard pattern: once focus is inside a menu, arrows rove the
+  // enabled items (Home/End jump); Escape closes (edit/view already handled
+  // it, file did not); ArrowDown on a trigger opens its menu and lands on the
+  // first item. Standard WAI-ARIA menubar behaviour, same for all three menus.
+  const menuKeyDown = (close: () => void) => (e: React.KeyboardEvent<HTMLElement>) => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      close();
+      return;
+    }
+    const items = Array.from(
+      e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])')
+    );
+    if (items.length === 0) return;
+    const idx = items.indexOf(document.activeElement as HTMLElement);
+    const move = (i: number) => {
+      e.preventDefault();
+      items[(i + items.length) % items.length].focus();
+    };
+    if (e.key === "ArrowDown") move(idx + 1);
+    else if (e.key === "ArrowUp") move(idx - 1);
+    else if (e.key === "Home") move(0);
+    else if (e.key === "End") move(items.length - 1);
+  };
+  const openMenuFromTrigger = (open: () => void, ref: React.RefObject<HTMLElement | null>) =>
+    (e: React.KeyboardEvent<HTMLElement>) => {
+      if (e.key !== "ArrowDown") return;
+      e.preventDefault();
+      open();
+      requestAnimationFrame(() => {
+        ref.current
+          ?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled])')
+          ?.focus();
+      });
+    };
+
   const dockedPanels = useAppStore((s) => s.dockedPanels) || [];
   const triggerLayoutAction = useAppStore((s) => s.triggerLayoutAction);
   const setTheme = useAppStore((s) => s.setTheme);
@@ -459,9 +496,14 @@ export default function Toolbar({ onFileLoaded }: Props) {
           MoshDither Studio
         </span>
         <nav className="hidden md:flex gap-4 ml-6" aria-label="Menu bar">
-          <div ref={fileMenuRef} className="relative">
+          <div
+            ref={fileMenuRef}
+            className="relative"
+            onKeyDown={menuKeyDown(() => setFileMenuOpen(false))}
+          >
             <button
               onClick={() => setFileMenuOpen((v) => !v)}
+              onKeyDown={openMenuFromTrigger(() => setFileMenuOpen(true), fileMenuRef)}
               className="font-label-md text-label-md text-accent-pink font-medium border-b-2 border-accent-pink pb-1 hover:text-accent-teal transition-colors flex items-center gap-1"
               aria-haspopup="menu"
               aria-expanded={fileMenuOpen}
@@ -599,10 +641,11 @@ export default function Toolbar({ onFileLoaded }: Props) {
           <div
             ref={editMenuRef}
             className="relative"
-            onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setEditMenuOpen(false); } }}
+            onKeyDown={menuKeyDown(() => setEditMenuOpen(false))}
           >
             <button
               onClick={() => setEditMenuOpen((v) => !v)}
+              onKeyDown={openMenuFromTrigger(() => setEditMenuOpen(true), editMenuRef)}
               aria-haspopup="menu"
               aria-expanded={editMenuOpen}
               className="font-label-md text-label-md text-on-surface-variant font-medium hover:text-accent-teal transition-colors flex items-center gap-1"
@@ -701,10 +744,11 @@ export default function Toolbar({ onFileLoaded }: Props) {
           <div
             ref={viewMenuRef}
             className="relative"
-            onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setViewMenuOpen(false); } }}
+            onKeyDown={menuKeyDown(() => setViewMenuOpen(false))}
           >
             <button
               onClick={() => setViewMenuOpen((v) => !v)}
+              onKeyDown={openMenuFromTrigger(() => setViewMenuOpen(true), viewMenuRef)}
               aria-haspopup="menu"
               aria-expanded={viewMenuOpen}
               className={`font-label-md text-label-md font-medium hover:text-accent-teal transition-colors flex items-center gap-1 ${showBeforeAfter ? "text-accent-pink" : "text-on-surface-variant"}`}
