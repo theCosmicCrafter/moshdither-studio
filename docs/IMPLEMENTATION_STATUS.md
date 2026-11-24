@@ -118,7 +118,8 @@
 | 11  | FFglitch export            | **Done** | `src/components/ExportPanel/index.tsx` | Separate FFglitch mode                                  |
 | 12  | Batch export queue         | **Done** | `src/components/ExportPanel/index.tsx` | Queue management, sequential processing                 |
 | 13  | Export cancel              | **Done** | `src/store/index.ts`                   | `requestExportCancel` flag                              |
-| 14  | Metadata probing           | **Done** | `src-tauri/src/commands.rs`            | `probe_metadata` + `get_media_metadata`                 |
+| 14  | Metadata probing           | **Done** | `src-tauri/src/commands.rs`            | `probe_metadata` (media refresh reads it inline)        |
+| 15  | Codec-pipeline layers      | **Done** | `src-tauri/src/effects/ffglitch.rs`, `commands.rs::apply_codec_to_segment` | 25 `ffglitch.*` modes stack inside `export_video` via encode→sidecar→decode |
 
 ---
 

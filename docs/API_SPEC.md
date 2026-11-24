@@ -16,20 +16,22 @@ All communication between the React frontend and Rust backend uses Tauri v2's `i
 |---------|-----------|--------|-------------|
 | `load_media` | `path: string` | `string` | Load image/video from filesystem path. Decodes first frame for preview. |
 | `load_media_from_base64` | `dataUrl: string` | `void` | Load media from a base64 data URL (e.g. drag-drop). |
-| `list_effects` | — | `EffectMeta[]` | List all registered effects (75+ across 11 categories). |
+| `list_effects` | — | `ListedEffect[]` | List all registered effects (120+ across 11 categories). `ListedEffect` is `EffectMeta` plus `pipeline: "pixel" \| "codec"` — codec effects (the 25 `ffglitch.*` modes) pass frames through and act on the encoded bitstream at export. |
 | `list_effects_by_category` | `category: string` | `EffectMeta[]` | Filter effects by category (dithering, analog, color, glitch, etc.). |
 | `apply_effect_stack` | `stack: StackEntry[], maskB64?: string` | `string` (data URL) | Apply the full effect stack to the current frame — used for single effects too, there's no separate single-effect command. Each entry has `effect_id`, `params`, `mask_b64`, `mask_mode`. |
 | `get_frame_data` | — | `string` (data URL) | Get the current frame as a PNG data URL. |
 | `save_media` | `path: string, format: string, quality: number` | `void` | Save current frame to file (PNG/JPEG/BMP/TIFF). |
-| `export_video` | `sourcePath, outputPath, stack, options?: { maskB64?, codec?, fps?, width?, height?, audioBakeJson?, watermark?, trimStart?, trimEnd?, format?, quality?, includeAudio?, processingScale? }` | `string` (output path) | Export video with effect stack applied via FFmpeg. |
+| `export_video` | `sourcePath, outputPath, stack, options?: { maskB64?, codec?, fps?, width?, height?, audioBakeJson?, watermark?, trimStart?, trimEnd?, format?, quality?, includeAudio?, processingScale? }` | `string` (output path) | Export video with effect stack applied via FFmpeg. Codec-pipeline entries run an encode→FFglitch→decode stage inside the pipeline, in stack order. |
 | `apply_ffglitch` | `inputPath, outputPath, mode, params` | `string` (output path) | Apply FFglitch datamoshing mode (ffgac/ffedit). |
+| `preview_ffglitch` | `inputPath, mode, startSecs?, durationSecs?, params?` | `string` (output path) | Render a short moshed slice of the source so a mode can be browsed before exporting. Cached per (source, mode, range, params). |
+| `codec_preview_path` | — | `string` | Reserve a marked temp path under `%TEMP%/moshdither-studio/mosh-preview` for the "Render mosh preview" flow, which then runs the real `export_video` on a ~2s trim into it. Clean up via `remove_export_temp`. |
+| `remove_export_temp` | `path: string` | `void` | Delete a file carrying the export temp marker (`*.moshdither-fx-tmp.*`). Refuses unmarked paths. |
 
 ### 1.2 Media Info & Proxy
 
 | Command | Parameters | Return | Description |
 |---------|-----------|--------|-------------|
 | `get_media_info` | — | `{ width: number, height: number, loaded: boolean }` | Get dimensions and load status of current media. |
-| `get_media_metadata` | `path: string` | `Record<string, unknown>` | Probe media file metadata via ffprobe (codec, duration, bitrate, etc.). |
 | `generate_proxy_command` | `sourcePath: string, maxWidth: number, crf: number` | `string` (proxy path) | Generate a low-resolution H.264 proxy video via FFmpeg for smooth preview. Returns proxy file path. |
 
 ### 1.3 SAM3 Segmentation
@@ -122,6 +124,21 @@ interface EffectMeta {
   parameters: EffectParam[];
 }
 ```
+
+### 3.1a `ListedEffect` (`list_effects` return)
+
+```ts
+// Serde-flattened: every EffectMeta field plus pipeline.
+interface ListedEffect extends EffectMeta {
+  pipeline: "pixel" | "codec";  // "codec" = ffglitch.* modes; frames pass
+                                // through preview, bitstream stage runs
+                                // inside export_video
+}
+```
+
+The frontend prefers `pipeline` from `list_effects` and falls back to the
+`ffglitch.` id-prefix heuristic (`src/lib/effectPipeline.ts`); `"sim"` remains
+a frontend-only refinement for `datamoshing.*` pixel effects.
 
 ### 3.2 `StackEntry`
 

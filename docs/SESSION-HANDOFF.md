@@ -4,16 +4,86 @@ Living pass-down note. Update it at the end of every session and commit it.
 It lives in `docs/` on purpose: the previous handoff sat in `outputs/`, which is
 gitignored, so it never travelled with the branch.
 
-**Last updated:** 2026-11-24 · branch `feat/phase1-look-legit` @ `b3a26fa`
-(Phases 1+2 of the reskin megaplan COMPLETE — all gates green, production-audit
-verdict Pass)
+**Last updated:** 2026-11-24 · branch `feat/phase1-look-legit` @ `ad1af0d`
+(All 3 phases of the reskin megaplan COMPLETE + deferred items + codebase
+quality sweep — all gates green, three-domain audit remediated, PSA Pass)
 
 ## Reskin megaplan progress (feat/phase1-look-legit)
 
-Three phases planned against `outputs/ui-proto/mock.html`. Phases 1 and 2 are
-done and audited; Phase 3 (full codec-effect stacking — stage-based render
-model, `pipeline` flag on Rust `EffectMeta`, `preview_ffglitch` segment
-previews) is the remaining work.
+Three phases planned against `outputs/ui-proto/mock.html`. All three are done
+and audited.
+
+**Phase 1 (`292b2db`, `e469d3f`, `7f2a158`):** token reskin in `index.css`
+(killed `--font-hand`, flattened `neo-*`/filigree, pink = single hero accent),
+`utils/effectPipeline.ts` provenance (`pixel|codec|sim`) driving `~sim`/`codec`
+chips, honest preview badge words, curated dock layout (`LAYOUT_VERSION` 5 —
+saved-layout bumps are how tab renames survive), permanent PanelRail toggles,
+layer-card kebab menu + eye toggles, fader params replacing the circular dial,
+stills collapse to a slim strip (duration + ⚡MOSH + Animate CTA).
+
+**Phase 2 (`77cafc9`, `13565e4`, `50baec7`, `b3a26fa`):** `lfos` store map +
+`resolveModulatedValue` (keyframes + LFO + audio at one resolution point →
+preview/export parity), per-param LFO editor in ParameterPanel, ParamLaneRow
+keyframe lanes in the timeline, presets persist per-entry keyframes + lfos
+(ids are regenerated on load — tracks ride on the entry), real CPU-rendered
+preset thumbnails, 5 animated-look default presets, LFO bake into per-frame
+export tracks (`effectConverter.ts`, no Rust changes).
+
+**Phase 3 (`2c3d48c`):** `Pipeline { Pixel, Codec }` as a trait method on
+`Effect` (not an EffectMeta field — avoids churning ~60 meta literals);
+`effects/ffglitch.rs` registers all 25 `ffglitch.*` modes from a `ModeSpec`
+table mirroring `src/lib/ffglitchModes.ts`; `list_effects` returns
+`ListedEffect` (flattened meta + pipeline); `export_video_blocking` dispatches
+codec entries to `apply_codec_to_segment` — encode→temp mp4→`run_ffglitch_file`
+→decode, inside the held semaphore, never re-acquiring it; `codec_preview_path`
++ PreviewViewport "Render mosh preview" runs the real export path on a ~2s
+trim into a marked temp and loops it as a docked `REAL MOSH` clip; codec
+entries suppress keyframe/LFO/audio/mask controls; verification/conformance
+report them `skipped`.
+
+**Deferred items + quality sweep (`5aa220c`, `fafc285`, `ecf037f`):**
+status-bar Export CTA; full WAI-ARIA menubar; `EffectList.tsx` +
+`utils/metadata.ts` + 4 orphaned scripts + dead Rust `config.rs`/`dsp.rs`
+deleted; number keys 1–9 drive accordion expansion (fixed `pixel_geo` vs
+`pixel_geometry` bug); `app:export` wired to `triggerExport`;
+`lib/mediaRefresh.ts` merged the two divergent refresh paths (the dropzone
+path had never set duration/fps — real latent bug).
+
+**Audit remediation (`ad1af0d`):** mosh-preview button is a real cancel path
+and owns `exportIsRunning` (was a dead button + a state-machine race); dock
+goes STALE on stack divergence and lifts above scopes; menubar roving reaches
+every item (roles added) and stops leaking Home/End to the playhead; temp
+dir hardened to 0700 on POSIX; sidecar params schema-clamped+filtered in
+`run_ffglitch_file`; `media://` uses `removeprefix` matching the Rust
+validator; dangling `scripts/pre-commit.ps1` hook repointed to
+`secret-scan.ps1`.
+
+**Traps a future session must not regress:**
+
+- **`!isVideo` ≠ still.** It's also the no-media state. The still-strip gate is
+  `!isVideo && mediaLoaded`; the empty state must keep the full transport
+  strip (timeline.spec's assertions encode this).
+- **Hidden dock tabs stay mounted** with zero-size boxes. `page.$$` finds
+  their elements; click/selectOption then starve on visibility. E2E queries
+  must be `:visible`-scoped or timeout-bounded (see `stress-test.spec.ts`).
+- **Playwright evaluate runs in an isolated world** — store-seeding via
+  `import("/src/store")` hits a second store instance after HMR rewrites
+  module URLs. Seed via DOM (file drop on `.dropzone-btn`) or reload first.
+- **`presetMatchesCurrentStack`** compares saved vs live stacks per render —
+  saved-side signatures are WeakMap-cached; keep it that way (it runs on
+  every resolved-param write during playback).
+- **`mosh-verify` must be rebuilt after touching Rust** — real-backend.spec
+  throws on a stale binary by design.
+- **The mosh preview shares the export semaphore + cancel flag** — it must
+  set `exportIsRunning` before invoking `export_video`, and `resetExport()`
+  in its finally restores exactly that. Never call export_video from a new
+  UI affordance without owning that flag.
+- **Codec spec tables live in two places** — `src/lib/ffglitchModes.ts` (UI)
+  and `src-tauri/src/effects/ffglitch.rs` (registry). Param ids/defaults must
+  match `mosh_cli.py`'s `params.get` reads; the ffglitch.rs header comment
+  and tests pin this.
+- **`run_ffglitch_file` is the sidecar funnel** — params are schema-clamped
+  there; don't bypass it with a second spawn path.
 
 **Phase 1 (`292b2db`, `e469d3f`, `7f2a158`):** token reskin in `index.css`
 (killed `--font-hand`, flattened `neo-*`/filigree, pink = single hero accent),

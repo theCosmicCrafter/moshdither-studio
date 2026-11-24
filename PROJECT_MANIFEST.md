@@ -18,6 +18,12 @@ or touches the filesystem except through `src/lib/tauri.ts` adapters, and the
 backend never touches WebGL — `apply_effect_stack` (CPU) is the parity oracle
 the WebGL preview is checked against.
 
+Two effect pipelines exist (`Effect::pipeline()`): **pixel** effects run on
+frames in preview and export alike; **codec** effects (the 25 `ffglitch.*`
+modes) pass frames through and instead run an encode→FFglitch→decode stage
+inside `export_video` — visible live only via the "Render mosh preview" flow,
+which calls the same export path on a ~2s trim.
+
 ## Contract registry
 
 This is a desktop app — the "API surface" is the Tauri IPC command set, not
