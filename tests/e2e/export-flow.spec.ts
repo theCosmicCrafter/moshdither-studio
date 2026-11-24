@@ -28,7 +28,7 @@ test("export video flow produces a status message", async ({ page }) => {
   // that a testid selector would ambiguously match too.
   const exportTab = page.getByRole("tab", { name: "Export" });
   if (!(await exportTab.isVisible().catch(() => false))) {
-    await page.getByRole("button", { name: /^Add Export panel/ }).click();
+    await page.getByRole("button", { name: /^Show Export panel/ }).click();
   }
   await exportTab.click();
 

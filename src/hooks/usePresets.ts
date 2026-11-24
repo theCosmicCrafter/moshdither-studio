@@ -390,6 +390,46 @@ function trackSignature(track: KeyframeTrack | undefined): string {
 }
 
 /**
+ * Saved-side signatures are static per preset object — cache them so the
+ * per-render compare in PresetPanel costs O(presets) live-side work instead
+ * of re-stringifying every saved stack on every stack change (the panel
+ * re-renders on every resolved-param write during playback).
+ */
+const presetSigCache = new WeakMap<
+  Preset,
+  { params: string[]; tracks: string[]; lfos: string[]; modulated: Set<string>[] }
+>();
+
+function presetSignature(preset: Preset) {
+  let sig = presetSigCache.get(preset);
+  if (!sig) {
+    sig = {
+      params: [],
+      tracks: [],
+      lfos: [],
+      modulated: [],
+    };
+    for (const entry of preset.stack) {
+      const savedLfos = sanitizeLfoMap(entry.lfos) ?? {};
+      const modulated = new Set([
+        ...Object.keys(entry.keyframes ?? {}),
+        ...Object.keys(savedLfos),
+      ]);
+      sig.params.push(
+        stableStringify(
+          Object.fromEntries(Object.entries(entry.params).filter(([k]) => !modulated.has(k)))
+        )
+      );
+      sig.tracks.push(trackSignature(entry.keyframes));
+      sig.lfos.push(stableStringify(savedLfos));
+      sig.modulated.push(modulated);
+    }
+    presetSigCache.set(preset, sig);
+  }
+  return sig;
+}
+
+/**
  * Whether `preset` describes what is on the stack right now — the basis for
  * the panel's CURRENT marker.
  *
@@ -408,25 +448,26 @@ export function presetMatchesCurrentStack(
 ): boolean {
   if (preset.stack.length !== stack.length) return false;
   if (preset.ffglitchMode && preset.ffglitchMode !== ffglitchMode) return false;
+  const saved = presetSignature(preset);
   for (let i = 0; i < stack.length; i++) {
-    const saved = preset.stack[i];
+    const entry = preset.stack[i];
     const live = stack[i];
-    if (saved.effectId !== live.effectId) return false;
-    if (!!saved.enabled !== !!live.enabled) return false;
+    if (entry.effectId !== live.effectId) return false;
+    if (!!entry.enabled !== !!live.enabled) return false;
     // Modulated params are compared by track/LFO signature below — their
     // `params` entries hold resolved values, which drift with the playhead
     // and would flicker CURRENT off and on during playback.
     const modulated = new Set([
-      ...Object.keys(saved.keyframes ?? {}),
-      ...Object.keys(sanitizeLfoMap(saved.lfos) ?? {}),
+      ...saved.modulated[i],
       ...Object.keys(keyframes[live.id] ?? {}),
       ...Object.keys(lfos[live.id] ?? {}),
     ]);
-    const strip = (params: Record<string, unknown>) =>
-      Object.fromEntries(Object.entries(params).filter(([k]) => !modulated.has(k)));
-    if (stableStringify(strip(saved.params)) !== stableStringify(strip(live.params))) return false;
-    if (trackSignature(saved.keyframes) !== trackSignature(keyframes[live.id])) return false;
-    if (stableStringify(sanitizeLfoMap(saved.lfos) ?? {}) !== stableStringify(sanitizeLfoMap(lfos[live.id]) ?? {})) return false;
+    const liveStripped = Object.fromEntries(
+      Object.entries(live.params).filter(([k]) => !modulated.has(k))
+    );
+    if (saved.params[i] !== stableStringify(liveStripped)) return false;
+    if (saved.tracks[i] !== trackSignature(keyframes[live.id])) return false;
+    if (saved.lfos[i] !== stableStringify(sanitizeLfoMap(lfos[live.id]) ?? {})) return false;
   }
   return true;
 }

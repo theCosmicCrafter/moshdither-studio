@@ -26,7 +26,7 @@ test("SAM3 auto-mask flow returns mask candidates", async ({ page }) => {
   // drag-preview system) that a testid selector would ambiguously match too.
   const maskTab = page.getByRole("tab", { name: "Mask" });
   if (!(await maskTab.isVisible().catch(() => false))) {
-    await page.getByRole("button", { name: /^Add Mask panel/ }).click();
+    await page.getByRole("button", { name: /^Show Mask panel/ }).click();
   }
   await maskTab.click();
   await page.getByRole("button", { name: "SAM3" }).click();

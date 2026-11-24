@@ -21,7 +21,7 @@ async function openPanelTab(page: import("@playwright/test").Page, tabLabel: str
   // Not every panel is part of the default dock layout (e.g. Proxy Media) --
   // those need adding via the panel rail before their tab exists.
   if (!(await tab.isVisible().catch(() => false))) {
-    await page.getByRole("button", { name: new RegExp(`^Add ${tabLabel} panel`) }).click();
+    await page.getByRole("button", { name: new RegExp(`^Show ${tabLabel} panel`) }).click();
   }
   await tab.click();
   await page.waitForTimeout(300);
