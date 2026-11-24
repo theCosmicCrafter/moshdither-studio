@@ -205,13 +205,14 @@ export default function Timeline() {
               <input
                 type="number"
                 min={0.1}
+                max={120}
                 step={0.5}
                 value={duration}
                 onChange={(e) => {
                   const val = parseFloat(e.target.value);
-                  setDuration(isNaN(val) ? 1 : Math.max(0.1, val));
+                  setDuration(isNaN(val) ? 1 : Math.min(120, Math.max(0.1, val)));
                 }}
-                className="themed-select font-data-micro text-data-micro w-[56px] text-center"
+                className="themed-select font-label-sm text-label-sm w-[56px] text-center"
                 title="Animation length (seconds)"
               />
               <span className="font-data-micro text-data-micro text-on-surface-variant">s</span>
@@ -219,7 +220,7 @@ export default function Timeline() {
             <button
               onClick={randomizeStack}
               className="flex items-center gap-1.5 font-label-sm text-label-sm font-semibold tracking-wider text-accent-pink border border-accent-pink/40 rounded px-2.5 py-1 hover:bg-accent-pink/10 transition-colors"
-              title="Randomize the layer stack"
+              title="Randomize layers"
             >
               <span className="material-symbols-outlined" style={{ fontSize: 14 }}>bolt</span>
               MOSH
@@ -255,7 +256,7 @@ export default function Timeline() {
         </div>
 
         {/* Frame counter */}
-        <div className="font-data-micro text-data-micro text-on-surface-variant min-w-[70px]">
+        <div className="font-code-sm text-code-sm text-on-surface-variant min-w-[70px]">
           F:{currentFrame.toString().padStart(5, "0")}
         </div>
 
@@ -264,11 +265,11 @@ export default function Timeline() {
           <button
             onClick={() => setInPoint(currentTime)}
             title="Set in point (I)"
-            className="font-data-micro text-data-micro rounded px-1 cursor-pointer transition"
+            className="font-label-sm text-label-sm rounded px-1 cursor-pointer transition"
             style={{
-              border: "1px solid var(--cat-analog)",
+              border: "1px solid var(--accent-gold)",
               background: inPoint !== null ? "rgba(255, 215, 0, 0.15)" : "transparent",
-              color: "var(--cat-analog)",
+              color: "var(--accent-gold)",
             }}
           >
             IN
@@ -276,7 +277,7 @@ export default function Timeline() {
           <button
             onClick={() => setOutPoint(currentTime)}
             title="Set out point (O)"
-            className="font-data-micro text-data-micro rounded px-1 cursor-pointer transition"
+            className="font-label-sm text-label-sm rounded px-1 cursor-pointer transition"
             style={{
               border: "1px solid var(--accent-pink)",
               background: outPoint !== null ? "rgba(255, 173, 224, 0.15)" : "transparent",
@@ -289,7 +290,7 @@ export default function Timeline() {
             <button
               onClick={() => clearInOut()}
               title="Clear in/out (X)"
-              className="font-data-micro text-data-micro rounded px-1 cursor-pointer text-on-surface-variant hover:text-accent-pink transition-colors"
+              className="font-label-sm text-label-sm rounded px-1 cursor-pointer text-on-surface-variant hover:text-accent-pink transition-colors"
               style={{ border: "1px solid var(--outline-variant)", background: "transparent" }}
             >
               CLR
@@ -300,7 +301,7 @@ export default function Timeline() {
         {/* Keyframe count -- the diamonds on the bar are the real UI */}
         {keyframeMarks.length > 0 && (
           <div
-            className="font-data-micro text-data-micro text-accent-teal"
+            className="font-code-sm text-code-sm text-accent-teal"
             title="Keyframes on the bar: click one to jump to it, right-click to delete it"
           >
             ◆ {keyframeMarks.length}
@@ -309,7 +310,7 @@ export default function Timeline() {
 
         {/* BPM */}
         {audioBpm && (
-          <div className="font-data-micro text-data-micro text-accent-teal min-w-[50px]">
+          <div className="font-code-sm text-code-sm text-accent-teal min-w-[50px]">
             {Math.round(audioBpm)} BPM
           </div>
         )}
@@ -319,8 +320,8 @@ export default function Timeline() {
 
         <button
           onClick={randomizeStack}
-          className="flex items-center gap-1 font-data-micro text-data-micro font-semibold tracking-wider text-accent-pink border border-accent-pink/40 rounded px-2 py-0.5 hover:bg-accent-pink/10 transition-colors"
-          title="Randomize the layer stack"
+          className="flex items-center gap-1 font-label-sm text-label-sm font-semibold tracking-wider text-accent-pink border border-accent-pink/40 rounded px-2 py-0.5 hover:bg-accent-pink/10 transition-colors"
+          title="Randomize layers"
         >
           <span className="material-symbols-outlined" style={{ fontSize: 13 }}>bolt</span>
           MOSH
@@ -345,7 +346,7 @@ export default function Timeline() {
               title="Playback speed"
               value={playbackSpeed}
               onChange={(e) => setPlaybackSpeed(parseFloat(e.target.value))}
-              className="themed-select font-data-micro text-data-micro cursor-pointer"
+              className="themed-select font-label-sm text-label-sm cursor-pointer"
             >
               <option value={0.25}>0.25x</option>
               <option value={0.5}>0.5x</option>
@@ -367,13 +368,14 @@ export default function Timeline() {
               <input
                 type="number"
                 min={0.1}
+                max={120}
                 step={0.5}
                 value={duration}
                 onChange={(e) => {
                   const val = parseFloat(e.target.value);
-                  setDuration(isNaN(val) ? 1 : Math.max(0.1, val));
+                  setDuration(isNaN(val) ? 1 : Math.min(120, Math.max(0.1, val)));
                 }}
-                className="themed-select font-data-micro text-data-micro w-[60px] text-center"
+                className="themed-select font-label-sm text-label-sm w-[60px] text-center"
                 title="Animation length (seconds)"
               />
               <span className="font-data-micro text-data-micro text-on-surface-variant">s</span>
@@ -396,6 +398,19 @@ export default function Timeline() {
       <div
         ref={scrubberRef}
         data-testid="timeline-scrubber"
+        role="slider"
+        tabIndex={0}
+        aria-label="Timeline scrubber"
+        aria-valuemin={0}
+        aria-valuemax={duration}
+        aria-valuenow={currentTime}
+        aria-valuetext={formatTime(currentTime)}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowLeft") { e.preventDefault(); setCurrentTime(Math.max(inPoint ?? 0, currentTime - 1 / fps)); }
+          else if (e.key === "ArrowRight") { e.preventDefault(); setCurrentTime(Math.min(outPoint ?? duration, currentTime + 1 / fps)); }
+          else if (e.key === "Home") { e.preventDefault(); setCurrentTime(inPoint ?? 0); }
+          else if (e.key === "End") { e.preventDefault(); setCurrentTime(outPoint ?? duration); }
+        }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -408,7 +423,7 @@ export default function Timeline() {
           className="absolute left-0 top-0 bottom-0 rounded opacity-60"
           style={{
             width: pct(currentTime),
-            background: "linear-gradient(90deg, var(--accent-pink), var(--accent-gold))",
+            background: "var(--accent-pink)",
           }}
         />
 
@@ -481,8 +496,8 @@ export default function Timeline() {
             style={{
               left: pct(inPoint),
               width: 6,
-              background: "var(--cat-analog)",
-              boxShadow: "0 0 4px var(--cat-analog)",
+              background: "var(--accent-gold)",
+              boxShadow: "0 0 4px var(--accent-gold)",
               transform: "translateX(-50%)",
             }}
           />

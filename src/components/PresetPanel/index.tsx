@@ -79,7 +79,6 @@ export default function PresetPanel() {
             border: "1px solid var(--outline-variant)",
             background: "var(--surface-container-low)",
             color: "var(--text-secondary)",
-            outline: "none",
           }}
         />
         <button

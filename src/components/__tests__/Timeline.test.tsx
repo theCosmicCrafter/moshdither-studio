@@ -120,11 +120,11 @@ describe("Timeline", () => {
       expect(useAppStore.getState().duration).toBe(0.1);
     });
 
-    it("accepts large duration values", () => {
+    it("caps large duration values at the 120s ceiling", () => {
       render(<Timeline />);
       const durationInput = screen.getByTitle("Animation length (seconds)");
       fireEvent.change(durationInput, { target: { value: "300" } });
-      expect(useAppStore.getState().duration).toBe(300);
+      expect(useAppStore.getState().duration).toBe(120);
     });
   });
 

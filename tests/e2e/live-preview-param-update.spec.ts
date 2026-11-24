@@ -69,10 +69,10 @@ test("changing a static effect's parameter updates the WebGL live preview canvas
   await expect(bayerEffect).toBeVisible({ timeout: 10000 });
   await bayerEffect.click();
 
-  // Effects and Stack share a tabset (see defaultLayout.ts) -- adding an
-  // effect from the browser doesn't switch tabs, so Stack's ParameterPanel
-  // (where the Matrix Size control lives) isn't visible until selected.
-  await page.getByRole("tab", { name: "Stack" }).click();
+  // The curated layout docks Layers on the right and a newly added layer is
+  // auto-selected (expanded, params visible); the click is insurance in case
+  // a saved layout leaves another tab active.
+  await page.getByRole("tab", { name: "Layers" }).click();
 
   const canvas = page.locator("canvas.preview-canvas").first();
   await expect(canvas).toBeVisible({ timeout: 10000 });

@@ -49,7 +49,7 @@ describe("UI Components E2E", () => {
       useAppStore.getState().addToStack(mockEffectMeta("dithering.bayer", "Bayer", "dithering"));
       render(<StatusBar />);
       expect(screen.getByText(/2 effects available/)).toBeInTheDocument();
-      expect(screen.getByText(/1 active in stack/)).toBeInTheDocument();
+      expect(screen.getByText(/1 active layer$/)).toBeInTheDocument();
     });
 
     it("renders scope buttons", () => {
@@ -102,7 +102,7 @@ describe("UI Components E2E", () => {
   describe("EffectStack", () => {
     it("shows empty state when no effects", () => {
       render(<EffectStack />);
-      expect(screen.getByText(/No effects in stack/)).toBeInTheDocument();
+      expect(screen.getByText(/No layers yet/)).toBeInTheDocument();
     });
 
     it("shows effect count when stack has items", () => {

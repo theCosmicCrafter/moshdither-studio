@@ -221,7 +221,7 @@ describe("EffectBrowser — Effect Selection", () => {
     useAppStore.getState().setActiveCategory("dithering");
     useAppStore.getState().addToStack(meta);
     render(<EffectList />);
-    expect(screen.getByText(/in stack/)).toBeInTheDocument();
+    expect(screen.getByText(/added/)).toBeInTheDocument();
   });
 
   it("can add multiple different effects", () => {

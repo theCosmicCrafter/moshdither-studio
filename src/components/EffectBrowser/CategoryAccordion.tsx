@@ -131,7 +131,7 @@ export default function CategoryAccordion() {
             {isExpanded && (
               <div className="px-2 pb-2 space-y-1.5">
                 {effects.length === 0 ? (
-                  <div className="text-center py-4 font-body-sm text-body-sm text-on-surface-variant opacity-50">
+                  <div className="text-center py-4 font-body-sm text-body-sm text-on-surface-variant">
                     No effects found
                   </div>
                 ) : (
@@ -191,10 +191,10 @@ function EffectItem({
         <div className="text-label-sm font-label-sm text-on-surface-variant opacity-70 truncate">
           {effect.parameters.length} parameter
           {effect.parameters.length === 1 ? "" : "s"}
-          {isInStack && <span className="text-accent-pink ml-1">• in stack</span>}
+          {isInStack && <span className="text-accent-pink ml-1">• added</span>}
           {isIncompatible && (
             <span
-              className="material-symbols-outlined text-amber-400 ml-1 align-middle"
+              className="material-symbols-outlined text-[var(--accent-gold)] ml-1 align-middle"
               style={{ fontSize: 12 }}
               title={VIDEO_ONLY_ON_IMAGE_WARNING}
             >

@@ -190,7 +190,6 @@ export default function CommandPalette() {
             padding: "16px 20px",
             background: "transparent",
             border: "none",
-            outline: "none",
             color: "var(--text-primary, #e8e8ed)",
             fontSize: 16,
             caretColor: "var(--accent-primary, #0a84ff)",

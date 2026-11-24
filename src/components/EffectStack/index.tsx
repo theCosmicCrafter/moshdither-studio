@@ -102,7 +102,7 @@ export default function EffectStack() {
               placeholder="Filter effects..."
               value={filterQuery}
               onChange={(e) => setFilterQuery(e.target.value)}
-              className="w-full bg-surface/50 border border-outline/20 rounded pl-8 pr-2 py-1 text-label-sm font-label-sm text-on-surface outline-none focus:border-accent-teal/50 transition-colors"
+              className="w-full bg-surface/50 border border-outline/20 rounded pl-8 pr-2 py-1 text-label-sm font-label-sm text-on-surface focus:border-accent-teal/50 transition-colors"
             />
           </div>
         </div>
@@ -111,18 +111,18 @@ export default function EffectStack() {
       {/* Stack List */}
       <div className="flex-1 overflow-y-auto custom-scrollbar px-3 py-3 space-y-3 min-h-0">
         {stackCount === 0 ? (
-          <div className="flex flex-col items-center justify-center gap-2 py-8 text-on-surface-variant opacity-50">
+          <div className="flex flex-col items-center justify-center gap-2 py-8 text-on-surface-variant">
             <span className="material-symbols-outlined opacity-20" style={{ fontSize: 32 }}>
               layers
             </span>
             <span className="text-label-sm font-label-sm text-center">
-              No effects in stack
+              No layers yet
               <br />
-              Click an effect from the browser to add it
+              Click an effect in the Library to add it
             </span>
           </div>
         ) : filteredStack.length === 0 ? (
-          <div className="flex flex-col items-center justify-center gap-2 py-8 text-on-surface-variant opacity-50">
+          <div className="flex flex-col items-center justify-center gap-2 py-8 text-on-surface-variant">
             <span className="text-label-sm font-label-sm text-center">
               No matching effects
             </span>
@@ -139,6 +139,22 @@ export default function EffectStack() {
             return (
               <div
                 key={entry.id}
+                role="button"
+                tabIndex={0}
+                aria-pressed={isSelected}
+                aria-label={`${entry.effectName} layer`}
+                onKeyDown={(e) => {
+                  if (e.target !== e.currentTarget) return;
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    selectStackItem(entry.id);
+                  } else if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+                    e.preventDefault();
+                    selectStackItem(entry.id);
+                    const r = e.currentTarget.getBoundingClientRect();
+                    setContextMenu({ x: r.left + 24, y: r.top + 24, id: entry.id });
+                  }
+                }}
                 onClick={() => selectStackItem(entry.id)}
                 onContextMenu={(e) => {
                   e.preventDefault();
@@ -163,7 +179,7 @@ export default function EffectStack() {
                   {/* Always-visible eye toggle */}
                   <button
                     onClick={(e) => { e.stopPropagation(); toggleStackItem(entry.id); }}
-                    className={`material-symbols-outlined flex-shrink-0 transition-colors ${
+                    className={`material-symbols-outlined flex-shrink-0 w-6 h-6 flex items-center justify-center rounded transition-colors ${
                       entry.enabled ? "text-accent-pink" : "text-on-surface-variant opacity-60"
                     }`}
                     style={{ fontSize: 16 }}
@@ -194,7 +210,7 @@ export default function EffectStack() {
                       })()}
                     </div>
                     <div className="flex items-center gap-1">
-                      <span className="text-label-sm font-label-sm opacity-70 truncate" style={{ color }}>
+                      <span className="text-label-sm font-label-sm truncate" style={{ color }}>
                         {category}
                         {entry.maskId ? " · masked" : ""}
                       </span>
@@ -217,7 +233,7 @@ export default function EffectStack() {
                       selectStackItem(entry.id);
                       setContextMenu({ x: e.clientX, y: e.clientY, id: entry.id });
                     }}
-                    className="material-symbols-outlined flex-shrink-0 text-on-surface-variant opacity-0 group-hover:opacity-100 hover:text-on-surface transition-opacity"
+                    className="material-symbols-outlined flex-shrink-0 w-6 h-6 flex items-center justify-center rounded text-on-surface-variant opacity-0 group-hover:opacity-100 focus-visible:opacity-100 group-focus-within:opacity-100 hover:text-on-surface transition-opacity"
                     style={{ fontSize: 18 }}
                     title="Layer actions"
                   >

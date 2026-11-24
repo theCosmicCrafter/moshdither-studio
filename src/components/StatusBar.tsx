@@ -56,7 +56,8 @@ export default function StatusBar() {
         <span>{allEffects.length} effects available</span>
         <span className="text-outline-variant">|</span>
         <span>
-          {effectStack.filter((e) => e.enabled).length} active in stack
+          {effectStack.filter((e) => e.enabled).length} active{" "}
+          {effectStack.filter((e) => e.enabled).length === 1 ? "layer" : "layers"}
         </span>
       </div>
     </div>

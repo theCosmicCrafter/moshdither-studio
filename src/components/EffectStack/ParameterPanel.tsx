@@ -204,7 +204,6 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
             style={{
               background: "var(--bg-input)",
               color: "var(--text-primary)",
-              outline: "none",
             }}
             onChange={(e) => {
               const preset = PALETTE_PRESETS.find((p) => p.name === e.target.value);
@@ -289,7 +288,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                       const clamped = Math.min(hi, Math.max(lo, raw));
                       updateStackParams(entry.id, { [param.id]: clamped });
                     }}
-                    className="param-readout bg-transparent border-b border-[var(--border-secondary)] px-1 w-12 text-right outline-none focus:border-[var(--accent)]"
+                    className="param-readout bg-transparent border-b border-[var(--border-secondary)] px-1 w-12 text-right focus:border-[var(--accent)]"
                     style={{ color: "var(--text-primary)" }}
                   />
                 ) : (

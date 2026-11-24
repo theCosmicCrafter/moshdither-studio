@@ -452,7 +452,8 @@ export default function Toolbar({ onFileLoaded }: Props) {
           />
         ) : null}
         <span
-          className={`font-headline-lg text-headline-lg solar-text filigree-header cursor-default toolbar-logo ${theme === "custom" ? "hidden ml-2" : "ml-6"}`}
+          className={`solar-text filigree-header cursor-default toolbar-logo ${theme === "custom" ? "hidden ml-2" : "ml-6"}`}
+          style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.06em" }}
           aria-hidden="true"
         >
           MoshDither Studio
@@ -595,9 +596,15 @@ export default function Toolbar({ onFileLoaded }: Props) {
               </div>
             )}
           </div>
-          <div ref={editMenuRef} className="relative">
+          <div
+            ref={editMenuRef}
+            className="relative"
+            onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setEditMenuOpen(false); } }}
+          >
             <button
               onClick={() => setEditMenuOpen((v) => !v)}
+              aria-haspopup="menu"
+              aria-expanded={editMenuOpen}
               className="font-label-md text-label-md text-on-surface-variant font-medium hover:text-accent-teal transition-colors flex items-center gap-1"
             >
               Edit
@@ -608,8 +615,9 @@ export default function Toolbar({ onFileLoaded }: Props) {
               </span>
             </button>
             {editMenuOpen && (
-              <div className="absolute left-0 top-full mt-1 z-[200] min-w-[200px] neo-flat rounded-lg bg-surface/90 backdrop-blur-xl border border-outline/20 py-1 shadow-xl">
+              <div role="menu" className="absolute left-0 top-full mt-1 z-[200] min-w-[200px] neo-flat rounded-lg bg-surface/90 backdrop-blur-xl border border-outline/20 py-1 shadow-xl">
                 <button
+                  role="menuitem"
                   onClick={() => { handleUndo(); setEditMenuOpen(false); }}
                   disabled={!canUndo}
                   className={`w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors ${canUndo ? "toolbar-enabled" : "toolbar-disabled"}`}
@@ -690,9 +698,15 @@ export default function Toolbar({ onFileLoaded }: Props) {
               </div>
             )}
           </div>
-          <div ref={viewMenuRef} className="relative">
+          <div
+            ref={viewMenuRef}
+            className="relative"
+            onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setViewMenuOpen(false); } }}
+          >
             <button
               onClick={() => setViewMenuOpen((v) => !v)}
+              aria-haspopup="menu"
+              aria-expanded={viewMenuOpen}
               className={`font-label-md text-label-md font-medium hover:text-accent-teal transition-colors flex items-center gap-1 ${showBeforeAfter ? "text-accent-pink" : "text-on-surface-variant"}`}
             >
               View
@@ -703,7 +717,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
               </span>
             </button>
             {viewMenuOpen && (
-              <div className="absolute left-0 top-full mt-1 z-[200] min-w-[220px] neo-flat rounded-lg bg-surface/90 backdrop-blur-xl border border-outline/20 py-2 shadow-xl">
+              <div role="menu" className="absolute left-0 top-full mt-1 z-[200] min-w-[220px] neo-flat rounded-lg bg-surface/90 backdrop-blur-xl border border-outline/20 py-2 shadow-xl">
                 <button
                   onClick={() => { setShowBeforeAfter(!showBeforeAfter); setViewMenuOpen(false); }}
                   className="w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors"
@@ -805,7 +819,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
           onClick={handleClearAll}
           disabled={stackCount === 0}
           className={`material-symbols-outlined text-on-surface-variant hover:text-accent-pink transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full transport-icon ${stackCount > 0 ? "toolbar-enabled" : "toolbar-disabled"}`}
-          title="Clear Stack"
+          title="Clear Layers"
           aria-label="Clear effect stack"
         >
           delete_sweep

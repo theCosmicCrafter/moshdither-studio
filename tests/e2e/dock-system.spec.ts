@@ -31,7 +31,7 @@ test("dock tabs are clickable", async ({ page }) => {
   // different tabset so this also exercises independent dock zones. The
   // Timeline is not among them: it is the transport strip pinned under the
   // workspace, not a panel (tests/e2e/timeline.spec.ts covers it).
-  const knownTabs = ["Effects", "Preview", "Stack"];
+  const knownTabs = ["Library", "Preview", "Layers"];
 
   for (const label of knownTabs) {
     const tab = page.getByRole("tab", { name: label }).first();
@@ -45,26 +45,24 @@ test("dock tabs are clickable", async ({ page }) => {
   }
 });
 
-test("a panel can be added from the rail and closed again", async ({ page }) => {
-  // The old test was named for floating windows but clicked a loose
-  // [title*='panel'] match and asserted <header> was visible, so it exercised
-  // nothing. What the rail actually does is dock and undock panels, and that
-  // round trip is worth pinning: PanelRail only offers panels that are not
-  // already docked, so add-then-close must return the rail to its start state.
-  const railButton = page.getByTitle("Add Presets to right");
+test("a panel can be toggled on from the rail and closed again", async ({ page }) => {
+  // The rail is a permanent toggle bar: every panel keeps a slot, lit when
+  // docked, and toggling a docked one removes its tab. The round trip to pin
+  // is toggle-on → tab's own close button → rail back to "Show".
+  const railButton = page.getByTitle("Show Presets");
   await expect(railButton).toBeVisible();
   await expect(page.getByRole("tab", { name: "Presets" })).toHaveCount(0);
 
   await railButton.click();
   const tab = page.getByRole("tab", { name: "Presets" });
   await expect(tab).toBeVisible();
-  // Once docked it is no longer on offer in the rail.
-  await expect(page.getByTitle("Add Presets to right")).toHaveCount(0);
+  // The rail slot stays put once docked -- it just flips to Hide.
+  await expect(page.getByTitle("Hide Presets")).toBeVisible();
 
   await tab.hover();
   await tab.locator(".flexlayout__tab_button_trailing").click();
   await expect(page.getByRole("tab", { name: "Presets" })).toHaveCount(0);
-  await expect(page.getByTitle("Add Presets to right")).toBeVisible();
+  await expect(page.getByTitle("Show Presets")).toBeVisible();
 });
 
 test("window controls (minimize/maximize) don't crash", async ({ page }) => {

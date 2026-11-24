@@ -153,7 +153,7 @@ export function useKeyboardShortcuts() {
         case "End":
           if (!isInput) {
             e.preventDefault();
-            setCurrentTime(300);
+            setCurrentTime(useAppStore.getState().duration);
           }
           break;
 

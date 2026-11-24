@@ -36,13 +36,13 @@ export async function dismissModalOverlays(page: Page): Promise<void> {
 
 /**
  * Open the Presets docked panel and return it. Presets is not in the default
- * layout -- it is added from the panel rail, whose buttons are labelled
- * "Add {panel} to {zone}" from PANEL_REGISTRY.
+ * layout -- it is toggled on from the permanent panel rail, whose buttons are
+ * labelled "Show {panel}" / "Hide {panel}" from PANEL_REGISTRY.
  */
 export async function openPresetPanel(page: Page): Promise<Locator> {
   const existing = page.getByRole("tab", { name: "Presets" });
   if (!(await existing.count())) {
-    await page.getByTitle("Add Presets to right").click();
+    await page.getByTitle("Show Presets").click();
   }
   await page.getByRole("tab", { name: "Presets" }).click();
   const panel = page.locator(".flexlayout__tab").filter({ has: page.getByLabel("Preset name") });

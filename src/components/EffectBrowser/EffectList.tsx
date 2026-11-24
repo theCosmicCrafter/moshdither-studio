@@ -45,7 +45,7 @@ export default function EffectList() {
   return (
     <div className="flex-1 overflow-y-auto custom-scrollbar px-2 py-2 space-y-1.5">
       {effects.length === 0 && (
-        <div className="text-center py-8 font-body-sm text-body-sm text-on-surface-variant opacity-50">
+        <div className="text-center py-8 font-body-sm text-body-sm text-on-surface-variant">
           <span className="material-symbols-outlined mx-auto mb-2 opacity-30 block" style={{ fontSize: 24 }}>
             layers
           </span>
@@ -93,11 +93,11 @@ export default function EffectList() {
                 {effect.parameters.length} parameter
                 {effect.parameters.length !== 1 ? "s" : ""}
                 {isInStack && (
-                  <span className="text-accent-pink ml-1">• in stack</span>
+                  <span className="text-accent-pink ml-1">• added</span>
                 )}
                 {isIncompatible && (
                   <span
-                    className="material-symbols-outlined text-amber-400 ml-1 align-middle"
+                    className="material-symbols-outlined text-[var(--accent-gold)] ml-1 align-middle"
                     style={{ fontSize: 12 }}
                     title={VIDEO_ONLY_ON_IMAGE_WARNING}
                   >
