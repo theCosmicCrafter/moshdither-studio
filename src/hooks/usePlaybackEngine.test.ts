@@ -104,6 +104,35 @@ describe("usePlaybackEngine", () => {
     expect(useAppStore.getState().isPlaying).toBe(true);
   });
 
+  it("reverses direction at outPoint and bounces back at inPoint in pingpong mode", () => {
+    useAppStore.setState({
+      isPlaying: true,
+      inPoint: 0,
+      outPoint: 1,
+      currentTime: 0,
+      loopMode: "pingpong",
+      animateFps: 10,
+    });
+    renderHook(() => usePlaybackEngine());
+
+    // Advance ~1.4s on a [0, 1] range: 1s forward to 1.0, then ~0.4s backward toward 0.6
+    advance(1450, 50);
+    const tBackward = useAppStore.getState().currentTime;
+    expect(tBackward).toBeGreaterThan(0.4);
+    expect(tBackward).toBeLessThan(0.8);
+
+    // Advance another 100ms — should continue moving backward (decreasing time)
+    advance(100, 50);
+    const tFurtherBackward = useAppStore.getState().currentTime;
+    expect(tFurtherBackward).toBeLessThan(tBackward);
+
+    // Advance past the start boundary — should bounce forward again
+    advance(1000, 50);
+    const tForwardAgain = useAppStore.getState().currentTime;
+    expect(tForwardAgain).toBeGreaterThan(0.2);
+    expect(tForwardAgain).toBeLessThan(0.9);
+  });
+
   it("stops at the out point when not looping", () => {
     useAppStore.setState({ isPlaying: true, inPoint: 1, outPoint: 2, currentTime: 1, loopMode: "off" });
     renderHook(() => usePlaybackEngine());

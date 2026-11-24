@@ -53,9 +53,13 @@ impl Effect for ShuffleDatamosh {
         params: &ParameterValues,
     ) -> Result<Frame> {
         let chunk_size =
-            crate::effects::params::usize_param(params, "chunk_size", self.chunk_size as usize);
+            crate::effects::params::usize_param(params, "chunk_size", self.chunk_size as usize)
+                .max(1);
         let data = &input.data;
-        let mut chunks: Vec<Vec<u8>> = data.chunks(chunk_size * 4).map(|c| c.to_vec()).collect();
+        let mut chunks: Vec<Vec<u8>> = data
+            .chunks(chunk_size.saturating_mul(4))
+            .map(|c| c.to_vec())
+            .collect();
         let n = chunks.len();
         for i in 0..n {
             let seed = i.wrapping_mul(374761393);
@@ -81,7 +85,8 @@ impl Effect for ShuffleDatamosh {
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
         let chunk_size =
-            crate::effects::params::usize_param(params, "chunk_size", self.chunk_size as usize);
+            crate::effects::params::usize_param(params, "chunk_size", self.chunk_size as usize)
+                .max(1);
 
         let mut chunks: Vec<Vec<Frame>> = input
             .frames

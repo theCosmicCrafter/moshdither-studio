@@ -45,28 +45,43 @@ def mosh(infile, outfile, m, c, n, a, f, k):
                         filesize = os.path.getsize(bfilein)
                         if marker :
                                 marker = str.encode(marker)
+                        # A 4-byte marker can begin in the last bytes of one
+                        # chunk and end in the next; scanning each buffer
+                        # alone misses that split (and find() > 0 missed a
+                        # marker at offset 0). Hold back the tail of every
+                        # chunk so the scan always sees marker-length context.
+                        overlap = len(marker) - 1 if marker else 0
 
                         with open(bfilein,'rb') as rd:
                                 with open(bfileout,'ab') as wr:
+                                        pending = b''
                                         for pos in range(startpos, filesize, chunk):
                                                 rd.seek(pos)
                                                 buffer = rd.read(chunk)
 
                                                 if marker:
-                                                        if buffer.find(marker) > 0 :
-                                                                marker_pos = re.search(marker, buffer).start() # position is relative to buffer glitchedframes
-                                                                marker_pos = marker_pos + pos # position should be absolute now
-                                                                split = buffer.split(marker, 1)
-                                                                wr.write(split[0])
-                                                                return marker_pos
-                                                        else:
-                                                                wr.write(buffer)
+                                                        scan = pending + buffer
+                                                        hit = scan.find(marker)
+                                                        if hit >= 0 :
+                                                                wr.write(scan[:hit])
+                                                                return pos - len(pending) + hit # absolute position of the marker's first byte
+                                                        # No marker: flush everything except the tail where
+                                                        # one could still start.
+                                                        wr.write(scan[:len(scan) - overlap])
+                                                        pending = scan[len(scan) - overlap:]
                                                 else:
                                                         wr.write(buffer)
+                                        if pending:
+                                                wr.write(pending)
+                                        return None
 
                 #make 3 files, 1 for each chunk
                 movi_marker_pos = bstream_until_marker(filein, temp_hdrl, "movi")
+                if movi_marker_pos is None:
+                        raise ValueError("Invalid AVI container: 'movi' marker not found")
                 idx1_marker_pos = bstream_until_marker(filein, temp_movi, "idx1", movi_marker_pos)
+                if idx1_marker_pos is None:
+                        raise ValueError("Invalid AVI container: 'idx1' marker not found")
                 bstream_until_marker(filein, temp_idx1, 0, idx1_marker_pos)
 
                 ####################################
@@ -144,6 +159,10 @@ def mosh(infile, outfile, m, c, n, a, f, k):
                         for x in l:
                                 if x[1] <= (max_frame_size * kill) :
                                         clean.append(x)
+                # An empty clean list makes bloom/jiggle crash with IndexError
+                # and every other mode silently emit an empty file.
+                if not clean:
+                        raise ValueError("No frames survived the clean pass -- input may be too short or the kill threshold too strict")
                 # FX modes
                 if mode == "void":
                         print('> step 3/5 : mode void')
@@ -189,8 +208,9 @@ def mosh(infile, outfile, m, c, n, a, f, k):
 
                 if mode == "overlap":
                         print('> step 3/5 : mode overlap')
-                        pulselen = int(countframes)
-                        pulseryt = int(positframes)
+                        # pulselen/pulseryt <= 0 make range() raise ValueError.
+                        pulselen = max(1, int(countframes))
+                        pulseryt = max(1, int(positframes))
 
                         clean = [clean[i:i+pulselen] for i in range(0,len(clean),pulseryt)]
                         final = [item for sublist in clean for item in sublist]

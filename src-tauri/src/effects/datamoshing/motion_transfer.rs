@@ -64,7 +64,7 @@ impl Effect for MotionTransfer {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let block_size = crate::effects::params::usize_param(params, "block_size", 16);
+        let block_size = crate::effects::params::usize_param(params, "block_size", 16).max(1);
         let strength = crate::effects::params::f32_param(params, "strength", 0.7);
 
         // Single-frame preview: estimate a self-motion field from the frame
@@ -81,7 +81,7 @@ impl Effect for MotionTransfer {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let block_size = crate::effects::params::usize_param(params, "block_size", 16);
+        let block_size = crate::effects::params::usize_param(params, "block_size", 16).max(1);
         let strength = crate::effects::params::f32_param(params, "strength", 0.7);
 
         if input.frames.len() < 2 {

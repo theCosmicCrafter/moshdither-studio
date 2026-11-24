@@ -291,14 +291,14 @@ def _infer(call, what: str):
     """
     try:
         with torch.inference_mode():
-            if DEVICE == "cuda" and USE_AMP:
+            if DEVICE.startswith("cuda") and USE_AMP:
                 with torch.autocast(device_type="cuda", dtype=torch.float16):
                     return call(), None
             return call(), None
     except RuntimeError as e:
         if "out of memory" not in str(e).lower():
             raise
-        if DEVICE == "cuda":
+        if DEVICE.startswith("cuda"):
             torch.cuda.empty_cache()
         return None, {"status": "error", "message": f"CUDA out of memory during {what}: {e}"}
 _raw_stdout = sys.stdout.buffer
@@ -336,9 +336,13 @@ def _read_frame() -> bytes | None:
     return payload
 
 
-def _verify_auth(token: str) -> bool:
+def _verify_auth(token: object) -> bool:
     """Verify the shared auth token delivered by Rust during handshake."""
-    return _AUTH_TOKEN is not None and hmac.compare_digest(_AUTH_TOKEN, token)
+    return (
+        isinstance(_AUTH_TOKEN, str)
+        and isinstance(token, str)
+        and hmac.compare_digest(_AUTH_TOKEN, token)
+    )
 
 
 def _do_auth_handshake():
@@ -349,6 +353,8 @@ def _do_auth_handshake():
         raise RuntimeError("EOF before auth handshake")
     req = json.loads(payload.decode("utf-8"))
     token = req.get("auth_token", "")
+    if not isinstance(token, str):
+        raise RuntimeError("Invalid auth_token type in handshake")
     _AUTH_TOKEN = token
     send_response({"status": "auth_ok"})
 
@@ -520,7 +526,7 @@ def ensure_model_loaded():
         _ensure_checkpoint()
     # torch.compile can cause inaccurate results on some Windows/GPU combos.
     # Enable only if explicitly requested via env var.
-    use_compile = DEVICE == "cuda" and os.environ.get("SAM3_ENABLE_COMPILE", "0") == "1"
+    use_compile = DEVICE.startswith("cuda") and os.environ.get("SAM3_ENABLE_COMPILE", "0") == "1"
 
     try:
         model = build_sam3_image_model(
@@ -539,7 +545,7 @@ def ensure_model_loaded():
             ) from e
         raise
 
-    if DEVICE == "cuda":
+    if DEVICE.startswith("cuda"):
         # Throughput knobs similar to high-performance inference stacks.
         torch.backends.cudnn.benchmark = True
         torch.backends.cuda.matmul.allow_tf32 = True
@@ -557,7 +563,7 @@ def ensure_model_loaded():
     log("Active accelerators: %s", ", ".join(_ACCELERATORS) if _ACCELERATORS else "none")
     if use_compile:
         log("torch.compile enabled (mode=default) for vision encoder.")
-    if DEVICE == "cuda":
+    if DEVICE.startswith("cuda"):
         log("TF32: enabled, cuDNN benchmark: enabled")
 
 
@@ -580,8 +586,8 @@ def mask_to_base64(mask: np.ndarray) -> str:
     """Encode a boolean/float mask as base64 PNG, resizing back to orig_hw if needed."""
     if mask.dtype == bool:
         mask_u8 = (mask * 255).astype(np.uint8)
-    elif mask.dtype in (np.float32, np.float64):
-        mask_u8 = (mask * 255).astype(np.uint8)
+    elif np.issubdtype(mask.dtype, np.floating):
+        mask_u8 = (np.clip(mask, 0.0, 1.0) * 255).astype(np.uint8)
     else:
         mask_u8 = mask.astype(np.uint8)
     img = Image.fromarray(mask_u8, mode="L")
@@ -681,7 +687,7 @@ def cmd_load_image(image_b64: str):
         # was never going to reset it.
         session.reset()
         if isinstance(e, RuntimeError) and "out of memory" in str(e).lower():
-            if DEVICE == "cuda":
+            if DEVICE.startswith("cuda"):
                 try:
                     torch.cuda.empty_cache()
                 except Exception:
@@ -734,6 +740,8 @@ def cmd_point_prompt(points: list, labels: list = None):
         return {"status": "error", "message": "Model not loaded"}
     if not session.loaded:
         return {"status": "error", "message": "No image loaded — call load_image first"}
+    if not points:
+        return {"status": "error", "message": "At least one point is required"}
 
     if model_manager:
         model_manager.move_to_target()
@@ -777,12 +785,16 @@ def cmd_refine_mask(mask_b64: str, points: list, labels: list = None):
         return {"status": "error", "message": "Model not loaded"}
     if not session.loaded:
         return {"status": "error", "message": "No image loaded"}
+    if not points:
+        return {"status": "error", "message": "At least one point is required"}
 
     if model_manager:
         model_manager.move_to_target()
 
     try:
         mask_img = pil_from_base64(mask_b64)
+        if session.image is not None and mask_img.size != session.image.size:
+            mask_img = mask_img.resize(session.image.size, Image.Resampling.NEAREST)
         mask_np = np.array(mask_img.convert("L"), dtype=np.uint8) > 127
     except Exception as e:
         return {"status": "error", "message": f"Invalid mask: {e}"}
@@ -1082,7 +1094,7 @@ def cmd_clear():
     # sessions. gc.collect() sweeps Python cycles first.
     import gc
     gc.collect()
-    if DEVICE == "cuda":
+    if DEVICE.startswith("cuda"):
         try:
             torch.cuda.empty_cache()
         except Exception:
@@ -1124,7 +1136,7 @@ def main():
 
         # Verify auth token on every request except handshake (already done)
         token = req.get("auth_token", "")
-        if not _verify_auth(token):
+        if not isinstance(token, str) or not _verify_auth(token):
             send_response({"status": "error", "message": "Auth token mismatch"})
             continue
 

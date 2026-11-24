@@ -114,7 +114,11 @@ test("changing a static effect's parameter updates the WebGL live preview canvas
     auditorExitCode = 1;
     result = (e.stdout || "") + (e.stderr || "");
   }
-  console.log(result);
+  const rmsdLine = result
+    .split(/\r?\n/)
+    .find((line) => /RMSD/i.test(line))
+    ?.trim();
+  console.log(`[param-update] Canvas updated as expected (${rmsdLine ?? "RMSD > 2.0"})`);
 
   expect(auditorExitCode, "expected a meaningful (non-noise) pixel difference after the parameter change").toBe(1);
   expect(result).toContain("FAIL");

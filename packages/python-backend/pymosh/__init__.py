@@ -20,6 +20,17 @@ class Index(object):
 
         return instance
 
+    def close(self):
+        """Close the file handle held open by the lazy chunk readers."""
+        if self.index is not None and self.index.riff is not None:
+            self.index.riff.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
     def __getattr__(self, index):
         return getattr(self.index, index)
 

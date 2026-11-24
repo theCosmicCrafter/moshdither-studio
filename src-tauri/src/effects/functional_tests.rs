@@ -588,9 +588,7 @@ pub fn run_all_function_tests() -> FunctionTestReport {
 
     results.push(run_test("python_bridge_check", "ffglitch", || {
         // Check if Python is available
-        let result = crate::proc::command("python")
-            .arg("--version")
-            .output();
+        let result = crate::proc::command("python").arg("--version").output();
         match result {
             Ok(output) if output.status.success() => {
                 let version = String::from_utf8_lossy(&output.stdout).trim().to_string();

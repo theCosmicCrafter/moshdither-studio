@@ -73,6 +73,10 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
     // match Rust's rx = x - shift / bx = x + shift exactly (anaglyph.rs).
     paramMap: { shift: "amount" },
     transform: (_k, v) => (typeof v === "number" ? v / 30 : 0.2),
+    // The pixel->UV conversion bakes a ~1000px-wide frame assumption into
+    // the constant (shift/30 * 0.03 UV = shift pixels only near 1000px), so
+    // the displacement is off on any other resolution. Approximate.
+    accurate: false,
   },
   "pixel_geo.block_shift": {
     shaderId: "block_shift",
@@ -133,6 +137,10 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
     // match Rust's rx = x - shift / bx = x + shift (chromatic_aberration.rs).
     paramMap: { shift: "amount" },
     transform: (_k, v) => (typeof v === "number" ? v / 10 : 1),
+    // Same fixed-width flaw as anaglyph: `shift` is in pixels but `amount`
+    // becomes a UV offset through a constant that only lands pixel-exact on
+    // a ~1000px-wide frame. Approximate.
+    accurate: false,
   },
   "analog.vhs": {
     shaderId: "vhs_crt",
@@ -505,6 +513,9 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
       if (k === "max_shift") return Math.min(1, n / 100);
       return Math.max(1, n);
     },
+    // Shader uses a GLSL sin() hash and a fixed /1000 UV shift rather than
+    // Rust's seeded SmallRng per-slice pixel displacement. Approximate.
+    accurate: false,
   },
   "glitch.databend": {
     shaderId: "databend",

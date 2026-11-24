@@ -64,7 +64,8 @@ impl Effect for PngChunkGlitch {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let chunk_interval = crate::effects::params::usize_param(params, "chunk_interval", 4096);
+        let chunk_interval =
+            crate::effects::params::usize_param(params, "chunk_interval", 4096).max(1);
         let corruption = crate::effects::params::f32_param(params, "corruption", 0.3);
 
         let mut data = input.data.clone();
@@ -76,7 +77,7 @@ impl Effect for PngChunkGlitch {
         let mut offset = chunk_interval;
         while offset < len {
             let corrupt_len = (chunk_interval as f32 * corruption) as usize;
-            let end = (offset + corrupt_len).min(len);
+            let end = offset.saturating_add(corrupt_len).min(len);
             for (i, byte) in data.iter_mut().enumerate().take(end).skip(offset) {
                 if i % 4 == 3 {
                     continue; // Preserve alpha channel
@@ -97,7 +98,7 @@ impl Effect for PngChunkGlitch {
                     }
                 }
             }
-            offset += chunk_interval;
+            offset = offset.saturating_add(chunk_interval);
         }
 
         Ok(Frame {
@@ -160,11 +161,13 @@ impl Effect for CrcMismatchGlitch {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let scanline_interval = crate::effects::params::usize_param(params, "scanline_interval", 8);
-        let shift_amount = crate::effects::params::usize_param(params, "shift_amount", 16);
-
         let w = input.width as usize;
         let h = input.height as usize;
+        let scanline_interval =
+            crate::effects::params::usize_param(params, "scanline_interval", 8).max(1);
+        // A shift wider than the row wraps identically; the cap keeps
+        // `dir * shift_amount` inside i32.
+        let shift_amount = crate::effects::params::usize_param(params, "shift_amount", 16).min(w);
         let mut data = input.data.clone();
 
         // Every Nth scanline, shift pixels horizontally in alternating directions

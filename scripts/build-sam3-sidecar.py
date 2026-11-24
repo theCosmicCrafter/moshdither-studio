@@ -207,7 +207,7 @@ def run_pyinstaller(target: str, python: Path, work_dir: Path) -> Path:
         "--name",
         output_name,
         "--distpath",
-        str(BIN_DIR),
+        str(work_dir / "dist"),
         "--workpath",
         str(work_dir / "build"),
         "--specpath",
@@ -238,10 +238,18 @@ def run_pyinstaller(target: str, python: Path, work_dir: Path) -> Path:
     print(" ".join(cmd), flush=True)
     subprocess.run(cmd, check=True, env=env)
 
-    produced = BIN_DIR / bin_name
+    produced = work_dir / "dist" / bin_name
     if not produced.exists():
         raise RuntimeError(f"PyInstaller did not produce expected binary: {produced}")
-    return produced
+
+    # Publish into src-tauri/bin atomically. Writing --distpath straight into
+    # BIN_DIR meant a killed/interrupted build left a partial executable in
+    # place, and the next `tauri build` happily packaged the truncated file.
+    # work_dir lives under PROJECT_ROOT/build -- same filesystem as BIN_DIR,
+    # so os.replace is atomic here.
+    final = BIN_DIR / bin_name
+    os.replace(produced, final)
+    return final
 
 
 def main() -> None:

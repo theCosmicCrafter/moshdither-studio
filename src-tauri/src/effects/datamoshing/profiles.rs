@@ -117,7 +117,7 @@ impl Effect for GlitchProfile {
         mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let drop_interval = usize_param(params, "drop_interval", GLITCH_DROP_INTERVAL);
+        let drop_interval = usize_param(params, "drop_interval", GLITCH_DROP_INTERVAL).max(1);
 
         // Phase 1: Drop I-frames
         let mut frames = Vec::new();
@@ -205,7 +205,7 @@ impl Effect for BloomProfile {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let bloom_size = usize_param(params, "bloom_size", BLOOM_SIZE);
+        let bloom_size = usize_param(params, "bloom_size", BLOOM_SIZE).max(1);
         let mut out = input.data.clone();
 
         // Bloom. Shares its fix with datamoshing.bloom, which carried the same
@@ -249,8 +249,8 @@ impl Effect for BloomProfile {
         mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let bloom_size = usize_param(params, "bloom_size", BLOOM_SIZE);
-        let repeat_count = usize_param(params, "repeat_count", BLOOM_REPEAT_COUNT);
+        let bloom_size = usize_param(params, "bloom_size", BLOOM_SIZE).max(1);
+        let repeat_count = usize_param(params, "repeat_count", BLOOM_REPEAT_COUNT).max(1);
 
         // Phase 1: Bloom — duplicate keyframes
         let mut frames = Vec::new();
@@ -474,11 +474,11 @@ impl Effect for ExtremeProfile {
         // Row duplication (classic-style)
         let w = input.width as usize;
         let h = input.height as usize;
-        let chunk_size = (3.0 + aggression * 7.0) as usize;
+        let chunk_size = ((3.0 + aggression * 7.0).max(1.0)) as usize;
         for y in 0..h {
             let row_start = y * w * 4;
             for chunk in (0..w).step_by(chunk_size) {
-                let chunk_end = (chunk + chunk_size).min(w);
+                let chunk_end = chunk.saturating_add(chunk_size).min(w);
                 let src_idx = row_start + chunk * 4;
                 let r = out[src_idx];
                 let g = out[src_idx + 1];
@@ -527,8 +527,8 @@ impl Effect for ExtremeProfile {
         }
 
         // Phase 2: Classic chunk repeat
-        let chunk_size = (3.0 + aggression * 5.0) as usize;
-        let repeats = (2.0 + aggression * 4.0) as usize;
+        let chunk_size = ((3.0 + aggression * 5.0).max(1.0)) as usize;
+        let repeats = ((2.0 + aggression * 4.0).max(1.0)) as usize;
         let mut repeated = Vec::new();
         for chunk in frames.chunks(chunk_size) {
             for _ in 0..repeats {
@@ -719,7 +719,7 @@ impl Effect for RainbowProfile {
         mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let drop_interval = usize_param(params, "drop_interval", RAINBOW_DROP_INTERVAL);
+        let drop_interval = usize_param(params, "drop_interval", RAINBOW_DROP_INTERVAL).max(1);
 
         // Phase 1: Drop I-frames
         let mut frames = Vec::new();

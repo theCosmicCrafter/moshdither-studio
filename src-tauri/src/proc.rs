@@ -155,6 +155,7 @@ impl KillJob {
 /// the threads may be *joined* after a kill differs per call site -- ffmpeg's
 /// tree closes pipes with the direct child, while a mosh-cli grandchild can
 /// hold inherited handles open -- so joining stays the caller's decision.
+#[allow(clippy::type_complexity)]
 pub fn spawn_pipe_readers(
     child: &mut std::process::Child,
 ) -> std::io::Result<(

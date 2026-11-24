@@ -77,7 +77,8 @@ def _run(args):
     # immediately instead of leaving it orphaned.
     try:
         result = subprocess.run(
-            args, capture_output=True, text=True, check=False, timeout=1200, **_NO_WINDOW
+            args, capture_output=True, text=True, check=False, timeout=1200,
+            encoding="utf-8", errors="replace", **_NO_WINDOW
         )
     except subprocess.TimeoutExpired as e:
         tool = os.path.basename(str(args[0]))
@@ -167,7 +168,13 @@ def library(input_video, output, mode, extract_from="", fluidity=0, size=0, s=0,
             args += ["-g", str(gop), "-y", str(fin)]
             _run(args)
             _run([ffgac, "-i", str(fin), "-vcodec", "copy", os.path.join(raws_dir, "frames_%04d.raw")])
-            return sorted(os.listdir(raws_dir))
+            frames = sorted(os.listdir(raws_dir))
+            # Every caller indexes or slices this list; an empty decode used
+            # to either IndexError (water_bloom) or silently write an empty
+            # output file. Fail at the source instead.
+            if not frames:
+                raise RuntimeError(f"ffgac decoded no frames from {src}")
+            return frames
 
         def _concat(paths, output):
             """Concatenate raw frame files into `output`, streaming rather
@@ -184,11 +191,14 @@ def library(input_video, output, mode, extract_from="", fluidity=0, size=0, s=0,
             raws = os.path.join("cache_ffg","raws")
             os.mkdir(raws)
             frames = _ffg_to_raw_frames(input_video, raws, fin)
-            chunked_list = [frames[i:i+size] for i in range(0, len(frames), size)]
+            # size <= 0 makes range() raise ValueError and frames[:size]
+            # silently empty; a zero chunk size is meaningless anyway.
+            chunk_size = max(1, int(size))
+            chunked_list = [frames[i:i+chunk_size] for i in range(0, len(frames), chunk_size)]
             random.shuffle(chunked_list)
             # The first `size` frames always lead, in order; the shuffled
             # chunks fill in behind them, deduped.
-            framelist = list(frames[:size])
+            framelist = list(frames[:chunk_size])
             for i in chunked_list:
                 for j in i:
                     if not j in framelist:
@@ -252,18 +262,28 @@ def library(input_video, output, mode, extract_from="", fluidity=0, size=0, s=0,
             raws = os.path.join("cache_ffg","raws")
             os.mkdir(raws)
             frames = _ffg_to_raw_frames(input_video, raws, fin)
-            po = f-1
+            # f <= 0 left po negative, which indexed the LAST frame
+            # (frames[-1]) or crashed on an empty list; clamp into range.
+            po = max(0, min(int(f) - 1, len(frames) - 1))
             framelist = frames[:po] + [frames[po]] * r + frames[po:]
             _concat([os.path.join(raws, f) for f in framelist], output)
             shutil.rmtree("cache_ffg")
             
         def average(frames):
-            if not frames:
+            vecs = [x for x in frames if x != []]
+            if not vecs:
                 return []
-            return np.mean(np.array([x for x in frames if x != []]), axis=0).tolist()
+            # Per-frame forward-MV lists are ragged -- different frames
+            # decode a different number of macroblock vectors -- and
+            # np.array() on ragged input raises in NumPy >= 1.24. Truncate
+            # to the shortest list so the mean is defined.
+            min_len = min(len(x) for x in vecs)
+            return np.mean(np.array([x[:min_len] for x in vecs]), axis=0).tolist()
 
         def fluid(frames):
-            average_length = fluidity
+            # fluidity < 1 made the slice below empty (or wrap negative),
+            # averaging nothing.
+            average_length = max(1, int(fluidity))
             if average_length==1:
                 average_length=2
             return [average(frames[i + 1 - average_length: i + 1]) for i in range(len(frames))]

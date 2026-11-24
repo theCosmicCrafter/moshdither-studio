@@ -49,7 +49,8 @@ impl Effect for MirrorSlices {
         params: &ParameterValues,
     ) -> Result<Frame> {
         let slice_height =
-            crate::effects::params::usize_param(params, "slice_height", self.slice_height as usize);
+            crate::effects::params::usize_param(params, "slice_height", self.slice_height as usize)
+                .max(1);
         let w = input.width as usize;
         let h = input.height as usize;
         let mut data = input.data.clone();

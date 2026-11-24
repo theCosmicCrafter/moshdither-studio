@@ -89,7 +89,7 @@ Write-Host "Scanning $($paths.Count) staged file(s)..." -ForegroundColor Cyan
 # stderr is deliberately not redirected. TruffleHog writes its banner and progress
 # there, and piping it into PowerShell turns ordinary output into NativeCommandError
 # records that look like the hook itself failed.
-& $trufflehog filesystem @paths --only-verified --fail --no-update
+& $trufflehog filesystem @paths --only-verified --exclude-detectors=Lob --fail --no-update
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""

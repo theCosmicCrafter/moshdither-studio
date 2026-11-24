@@ -95,7 +95,8 @@ impl Effect for OpticalFlow {
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
         let alpha = crate::effects::params::f32_param(params, "alpha", self.alpha);
-        let iterations = crate::effects::params::usize_param(params, "iterations", self.iterations);
+        let iterations =
+            crate::effects::params::usize_param(params, "iterations", self.iterations).min(200);
         let warp_strength = crate::effects::params::f32_param(params, "warp_strength", 1.0);
 
         if input.frames.len() < 2 {

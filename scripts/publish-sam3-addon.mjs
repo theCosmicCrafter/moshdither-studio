@@ -121,6 +121,16 @@ function split(src, base, outDir) {
 
 const assetUrl = (name) => `https://github.com/${REPO}/releases/download/${TAG}/${name}`;
 
+/** Read the sidecar sha256 the app is compiled to accept. */
+function pinnedSidecarSha() {
+  const src = readFileSync(
+    join(projectRoot, "src-tauri", "src", "sam3_addon.rs"),
+    "utf8"
+  );
+  const m = src.match(/EXPECTED_SIDECAR_SHA256[^"]*"([0-9a-f]{64})"/);
+  return m ? m[1] : null;
+}
+
 function main() {
   if (!existsSync(SIDECAR)) {
     die(
@@ -201,6 +211,22 @@ function main() {
     say(`Remember: EXPECTED_SIDECAR_SHA256 in src-tauri/src/sam3_addon.rs must be`);
     say(`  ${sidecarSha}`);
     return;
+  }
+
+  // The app refuses any sidecar whose sha256 does not equal the compiled-in
+  // EXPECTED_SIDECAR_SHA256. Uploading a sidecar that does not match the pin
+  // publishes an add-on every install rejects -- check before pushing bytes.
+  const pinned = pinnedSidecarSha();
+  if (!pinned) {
+    die("could not find EXPECTED_SIDECAR_SHA256 in src-tauri/src/sam3_addon.rs");
+  }
+  if (pinned !== sidecarSha) {
+    die(
+      `refusing --upload: staged sidecar sha256 ${sidecarSha} does not match\n` +
+        `  EXPECTED_SIDECAR_SHA256 ${pinned} in src-tauri/src/sam3_addon.rs.\n` +
+        `  Update the constant (run with --print-hash) and ship an app release,\n` +
+        `  or rebuild the sidecar that matches the pinned hash.`
+    );
   }
 
   try {

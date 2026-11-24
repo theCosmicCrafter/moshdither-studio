@@ -73,7 +73,6 @@ pub fn run() {
                     state: None,
                     radius: None,
                     color: None,
-                    ..Default::default()
                 });
             }
             Ok(())

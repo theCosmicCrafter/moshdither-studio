@@ -60,4 +60,27 @@ describe("restoreSession media reporting", () => {
     });
     expect(useAppStore.getState().statusMessage).toMatch(/Session restored/);
   });
+
+  it("prefers originalDataUrl over CPU-rendered previewDataUrl when autosaving", () => {
+    vi.useFakeTimers();
+    try {
+      localStorage.removeItem("moshdither_autosave_v1");
+      useAppStore.setState({
+        filePath: "C:/media/clip.png",
+        originalDataUrl: "data:image/png;base64,ORIGINAL_UNPROCESSED",
+        previewDataUrl: "data:image/png;base64,CPU_RENDERED_WITH_EFFECTS",
+      });
+      const { unmount } = renderHook(() => useProjectSession());
+      act(() => {
+        vi.advanceTimersByTime(5500);
+      });
+      const savedRaw = localStorage.getItem("moshdither_autosave_v1");
+      expect(savedRaw).not.toBeNull();
+      const saved = JSON.parse(savedRaw!);
+      expect(saved.mediaDataUrl).toBe("data:image/png;base64,ORIGINAL_UNPROCESSED");
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

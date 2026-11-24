@@ -4,9 +4,10 @@ Living pass-down note. Update it at the end of every session and commit it.
 It lives in `docs/` on purpose: the previous handoff sat in `outputs/`, which is
 gitignored, so it never travelled with the branch.
 
-**Last updated:** 2026-11-02 · dev `4987632` (quality-plan COMPLETE: all 74 findings
-resolved or verified-already-fixed; full E2E suite green; branch model:
-`master` = release, `dev` = integration)
+**Last updated:** 2026-11-23 · dev `0779ea6` (QC/DevOps audit COMPLETE: all 38
+findings in `docs/QC_DEVOPS_AUDIT_REPORT_2026-11-02.md` remediated;
+cargo/vitest/tsc/eslint gates green on the CI toolchain; tagged
+`checkpoint/20261123-232238-dev`)
 
 ---
 
@@ -68,6 +69,86 @@ appears in every E2E run — the mock's event registration returns `{}`; the
 app logs it and moves on. The launch console-error test passes. The
 live-preview-param-update spec prints a parity RMSD ~23 as diagnostics but
 does not gate on it.
+
+---
+
+## QC/DevOps audit remediation (38 findings, `docs/QC_DEVOPS_AUDIT_REPORT_2026-11-02.md`)
+
+**ALL 38 FINDINGS IMPLEMENTED** on top of checkpoint `18bee51` ("Pre-QC-audit
+remediation batches" — that commit holds the audit doc and the batch-D
+CI/workflow fixes; the code remediation sat uncommitted and is now finished).
+Track layout: Batch A = Rust backend/effects, Batch B = frontend, Batch C =
+Python/DatamoshLib + scripts, Batch D = CI/DevOps.
+
+Gates green on the CI toolchain: `cargo fmt` clean;
+`RUSTUP_TOOLCHAIN=1.98.0 cargo clippy --all-targets -- -D warnings` clean;
+`cargo test` 714 lib + 3 mosh_verify; `npx tsc --noEmit` clean; `eslint`
+0 warnings; `vitest` 1326/1326; `python -m compileall` + `node --check`
+clean on every edited script.
+
+Notes a future session must not regress:
+
+- **`usize_param`-returns-0 class (RUST-M2).** The audit listed a file set;
+  the sweep found the same `step_by`/`%`/`chunks`/`gen_range` panic class in
+  ~15 further sites — `png_chunk`'s `chunk_interval` was an *infinite loop*,
+  `vhs` `slice_size` likewise, `mv_effects` `gen_range(0..randomness)`
+  panics, `color_bleed` `amount*2+1` overflowed. All clamped at the use
+  site (`.max(1)` pattern from `classic.rs`) — including
+  `classic.rs::process_frame` itself, which was unguarded.
+- **Updater contract (RUST-L1/DEVOPS-C2).** `check_update`/`install_update`
+  in commands.rs now return a typed status object instead of throwing;
+  `UpdateInfo` in `src/lib/tauri.ts` is the matching contract. The plugin
+  stays unregistered in `lib.rs` BY DESIGN — it panics without a
+  `plugins.updater` config. Do not "fix" it by registering it.
+- **`blend_mask`** now validates `working`/`previous` `data.len()` against
+  `width*height*4`, not just dims/mask length.
+- **`path_guard`** rejects DOS device names (CON/NUL/AUX/PRN/COM*/LPT*) on
+  every platform — Windows resolves them even mid-path.
+- **Dock AppBar** (`window_commands.rs`): rejects `size <= 0`, clamps to
+  `1..=w.min(h)`, offsets the rect by `monitor.position()` (was always
+  monitor 0), `.max(1) as u32` on dims.
+- **`sam3_video_predictor`** routes through `with_sam3` — was the one caller
+  bypassing auto-init/auto-restart.
+- **`ExportOptions.fps`** validated (>0, finite) at the export entry — the
+  four ffmpeg-arg consumers assumed it.
+- **`EffectChain.savedPreviousTex`** is guarded by pass index
+  (`savedPreviousTexFor === i-1`) so a skipped pre-`maskBlend` pass can no
+  longer blend a stale texture; cleared on `resize()`/`reset()`.
+- **`ManifestAudioEngine`** RAF loop runs only while playing (was a
+  perpetual 60 fps wake from `loadFile`); `play()`'s promise is caught and
+  surfaced as an `error` event.
+- **`logger.ts`** serializes `Error` values via a JSON replacer
+  (name/message/stack) — `{ err }` contexts no longer log `{"err":{}}`.
+  This was the second half of the `[drag-drop] {"err":{}}` noise.
+- **`tomato.py` `bstream_until_marker`** scans a carry-over buffer so
+  markers at chunk offset 0 or straddling the 1024 boundary are found, and
+  returns `None` → callers raise `ValueError` instead of `range(None, ...)`
+  TypeError. Empty `clean` raises before the FX modes.
+- **pymosh `Index`** gained `close()`/`__enter__`/`__exit__`; the three
+  `pymodes.py` call sites use `with` (RiffIndexChunk reads lazily through
+  the handle — closing early corrupts output). `echo` returns `all_frames`
+  when `pframes` is empty (was an infinite loop until timeout).
+- **`build-sam3-sidecar.py`** builds into the temp workdir and `os.replace`s
+  into `src-tauri/bin` — a killed PyInstaller no longer leaves a truncated
+  exe for the next `tauri build` to package.
+- **`publish-sam3-addon.mjs`** refuses `--upload` when the staged sidecar's
+  sha256 ≠ `EXPECTED_SIDECAR_SHA256` parsed from `sam3_addon.rs`.
+- **Clippy debt surfaced by `--all-targets` on Rust 1.98** (prior session
+  added that flag to `ci.yml`): 8 `needless_borrow` call sites,
+  `clone_on_copy`, `needless_update`, `type_complexity` (`PipeReaders`
+  alias) fixed. Two structural lints carry scoped `#[allow]`s
+  (`motion.rs::block_diff`, `sam3_addon.rs::download_and_assemble`, both
+  `too_many_arguments`) — refactor candidates deliberately left out of a
+  remediation pass.
+
+**Full `npm run gate` result (10 gates):** 9/10 pass on first run —
+tsc, eslint, cargo fmt, vitest, cargo test, frontend build, `mosh-verify`
+release build (fresh binary, so `real-backend.spec.ts` is unblocked),
+full Playwright E2E (~390s), and app-smoke. The one failure was
+`cargo-clippy` on the **default 1.99 toolchain**: `needless_borrows_for_
+generic_args` (new lint vs CI's 1.98) on three `map_err(&pipe_err)` sites
+in `sam3_engine.rs` — fixed by dropping the borrows; clippy is now clean
+on BOTH toolchains.
 
 ---
 

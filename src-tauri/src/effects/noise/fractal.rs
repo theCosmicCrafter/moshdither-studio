@@ -86,8 +86,11 @@ impl Effect for FractalNoise {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let octaves =
-            crate::effects::params::u64_param(params, "octaves", self.octaves as u64) as u32;
+        // Beyond ~8 octaves the extra passes are sub-pixel noise; the cap
+        // keeps a hostile param from turning every pixel into a hang.
+        let octaves = (crate::effects::params::u64_param(params, "octaves", self.octaves as u64)
+            as u32)
+            .min(16);
         let persistence =
             crate::effects::params::f32_param(params, "persistence", self.persistence);
         let amount = crate::effects::params::f32_param(params, "amount", 1.0);

@@ -66,13 +66,17 @@ impl Effect for BlockShift {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let bs =
-            crate::effects::params::usize_param(params, "block_size", self.block_size as usize);
-        let max_shift =
-            crate::effects::params::usize_param(params, "max_shift", self.max_shift as usize);
-        let time = crate::effects::params::usize_param(params, "time", 0);
         let w = input.width as usize;
         let h = input.height as usize;
+        let bs =
+            crate::effects::params::usize_param(params, "block_size", self.block_size as usize)
+                .max(1);
+        // A shift wider than the frame clamps to its edge anyway; the cap
+        // keeps `max_shift * 2 + 1` inside usize.
+        let max_shift =
+            crate::effects::params::usize_param(params, "max_shift", self.max_shift as usize)
+                .min(w.max(h));
+        let time = crate::effects::params::usize_param(params, "time", 0);
         let mut data = vec![0u8; input.data.len()];
 
         for by in (0..h).step_by(bs) {

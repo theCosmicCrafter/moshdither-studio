@@ -292,15 +292,19 @@ function PreviewViewport({ isDropTarget = false }: Props) {
   }, [sam3HoverMask, sam3OverlayOpacity, sam3OverlayColor]);
 
   // ── Pan / Zoom / Split ─────────────────────────────────────
-  const handleWheel = useCallback(
-    (e: React.WheelEvent) => {
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
       const delta = e.deltaY > 0 ? -0.1 : 0.1;
-      useAppStore.getState().setZoom(zoom + delta);
-    },
-    [zoom]
-  );
+      const s = useAppStore.getState();
+      s.setZoom(s.zoom + delta);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
@@ -1047,7 +1051,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       const renderRevision = ++cpuRenderRevisionRef.current;
       try {
         const s = useAppStore.getState();
-        const animTime = s.isPlaying ? s.currentTime : 0;
+        const animTime = s.currentTime;
         const activeStack = stackToRustPayload(s.effectStack, s.activeMask, s.sam3Masks, animTime);
         const result = await applyEffectStack(activeStack, null, scale);
         if (!cancelled && renderRevision === cpuRenderRevisionRef.current) state.setPreviewDataUrl(result);
@@ -1322,7 +1326,6 @@ function PreviewViewport({ isDropTarget = false }: Props) {
         ref={containerRef}
         aria-label="Media preview viewport"
         className={`flex-1 relative overflow-hidden ${!mediaLoaded ? "checkerboard" : "bg-black/95"} ${isFullscreen ? "bg-black" : ""} group/main ${canvasCursor}`}
-        onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}

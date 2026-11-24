@@ -424,6 +424,7 @@ async fn install(app: AppHandle) -> Result<AddonStatus> {
 /// verify the SHA-256, and rename into place. Parts are deleted after a
 /// successful assemble; an interrupted run leaves only staging files, never a
 /// half-written file at `dest`. Returns the updated byte total.
+#[allow(clippy::too_many_arguments)]
 async fn download_and_assemble(
     app: &AppHandle,
     client: &reqwest::Client,

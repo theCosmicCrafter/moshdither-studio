@@ -49,7 +49,8 @@ impl Effect for ByteReverse {
         params: &ParameterValues,
     ) -> Result<Frame> {
         let chunk_size =
-            crate::effects::params::usize_param(params, "chunk_size", self.chunk_size as usize);
+            crate::effects::params::usize_param(params, "chunk_size", self.chunk_size as usize)
+                .max(1);
         let mut data = input.data.clone();
         for chunk in data.chunks_exact_mut(chunk_size) {
             chunk.reverse();

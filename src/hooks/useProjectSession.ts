@@ -82,6 +82,7 @@ export function useProjectSession() {
     effectStack: useAppStore.getState().effectStack,
     currentTime: useAppStore.getState().currentTime,
     filePath: useAppStore.getState().filePath,
+    originalDataUrl: useAppStore.getState().originalDataUrl,
     previewDataUrl: useAppStore.getState().previewDataUrl,
     keyframes: useAppStore.getState().keyframes,
     audioFilePath: useAppStore.getState().audioFilePath,
@@ -94,6 +95,7 @@ export function useProjectSession() {
       stateRef.current.effectStack = s.effectStack;
       stateRef.current.currentTime = s.currentTime;
       stateRef.current.filePath = s.filePath;
+      stateRef.current.originalDataUrl = s.originalDataUrl;
       stateRef.current.previewDataUrl = s.previewDataUrl;
       stateRef.current.keyframes = s.keyframes;
       stateRef.current.audioFilePath = s.audioFilePath;
@@ -111,17 +113,19 @@ export function useProjectSession() {
         effectStack,
         currentTime,
         filePath,
+        originalDataUrl,
         previewDataUrl,
         keyframes,
         audioFilePath,
         audioBindings,
       } = stateRef.current;
+      const mediaDataUrl = originalDataUrl ?? previewDataUrl;
 
       // Only save if there is content to save
-      if (filePath || previewDataUrl || effectStack.length > 0 || audioFilePath) {
+      if (filePath || mediaDataUrl || effectStack.length > 0 || audioFilePath) {
         const session: ProjectSession = {
           filePath,
-          mediaDataUrl: previewDataUrl,
+          mediaDataUrl,
           effectStack: JSON.parse(JSON.stringify(effectStack)),
           currentTime,
           keyframes: JSON.parse(JSON.stringify(keyframes)),

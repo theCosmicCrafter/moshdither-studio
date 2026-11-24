@@ -992,6 +992,16 @@ pub async fn export_video(
     // `options` is optional at the IPC boundary — the frontend always sends
     // it, but a bare invoke defaults to an all-defaults export.
     let mut options = options.unwrap_or_default();
+    // `fps` feeds `idx as f64 / fps` transport times and the encoder's frame
+    // cadence: 0, negative or non-finite would turn every timestamp into
+    // inf/NaN and hand FFmpeg a nonsense -r. Reject it up front.
+    if let Some(fps) = options.fps {
+        if !fps.is_finite() || !(1.0..=240.0).contains(&fps) {
+            return Err(AppError::InvalidParameter(format!(
+                "Export fps must be finite and within 1..=240, got {fps}"
+            )));
+        }
+    }
     if let Some(wm) = options.watermark.as_mut() {
         if wm.enabled {
             if let Some(p) = &wm.image_path {
@@ -1161,7 +1171,7 @@ fn plan_and_decode(
         options.processing_scale
     );
     emit_export_progress(
-        &app_handle,
+        app_handle,
         ExportProgress {
             stage: "planning",
             progress: 0,
@@ -1195,7 +1205,7 @@ fn plan_and_decode(
         );
         tracing::warn!("{}", message);
         emit_export_progress(
-            &app_handle,
+            app_handle,
             ExportProgress {
                 stage: "planning",
                 progress: 0,
@@ -1209,7 +1219,7 @@ fn plan_and_decode(
     // Decode the full source video
     tracing::info!("Decoding export source: {}", source_path);
     emit_export_progress(
-        &app_handle,
+        app_handle,
         ExportProgress {
             stage: "decoding",
             progress: 0,
@@ -1265,7 +1275,7 @@ fn plan_and_decode(
             );
             tracing::warn!("{}", message);
             emit_export_progress(
-                &app_handle,
+                app_handle,
                 ExportProgress {
                     stage: "decoding",
                     progress: 0,
@@ -1306,7 +1316,7 @@ fn plan_and_decode(
             );
             tracing::warn!("{}", message);
             emit_export_progress(
-                &app_handle,
+                app_handle,
                 ExportProgress {
                     stage: "decoding",
                     progress: 0,
@@ -1463,7 +1473,7 @@ fn apply_effect_to_segment(
                     tracing::warn!("{}", message);
                     let pct = 5 + ((effect_idx + 1) as f64 / stack_len as f64 * 80.0) as u32;
                     emit_export_progress(
-                        &ctx.app_handle,
+                        ctx.app_handle,
                         ExportProgress {
                             stage: "effects",
                             progress: pct,
@@ -1543,7 +1553,7 @@ fn encode_output(
 ) -> crate::error::Result<()> {
     tracing::info!("All effects applied, proceeding to encode");
     emit_export_progress(
-        &app_handle,
+        app_handle,
         ExportProgress {
             stage: "encoding",
             progress: 90,
@@ -1592,7 +1602,7 @@ fn encode_output(
         options.format.as_deref(),
     )?;
     emit_export_progress(
-        &app_handle,
+        app_handle,
         ExportProgress {
             stage: "done",
             progress: 100,
@@ -1830,15 +1840,14 @@ pub fn sam3_auto_mask(
 /// Run video predictor on a list of frames.
 #[tauri::command]
 pub fn sam3_video_predictor(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     frames: Vec<String>,
     prompt: Option<String>,
 ) -> crate::error::Result<serde_json::Value> {
-    let sam3_lock = lock_state(&state.sam3, "SAM3")?;
-    let engine = sam3_lock
-        .as_ref()
-        .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
-    let (frame_masks, frame_scores) = engine.video_predictor(frames, prompt)?;
+    let (frame_masks, frame_scores) = with_sam3(&app, &state, |engine| {
+        engine.video_predictor(frames.clone(), prompt.clone())
+    })?;
     Ok(json!({
         "status": "ok",
         "frame_masks": frame_masks,
@@ -2738,7 +2747,13 @@ pub struct UpdateInfo {
 /// updater endpoint.
 #[tauri::command]
 pub async fn check_update(app: tauri::AppHandle) -> crate::error::Result<Option<UpdateInfo>> {
-    let updater = app.updater()?;
+    // The updater plugin is intentionally not registered (see lib.rs) until
+    // signed release artifacts exist, so `app.updater()` errors on every
+    // call. Report "no update" rather than surfacing a config error to the
+    // UI; a registered-but-failing check still propagates its real error.
+    let Ok(updater) = app.updater() else {
+        return Ok(None);
+    };
     match updater.check().await? {
         Some(update) => Ok(Some(UpdateInfo {
             version: update.version,
@@ -2754,7 +2769,11 @@ pub async fn check_update(app: tauri::AppHandle) -> crate::error::Result<Option<
 /// Download, verify, and install the latest signed update, then restart the app.
 #[tauri::command]
 pub async fn install_update(app: tauri::AppHandle) -> crate::error::Result<String> {
-    let updater = app.updater()?;
+    // See check_update: an unregistered updater plugin means "up to date",
+    // not an error.
+    let Ok(updater) = app.updater() else {
+        return Ok("up to date".to_string());
+    };
     match updater.check().await? {
         Some(update) => {
             update
@@ -2852,7 +2871,26 @@ fn find_python() -> Option<String> {
         }
     }
     for name in ["python.exe", "python3.exe", "python"] {
-        if crate::proc::command(name).arg("--version").output().is_ok() {
+        // Exit-0 alone is not enough: on machines without Python, the
+        // %LOCALAPPDATA%\Microsoft\WindowsApps\python.exe App Execution
+        // Alias stub sits on PATH, exits quickly and prints no version —
+        // we would end up invoking it for real work. A real interpreter
+        // prints "Python X.Y.Z" to stdout (2.x prints it to stderr).
+        let Ok(output) = crate::proc::command(name).arg("--version").output() else {
+            continue;
+        };
+        let text = [
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        ]
+        .concat();
+        let trimmed = text.trim_start();
+        let is_real_python = trimmed.starts_with("Python ")
+            && trimmed
+                .as_bytes()
+                .get(7)
+                .is_some_and(|b| b.is_ascii_digit());
+        if output.status.success() && is_real_python {
             return Some(name.to_string());
         }
     }
@@ -3272,7 +3310,15 @@ pub async fn apply_ffglitch(
     // resetting the flag so a stale `true` left over from a previously
     // cancelled operation can't immediately abort this new one, and so this
     // reset can't race a still-running or queued export_video call.
-    let permit = state.export_semaphore.clone().acquire_owned().await?;
+    // The temp config exists from this point on; every error path below must
+    // remove it before propagating or it leaks into the temp dir.
+    let permit = match state.export_semaphore.clone().acquire_owned().await {
+        Ok(permit) => permit,
+        Err(e) => {
+            let _ = std::fs::remove_file(&temp_config);
+            return Err(e.into());
+        }
+    };
     let cancel = state.export_cancel.clone();
     cancel.store(false, Ordering::Relaxed);
 
@@ -3294,11 +3340,11 @@ pub async fn apply_ffglitch(
         )
         .map(|output| (output, output_path_clone))
     })
-    .await?;
+    .await;
 
     let _ = std::fs::remove_file(&temp_config);
 
-    let (output, output_path) = result?;
+    let (output, output_path) = result??;
 
     if !output.status.success() {
         // Clean up 0-byte output file if it was created

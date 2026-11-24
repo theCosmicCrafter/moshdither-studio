@@ -32,6 +32,24 @@ pub fn blend_mask(
         )));
     }
 
+    // Both frame buffers are indexed at `y * width + x` below; a buffer that
+    // does not actually hold width*height*4 bytes would panic mid-blend.
+    let expected_frame_bytes = (working.width as u64)
+        .saturating_mul(working.height as u64)
+        .saturating_mul(4);
+    if working.data.len() as u64 != expected_frame_bytes
+        || previous.data.len() as u64 != expected_frame_bytes
+    {
+        return Err(crate::error::AppError::DimensionMismatch(format!(
+            "{}x{} frames expect {} bytes each, got working={} previous={}",
+            working.width,
+            working.height,
+            expected_frame_bytes,
+            working.data.len(),
+            previous.data.len()
+        )));
+    }
+
     let img_w = working.width as usize;
     let img_h = working.height as usize;
     let mask_w = mask.width as usize;

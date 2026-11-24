@@ -75,7 +75,12 @@ export class WebGLContext {
   createShader(type: number, source: string): WebGLShader {
     this.ensureContext();
     const gl = this.gl;
-    const shader = gl.createShader(type)!;
+    const shader = gl.createShader(type);
+    if (!shader) {
+      throw new Error(
+        `gl.createShader(type=${type}) returned null — the GL context may be invalid`
+      );
+    }
     gl.shaderSource(shader, source);
     gl.compileShader(shader);
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
@@ -92,7 +97,12 @@ export class WebGLContext {
     const gl = this.gl;
     const vs = this.createShader(gl.VERTEX_SHADER, vertSrc);
     const fs = this.createShader(gl.FRAGMENT_SHADER, fragSrc);
-    const program = gl.createProgram()!;
+    const program = gl.createProgram();
+    if (!program) {
+      throw new Error(
+        `gl.createProgram() returned null (program "${name}") — the GL context may be invalid`
+      );
+    }
     gl.attachShader(program, vs);
     gl.attachShader(program, fs);
     // Bind attribute locations BEFORE linking so they match FullscreenQuad's VAO (0=pos, 1=texCoord)
@@ -119,7 +129,12 @@ export class WebGLContext {
   createTexture(name: string, width: number, height: number, data?: Uint8Array): WebGLTexture {
     this.ensureContext();
     const gl = this.gl;
-    const tex = gl.createTexture()!;
+    const tex = gl.createTexture();
+    if (!tex) {
+      throw new Error(
+        `gl.createTexture() returned null (texture "${name}") — the GL context may be invalid`
+      );
+    }
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texImage2D(
       gl.TEXTURE_2D,
@@ -151,7 +166,12 @@ export class WebGLContext {
   createFramebuffer(name: string, texture: WebGLTexture): WebGLFramebuffer {
     this.ensureContext();
     const gl = this.gl;
-    const fb = gl.createFramebuffer()!;
+    const fb = gl.createFramebuffer();
+    if (!fb) {
+      throw new Error(
+        `gl.createFramebuffer() returned null (framebuffer "${name}") — the GL context may be invalid`
+      );
+    }
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
     if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {

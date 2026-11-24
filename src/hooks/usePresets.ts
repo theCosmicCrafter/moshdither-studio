@@ -342,7 +342,9 @@ export function usePresets() {
       a.href = url;
       a.download = `moshdither-presets-${new Date().toISOString().slice(0, 10)}.json`;
       a.click();
-      URL.revokeObjectURL(url);
+      // Revoke on a later tick: revoking immediately can cancel the
+      // download before the browser has started reading the blob.
+      setTimeout(() => URL.revokeObjectURL(url), 0);
       setStatusMessage(`Exported ${toExport.length} presets`);
     },
     [presets, setStatusMessage]

@@ -59,10 +59,19 @@ pub enum AppError {
 
 impl AppError {
     /// True when the failure means the SAM3 sidecar's IPC transport is dead
-    /// and the engine should be restarted and retried once. A `Sam3Timeout`
-    /// or a bridge-reported error is NOT a transport failure.
+    /// or desynchronized and the engine should be restarted and retried once.
+    ///
+    /// `Sam3Timeout` qualifies: the timed-out request can still be answered
+    /// later, and that stale response would be returned to the *next* command
+    /// on the same pipe (a `Sam3Response` parses `#[serde(default)]`, so a
+    /// mismatched body can surface as a plausible `"ok"`). Only a fresh
+    /// bridge process re-synchronizes the stream. A bridge-reported error is
+    /// NOT a transport failure.
     pub fn is_sam3_transport_failure(&self) -> bool {
-        matches!(self, AppError::Io(_) | AppError::Sam3Pipe(_))
+        matches!(
+            self,
+            AppError::Io(_) | AppError::Sam3Pipe(_) | AppError::Sam3Timeout(_)
+        )
     }
 }
 

@@ -131,6 +131,29 @@ jobs:
           TAURI_TARGET_TRIPLE: ${{ matrix.target }}
         run: npm run build:sam3-sidecar -- --target ${{ matrix.target }}
 
+      - name: prepare external binaries and mosh-cli sidecar (Windows)
+        if: matrix.platform == 'windows-latest'
+        env:
+          TAURI_TARGET_TRIPLE: ${{ matrix.target }}
+        run: |
+          npm run fetch:external
+          npm run build:mosh-sidecar
+
+      - name: stub externalBin for non-Windows targets
+        if: matrix.platform != 'windows-latest'
+        shell: bash
+        run: |
+          HOST_TRIPLE=$(rustc -vV | awk '/^host:/ {print $2}')
+          mkdir -p src-tauri/bin
+          for t in "${{ matrix.target }}" "${HOST_TRIPLE}"; do
+            [ -z "$t" ] && continue
+            for b in ffmpeg ffprobe ffgac ffedit mosh-cli; do
+              printf '#!/bin/sh\necho "%s stub version 0.0.0"\n' "$b" > "src-tauri/bin/${b}-${t}"
+              chmod +x "src-tauri/bin/${b}-${t}"
+            done
+          done
+          ls -la src-tauri/bin/
+
       - name: generate release Tauri config overlay
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

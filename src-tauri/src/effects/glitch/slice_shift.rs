@@ -66,15 +66,17 @@ impl Effect for SliceShift {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let slice_height =
-            crate::effects::params::u64_param(params, "slice_height", self.slice_height as u64)
-                as u32;
-        let max_shift =
-            crate::effects::params::u64_param(params, "max_shift", self.max_shift as u64) as u32;
-        let time = crate::effects::params::usize_param(params, "time", 0) as u32;
-
         let w = input.width as usize;
         let h = input.height as usize;
+        let slice_height =
+            crate::effects::params::u64_param(params, "slice_height", self.slice_height as u64)
+                .max(1) as u32;
+        // A shift wider than the frame clamps to its edge anyway; the cap
+        // keeps `max_shift * 2 + 1` inside u32.
+        let max_shift =
+            (crate::effects::params::u64_param(params, "max_shift", self.max_shift as u64) as u32)
+                .min(w as u32);
+        let time = crate::effects::params::usize_param(params, "time", 0) as u32;
         let mut data = vec![0u8; input.data.len()];
 
         for y in 0..h {

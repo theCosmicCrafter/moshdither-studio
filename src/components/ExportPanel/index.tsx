@@ -152,24 +152,15 @@ export default function ExportPanel() {
     ...(ffglitchParams[ffglitchMode] ?? {}),
   });
 
-  const progressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
   const exportTriggerId = useAppStore((s) => s.exportTriggerId);
   const lastTriggerId = useRef(exportTriggerId);
   const handleExportRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   const activeEffects = effectStack.filter((e) => e.enabled);
-  const resolution = RESOLUTIONS.find((r) => r.id === resolutionId)!;
+  const resolution =
+    RESOLUTIONS.find((r) => r.id === resolutionId) ?? RESOLUTIONS[0];
   const inPoint = useAppStore((s) => s.inPoint);
   const outPoint = useAppStore((s) => s.outPoint);
-
-  useEffect(() => {
-    return () => {
-      if (progressTimerRef.current) {
-        clearInterval(progressTimerRef.current);
-      }
-    };
-  }, []);
 
   const handleBrowseWatermarkImage = async () => {
     try {
@@ -245,10 +236,6 @@ export default function ExportPanel() {
           if (!cancelling) setStatusMessage(warning);
         }
         if (stage === "error") {
-          if (progressTimerRef.current) {
-            clearInterval(progressTimerRef.current);
-            progressTimerRef.current = null;
-          }
           setExportIsRunning(false);
           setExportProgress(0);
           setStatusMessage(`Export failed: ${message ?? "unknown error"}`);
@@ -318,10 +305,6 @@ export default function ExportPanel() {
 
       const unlisten = await unlistenPromise;
       unlisten();
-      if (progressTimerRef.current) {
-        clearInterval(progressTimerRef.current);
-        progressTimerRef.current = null;
-      }
       setExportProgress(100);
       setStatusMessage(`Exported: ${outputPath}`);
       setTimeout(() => {
@@ -331,10 +314,6 @@ export default function ExportPanel() {
     } catch (err) {
       const unlisten = await unlistenPromise;
       unlisten();
-      if (progressTimerRef.current) {
-        clearInterval(progressTimerRef.current);
-        progressTimerRef.current = null;
-      }
       // Branch on the store flag, not on the message: exportVideo throws its
       // own "Export cancelled" for a dismissed Save dialog with the flag
       // unset, and that must keep reading as it does today.

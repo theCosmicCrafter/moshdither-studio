@@ -46,9 +46,12 @@ impl Effect for ColorBleed {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let amount = crate::effects::params::usize_param(params, "amount", self.amount as usize);
         let w = input.width as usize;
         let h = input.height as usize;
+        // A bleed wider than the frame clamps to its edge anyway; the cap
+        // keeps `amount * 2 + 1` inside usize.
+        let amount =
+            crate::effects::params::usize_param(params, "amount", self.amount as usize).min(w);
         let mut data = vec![0u8; input.data.len()];
 
         for y in 0..h {

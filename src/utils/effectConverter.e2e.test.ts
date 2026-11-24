@@ -386,6 +386,10 @@ describe("Effect Pipeline E2E", () => {
       expect(rustToWebGL["dithering.random_noise"].accurate).toBe(false);
       expect(rustToWebGL["dithering.random_noise"].paramMap).toEqual({});
     });
+
+    it("glitch.slice_shift: marked approximate (seeded RNG per-slice displacement + pixel-width UV shift)", () => {
+      expect(rustToWebGL["glitch.slice_shift"].accurate).toBe(false);
+    });
   });
 
   describe("resolveMaskId", () => {

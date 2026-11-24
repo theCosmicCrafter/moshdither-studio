@@ -64,7 +64,7 @@ impl Effect for ChromaticAberration {
                 data[idx] = input.data[ridx];
 
                 // Blue shifted right
-                let bx = (x + shift).min(w - 1);
+                let bx = x.saturating_add(shift).min(w - 1);
                 let bidx = (y * w + bx) * 4;
                 data[idx + 2] = input.data[bidx];
             }

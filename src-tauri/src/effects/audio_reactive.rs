@@ -59,7 +59,7 @@ impl Effect for BassPulse {
         params: &ParameterValues,
     ) -> Result<Frame> {
         let sensitivity = crate::effects::params::f32_param(params, "sensitivity", 1.0);
-        let block_size = crate::effects::params::usize_param(params, "block_size", 16);
+        let block_size = crate::effects::params::usize_param(params, "block_size", 16).max(1);
 
         let bass = audio_f32(params, "_audio_bass");
         let pulse = bass * sensitivity;

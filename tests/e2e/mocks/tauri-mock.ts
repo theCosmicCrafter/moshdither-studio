@@ -134,9 +134,20 @@ export function buildTauriMockScript(config: TauriMockConfig = {}): string {
   let callbackId = 0;
 
   window.__TAURI_INTERNALS__ = {
+    metadata: {
+      currentWindow: { label: "main" },
+      currentWebview: { windowLabel: "main", label: "main" },
+      windows: [{ label: "main" }],
+      webviews: [{ windowLabel: "main", label: "main" }],
+    },
     invoke(command, args) {
       console.log('[TAURI MOCK] invoke:', command, args);
-      if (command === 'plugin:event|listen') return Promise.resolve(1);
+      if (
+        command === 'plugin:event|listen' ||
+        command === 'plugin:webview|on_drag_drop_event'
+      ) {
+        return Promise.resolve(1);
+      }
       if (command === 'plugin:event|unlisten') return Promise.resolve();
       if (command === 'plugin:dialog|open') {
         // A test opts in to a successful open by setting

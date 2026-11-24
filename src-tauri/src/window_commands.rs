@@ -269,17 +269,41 @@ fn dock_appbar_win32(app: &AppHandle, edge: &str, size: i32) -> crate::error::Re
 
     let window = main_window(app)?;
     let mut abd = appbar_data_for(&window)?;
-    let screen = current_monitor(app)?.size().clone();
+    let monitor = current_monitor(app)?;
+    let screen = *monitor.size();
+    let origin = *monitor.position();
 
-    // One match decides both the AppBar edge flag and the reserved rect —
-    // they are the same decision and previously could drift apart.
+    // `size` is raw IPC input: a non-positive strip is meaningless, and
+    // `size > w` on a right/bottom edge produces an inverted rect whose
+    // (right - left) wraps to ~u32::MAX when cast below — a multi-billion
+    // pixel window resize. Reject, then clamp to the smaller dimension.
+    if size <= 0 {
+        return Err(crate::error::AppError::InvalidParameter(format!(
+            "AppBar size must be positive, got {size}"
+        )));
+    }
     let w = screen.width as i32;
     let h = screen.height as i32;
+    let size = size.min(w.min(h)).max(1);
+
+    // One match decides both the AppBar edge flag and the reserved rect —
+    // they are the same decision and previously could drift apart. The rect
+    // is offset by the monitor's origin so a window docked on a secondary
+    // display reserves space on that display, not on monitor 0.
     let (abe, rect) = match edge {
-        "left" => (ABE_LEFT, (0, 0, size, h)),
-        "right" => (ABE_RIGHT, (w - size, 0, w, h)),
-        "top" => (ABE_TOP, (0, 0, w, size)),
-        "bottom" => (ABE_BOTTOM, (0, h - size, w, h)),
+        "left" => (
+            ABE_LEFT,
+            (origin.x, origin.y, origin.x + size, origin.y + h),
+        ),
+        "right" => (
+            ABE_RIGHT,
+            (origin.x + w - size, origin.y, origin.x + w, origin.y + h),
+        ),
+        "top" => (ABE_TOP, (origin.x, origin.y, origin.x + w, origin.y + size)),
+        "bottom" => (
+            ABE_BOTTOM,
+            (origin.x, origin.y + h - size, origin.x + w, origin.y + h),
+        ),
         _ => {
             return Err(crate::error::AppError::Generic(format!(
                 "Unknown edge: {edge}"
@@ -314,8 +338,8 @@ fn dock_appbar_win32(app: &AppHandle, edge: &str, size: i32) -> crate::error::Re
         .map_err(crate::error::AppError::from)?;
     window
         .set_size(PhysicalSize::new(
-            (abd.rc.right - abd.rc.left) as u32,
-            (abd.rc.bottom - abd.rc.top) as u32,
+            (abd.rc.right - abd.rc.left).max(1) as u32,
+            (abd.rc.bottom - abd.rc.top).max(1) as u32,
         ))
         .map_err(crate::error::AppError::from)?;
 

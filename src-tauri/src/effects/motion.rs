@@ -92,6 +92,7 @@ pub fn block_match_motion_field(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn block_diff(
     prev: &Frame,
     curr: &Frame,

@@ -161,7 +161,8 @@ impl Effect for VhsEffect {
             params,
             "slice_size",
             crate::effects::params::schema_f64(&meta, "slice_size").unwrap_or(0.0) as usize,
-        );
+        )
+        .max(1);
         let glitch_prob = crate::effects::params::f32_param(
             params,
             "glitch_probability",
@@ -185,7 +186,7 @@ impl Effect for VhsEffect {
 
         let mut y = 0;
         while y < h {
-            let slice_end = (y + slice_size).min(h);
+            let slice_end = y.saturating_add(slice_size).min(h);
             let slice_seed = (y as u32)
                 .wrapping_add(time.wrapping_mul(71))
                 .wrapping_mul(374761393);

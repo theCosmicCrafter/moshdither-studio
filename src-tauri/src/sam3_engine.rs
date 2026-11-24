@@ -575,9 +575,9 @@ impl Sam3Engine {
         };
         stdin
             .write_all(&(payload.len() as u32).to_le_bytes())
-            .map_err(&pipe_err)?;
-        stdin.write_all(&payload).map_err(&pipe_err)?;
-        stdin.flush().map_err(&pipe_err)?;
+            .map_err(pipe_err)?;
+        stdin.write_all(&payload).map_err(pipe_err)?;
+        stdin.flush().map_err(pipe_err)?;
         drop(stdin);
 
         // Commands like video prediction can legitimately take minutes, while
@@ -888,6 +888,9 @@ impl Sam3Engine {
                 tracing::error!("SAM3 bridge child wait error: {}", e);
                 // Attempt one final reap; do not swallow unexpected IO errors.
                 let _ = child.wait();
+                // Keep pid-file bookkeeping in step with the process table
+                // even when the bounded wait itself failed.
+                remove_sam3_pid();
                 return Err(crate::error::AppError::Generic(format!(
                     "SAM3 bridge shutdown failed: {}",
                     e

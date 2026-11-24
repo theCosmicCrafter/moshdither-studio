@@ -55,7 +55,7 @@ impl Effect for Anaglyph {
             for x in 0..w {
                 let dst_idx = (y * w + x) * 4;
                 let rx = x.saturating_sub(shift).min(w - 1);
-                let bx = (x + shift).min(w - 1);
+                let bx = x.saturating_add(shift).min(w - 1);
                 data[dst_idx] = input.data[(y * w + rx) * 4];
                 data[dst_idx + 1] = input.data[dst_idx + 1];
                 data[dst_idx + 2] = input.data[(y * w + bx) * 4 + 2];

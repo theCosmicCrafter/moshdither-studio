@@ -43,6 +43,7 @@ export class EffectChain {
   reset() {
     this.maskTextureCache.clear();
     this.savedPreviousTex = null;
+    this.savedPreviousTexFor = -1;
     this.initialized = false;
     this.quad.reset();
     this.lutLoader.clearCache();
@@ -234,8 +235,13 @@ export class EffectChain {
 
       if (isMaskBlend) {
         // inputTex is the effect output; we need the pre-effect frame and mask
-        // The pre-effect texture was saved before the effect pass
-        previousTex = this.savedPreviousTex;
+        // The pre-effect texture was saved before the effect pass — but only
+        // trust it if the pass right before this one actually rendered. When
+        // that pass was skipped (missing shader), savedPreviousTex still
+        // holds a texture saved by an earlier pass (or a previous frame),
+        // and blending against it produces a stale-image mask.
+        previousTex =
+          this.savedPreviousTexFor === i - 1 ? this.savedPreviousTex : null;
         const origPass = expandedPasses[i - 1];
         if (origPass?.maskB64) {
           maskTex = await this.getMaskTexture(origPass.maskB64);
@@ -247,6 +253,7 @@ export class EffectChain {
       } else if (pass.maskB64) {
         // Save the pre-effect input texture for the upcoming maskBlend pass
         this.savedPreviousTex = inputTex;
+        this.savedPreviousTexFor = i;
       }
 
       const program = this.ctx.getOrCreateProgram(
@@ -498,6 +505,11 @@ export class EffectChain {
       // createTexture/createFramebuffer already delete the object sitting in
       // the named slot, so a resize is just the creation path again.
       this.createPingPongTextures(width, height);
+      // savedPreviousTex can point at a ping-pong texture that was just
+      // deleted and recreated — the saved handle is now dangling, and a
+      // maskBlend that uses it samples from whatever replaced it.
+      this.savedPreviousTex = null;
+      this.savedPreviousTexFor = -1;
     }
   }
 
@@ -511,4 +523,7 @@ export class EffectChain {
   }
 
   private savedPreviousTex: WebGLTexture | null = null;
+  // Index of the expanded pass that produced savedPreviousTex. maskBlend at
+  // pass i trusts it only when savedPreviousTexFor === i - 1.
+  private savedPreviousTexFor = -1;
 }

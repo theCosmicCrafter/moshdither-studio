@@ -210,7 +210,10 @@ impl Effect for VibrateGlitch {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let randomness = usize_param(params, "randomness", VIBRATE_RANDOMNESS) as i32;
+        // gen_range panics on an empty range, and `as i32` wraps on
+        // usize::MAX — clamp into a positive, representable bound.
+        let randomness = usize_param(params, "randomness", VIBRATE_RANDOMNESS)
+            .clamp(1, i32::MAX as usize) as i32;
         let bias = randomness / 2;
         let mut rng = crate::effects::rng::frame_rng(input, params);
         let w = input.width as usize;
@@ -548,7 +551,7 @@ impl Effect for DelayGlitch {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let delay = usize_param(params, "delay_frames", DELAY_FRAMES);
+        let delay = usize_param(params, "delay_frames", DELAY_FRAMES).max(1);
 
         if input.frames.len() < 2 {
             return Ok(input.clone());
