@@ -1,10 +1,16 @@
 # MoshDither Studio
 
-A unified desktop application for datamoshing, dithering, glitch art, and video effects. Combines the capabilities of 37+ existing tools into a single, modern, cross-platform creative suite.
+A unified desktop application for datamoshing, dithering, glitch art, and video effects. Combines the capabilities of 37+ existing tools into a single, modern creative suite.
 
 ## System Requirements
 
-- **Operating System:** Windows 10/11 (64-bit)
+- **Operating System:** Windows 10/11 (64-bit) — the only supported platform.
+  CI compiles and tests the Rust crate on Ubuntu and the release workflow
+  produces a Linux artifact, but every bundled sidecar (`ffmpeg`, `ffprobe`,
+  `ffgac`, `ffedit`, `mosh-cli`) ships Windows binaries only, so media
+  decode, export, and moshing do not function there. macOS is unbuilt.
+  Linux/macOS support is blocked on sidecar packaging, not on the
+  Rust/React core, which is platform-agnostic.
 - **Memory (RAM):** 8 GB minimum, 16 GB+ recommended for long-form video exports
 - **Graphics (GPU):**
   - WebGL2-compatible GPU for real-time interactive preview.
