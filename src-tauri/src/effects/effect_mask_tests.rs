@@ -2645,9 +2645,9 @@ mod tests {
                 .unwrap();
             // All frames should be copies of the first frame
             assert_eq!(result.frames.len(), 5);
-            for i in 0..5 {
+            for frame in &result.frames {
                 assert_eq!(
-                    result.frames[i].data, seg.frames[0].data,
+                    frame.data, seg.frames[0].data,
                     "all frames should be first frame"
                 );
             }

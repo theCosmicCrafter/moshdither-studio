@@ -112,13 +112,7 @@ mod tests {
             .process_frame(&frame, None, &serde_json::Map::new())
             .unwrap();
 
-        let mut changed = false;
-        for i in 0..result.data.len() {
-            if result.data[i] != 128 {
-                changed = true;
-                break;
-            }
-        }
+        let changed = result.data.iter().any(|&b| b != 128);
         assert!(changed);
     }
 

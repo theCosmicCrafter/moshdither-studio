@@ -134,13 +134,12 @@ mod tests {
             .unwrap();
         assert_eq!(r.frames.len(), 6);
         // Deterministic shuffle should produce different order
-        let mut changed = false;
-        for i in 0..6 {
-            if r.frames[i].data[0] != i as u8 {
-                changed = true;
-                break;
-            }
-        }
+        let changed = r
+            .frames
+            .iter()
+            .enumerate()
+            .take(6)
+            .any(|(i, f)| f.data[0] != i as u8);
         assert!(changed);
     }
 }
