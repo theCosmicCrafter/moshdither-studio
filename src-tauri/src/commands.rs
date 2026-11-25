@@ -3440,8 +3440,7 @@ fn mosh_temp_root(uid: u32) -> PathBuf {
 fn mosh_temp_dir(sub: &str) -> crate::error::Result<PathBuf> {
     let root = std::env::temp_dir().join("moshdither-studio");
     let dir = if sub.is_empty() { root } else { root.join(sub) };
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("temp dir {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("temp dir {}: {e}", dir.display()))?;
     Ok(dir)
 }
 

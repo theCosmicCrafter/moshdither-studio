@@ -37,7 +37,12 @@ enum P {
     Bool(&'static str, &'static str, bool),
     /// (id, name, default, options) — TS `type: "select"`. Option strings are
     /// the values `mosh_cli.py` reads, not display labels.
-    Select(&'static str, &'static str, &'static str, &'static [&'static str]),
+    Select(
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static [&'static str],
+    ),
 }
 
 const fn num(id: &'static str, name: &'static str, def: f64, min: f64, max: f64, step: f64) -> P {
@@ -163,7 +168,14 @@ static MODES: &[ModeSpec] = &[
         "Water Bloom",
         &[
             num("positionFrame", "At frame", 1.0, 1.0, 5000.0, 1.0),
-            num("repeatCount", "Bloom length (frames)", 20.0, 1.0, 100.0, 1.0),
+            num(
+                "repeatCount",
+                "Bloom length (frames)",
+                20.0,
+                1.0,
+                100.0,
+                1.0,
+            ),
         ],
     ),
     // ── Movement ──
@@ -224,11 +236,7 @@ static MODES: &[ModeSpec] = &[
             num("feedback", "Feedback", 0.5, 0.0, 1.0, 0.05),
         ],
     ),
-    spec(
-        "stop",
-        "Stop",
-        &[threshold(95.0), frame_count(0.0)],
-    ),
+    spec("stop", "Stop", &[threshold(95.0), frame_count(0.0)]),
     spec(
         "invert-reverse",
         "Invert / Reverse",
@@ -394,11 +402,7 @@ mod tests {
     #[test]
     fn pixel_effects_keep_the_pixel_default() {
         let registry = EffectRegistry::new();
-        for id in [
-            "color.invert",
-            "dithering.bayer",
-            "datamoshing.cross_video",
-        ] {
+        for id in ["color.invert", "dithering.bayer", "datamoshing.cross_video"] {
             let effect = registry.get(id).expect(id);
             assert_eq!(effect.pipeline(), Pipeline::Pixel, "{id}");
         }
