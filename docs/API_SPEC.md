@@ -32,6 +32,7 @@ All communication between the React frontend and Rust backend uses Tauri v2's `i
 | Command | Parameters | Return | Description |
 |---------|-----------|--------|-------------|
 | `get_media_info` | — | `{ width: number, height: number, loaded: boolean }` | Get dimensions and load status of current media. |
+| `get_media_metadata` | `path: string` | `Record<string, unknown>` | Probe media file metadata via ffprobe (codec, duration, bitrate, etc.). |
 | `generate_proxy_command` | `sourcePath: string, maxWidth: number, crf: number` | `string` (proxy path) | Generate a low-resolution H.264 proxy video via FFmpeg for smooth preview. Returns proxy file path. |
 
 ### 1.3 SAM3 Segmentation
