@@ -93,7 +93,7 @@ impl Effect for PixelSort {
         } else {
             params
                 .get("threshold")
-                .and_then(|v| v.as_u64())
+                .and_then(crate::effects::params::as_uint)
                 .unwrap_or(self.threshold as u64)
                 .min(255) as u8
         };
@@ -137,22 +137,6 @@ impl Effect for PixelSort {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

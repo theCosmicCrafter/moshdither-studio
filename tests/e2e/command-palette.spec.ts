@@ -1,13 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { tauriMockScript } from "./mocks/tauri-mock";
+import { openApp } from "./helpers";
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(tauriMockScript);
-  await page.goto("/", { waitUntil: "domcontentloaded" });
-  await page.waitForSelector("header, [data-testid='toolbar']", { timeout: 15000 });
-  await page.locator("text=Discard").click({ timeout: 2000 }).catch(() => {});
-  await page.locator("text=Skip").click({ timeout: 2000 }).catch(() => {});
-  await page.locator("text=Get Started").click({ timeout: 2000 }).catch(() => {});
+  await openApp(page);
 });
 
 // Ctrl/Cmd+Shift+P toggles the palette (CommandPalette.tsx:46). It exposes

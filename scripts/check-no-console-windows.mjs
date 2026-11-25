@@ -47,7 +47,11 @@ function walk(dir, out = []) {
         name === "node_modules" ||
         name === "__pycache__" ||
         name === "target" ||
-        name === "build"
+        name === "build" ||
+        // venvs are gitignored third-party installs, same category as
+        // node_modules and sam3_repo -- flagging their subprocess use
+        // reports other people's code as ours.
+        name === "venv"
       )
         continue;
       walk(p, out);
@@ -57,9 +61,10 @@ function walk(dir, out = []) {
 }
 
 // ── Rust ────────────────────────────────────────────────────────────────────
-// `Command::new` is allowed only in proc.rs (which defines the wrapper) and in
-// the CLI verifier's own tests, which run in a terminal that already exists.
-const RUST_ALLOWED = ["src-tauri/src/proc.rs", "src-tauri/src/effects/functional_tests.rs"];
+// `Command::new` is allowed only in proc.rs, which defines the CREATE_NO_WINDOW
+// wrapper every other spawn must go through -- including GUI-reachable test
+// code; "it's just a test" still pops a console for an installed user.
+const RUST_ALLOWED = ["src-tauri/src/proc.rs"];
 for (const file of walk(join(root, "src-tauri", "src")).filter((f) => f.endsWith(".rs"))) {
   const rel = relative(root, file).split(sep).join("/");
   if (RUST_ALLOWED.includes(rel)) continue;

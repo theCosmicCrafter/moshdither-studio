@@ -1,3 +1,4 @@
+import { logger } from "../utils/logger";
 import { useEffect, useRef } from "react";
 import { useAppStore } from "../store";
 import { sam3Shutdown } from "../lib/tauri";
@@ -49,7 +50,7 @@ export function useSam3IdleShutdown() {
           setSam3Ready(false);
           setStatusMessage("SAM3 shut down after idle (RAM reclaimed)");
         } catch (e) {
-          console.warn("SAM3 idle shutdown failed:", e);
+          logger.warn("sam3-idle", `SAM3 idle shutdown failed:`, { error: String(e) });
         }
       }
     }, CHECK_INTERVAL_MS);

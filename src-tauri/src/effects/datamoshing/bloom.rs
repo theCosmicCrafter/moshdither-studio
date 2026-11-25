@@ -138,10 +138,9 @@ impl Effect for BloomDatamosh {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let bloom_size = params
-            .get("bloom_size")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(self.bloom_size as u64) as usize;
+        let bloom_size =
+            crate::effects::params::usize_param(params, "bloom_size", self.bloom_size as usize)
+                .max(1);
         let mut out = input.data.clone();
         apply_bloom(
             &mut out,
@@ -168,10 +167,9 @@ impl Effect for BloomDatamosh {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let bloom_size = params
-            .get("bloom_size")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(self.bloom_size as u64) as usize;
+        let bloom_size =
+            crate::effects::params::usize_param(params, "bloom_size", self.bloom_size as usize)
+                .max(1);
         let mut frames = Vec::new();
 
         for chunk in input.frames.chunks(bloom_size) {

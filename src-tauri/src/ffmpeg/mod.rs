@@ -1444,11 +1444,7 @@ pub fn encode_video(
                     tracing::info!("FFmpeg encode cancelled by user");
                     let _ = stdin.flush();
                     drop(stdin);
-                    let _ = child.kill();
-                    let _ = child.wait_timeout(std::time::Duration::from_secs(10));
-                    if let Some(t) = stderr_thread.take() {
-                        let _ = t.join();
-                    }
+                    kill_child_and_join(&mut child, stderr_thread.take());
                     return Err(AppError::Ffmpeg("Export cancelled by user".to_string()));
                 }
             }
@@ -1466,10 +1462,9 @@ pub fn encode_video(
             if frame.width != first_w || frame.height != first_h || frame.data.len() != expected {
                 let _ = stdin.flush();
                 drop(stdin);
-                let _ = child.kill();
-                let _ = child.wait();
+                kill_child_and_join(&mut child, stderr_thread.take());
                 return Err(AppError::Ffmpeg(format!(
-                    "Frame {} is {}x{} with {} bytes, but the encode was opened for                      {}x{} ({} bytes per frame). An effect changed the frame size                      mid-stream; FFmpeg cannot be re-sized once started.",
+                    "Frame {} is {}x{} with {} bytes, but the encode was opened for {}x{} ({} bytes per frame). An effect changed the frame size mid-stream; FFmpeg cannot be re-sized once started.",
                     i + 1,
                     frame.width,
                     frame.height,
@@ -1485,11 +1480,7 @@ pub fn encode_video(
                 // The IO error is only ever "the pipe has been ended", which
                 // says nothing about the cause; FFmpeg's own diagnosis is
                 // sitting in `stderr_buf`. Surface that instead of the errno.
-                use child_wait_timeout::ChildWT;
-                let _ = child.wait_timeout(std::time::Duration::from_secs(10));
-                if let Some(t) = stderr_thread.take() {
-                    let _ = t.join();
-                }
+                kill_child_and_join(&mut child, stderr_thread.take());
                 let stderr = stderr_buf
                     .lock()
                     .map(|g| String::from_utf8_lossy(&g).into_owned())
@@ -1521,21 +1512,14 @@ pub fn encode_video(
                 "FFmpeg encode timed out after {:?}, killing process",
                 timeout
             );
-            let _ = child.kill();
-            let _ = child.wait_timeout(std::time::Duration::from_secs(10));
-            if let Some(t) = stderr_thread.take() {
-                let _ = t.join();
-            }
+            kill_child_and_join(&mut child, stderr_thread.take());
             return Err(AppError::Ffmpeg(format!(
                 "FFmpeg encode timed out after {:?}",
                 timeout
             )));
         }
         Err(e) => {
-            let _ = child.kill();
-            if let Some(t) = stderr_thread.take() {
-                let _ = t.join();
-            }
+            kill_child_and_join(&mut child, stderr_thread.take());
             return Err(AppError::Io(e));
         }
     };
@@ -1592,6 +1576,23 @@ struct ProbeCache {
 /// a chatty process cannot deadlock on a full pipe buffer while we wait);
 /// this is that same pattern, generalized for callers that don't need to
 /// stream input to stdin.
+/// Kill a spawned child, give it ten seconds to exit, then join the reader
+/// threads that were draining its pipes so their captured output is complete
+/// for the error message that follows. The bounded wait, not `wait()`: if the
+/// kill was ignored (already-exited child is fine, but a wedged one is not)
+/// a blocking wait would hang the export thread forever.
+fn kill_child_and_join(
+    child: &mut std::process::Child,
+    readers: impl IntoIterator<Item = std::thread::JoinHandle<()>>,
+) {
+    use child_wait_timeout::ChildWT;
+    let _ = child.kill();
+    let _ = child.wait_timeout(std::time::Duration::from_secs(10));
+    for t in readers {
+        let _ = t.join();
+    }
+}
+
 fn output_with_timeout(
     cmd: &mut Command,
     timeout: std::time::Duration,
@@ -1612,7 +1613,7 @@ fn output_with_timeout_cancellable(
     cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<std::process::Output> {
     use child_wait_timeout::ChildWT;
-    use std::io::{ErrorKind, Read};
+    use std::io::ErrorKind;
     use std::sync::atomic::Ordering;
 
     let cancelled = || cancel.is_some_and(|c| c.load(Ordering::Relaxed));
@@ -1627,40 +1628,8 @@ fn output_with_timeout_cancellable(
         .spawn()
         .map_err(AppError::Io)?;
 
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| AppError::Ffmpeg("Failed to open child stdout".to_string()))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| AppError::Ffmpeg("Failed to open child stderr".to_string()))?;
-
-    let stdout_buf = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let stderr_buf = Arc::new(std::sync::Mutex::new(Vec::new()));
-
-    let stdout_thread = {
-        let buf = Arc::clone(&stdout_buf);
-        std::thread::spawn(move || {
-            let mut reader = std::io::BufReader::new(stdout);
-            let mut data = Vec::new();
-            let _ = reader.read_to_end(&mut data);
-            if let Ok(mut guard) = buf.lock() {
-                *guard = data;
-            }
-        })
-    };
-    let stderr_thread = {
-        let buf = Arc::clone(&stderr_buf);
-        std::thread::spawn(move || {
-            let mut reader = std::io::BufReader::new(stderr);
-            let mut data = Vec::new();
-            let _ = reader.read_to_end(&mut data);
-            if let Ok(mut guard) = buf.lock() {
-                *guard = data;
-            }
-        })
-    };
+    let (stdout_buf, stderr_buf, stdout_thread, stderr_thread) =
+        crate::proc::spawn_pipe_readers(&mut child).map_err(|e| AppError::Ffmpeg(e.to_string()))?;
 
     let join_readers = |stdout_thread: std::thread::JoinHandle<()>,
                         stderr_thread: std::thread::JoinHandle<()>| {
@@ -1679,16 +1648,12 @@ fn output_with_timeout_cancellable(
             Err(e) if e.kind() == ErrorKind::TimedOut => {
                 if cancelled() {
                     tracing::info!("Cancel requested; killing child process");
-                    let _ = child.kill();
-                    let _ = child.wait_timeout(std::time::Duration::from_secs(10));
-                    join_readers(stdout_thread, stderr_thread);
+                    kill_child_and_join(&mut child, [stdout_thread, stderr_thread]);
                     return Err(AppError::Generic(EXPORT_CANCELLED.to_string()));
                 }
                 if started.elapsed() > timeout {
                     tracing::warn!("Command timed out after {:?}, killing process", timeout);
-                    let _ = child.kill();
-                    let _ = child.wait_timeout(std::time::Duration::from_secs(10));
-                    join_readers(stdout_thread, stderr_thread);
+                    kill_child_and_join(&mut child, [stdout_thread, stderr_thread]);
                     return Err(AppError::Ffmpeg(format!(
                         "Process timed out after {:?}",
                         timeout
@@ -1696,8 +1661,7 @@ fn output_with_timeout_cancellable(
                 }
             }
             Err(e) => {
-                let _ = child.kill();
-                join_readers(stdout_thread, stderr_thread);
+                kill_child_and_join(&mut child, [stdout_thread, stderr_thread]);
                 return Err(AppError::Io(e));
             }
         }
@@ -1995,9 +1959,7 @@ pub fn extract_audio_to_wav(
             || stderr_lower.contains("could not find audio codec")
             || stderr_lower.contains("stream specifier ':a': no stream")
         {
-            return Err(AppError::Ffmpeg(
-                "Source video has no audio stream".to_string(),
-            ));
+            return Err(AppError::NoAudioStream);
         }
         return Err(AppError::Ffmpeg(format!(
             "FFmpeg audio extract failed (exit {}): {}",

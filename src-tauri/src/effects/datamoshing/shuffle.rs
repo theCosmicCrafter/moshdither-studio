@@ -52,12 +52,14 @@ impl Effect for ShuffleDatamosh {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let chunk_size = params
-            .get("chunk_size")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(self.chunk_size as u64) as usize;
+        let chunk_size =
+            crate::effects::params::usize_param(params, "chunk_size", self.chunk_size as usize)
+                .max(1);
         let data = &input.data;
-        let mut chunks: Vec<Vec<u8>> = data.chunks(chunk_size * 4).map(|c| c.to_vec()).collect();
+        let mut chunks: Vec<Vec<u8>> = data
+            .chunks(chunk_size.saturating_mul(4))
+            .map(|c| c.to_vec())
+            .collect();
         let n = chunks.len();
         for i in 0..n {
             let seed = i.wrapping_mul(374761393);
@@ -82,10 +84,9 @@ impl Effect for ShuffleDatamosh {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let chunk_size = params
-            .get("chunk_size")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(self.chunk_size as u64) as usize;
+        let chunk_size =
+            crate::effects::params::usize_param(params, "chunk_size", self.chunk_size as usize)
+                .max(1);
 
         let mut chunks: Vec<Vec<Frame>> = input
             .frames
@@ -133,13 +134,12 @@ mod tests {
             .unwrap();
         assert_eq!(r.frames.len(), 6);
         // Deterministic shuffle should produce different order
-        let mut changed = false;
-        for i in 0..6 {
-            if r.frames[i].data[0] != i as u8 {
-                changed = true;
-                break;
-            }
-        }
+        let changed = r
+            .frames
+            .iter()
+            .enumerate()
+            .take(6)
+            .any(|(i, f)| f.data[0] != i as u8);
         assert!(changed);
     }
 }

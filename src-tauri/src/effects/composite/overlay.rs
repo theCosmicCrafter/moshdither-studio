@@ -216,6 +216,31 @@ impl Overlay {
             overlay_path,
         }
     }
+
+    /// Params + decoded overlay frames for one call, or `None` when no overlay
+    /// is configured (callers pass input through unchanged). Shared between
+    /// `process_frame` and `process_video`, which used to each duplicate the
+    /// extraction and resolution.
+    fn overlay_setup(&self, params: &ParameterValues) -> Result<Option<(f32, u32, Vec<Frame>)>> {
+        let opacity = crate::effects::params::f32_param(params, "opacity", self.opacity);
+        let blend_mode =
+            crate::effects::params::u64_param(params, "blend_mode", self.blend_mode as u64) as u32;
+        let overlay_path = params
+            .get("overlay_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&self.overlay_path);
+
+        if overlay_path.is_empty() {
+            return Ok(None);
+        }
+        let Some(resolved) = locate_overlay_file(overlay_path)? else {
+            return Err(crate::error::AppError::Generic(format!(
+                "Overlay file not found: {}",
+                overlay_path
+            )));
+        };
+        Ok(Some((opacity, blend_mode, load_overlay_frames(&resolved)?)))
+    }
 }
 
 impl Default for Overlay {
@@ -282,29 +307,9 @@ impl Effect for Overlay {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let opacity = params
-            .get("opacity")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(self.opacity as f64) as f32;
-        let blend_mode = params
-            .get("blend_mode")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(self.blend_mode as u64) as u32;
-        let overlay_path = params
-            .get("overlay_path")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&self.overlay_path);
-
-        if overlay_path.is_empty() {
+        let Some((opacity, blend_mode, frames)) = self.overlay_setup(params)? else {
             return Ok(input.clone());
-        }
-        let Some(resolved) = locate_overlay_file(overlay_path)? else {
-            return Err(crate::error::AppError::Generic(format!(
-                "Overlay file not found: {}",
-                overlay_path
-            )));
         };
-        let frames = load_overlay_frames(&resolved)?;
         Ok(blend_frame(input, &frames[0], opacity, blend_mode))
     }
 
@@ -314,34 +319,13 @@ impl Effect for Overlay {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let opacity = params
-            .get("opacity")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(self.opacity as f64) as f32;
-        let blend_mode = params
-            .get("blend_mode")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(self.blend_mode as u64) as u32;
-        let overlay_path = params
-            .get("overlay_path")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&self.overlay_path);
-
-        if overlay_path.is_empty() {
+        let Some((opacity, blend_mode, overlay_frames)) = self.overlay_setup(params)? else {
             return Ok(input.clone());
-        }
-        let Some(resolved) = locate_overlay_file(overlay_path)? else {
-            return Err(crate::error::AppError::Generic(format!(
-                "Overlay file not found: {}",
-                overlay_path
-            )));
         };
 
         // Decoded once for the whole segment rather than per frame, and cycled
         // so a short overlay loop covers a longer clip -- these assets are
         // designed to tile in time.
-        let overlay_frames = load_overlay_frames(&resolved)?;
-
         let mut frames = Vec::with_capacity(input.frames.len());
         for (i, frame) in input.frames.iter().enumerate() {
             let ov = &overlay_frames[i % overlay_frames.len()];

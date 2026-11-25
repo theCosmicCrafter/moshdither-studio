@@ -48,10 +48,9 @@ impl Effect for MirrorSlices {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let slice_height = params
-            .get("slice_height")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(self.slice_height as u64) as usize;
+        let slice_height =
+            crate::effects::params::usize_param(params, "slice_height", self.slice_height as usize)
+                .max(1);
         let w = input.width as usize;
         let h = input.height as usize;
         let mut data = input.data.clone();
@@ -74,22 +73,6 @@ impl Effect for MirrorSlices {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

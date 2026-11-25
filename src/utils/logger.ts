@@ -35,8 +35,24 @@ function forward(level: "warn" | "error", line: string): void {
   }
 }
 
+function serializeContext(ctx: Context): string {
+  try {
+    // Error instances serialize as {} — name/message/stack are
+    // non-enumerable — so without the replacer `logger.error("x", "y",
+    // { err })` loses the failure text entirely. The replacer covers
+    // Errors nested inside arrays/objects, not just top-level values.
+    return JSON.stringify(ctx, (_key, value: unknown) =>
+      value instanceof Error
+        ? { name: value.name, message: value.message, stack: value.stack }
+        : value
+    );
+  } catch {
+    return String(ctx);
+  }
+}
+
 function format(category: string, message: string, ctx?: Context): string {
-  return ctx ? `[${category}] ${message} ${JSON.stringify(ctx)}` : `[${category}] ${message}`;
+  return ctx ? `[${category}] ${message} ${serializeContext(ctx)}` : `[${category}] ${message}`;
 }
 
 export const logger = {

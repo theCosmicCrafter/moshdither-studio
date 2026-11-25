@@ -48,10 +48,9 @@ impl Effect for ByteReverse {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let chunk_size = params
-            .get("chunk_size")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(self.chunk_size as u64) as usize;
+        let chunk_size =
+            crate::effects::params::usize_param(params, "chunk_size", self.chunk_size as usize)
+                .max(1);
         let mut data = input.data.clone();
         for chunk in data.chunks_exact_mut(chunk_size) {
             chunk.reverse();
@@ -60,22 +59,6 @@ impl Effect for ByteReverse {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

@@ -230,19 +230,77 @@ if not torch.cuda.is_available():
     )
 
 MAX_SAM3_DIM = int(os.environ.get("SAM3_MAX_DIM", "1024"))
-scale_x = 1.0
-scale_y = 1.0
 model = None
 processor = None         # Sam3Processor (text / box grounding)
 model_manager = None     # Manages GPU/CPU offloading
-current_image = None
-orig_hw = None
-# Only ever assigned inside cmd_load_image. Without this initialiser, the
-# `if inference_state is None` guard in cmd_text_prompt / cmd_point_prompt /
-# cmd_box_prompt raised NameError instead of returning "Image not loaded" --
-# so a prompt sent before an image crashed the bridge rather than reporting a
-# usable error to the UI.
-inference_state = None
+
+
+class _SessionState:
+    """Per-image inference state, held as one object.
+
+    The five fields only mean something together: the image that was
+    encoded, its pre-resize dimensions, the prompt->SAM coordinate scales,
+    and the processor's opaque inference state. They used to be separate
+    module globals assigned field-by-field with `global` declarations --
+    a missing declaration raised NameError on prompt-before-load (the crash
+    the old initialiser comment described), and a failed load could leave
+    half of the previous image's state mixed with half of the new one's.
+    `publish()` moves all five at once; `reset()` clears them all; attribute
+    access needs no `global`.
+    """
+
+    __slots__ = ("image", "orig_hw", "scale_x", "scale_y", "inference_state")
+
+    def __init__(self):
+        self.reset()
+
+    def publish(self, image, orig_hw, scale_x, scale_y, inference_state):
+        self.image = image
+        self.orig_hw = orig_hw
+        self.scale_x = scale_x
+        self.scale_y = scale_y
+        self.inference_state = inference_state
+
+    def reset(self):
+        self.image = None
+        self.orig_hw = None
+        self.scale_x = 1.0
+        self.scale_y = 1.0
+        self.inference_state = None
+
+    @property
+    def loaded(self):
+        return self.inference_state is not None
+
+
+# The one session. cmd_clear keeps the engine (model, processor, manager)
+# loaded -- only this image-derived state resets.
+session = _SessionState()
+
+
+def _infer(call, what: str):
+    """Run `call` under inference_mode (CUDA autocast when enabled) and
+    translate a CUDA out-of-memory error into an error response.
+
+    Returns ``(result, None)`` on success or ``(None, error_response)`` on
+    OOM. Non-OOM exceptions propagate -- callers either handle them
+    specifically or let main()'s dispatch loop build the generic error
+    response. `what` names the operation for the OOM message ("point
+    inference", "auto mask", ...). This block used to be copy-pasted into
+    every command and had already drifted in its reset behaviour.
+    """
+    try:
+        with torch.inference_mode():
+            if DEVICE.startswith("cuda") and USE_AMP:
+                with torch.autocast(device_type="cuda", dtype=torch.float16):
+                    return call(), None
+            return call(), None
+    except RuntimeError as e:
+        if "out of memory" not in str(e).lower():
+            raise
+        if DEVICE.startswith("cuda"):
+            torch.cuda.empty_cache()
+        return None, {"status": "error", "message": f"CUDA out of memory during {what}: {e}"}
 _raw_stdout = sys.stdout.buffer
 sys.stdout = sys.stderr
 
@@ -278,9 +336,13 @@ def _read_frame() -> bytes | None:
     return payload
 
 
-def _verify_auth(token: str) -> bool:
+def _verify_auth(token: object) -> bool:
     """Verify the shared auth token delivered by Rust during handshake."""
-    return _AUTH_TOKEN is not None and hmac.compare_digest(_AUTH_TOKEN, token)
+    return (
+        isinstance(_AUTH_TOKEN, str)
+        and isinstance(token, str)
+        and hmac.compare_digest(_AUTH_TOKEN, token)
+    )
 
 
 def _do_auth_handshake():
@@ -291,6 +353,8 @@ def _do_auth_handshake():
         raise RuntimeError("EOF before auth handshake")
     req = json.loads(payload.decode("utf-8"))
     token = req.get("auth_token", "")
+    if not isinstance(token, str):
+        raise RuntimeError("Invalid auth_token type in handshake")
     _AUTH_TOKEN = token
     send_response({"status": "auth_ok"})
 
@@ -462,7 +526,7 @@ def ensure_model_loaded():
         _ensure_checkpoint()
     # torch.compile can cause inaccurate results on some Windows/GPU combos.
     # Enable only if explicitly requested via env var.
-    use_compile = DEVICE == "cuda" and os.environ.get("SAM3_ENABLE_COMPILE", "0") == "1"
+    use_compile = DEVICE.startswith("cuda") and os.environ.get("SAM3_ENABLE_COMPILE", "0") == "1"
 
     try:
         model = build_sam3_image_model(
@@ -481,7 +545,7 @@ def ensure_model_loaded():
             ) from e
         raise
 
-    if DEVICE == "cuda":
+    if DEVICE.startswith("cuda"):
         # Throughput knobs similar to high-performance inference stacks.
         torch.backends.cudnn.benchmark = True
         torch.backends.cuda.matmul.allow_tf32 = True
@@ -499,7 +563,7 @@ def ensure_model_loaded():
     log("Active accelerators: %s", ", ".join(_ACCELERATORS) if _ACCELERATORS else "none")
     if use_compile:
         log("torch.compile enabled (mode=default) for vision encoder.")
-    if DEVICE == "cuda":
+    if DEVICE.startswith("cuda"):
         log("TF32: enabled, cuDNN benchmark: enabled")
 
 
@@ -522,13 +586,13 @@ def mask_to_base64(mask: np.ndarray) -> str:
     """Encode a boolean/float mask as base64 PNG, resizing back to orig_hw if needed."""
     if mask.dtype == bool:
         mask_u8 = (mask * 255).astype(np.uint8)
-    elif mask.dtype in (np.float32, np.float64):
-        mask_u8 = (mask * 255).astype(np.uint8)
+    elif np.issubdtype(mask.dtype, np.floating):
+        mask_u8 = (np.clip(mask, 0.0, 1.0) * 255).astype(np.uint8)
     else:
         mask_u8 = mask.astype(np.uint8)
     img = Image.fromarray(mask_u8, mode="L")
-    if orig_hw and (img.height != orig_hw[0] or img.width != orig_hw[1]):
-        img = img.resize((orig_hw[1], orig_hw[0]), Image.Resampling.NEAREST)
+    if session.orig_hw and (img.height != session.orig_hw[0] or img.width != session.orig_hw[1]):
+        img = img.resize((session.orig_hw[1], session.orig_hw[0]), Image.Resampling.NEAREST)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode("ascii")
@@ -538,7 +602,6 @@ def mask_to_base64(mask: np.ndarray) -> str:
 # ── Command Handlers ─────────────────────────────────────────
 
 def cmd_load_image(image_b64: str):
-    global current_image, orig_hw, inference_state, scale_x, scale_y
     try:
         ensure_model_loaded()
         if model_manager:
@@ -555,32 +618,33 @@ def cmd_load_image(image_b64: str):
         image = pil_from_base64(image_b64)
     except ValueError as e:
         # Safe even after a prior successful load: this failure happens
-        # BEFORE current_image/orig_hw/inference_state are touched below, so
-        # all three globals are left exactly as the previous successful load
-        # set them (mutually consistent, still describing the OLD image) —
-        # no reset needed here, unlike the set_image() failure path below.
+        # BEFORE the session is touched below, so its fields are left
+        # exactly as the previous successful load set them (mutually
+        # consistent, still describing the OLD image) — no reset needed
+        # here, unlike the set_image() failure path below.
         return {"status": "error", "message": str(e)}
 
     # Compute everything the new image needs into LOCAL variables, and only
-    # publish them to the module globals once every step below has succeeded.
+    # publish them to the session once every step below has succeeded.
     #
     # An earlier version of this function assigned orig_hw, then scale_x/
-    # scale_y, then current_image to the globals one at a time as each step
-    # completed, with only the final processor.set_image() call guarded by a
-    # reset-on-failure handler. That left a gap: image.resize() below (or
-    # anything else in this block) could raise on a SECOND-OR-LATER call
+    # scale_y, then current_image to module globals one at a time as each
+    # step completed, with only the final processor.set_image() call guarded
+    # by a reset-on-failure handler. That left a gap: image.resize() below
+    # (or anything else in this block) could raise on a SECOND-OR-LATER call
     # (e.g. a MemoryError downscaling a large image) after orig_hw/scale_x/
     # scale_y had already been overwritten with the NEW image's values, while
     # current_image/inference_state still held the OLD image's — the globals
     # would come out of this call describing two different images. A
-    # subsequent point/box prompt only checks `if inference_state is None`,
+    # subsequent point/box prompt only checked `if inference_state is None`,
     # which would still pass (the old state is intact), run against the old
     # backbone features, then get resized against the new orig_hw — a
     # geometrically wrong mask reported as "ok".
     #
-    # Local-then-commit makes that class of bug structurally impossible:
-    # either every global moves together on success, or none of them move on
-    # any failure, regardless of which line inside this block actually raises.
+    # Local-then-commit plus _SessionState.publish() makes that class of bug
+    # structurally impossible: either every field moves together on success,
+    # or none of them move on any failure, regardless of which line inside
+    # this block actually raises.
     try:
         new_orig_hw = (image.height, image.width)
         w, h = image.width, image.height
@@ -599,17 +663,18 @@ def cmd_load_image(image_b64: str):
 
         # Set image in the text/grounding processor and capture inference state.
         # Point/box prompts reuse the detector backbone features via model.predict_inst.
-        with torch.inference_mode():
-            if DEVICE == "cuda" and USE_AMP:
-                with torch.autocast(device_type="cuda", dtype=torch.float16):
-                    new_inference_state = processor.set_image(new_sam_image)
-            else:
-                new_inference_state = processor.set_image(new_sam_image)
+        res, oom = _infer(
+            lambda: processor.set_image(new_sam_image), "image encoding"
+        )
+        if oom:
+            session.reset()
+            return oom
+        new_inference_state = res
     except Exception as e:
-        # Nothing above has touched the module globals yet, so the previous
-        # image's state (if any) is technically still intact -- reset it
-        # anyway. Silently keeping the old image loaded after a reported
-        # failure is a worse contract than requiring an explicit reload.
+        # Nothing above has touched the session yet, so the previous image's
+        # state (if any) is technically still intact -- reset it anyway.
+        # Silently keeping the old image loaded after a reported failure is a
+        # worse contract than requiring an explicit reload.
         #
         # Catches Exception (not just RuntimeError) deliberately: the
         # original code only caught RuntimeError around set_image(), so any
@@ -618,13 +683,11 @@ def cmd_load_image(image_b64: str):
         # etc.) would propagate out of cmd_load_image entirely, past this
         # function's own error handling, and only get caught by main()'s
         # generic `except Exception` in the command-dispatch loop -- which
-        # builds an error response but has no knowledge of these globals and
-        # was never going to reset them.
-        current_image = None
-        orig_hw = None
-        inference_state = None
+        # builds an error response but has no knowledge of the session and
+        # was never going to reset it.
+        session.reset()
         if isinstance(e, RuntimeError) and "out of memory" in str(e).lower():
-            if DEVICE == "cuda":
+            if DEVICE.startswith("cuda"):
                 try:
                     torch.cuda.empty_cache()
                 except Exception:
@@ -637,42 +700,30 @@ def cmd_load_image(image_b64: str):
         return {"status": "error", "message": f"Image encoding failed: {e}"}
 
     # Every step succeeded -- publish all five values together.
-    current_image = new_sam_image
-    orig_hw = new_orig_hw
-    scale_x = new_scale_x
-    scale_y = new_scale_y
-    inference_state = new_inference_state
+    session.publish(new_sam_image, new_orig_hw, new_scale_x, new_scale_y, new_inference_state)
 
-    return {"status": "ok", "width": orig_hw[1], "height": orig_hw[0]}
+    return {"status": "ok", "width": session.orig_hw[1], "height": session.orig_hw[0]}
 
 
 def cmd_text_prompt(prompt: str):
-    global inference_state
-    if inference_state is None:
+    if not session.loaded:
         return {"status": "error", "message": "No image loaded"}
 
     if model_manager:
         model_manager.move_to_target()
 
-    try:
-        with torch.inference_mode():
-            if DEVICE == "cuda" and USE_AMP:
-                with torch.autocast(device_type="cuda", dtype=torch.float16):
-                    state = processor.set_text_prompt(prompt=prompt, state=inference_state)
-            else:
-                state = processor.set_text_prompt(prompt=prompt, state=inference_state)
-    except RuntimeError as e:
-        if "out of memory" in str(e).lower():
-            if DEVICE == "cuda":
-                torch.cuda.empty_cache()
-            return {"status": "error", "message": f"CUDA out of memory during text inference: {e}"}
-        raise
+    state, err = _infer(
+        lambda: processor.set_text_prompt(prompt=prompt, state=session.inference_state),
+        "text inference",
+    )
+    if err:
+        return err
 
     masks = state["masks"].to(torch.float32).cpu().numpy()   # float array [N, 1, H, W]
     scores = state["scores"].to(torch.float32).cpu().numpy()  # float array [N]
 
-    # Update global state so subsequent prompts build on this
-    inference_state = state
+    # Update session state so subsequent prompts build on this
+    session.inference_state = state
 
     # Squeeze extra channel dim
     mask_list = [masks[i].squeeze() for i in range(masks.shape[0])]
@@ -687,41 +738,32 @@ def cmd_text_prompt(prompt: str):
 def cmd_point_prompt(points: list, labels: list = None):
     if model is None:
         return {"status": "error", "message": "Model not loaded"}
-    if inference_state is None:
+    if not session.loaded:
         return {"status": "error", "message": "No image loaded — call load_image first"}
+    if not points:
+        return {"status": "error", "message": "At least one point is required"}
 
     if model_manager:
         model_manager.move_to_target()
 
     points_np = np.array(points, dtype=np.float32)   # shape [N, 2]
-    if scale_x != 1.0 or scale_y != 1.0:
-        points_np[:, 0] *= scale_x
-        points_np[:, 1] *= scale_y
+    if session.scale_x != 1.0 or session.scale_y != 1.0:
+        points_np[:, 0] *= session.scale_x
+        points_np[:, 1] *= session.scale_y
     labels_np = np.array(labels if labels else [1] * len(points), dtype=np.int32)
 
-    try:
-        with torch.inference_mode():
-            if DEVICE == "cuda" and USE_AMP:
-                with torch.autocast(device_type="cuda", dtype=torch.float16):
-                    masks, scores, _ = model.predict_inst(
-                        inference_state,
-                        point_coords=points_np,
-                        point_labels=labels_np,
-                        multimask_output=True,
-                    )
-            else:
-                masks, scores, _ = model.predict_inst(
-                    inference_state,
-                    point_coords=points_np,
-                    point_labels=labels_np,
-                    multimask_output=True,
-                )
-    except RuntimeError as e:
-        if "out of memory" in str(e).lower():
-            if DEVICE == "cuda":
-                torch.cuda.empty_cache()
-            return {"status": "error", "message": f"CUDA out of memory during point inference: {e}"}
-        raise
+    res, err = _infer(
+        lambda: model.predict_inst(
+            session.inference_state,
+            point_coords=points_np,
+            point_labels=labels_np,
+            multimask_output=True,
+        ),
+        "point inference",
+    )
+    if err:
+        return err
+    masks, scores, _ = res
 
     if masks.ndim == 3:
         sorted_indices = np.argsort(scores)[::-1]
@@ -741,45 +783,38 @@ def cmd_point_prompt(points: list, labels: list = None):
 def cmd_refine_mask(mask_b64: str, points: list, labels: list = None):
     if model is None:
         return {"status": "error", "message": "Model not loaded"}
-    if inference_state is None:
+    if not session.loaded:
         return {"status": "error", "message": "No image loaded"}
+    if not points:
+        return {"status": "error", "message": "At least one point is required"}
 
     if model_manager:
         model_manager.move_to_target()
 
     try:
         mask_img = pil_from_base64(mask_b64)
+        if session.image is not None and mask_img.size != session.image.size:
+            mask_img = mask_img.resize(session.image.size, Image.Resampling.NEAREST)
         mask_np = np.array(mask_img.convert("L"), dtype=np.uint8) > 127
     except Exception as e:
         return {"status": "error", "message": f"Invalid mask: {e}"}
     points_np = np.array(points, dtype=np.float32)
-    if scale_x != 1.0 or scale_y != 1.0:
-        points_np[:, 0] *= scale_x
-        points_np[:, 1] *= scale_y
+    if session.scale_x != 1.0 or session.scale_y != 1.0:
+        points_np[:, 0] *= session.scale_x
+        points_np[:, 1] *= session.scale_y
     labels_np = np.array(labels if labels else [1] * len(points), dtype=np.int32)
-    try:
-        with torch.inference_mode():
-            if DEVICE == "cuda" and USE_AMP:
-                with torch.autocast(device_type="cuda", dtype=torch.float16):
-                    masks, scores, _ = model.predict_inst(
-                        inference_state,
-                        point_coords=points_np,
-                        point_labels=labels_np,
-                        multimask_output=True,
-                    )
-            else:
-                masks, scores, _ = model.predict_inst(
-                    inference_state,
-                    point_coords=points_np,
-                    point_labels=labels_np,
-                    multimask_output=True,
-                )
-    except RuntimeError as e:
-        if "out of memory" in str(e).lower():
-            if DEVICE == "cuda":
-                torch.cuda.empty_cache()
-            return {"status": "error", "message": f"CUDA out of memory during refine: {e}"}
-        raise
+    res, err = _infer(
+        lambda: model.predict_inst(
+            session.inference_state,
+            point_coords=points_np,
+            point_labels=labels_np,
+            multimask_output=True,
+        ),
+        "refine",
+    )
+    if err:
+        return err
+    masks, scores, _ = res
     ious = []
     for i in range(masks.shape[0]):
         m = masks[i]
@@ -798,7 +833,7 @@ def cmd_refine_mask(mask_b64: str, points: list, labels: list = None):
 def cmd_box_prompt(boxes: list):
     if model is None:
         return {"status": "error", "message": "Model not loaded"}
-    if inference_state is None:
+    if not session.loaded:
         return {"status": "error", "message": "No image loaded — call load_image first"}
 
     if model_manager:
@@ -808,32 +843,22 @@ def cmd_box_prompt(boxes: list):
     all_scores = []
     for box in boxes:
         box_np = np.array(box, dtype=np.float32)  # [x0, y0, x1, y1]
-        if scale_x != 1.0 or scale_y != 1.0:
-            box_np[0] *= scale_x
-            box_np[1] *= scale_y
-            box_np[2] *= scale_x
-            box_np[3] *= scale_y
-        try:
-            with torch.inference_mode():
-                if DEVICE == "cuda" and USE_AMP:
-                    with torch.autocast(device_type="cuda", dtype=torch.float16):
-                        masks, scores, _ = model.predict_inst(
-                            inference_state,
-                            box=box_np,
-                            multimask_output=True,
-                        )
-                else:
-                    masks, scores, _ = model.predict_inst(
-                        inference_state,
-                        box=box_np,
-                        multimask_output=True,
-                    )
-        except RuntimeError as e:
-            if "out of memory" in str(e).lower():
-                if DEVICE == "cuda":
-                    torch.cuda.empty_cache()
-                return {"status": "error", "message": f"CUDA out of memory during box inference: {e}"}
-            raise
+        if session.scale_x != 1.0 or session.scale_y != 1.0:
+            box_np[0] *= session.scale_x
+            box_np[1] *= session.scale_y
+            box_np[2] *= session.scale_x
+            box_np[3] *= session.scale_y
+        res, err = _infer(
+            lambda: model.predict_inst(
+                session.inference_state,
+                box=box_np,
+                multimask_output=True,
+            ),
+            "box inference",
+        )
+        if err:
+            return err
+        masks, scores, _ = res
         # masks shape: [num_masks, H, W] — return all masks sorted by score
         if masks.ndim == 3:
             sorted_indices = np.argsort(scores)[::-1]
@@ -992,49 +1017,38 @@ def cmd_auto_mask(grid_size: int = 8, iou_threshold: float = 0.7, min_mask_regio
     """Generate automatic masks by sampling a grid of points across the image."""
     if model is None:
         return {"status": "error", "message": "Model not loaded"}
-    if inference_state is None:
+    if not session.loaded:
         return {"status": "error", "message": "No image loaded — call load_image first"}
 
     if model_manager:
         model_manager.move_to_target()
 
     grid_size = min(grid_size, 8)  # Cap grid to 8x8 (64 points max) for responsive performance
-    h, w = current_image.height, current_image.width
+    h, w = session.image.height, session.image.width
     all_masks = []
     all_scores = []
 
-    try:
-        with torch.inference_mode():
-            ys = np.linspace(0, h - 1, grid_size)
-            xs = np.linspace(0, w - 1, grid_size)
-            for y in ys:
-                for x in xs:
-                    points = np.array([[x, y]], dtype=np.float32)
-                    labels = np.array([1], dtype=np.int32)
-                    if DEVICE == "cuda" and USE_AMP:
-                        with torch.autocast(device_type="cuda", dtype=torch.float16):
-                            masks, scores, _ = model.predict_inst(
-                                inference_state,
-                                point_coords=points,
-                                point_labels=labels,
-                                multimask_output=True,
-                            )
-                    else:
-                        masks, scores, _ = model.predict_inst(
-                            inference_state,
-                            point_coords=points,
-                            point_labels=labels,
-                            multimask_output=True,
-                        )
-                    for i in range(masks.shape[0]):
-                        all_masks.append(masks[i])
-                        all_scores.append(float(scores[i]))
-    except RuntimeError as e:
-        if "out of memory" in str(e).lower():
-            if DEVICE == "cuda":
-                torch.cuda.empty_cache()
-            return {"status": "error", "message": f"CUDA out of memory during auto mask: {e}"}
-        raise
+    ys = np.linspace(0, h - 1, grid_size)
+    xs = np.linspace(0, w - 1, grid_size)
+    for y in ys:
+        for x in xs:
+            points = np.array([[x, y]], dtype=np.float32)
+            labels = np.array([1], dtype=np.int32)
+            res, err = _infer(
+                lambda: model.predict_inst(
+                    session.inference_state,
+                    point_coords=points,
+                    point_labels=labels,
+                    multimask_output=True,
+                ),
+                "auto mask",
+            )
+            if err:
+                return err
+            masks, scores, _ = res
+            for i in range(masks.shape[0]):
+                all_masks.append(masks[i])
+                all_scores.append(float(scores[i]))
 
     # Deduplicate by IoU threshold
     unique_masks = []
@@ -1074,16 +1088,13 @@ def cmd_get_mask(index: int = 0):
 
 def cmd_clear():
     """Clear all image state and free GPU memory."""
-    global current_image, orig_hw, inference_state
-    current_image = None
-    orig_hw = None
-    inference_state = None
+    session.reset()
 
     # Release unreferenced CUDA tensors so VRAM isn't silently leaked between
     # sessions. gc.collect() sweeps Python cycles first.
     import gc
     gc.collect()
-    if DEVICE == "cuda":
+    if DEVICE.startswith("cuda"):
         try:
             torch.cuda.empty_cache()
         except Exception:
@@ -1125,7 +1136,7 @@ def main():
 
         # Verify auth token on every request except handshake (already done)
         token = req.get("auth_token", "")
-        if not _verify_auth(token):
+        if not isinstance(token, str) or not _verify_auth(token):
             send_response({"status": "error", "message": "Auth token mismatch"})
             continue
 

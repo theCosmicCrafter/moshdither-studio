@@ -230,7 +230,6 @@ export default function KeyboardShortcutsEditor({ onClose }: KeyboardShortcutsEd
               borderRadius: 6,
               color: "var(--text-primary, #e8e8ed)",
               fontSize: 13,
-              outline: "none",
               width: 160,
             }}
           />

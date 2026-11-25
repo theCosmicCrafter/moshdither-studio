@@ -11,6 +11,15 @@ import Meyda from "meyda";
 import type { FrameAudioFeatures, FrequencyBand } from "./types";
 import { STANDARD_BANDS } from "./types";
 
+/** AudioContext constructor, including the legacy webkit prefix — shared so
+ *  every consumer carries one copy of the double-cast. */
+export function audioContextCtor(): typeof AudioContext {
+  return (
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+  );
+}
+
 export type AudioSourceType = "file" | "microphone" | "none";
 
 export type AudioEngineEvent =
@@ -100,10 +109,7 @@ export class AudioEngine {
 
   private ensureContext(): AudioContext {
     if (!this.ctx) {
-      this.ctx = new (
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-      )();
+      this.ctx = new (audioContextCtor())();
     }
     if (this.ctx.state === "suspended") {
       this.ctx.resume();

@@ -63,14 +63,8 @@ impl Effect for Scanlines {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let gap = params
-            .get("gap")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(self.gap as u64) as u32;
-        let intensity = params
-            .get("intensity")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(self.intensity as f64) as f32;
+        let gap = crate::effects::params::u64_param(params, "gap", self.gap as u64).max(1) as u32;
+        let intensity = crate::effects::params::f32_param(params, "intensity", self.intensity);
 
         let w = input.width as usize;
         let h = input.height as usize;
@@ -93,22 +87,6 @@ impl Effect for Scanlines {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

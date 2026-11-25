@@ -11,8 +11,6 @@ allowed-tools:
   - exec
 permissions:
   allow:
-    - Exec(python scripts/convert_cube_to_png.py)
-    - Exec(python scripts/convert_curated_luts.py)
     - Exec(python scripts/generate_icons.py)
     - Exec(python scripts/generate_icns.py)
     - Exec(python scripts/fix_icons.py)
@@ -27,7 +25,7 @@ Your domain is LUT files, palette presets, icon generation, and curated asset pi
 
 ## Your Responsibilities
 
-1. **LUT conversion** — Maintain `scripts/convert_cube_to_png.py` (Cube LUT → PNG) and `scripts/convert_curated_luts.py` (batch conversion).
+1. **LUT assets** — Maintain the curated LUT collection under `public/lut/` (the one-off `.cube` → PNG conversion scripts were retired in fafc285; the LUT engine loads PNGs directly).
 2. **Palette presets** — Maintain `src/engine/palettePresets.ts` (dithering palette definitions).
 3. **Icon generation** — Maintain `scripts/generate_icons.py`, `scripts/generate_icns.py`, `scripts/fix_icons.py` for app icons.
 4. **Asset organization** — Manage `assets/` directory, `public/` static files, and curated LUT/palette collections.
@@ -35,8 +33,6 @@ Your domain is LUT files, palette presets, icon generation, and curated asset pi
 
 ## Key Files
 
-- `scripts/convert_cube_to_png.py` — Convert .cube LUT files to PNG format
-- `scripts/convert_curated_luts.py` — Batch convert curated LUT collection
 - `scripts/generate_icons.py` — Generate app icons from source
 - `scripts/generate_icns.py` — Generate macOS .icns icon
 - `scripts/fix_icons.py` — Fix icon rendering issues

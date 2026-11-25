@@ -234,23 +234,7 @@ export default function MaskPanel() {
         ppFeather,
         ppFillHoles
       );
-      // Replace the currently active mask in the multi-mask array
-      const idx = useAppStore.getState().sam3MaskIndex;
-      const masks = [...useAppStore.getState().sam3Masks];
-      const scores = [...useAppStore.getState().sam3MaskScores];
-      if (idx >= 0 && idx < masks.length) {
-        masks[idx] = processed;
-        // Update the mask array, keep the current index, and set activeMask to the processed result
-        useAppStore.setState({
-          sam3Masks: masks,
-          sam3MaskScores: scores,
-          sam3MaskIndex: idx,
-          activeMask: processed,
-        });
-      } else {
-        // No multi-mask array — just update activeMask directly
-        useAppStore.setState({ activeMask: processed });
-      }
+      useAppStore.getState().replaceActiveSam3Mask(processed);
       setStatusMessage("Mask post-processed");
     } catch (e) {
       setStatusMessage(`Post-process failed: ${e}`);

@@ -5,7 +5,7 @@ import {
   type EffectVerificationResult,
 } from "../../lib/tauri";
 
-type FilterMode = "all" | "passed" | "failed";
+type FilterMode = "all" | "passed" | "failed" | "skipped";
 
 export default function VerificationPanel() {
   const [report, setReport] = useState<VerificationReport | null>(null);
@@ -31,8 +31,11 @@ export default function VerificationPanel() {
   const filteredResults = useMemo(() => {
     if (!report) return [];
     return report.results.filter((r) => {
-      if (filter === "passed" && !r.overall_pass) return false;
-      if (filter === "failed" && r.overall_pass) return false;
+      // Skipped (codec) effects were never evaluated — they belong under
+      // "all" or their own "skipped" filter, not inside either verdict bucket.
+      if (filter === "passed" && (!r.overall_pass || r.skipped)) return false;
+      if (filter === "failed" && (r.overall_pass || r.skipped)) return false;
+      if (filter === "skipped" && !r.skipped) return false;
       if (search && !r.effect_id.includes(search) && !r.effect_name.toLowerCase().includes(search.toLowerCase()))
         return false;
       return true;
@@ -41,9 +44,13 @@ export default function VerificationPanel() {
 
   const categoryStats = useMemo(() => {
     if (!report) return [];
-    const cats: Record<string, { total: number; passed: number }> = {};
+    const cats: Record<string, { total: number; passed: number; skipped: number }> = {};
     for (const r of report.results) {
-      if (!cats[r.category]) cats[r.category] = { total: 0, passed: 0 };
+      if (!cats[r.category]) cats[r.category] = { total: 0, passed: 0, skipped: 0 };
+      if (r.skipped) {
+        cats[r.category].skipped++;
+        continue;
+      }
       cats[r.category].total++;
       if (r.overall_pass) cats[r.category].passed++;
     }
@@ -52,7 +59,9 @@ export default function VerificationPanel() {
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [report]);
 
-  const passRate = report ? Math.round((report.passed / report.total_effects) * 100) : 0;
+  // Skipped effects were never run, so they don't belong in the rate either.
+  const evaluated = report ? report.total_effects - (report.skipped ?? 0) : 0;
+  const passRate = report ? Math.round((report.passed / Math.max(evaluated, 1)) * 100) : 0;
 
   return (
     <div
@@ -86,7 +95,7 @@ export default function VerificationPanel() {
         </button>
         {report && !running && (
           <span style={{ fontSize: 10, color: "var(--text-muted)" }}>
-            {report.passed}/{report.total_effects} passed ({passRate}%)
+            {report.passed}/{evaluated} passed ({passRate}%)
           </span>
         )}
       </div>
@@ -120,6 +129,9 @@ export default function VerificationPanel() {
             <StatBadge label="Total" value={report.total_effects} color="var(--text-primary)" />
             <StatBadge label="Passed" value={report.passed} color="var(--accent-teal, #4ade80)" />
             <StatBadge label="Failed" value={report.failed} color="var(--accent-pink)" />
+            {(report.skipped ?? 0) > 0 && (
+              <StatBadge label="Skipped" value={report.skipped ?? 0} color="var(--text-muted)" />
+            )}
             <StatBadge label="Pass Rate" value={`${passRate}%`} color="var(--accent-cyan)" />
           </div>
 
@@ -143,13 +155,14 @@ export default function VerificationPanel() {
                 }}
               >
                 {cat.name}: {cat.passed}/{cat.total}
+                {cat.skipped > 0 ? ` (+${cat.skipped} skipped)` : ""}
               </span>
             ))}
           </div>
 
           {/* Filter controls */}
           <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-            {(["all", "passed", "failed"] as FilterMode[]).map((f) => (
+            {(["all", "passed", "failed", "skipped"] as FilterMode[]).map((f) => (
               <button
                 key={f}
                 onClick={() => setFilter(f)}
@@ -292,36 +305,57 @@ function ResultRow({ result }: { result: EffectVerificationResult }) {
       >
         <td style={{ padding: "3px 6px" }}>
           <span
+            title={
+              result.skipped
+                ? "Codec-pipeline effect — runs on the encoded bitstream at export, so the frame-domain checks don't apply"
+                : undefined
+            }
             style={{
               fontSize: 9,
               fontWeight: 700,
               padding: "1px 4px",
               borderRadius: 2,
-              background: result.overall_pass
-                ? "rgba(74, 222, 128, 0.15)"
-                : "rgba(255, 80, 80, 0.15)",
-              color: result.overall_pass ? "var(--accent-teal, #4ade80)" : "var(--accent-pink)",
+              background: result.skipped
+                ? "var(--surface-container-low)"
+                : result.overall_pass
+                  ? "rgba(74, 222, 128, 0.15)"
+                  : "rgba(255, 80, 80, 0.15)",
+              color: result.skipped
+                ? "var(--text-muted)"
+                : result.overall_pass
+                  ? "var(--accent-teal, #4ade80)"
+                  : "var(--accent-pink)",
             }}
           >
-            {result.overall_pass ? "PASS" : "FAIL"}
+            {result.skipped ? "SKIP" : result.overall_pass ? "PASS" : "FAIL"}
           </span>
         </td>
         <td style={{ padding: "3px 6px" }}>
           <div style={{ fontWeight: 500 }}>{result.effect_name}</div>
           <div style={{ fontSize: 9, color: "var(--text-muted)" }}>{result.effect_id}</div>
         </td>
-        <td style={{ padding: "3px 6px", textAlign: "center" }}>
-          <CheckIcon pass={result.checks.no_crash} />
-        </td>
-        <td style={{ padding: "3px 6px", textAlign: "center" }}>
-          <CheckIcon pass={result.checks.non_empty_output} />
-        </td>
-        <td style={{ padding: "3px 6px", textAlign: "center" }}>
-          <CheckIcon pass={result.checks.animates} />
-        </td>
-        <td style={{ padding: "3px 6px", textAlign: "center" }}>
-          <CheckIcon pass={result.checks.mask_inside_correct && result.checks.mask_outside_correct} />
-        </td>
+        {/* Skipped checks were never evaluated — a muted dash, not a red ✗
+            that would read as four failures beside a neutral verdict. */}
+        {result.skipped ? (
+          <td colSpan={4} style={{ padding: "3px 6px", textAlign: "center", color: "var(--text-muted)" }}>
+            — frame-domain checks don't apply —
+          </td>
+        ) : (
+          <>
+            <td style={{ padding: "3px 6px", textAlign: "center" }}>
+              <CheckIcon pass={result.checks.no_crash} />
+            </td>
+            <td style={{ padding: "3px 6px", textAlign: "center" }}>
+              <CheckIcon pass={result.checks.non_empty_output} />
+            </td>
+            <td style={{ padding: "3px 6px", textAlign: "center" }}>
+              <CheckIcon pass={result.checks.animates} />
+            </td>
+            <td style={{ padding: "3px 6px", textAlign: "center" }}>
+              <CheckIcon pass={result.checks.mask_inside_correct && result.checks.mask_outside_correct} />
+            </td>
+          </>
+        )}
         <td style={{ padding: "3px 6px", textAlign: "right", color: "var(--text-muted)" }}>
           {result.duration_ms}
         </td>
@@ -329,7 +363,7 @@ function ResultRow({ result }: { result: EffectVerificationResult }) {
       {expanded && hasError && (
         <tr>
           <td colSpan={7} style={{ padding: "4px 6px", background: "var(--surface-container-low)" }}>
-            <div style={{ fontSize: 9, color: "var(--accent-pink)" }}>{result.error_message}</div>
+            <div style={{ fontSize: 9, color: result.skipped ? "var(--text-muted)" : "var(--accent-pink)" }}>{result.error_message}</div>
           </td>
         </tr>
       )}

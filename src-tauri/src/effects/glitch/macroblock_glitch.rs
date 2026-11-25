@@ -78,19 +78,10 @@ impl Effect for MacroblockGlitch {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let intensity = params
-            .get("u_intensity")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(self.intensity as f64) as f32;
-        let block_size = params
-            .get("u_blockSize")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(self.block_size as f64) as f32;
-        let seed = params
-            .get("u_seed")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(self.seed as f64) as u32;
-        let time = params.get("time").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
+        let intensity = crate::effects::params::f32_param(params, "u_intensity", self.intensity);
+        let block_size = crate::effects::params::f32_param(params, "u_blockSize", self.block_size);
+        let seed = crate::effects::params::usize_param(params, "u_seed", self.seed as usize) as u32;
+        let time = crate::effects::params::usize_param(params, "time", 0) as u32;
         let seed = seed.wrapping_add(time.wrapping_mul(2654435761));
 
         let width = input.width;
@@ -159,22 +150,6 @@ impl Effect for MacroblockGlitch {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

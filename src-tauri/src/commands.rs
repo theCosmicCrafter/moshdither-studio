@@ -1,9 +1,8 @@
-#![allow(clippy::too_many_arguments)]
-
 use crate::effects::{
     blend_mask, functional_tests::run_all_function_tests, verification::verify_all_effects, Effect,
-    EffectCategory, EffectMeta, EffectRegistry, Frame, Mask,
+    EffectCategory, EffectMeta, EffectRegistry, Frame, Mask, Pipeline, VideoSegment,
 };
+use crate::error::AppError;
 use crate::ffmpeg::{
     decode_video, encode_video, extract_audio_to_wav, ffedit_binary, ffgac_binary, ffmpeg_binary,
     generate_proxy, has_audio_stream, image_to_video, probe_metadata,
@@ -86,6 +85,41 @@ impl Default for AppState {
     }
 }
 
+/// Lock a shared-state mutex, mapping a poisoned lock to `AppError` instead
+/// of panicking. `name` is the field label used in the message, e.g. "frame"
+/// produces "frame lock poisoned: ...".
+fn lock_state<'a, T>(
+    mutex: &'a Mutex<T>,
+    name: &str,
+) -> crate::error::Result<std::sync::MutexGuard<'a, T>> {
+    mutex
+        .lock()
+        .map_err(|e| AppError::LockPoisoned(format!("{name} lock poisoned: {e}")))
+}
+
+/// Payload for the `export-progress` Tauri event. `stage` names the phase the
+/// progress bar should show; the rest are optional extras the renderer reads
+/// only when present.
+#[derive(serde::Serialize, Default, Clone)]
+struct ExportProgress<'a> {
+    stage: &'a str,
+    progress: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    warning: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    downscaled_to: Option<usize>,
+}
+
+/// Emit `export-progress` best-effort: a dropped listener must not fail an
+/// export that is still running.
+fn emit_export_progress(app_handle: &tauri::AppHandle, p: ExportProgress<'_>) {
+    let _ = app_handle.emit("export-progress", p);
+}
+
 /// Trim cached intermediate frames so the total byte size stays under budget.
 /// Oldest entries are evicted first.
 fn trim_cache_to_budget(entries: &mut Vec<CacheEntry>, budget: usize) {
@@ -107,7 +141,9 @@ fn fit_to_preview_budget(frame: Frame) -> crate::error::Result<Frame> {
     let new_h = ((frame.height as f64 * scale) as u32).max(1);
     let img =
         image::RgbaImage::from_raw(frame.width, frame.height, frame.data).ok_or_else(|| {
-            crate::error::AppError::Generic("frame buffer does not match dimensions".to_string())
+            crate::error::AppError::DimensionMismatch(
+                "frame buffer does not match dimensions".to_string(),
+            )
         })?;
     let resized =
         image::imageops::resize(&img, new_w, new_h, image::imageops::FilterType::Triangle);
@@ -120,52 +156,41 @@ fn fit_to_preview_budget(frame: Frame) -> crate::error::Result<Frame> {
 
 /// Load an image or video file into the app.
 #[tauri::command]
-pub async fn load_media(
-    state: State<'_, AppState>,
-    path: String,
-) -> std::result::Result<String, String> {
+pub async fn load_media(state: State<'_, AppState>, path: String) -> crate::error::Result<String> {
     let path_clone = path.clone();
-    let frame =
-        tauri::async_runtime::spawn_blocking(move || -> std::result::Result<Frame, String> {
-            validate_io_path(&path_clone, true)?;
+    let frame = tauri::async_runtime::spawn_blocking(move || -> crate::error::Result<Frame> {
+        validate_io_path(&path_clone, true)?;
 
-            let ext = Path::new(&path_clone)
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_lowercase();
+        let ext = Path::new(&path_clone)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
 
-            let video_exts = [
-                "mp4", "avi", "mov", "mkv", "webm", "m4v", "flv", "wmv", "mpeg", "mpg",
-            ];
+        let video_exts = [
+            "mp4", "avi", "mov", "mkv", "webm", "m4v", "flv", "wmv", "mpeg", "mpg",
+        ];
 
-            let raw_frame = if video_exts.contains(&ext.as_str()) {
-                // Decode first frame of video
-                let segment = decode_video(&path_clone, Some(1)).map_err(|e| e.to_string())?;
-                segment
-                    .frames
-                    .into_iter()
-                    .next()
-                    .ok_or("No frames decoded".to_string())?
-            } else {
-                load_image(&path_clone).map_err(|e| e.to_string())?
-            };
+        let raw_frame = if video_exts.contains(&ext.as_str()) {
+            // Decode first frame of video
+            let segment = decode_video(&path_clone, Some(1))?;
+            segment
+                .frames
+                .into_iter()
+                .next()
+                .ok_or("No frames decoded")?
+        } else {
+            load_image(&path_clone)?
+        };
 
-            // Keep the in-memory preview frame within a sane pixel budget so that
-            // giant stills do not blow up RAM and the effect cache.
-            fit_to_preview_budget(raw_frame).map_err(|e| e.to_string())
-        })
-        .await
-        .map_err(|e| format!("Task failed: {}", e))??;
+        // Keep the in-memory preview frame within a sane pixel budget so that
+        // giant stills do not blow up RAM and the effect cache.
+        fit_to_preview_budget(raw_frame)
+    })
+    .await??;
 
-    *state
-        .current_frame
-        .lock()
-        .map_err(|e| format!("frame lock poisoned: {e}"))? = Some(frame);
-    *state
-        .frame_cache
-        .lock()
-        .map_err(|e| format!("cache lock poisoned: {e}"))? = EffectCache::default();
+    *lock_state(&state.current_frame, "frame")? = Some(frame);
+    *lock_state(&state.frame_cache, "cache")? = EffectCache::default();
     Ok(path)
 }
 
@@ -174,14 +199,15 @@ pub async fn load_media(
 pub async fn load_media_from_base64(
     state: State<'_, AppState>,
     data_url: String,
-) -> std::result::Result<String, String> {
+) -> crate::error::Result<String> {
     const MAX_BASE64_INPUT_LEN: usize = 100 * 1024 * 1024;
     if data_url.len() > MAX_BASE64_INPUT_LEN {
         return Err(format!(
             "Input too large: {} chars (max {} chars)",
             data_url.len(),
             MAX_BASE64_INPUT_LEN
-        ));
+        )
+        .into());
     }
 
     let bytes = tauri::async_runtime::spawn_blocking(move || {
@@ -193,34 +219,45 @@ pub async fn load_media_from_base64(
         base64::Engine::decode(&base64::engine::general_purpose::STANDARD, base64_part)
             .map_err(|e| format!("Invalid base64: {}", e))
     })
-    .await
-    .map_err(|e| format!("Task failed: {}", e))??;
+    .await??;
 
-    let frame = tauri::async_runtime::spawn_blocking(move || {
-        load_image_from_memory(&bytes).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| format!("Task failed: {}", e))??;
+    let frame =
+        tauri::async_runtime::spawn_blocking(move || load_image_from_memory(&bytes)).await??;
 
-    *state
-        .current_frame
-        .lock()
-        .map_err(|e| format!("frame lock poisoned: {e}"))? = Some(frame);
-    *state
-        .frame_cache
-        .lock()
-        .map_err(|e| format!("cache lock poisoned: {e}"))? = EffectCache::default();
+    *lock_state(&state.current_frame, "frame")? = Some(frame);
+    *lock_state(&state.frame_cache, "cache")? = EffectCache::default();
     Ok("loaded".to_string())
+}
+
+/// One item in the `list_effects` payload: the effect's `EffectMeta`
+/// flattened with its `pipeline`, so the JSON is
+/// `{ id, name, category, media_type, parameters, pipeline }`. The pipeline
+/// lives on the trait rather than on `EffectMeta` (see `Pipeline`'s doc), so
+/// the join happens here — the registry's `list_details` avoids a
+/// second lookup per id.
+#[derive(serde::Serialize)]
+pub struct ListedEffect {
+    #[serde(flatten)]
+    meta: EffectMeta,
+    pipeline: Pipeline,
+    /// Temporal effects consume the whole segment at once, so per-frame LFO
+    /// modulation is never sampled — the UI suppresses the control on this.
+    is_temporal: bool,
 }
 
 /// Get metadata for all available effects.
 #[tauri::command]
-pub fn list_effects(state: State<'_, AppState>) -> std::result::Result<Vec<EffectMeta>, String> {
-    let registry = state
-        .registry
-        .lock()
-        .map_err(|e| format!("registry lock poisoned: {e}"))?;
-    Ok(registry.list())
+pub fn list_effects(state: State<'_, AppState>) -> crate::error::Result<Vec<ListedEffect>> {
+    let registry = lock_state(&state.registry, "registry")?;
+    Ok(registry
+        .list_details()
+        .into_iter()
+        .map(|(meta, pipeline, is_temporal)| ListedEffect {
+            meta,
+            pipeline,
+            is_temporal,
+        })
+        .collect())
 }
 
 /// Get effects filtered by category.
@@ -228,11 +265,8 @@ pub fn list_effects(state: State<'_, AppState>) -> std::result::Result<Vec<Effec
 pub fn list_effects_by_category(
     state: State<'_, AppState>,
     category: EffectCategory,
-) -> std::result::Result<Vec<EffectMeta>, String> {
-    let registry = state
-        .registry
-        .lock()
-        .map_err(|e| format!("registry lock poisoned: {e}"))?;
+) -> crate::error::Result<Vec<EffectMeta>> {
+    let registry = lock_state(&state.registry, "registry")?;
     Ok(registry.list_by_category(category))
 }
 
@@ -243,11 +277,8 @@ pub fn list_effects_by_category(
 #[tauri::command]
 pub fn verify_effects(
     state: State<'_, AppState>,
-) -> std::result::Result<crate::effects::verification::VerificationReport, String> {
-    let registry = state
-        .registry
-        .lock()
-        .map_err(|e| format!("registry lock poisoned: {e}"))?;
+) -> crate::error::Result<crate::effects::verification::VerificationReport> {
+    let registry = lock_state(&state.registry, "registry")?;
     Ok(verify_all_effects(&registry))
 }
 
@@ -256,13 +287,11 @@ pub fn verify_effects(
 /// stack chaining, mask blending, animation, FFmpeg, FFglitch, SAM3.
 #[tauri::command]
 pub fn test_all_functions(
-) -> std::result::Result<crate::effects::functional_tests::FunctionTestReport, String> {
+) -> crate::error::Result<crate::effects::functional_tests::FunctionTestReport> {
     Ok(run_all_function_tests())
 }
 
-fn decode_mask_b64(
-    mask_b64: Option<&str>,
-) -> std::result::Result<Option<crate::effects::Mask>, String> {
+fn decode_mask_b64(mask_b64: Option<&str>) -> crate::error::Result<Option<crate::effects::Mask>> {
     let Some(b64) = mask_b64 else {
         return Ok(None);
     };
@@ -298,20 +327,18 @@ fn process_frame_with_mask(
     mask: Option<&Mask>,
     params: &serde_json::Map<String, serde_json::Value>,
     mode: &str,
-) -> std::result::Result<Frame, String> {
+) -> crate::error::Result<Frame> {
     let blend_needed = needs_mask_blend(effect, mask);
 
     let clamped_params = crate::effects::clamp_for_effect(effect, params);
-    let mut result = effect
-        .process_frame(working, mask, &clamped_params)
-        .map_err(|e| e.to_string())?;
+    let mut result = effect.process_frame(working, mask, &clamped_params)?;
 
     // `working` is borrowed for the whole call and process_frame returns an
     // owned Frame, so the blend can read the caller's frame directly. This
     // used to clone it first -- a full frame per call, for nothing.
     if blend_needed {
         if let Some(m) = mask {
-            blend_mask(&mut result, working, m, mode).map_err(|e| e.to_string())?;
+            blend_mask(&mut result, working, m, mode)?;
         }
     }
 
@@ -337,12 +364,10 @@ fn apply_frame_in_place(
     params: &serde_json::Map<String, serde_json::Value>,
     blend: bool,
     mode: &str,
-) -> std::result::Result<(), String> {
-    let mut out = effect
-        .process_frame(&*frame, mask, params)
-        .map_err(|e| e.to_string())?;
+) -> crate::error::Result<()> {
+    let mut out = effect.process_frame(&*frame, mask, params)?;
     if let (true, Some(m)) = (blend, mask) {
-        blend_mask(&mut out, &*frame, m, mode).map_err(|e| e.to_string())?;
+        blend_mask(&mut out, &*frame, m, mode)?;
     }
     *frame = out;
     Ok(())
@@ -361,15 +386,15 @@ fn blend_segment_against(
     mask: &Mask,
     mode: &str,
     cancel: &AtomicBool,
-) -> std::result::Result<(), String> {
+) -> crate::error::Result<()> {
     frames
         .par_iter_mut()
         .zip(previous.par_iter())
         .try_for_each(|(f, p)| {
             if cancel.load(Ordering::Relaxed) {
-                return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
+                return Err(crate::ffmpeg::EXPORT_CANCELLED.into());
             }
-            blend_mask(f, p, mask, mode).map_err(|e| e.to_string())
+            blend_mask(f, p, mask, mode)
         })
 }
 
@@ -628,11 +653,8 @@ pub fn apply_effect_stack(
     stack: Vec<EffectCall>,
     mask_b64: Option<String>,
     preview_scale: Option<f32>,
-) -> std::result::Result<String, String> {
-    let frame_lock = state
-        .current_frame
-        .lock()
-        .map_err(|e| format!("frame lock poisoned: {e}"))?;
+) -> crate::error::Result<String> {
+    let frame_lock = lock_state(&state.current_frame, "frame")?;
     let original = frame_lock.as_ref().ok_or("No media loaded")?.clone();
     drop(frame_lock);
 
@@ -653,19 +675,13 @@ pub fn apply_effect_stack(
     // already handle dimension mismatches via nearest-neighbor sampling.
     let global_mask = decode_mask_b64(mask_b64.as_deref())?;
 
-    let registry = state
-        .registry
-        .lock()
-        .map_err(|e| format!("registry lock poisoned: {e}"))?;
+    let registry = lock_state(&state.registry, "registry")?;
     let mut use_cache = true;
     let mut new_cache = Vec::new();
 
     // Check if scale or global mask changed
     {
-        let cache_lock = state
-            .frame_cache
-            .lock()
-            .map_err(|e| format!("cache lock poisoned: {e}"))?;
+        let cache_lock = lock_state(&state.frame_cache, "cache")?;
         if cache_lock.scale != preview_scale || cache_lock.global_mask_b64 != mask_b64 {
             use_cache = false;
         }
@@ -677,10 +693,7 @@ pub fn apply_effect_stack(
             .ok_or_else(|| format!("Effect '{}' not found", call.effect_id))?;
 
         if use_cache {
-            let cache_lock = state
-                .frame_cache
-                .lock()
-                .map_err(|e| format!("cache lock poisoned: {e}"))?;
+            let cache_lock = lock_state(&state.frame_cache, "cache")?;
             if i < cache_lock.entries.len() {
                 let entry = &cache_lock.entries[i];
                 if entry.effect_id == call.effect_id
@@ -724,10 +737,7 @@ pub fn apply_effect_stack(
 
     // Update cache
     {
-        let mut cache_lock = state
-            .frame_cache
-            .lock()
-            .map_err(|e| format!("cache lock poisoned: {e}"))?;
+        let mut cache_lock = lock_state(&state.frame_cache, "cache")?;
         cache_lock.scale = preview_scale;
         cache_lock.global_mask_b64 = mask_b64;
         cache_lock.entries = new_cache;
@@ -742,8 +752,7 @@ pub fn apply_effect_stack(
     let img = image::RgbaImage::from_raw(working.width, working.height, working.data)
         .ok_or("Invalid frame data after processing.")?;
     let mut buf = Cursor::new(Vec::new());
-    img.write_to(&mut buf, ImageFormat::Png)
-        .map_err(|e| e.to_string())?;
+    img.write_to(&mut buf, ImageFormat::Png)?;
 
     let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, buf.into_inner());
     Ok(format!("data:image/png;base64,{}", b64))
@@ -751,7 +760,7 @@ pub fn apply_effect_stack(
 
 /// Downscale a Frame by a factor using simple box averaging (no external deps).
 /// Returns an error if the frame's raw buffer does not match its declared dimensions.
-fn downscale_frame(frame: Frame, scale: f32) -> std::result::Result<Frame, String> {
+fn downscale_frame(frame: Frame, scale: f32) -> crate::error::Result<Frame> {
     let new_w = ((frame.width as f32 * scale) as u32).max(1);
     let new_h = ((frame.height as f32 * scale) as u32).max(1);
     let data_len = frame.data.len();
@@ -777,7 +786,7 @@ fn downscale_frame(frame: Frame, scale: f32) -> std::result::Result<Frame, Strin
 
 /// Upscale a Frame back to the target dimensions.
 /// Returns an error if the frame's raw buffer does not match its declared dimensions.
-fn upscale_frame(frame: Frame, target_w: u32, target_h: u32) -> std::result::Result<Frame, String> {
+fn upscale_frame(frame: Frame, target_w: u32, target_h: u32) -> crate::error::Result<Frame> {
     let data_len = frame.data.len();
     let img =
         image::RgbaImage::from_raw(frame.width, frame.height, frame.data).ok_or_else(|| {
@@ -801,17 +810,13 @@ fn upscale_frame(frame: Frame, target_w: u32, target_h: u32) -> std::result::Res
 
 /// Get the current frame as base64 PNG.
 #[tauri::command]
-pub fn get_frame_data(state: State<'_, AppState>) -> std::result::Result<String, String> {
-    let frame_lock = state
-        .current_frame
-        .lock()
-        .map_err(|e| format!("frame lock poisoned: {e}"))?;
+pub fn get_frame_data(state: State<'_, AppState>) -> crate::error::Result<String> {
+    let frame_lock = lock_state(&state.current_frame, "frame")?;
     let frame = frame_lock.as_ref().ok_or("No media loaded")?;
     let img = image::RgbaImage::from_raw(frame.width, frame.height, frame.data.clone())
         .ok_or("Invalid frame data.")?;
     let mut buf = Cursor::new(Vec::new());
-    img.write_to(&mut buf, ImageFormat::Png)
-        .map_err(|e| e.to_string())?;
+    img.write_to(&mut buf, ImageFormat::Png)?;
 
     let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, buf.into_inner());
     Ok(format!("data:image/png;base64,{}", b64))
@@ -825,14 +830,11 @@ pub fn save_media(
     path: String,
     format: Option<String>,
     quality: Option<u8>,
-) -> std::result::Result<String, String> {
+) -> crate::error::Result<String> {
     validate_io_path(&path, false)?;
-    let frame_lock = state
-        .current_frame
-        .lock()
-        .map_err(|e| format!("frame lock poisoned: {e}"))?;
+    let frame_lock = lock_state(&state.current_frame, "frame")?;
     let frame = frame_lock.as_ref().ok_or("No media loaded")?;
-    save_image(frame, &path, format.as_deref(), quality).map_err(|e| e.to_string())?;
+    save_image(frame, &path, format.as_deref(), quality)?;
     Ok(path)
 }
 
@@ -846,7 +848,7 @@ fn apply_stack_to_frame(
     frame: Frame,
     stack: &[EffectCall],
     global_mask: Option<&Mask>,
-) -> std::result::Result<Frame, String> {
+) -> crate::error::Result<Frame> {
     let mut working = frame;
     for call in stack {
         let effect = registry
@@ -878,25 +880,19 @@ pub fn save_processed_image(
     path: String,
     format: Option<String>,
     quality: Option<u8>,
-) -> std::result::Result<String, String> {
+) -> crate::error::Result<String> {
     validate_io_path(&path, false)?;
 
-    let frame_lock = state
-        .current_frame
-        .lock()
-        .map_err(|e| format!("frame lock poisoned: {e}"))?;
+    let frame_lock = lock_state(&state.current_frame, "frame")?;
     let frame = frame_lock.as_ref().ok_or("No media loaded")?.clone();
     drop(frame_lock);
 
     let global_mask = decode_mask_b64(mask_b64.as_deref())?;
-    let registry = state
-        .registry
-        .lock()
-        .map_err(|e| format!("registry lock poisoned: {e}"))?;
+    let registry = lock_state(&state.registry, "registry")?;
     let working = apply_stack_to_frame(&registry, frame, &stack, global_mask.as_ref())?;
     drop(registry);
 
-    save_image(&working, &path, format.as_deref(), quality).map_err(|e| e.to_string())?;
+    save_image(&working, &path, format.as_deref(), quality)?;
     Ok(path)
 }
 
@@ -918,6 +914,65 @@ pub fn save_processed_image(
 /// point uses -- so a typo of 12000 in that box asked for 360 000 frames.
 const MAX_EXPORT_FRAMES: usize = 108_000;
 
+/// Optional parameters for a video export, deserialized once from the
+/// `options` object of the `export_video` invoke. Bundling them keeps the
+/// pipeline stages below from taking a dozen positional `Option<_>`s, where
+/// a swapped argument at the call site compiles silently.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportOptions {
+    pub mask_b64: Option<String>,
+    pub codec: Option<String>,
+    pub fps: Option<f64>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub audio_bake_json: Option<String>,
+    pub watermark: Option<WatermarkSettings>,
+    pub trim_start: Option<f64>,
+    pub trim_end: Option<f64>,
+    pub format: Option<String>,
+    pub quality: Option<String>,
+    pub include_audio: Option<bool>,
+    /// Optional max dimension (px) for the internal decode and
+    /// effect-processing pipeline. `None` means "auto" — the backend picks
+    /// the largest resolution that fits in the adaptive memory budget.
+    pub processing_scale: Option<usize>,
+}
+
+impl ExportOptions {
+    /// Fill an unset trim range from the `_trim_<start>-<end>` suffix
+    /// encoded in the output filename (e.g. `name_trim_0.5-2.3.mp4`).
+    /// An explicit range from the caller always wins.
+    fn resolve_filename_trim(&mut self, output_path: &str) {
+        if self.trim_start.is_some() || self.trim_end.is_some() {
+            return;
+        }
+        let (trim_start, trim_end) = filename_trim_range(output_path);
+        self.trim_start = trim_start;
+        self.trim_end = trim_end;
+    }
+}
+
+/// Read the trim range encoded in an output filename like
+/// `name_trim_0.5-2.3.mp4` — a start and end in seconds after a `_trim_`
+/// marker in the file stem. Either side that fails to parse stays `None`.
+fn filename_trim_range(output_path: &str) -> (Option<f64>, Option<f64>) {
+    let Some(stem) = std::path::Path::new(output_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+    else {
+        return (None, None);
+    };
+    let Some(idx) = stem.rfind("_trim_") else {
+        return (None, None);
+    };
+    let parts: Vec<&str> = stem[idx + 6..].split('-').collect();
+    if parts.len() != 2 {
+        return (None, None);
+    }
+    (parts[0].parse::<f64>().ok(), parts[1].parse::<f64>().ok())
+}
+
 #[tauri::command]
 pub async fn export_video(
     state: State<'_, AppState>,
@@ -925,20 +980,8 @@ pub async fn export_video(
     source_path: String,
     output_path: String,
     stack: Vec<EffectCall>,
-    mask_b64: Option<String>,
-    codec: Option<String>,
-    fps: Option<f64>,
-    width: Option<u32>,
-    height: Option<u32>,
-    audio_bake_json: Option<String>,
-    watermark: Option<WatermarkSettings>,
-    trim_start: Option<f64>,
-    trim_end: Option<f64>,
-    format: Option<String>,
-    quality: Option<String>,
-    include_audio: Option<bool>,
-    processing_scale: Option<usize>,
-) -> std::result::Result<String, String> {
+    options: Option<ExportOptions>,
+) -> crate::error::Result<String> {
     // Logged BEFORE validation, which is the first thing that can fail. A
     // missing source returned here with no trace at all: the log showed a clean
     // startup and nothing else, so an export that died on its first line looked
@@ -954,7 +997,7 @@ pub async fn export_video(
     tracing::info!("export_video {}", crate::sysmem::describe(&headroom));
     if let Some(notice) = crate::sysmem::notice_for(&headroom) {
         tracing::error!("export_video refused: {notice}");
-        return Err(notice);
+        return Err(notice.into());
     }
     let validated_output = validate_io_path(&output_path, false).inspect_err(|e| {
         tracing::error!("export_video rejected output {output_path}: {e}");
@@ -970,19 +1013,29 @@ pub async fn export_video(
     // way as source_path/output_path so a compromised renderer (or a
     // malicious .moshdither preset) can't smuggle a UNC path or an
     // unexpected local file through the watermark fields instead.
-    let watermark = watermark
-        .map(|mut wm| -> std::result::Result<WatermarkSettings, String> {
-            if wm.enabled {
-                if let Some(p) = &wm.image_path {
-                    wm.image_path = Some(validate_io_path(p, true)?.to_string_lossy().into_owned());
-                }
-                if let Some(p) = &wm.font_path {
-                    wm.font_path = Some(validate_io_path(p, true)?.to_string_lossy().into_owned());
-                }
+    // `options` is optional at the IPC boundary — the frontend always sends
+    // it, but a bare invoke defaults to an all-defaults export.
+    let mut options = options.unwrap_or_default();
+    // `fps` feeds `idx as f64 / fps` transport times and the encoder's frame
+    // cadence: 0, negative or non-finite would turn every timestamp into
+    // inf/NaN and hand FFmpeg a nonsense -r. Reject it up front.
+    if let Some(fps) = options.fps {
+        if !fps.is_finite() || !(1.0..=240.0).contains(&fps) {
+            return Err(AppError::InvalidParameter(format!(
+                "Export fps must be finite and within 1..=240, got {fps}"
+            )));
+        }
+    }
+    if let Some(wm) = options.watermark.as_mut() {
+        if wm.enabled {
+            if let Some(p) = &wm.image_path {
+                wm.image_path = Some(validate_io_path(p, true)?.to_string_lossy().into_owned());
             }
-            Ok(wm)
-        })
-        .transpose()?;
+            if let Some(p) = &wm.font_path {
+                wm.font_path = Some(validate_io_path(p, true)?.to_string_lossy().into_owned());
+            }
+        }
+    }
 
     // Serialize expensive exports (this and apply_ffglitch both share one
     // export_cancel AtomicBool) so only one runs at a time. The permit is
@@ -990,12 +1043,7 @@ pub async fn export_video(
     // apply_ffglitch share that flag, so resetting it while another
     // export-like operation is still running (or queued ahead of us) could
     // silently un-cancel that other job.
-    let permit = state
-        .export_semaphore
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(|e| format!("Export queue error: {}", e))?;
+    let permit = state.export_semaphore.clone().acquire_owned().await?;
     cancel.store(false, Ordering::Relaxed);
 
     tauri::async_runtime::spawn_blocking(move || {
@@ -1006,27 +1054,15 @@ pub async fn export_video(
             source_path,
             output_path,
             stack,
-            mask_b64,
-            codec,
-            fps,
-            width,
-            height,
-            audio_bake_json,
-            watermark,
-            trim_start,
-            trim_end,
-            format,
-            quality,
-            include_audio,
-            processing_scale,
+            options,
             cancel,
         )
     })
     .await
-    .map_err(|e| format!("Export task failed: {}", e))?
+    .map_err(|e| format!("Export task failed: {e}"))?
     // A failure that started with plenty of memory can still end in an
     // allocation that did not fit; the suffix is empty unless it did.
-    .map_err(|e: String| format!("{e}{}", crate::sysmem::low_memory_suffix()))
+    .map_err(|e| AppError::Generic(format!("{e}{}", crate::sysmem::low_memory_suffix())))
 }
 
 fn export_video_blocking(
@@ -1035,71 +1071,176 @@ fn export_video_blocking(
     source_path: String,
     output_path: String,
     stack: Vec<EffectCall>,
-    mask_b64: Option<String>,
-    codec: Option<String>,
-    fps: Option<f64>,
-    width: Option<u32>,
-    height: Option<u32>,
-    audio_bake_json: Option<String>,
-    watermark: Option<WatermarkSettings>,
-    trim_start: Option<f64>,
-    trim_end: Option<f64>,
-    format: Option<String>,
-    quality: Option<String>,
-    include_audio: Option<bool>,
-    processing_scale: Option<usize>,
+    mut options: ExportOptions,
     cancel: Arc<AtomicBool>,
-) -> std::result::Result<String, String> {
+) -> crate::error::Result<String> {
     // Parse optional trim suffix from output filename (e.g. name_trim_0.5-2.3.mp4)
-    let (mut trim_start, mut trim_end) = (trim_start, trim_end);
-    if trim_start.is_none() && trim_end.is_none() {
-        if let Some(stem) = std::path::Path::new(&output_path)
-            .file_stem()
-            .and_then(|s| s.to_str())
-        {
-            if let Some(idx) = stem.rfind("_trim_") {
-                let range = &stem[idx + 6..];
-                let parts: Vec<&str> = range.split('-').collect();
-                if parts.len() == 2 {
-                    if let Ok(s) = parts[0].parse::<f64>() {
-                        trim_start = Some(s);
-                    }
-                    if let Ok(e) = parts[1].parse::<f64>() {
-                        trim_end = Some(e);
-                    }
-                }
+    options.resolve_filename_trim(&output_path);
+
+    let mut segment = plan_and_decode(&app_handle, &source_path, &options, &cancel)?;
+    apply_trim(&mut segment, options.trim_start, options.trim_end)?;
+
+    // Resolution override is now handled by FFmpeg -vf scale in encode_video
+
+    let global_mask = decode_mask_b64(options.mask_b64.as_deref())?;
+
+    // Deserialize audio bake data if provided
+    let audio_data: Option<crate::audio::AudioBakeData> = options
+        .audio_bake_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok());
+
+    // Apply the effect stack
+    tracing::info!("Applying {} effects for export", stack.len());
+    emit_export_progress(
+        &app_handle,
+        ExportProgress {
+            stage: "effects",
+            progress: 5,
+            total: Some(stack.len()),
+            current: Some(0),
+            ..Default::default()
+        },
+    );
+    // Resolve every call's effect handle under ONE short lock, then drop the
+    // guard before the loop runs. A codec stage shells out to the FFglitch
+    // sidecar for seconds-to-minutes; holding the registry mutex across that
+    // blocked every synchronous preview render (and the Cancel control that
+    // lives behind them) for the duration.
+    let effects: Vec<std::sync::Arc<dyn Effect>> = {
+        let registry = lock_state(&registry, "registry")?;
+        let mut resolved = Vec::with_capacity(stack.len());
+        for call in stack.iter() {
+            resolved.push(
+                registry
+                    .get_shared(&call.effect_id)
+                    .ok_or_else(|| format!("Effect '{}' not found", call.effect_id))?,
+            );
+        }
+        resolved
+    };
+    // Every per-frame time below goes through `export_frame_time`: the frames
+    // were trimmed above, so a frame's index in the segment is NOT its time on
+    // the transport. See that function for why it matters.
+    let ctx = EffectPassCtx {
+        app_handle: &app_handle,
+        global_mask: global_mask.as_ref(),
+        audio_data: audio_data.as_ref(),
+        trim_start: options.trim_start,
+        cancel: &cancel,
+    };
+
+    for (effect_idx, (call, effect)) in stack.iter().zip(effects.iter()).enumerate() {
+        // Cancel is polled between effects, and per frame inside the two
+        // non-temporal branches of apply_effect_to_segment. It used to be
+        // read only inside the encoder's write loop -- the last 15% of an
+        // export -- so "Cancel" during decode or effects changed nothing but
+        // the status text.
+        if cancel.load(Ordering::Relaxed) {
+            return Err(crate::ffmpeg::EXPORT_CANCELLED.into());
+        }
+        let effect: &dyn Effect = effect.as_ref();
+        tracing::debug!(
+            "Export effect {}/{}: {} (temporal={}, pipeline={:?})",
+            effect_idx + 1,
+            stack.len(),
+            call.effect_id,
+            effect.is_temporal(),
+            effect.pipeline()
+        );
+
+        match effect.pipeline() {
+            // Pixel layers run on the decoded frames in place.
+            Pipeline::Pixel => {
+                apply_effect_to_segment(effect, call, &mut segment, &ctx, effect_idx, stack.len())?
+            }
+            // Codec layers corrupt the compressed bitstream: the segment makes
+            // a round trip through a temp mp4 and the FFglitch sidecar. It
+            // reuses `ctx.cancel` and deliberately never touches the export
+            // semaphore — this thread already holds the only permit.
+            Pipeline::Codec => {
+                apply_codec_to_segment(effect, call, &mut segment, &ctx, effect_idx, stack.len())?
             }
         }
+
+        tracing::debug!("Export effect {}/{} done", effect_idx + 1, stack.len());
+        let pct = 5 + ((effect_idx + 1) as f64 / stack.len() as f64 * 80.0) as u32;
+        emit_export_progress(
+            &app_handle,
+            ExportProgress {
+                stage: "effects",
+                progress: pct,
+                total: Some(stack.len()),
+                current: Some(effect_idx + 1),
+                ..Default::default()
+            },
+        );
     }
 
+    encode_output(
+        &app_handle,
+        &segment,
+        &source_path,
+        &output_path,
+        &options,
+        &cancel,
+    )?;
+
+    Ok(output_path)
+}
+
+/// Shared inputs for `apply_effect_to_segment` that stay the same for every
+/// effect in the stack: the decode-time global mask, the audio bake, the
+/// trim in-point the transport-time math counts from, and the progress /
+/// cancel plumbing.
+struct EffectPassCtx<'a> {
+    app_handle: &'a tauri::AppHandle,
+    global_mask: Option<&'a Mask>,
+    audio_data: Option<&'a crate::audio::AudioBakeData>,
+    trim_start: Option<f64>,
+    cancel: &'a AtomicBool,
+}
+
+/// Plan the decode resolution against the adaptive memory budget, decode
+/// the source, and expand a still image into the requested frame count.
+///
+/// `options.processing_scale = None` means "auto" — the backend picks the
+/// largest resolution that fits. `Some(n)` means the user explicitly chose
+/// n px on the longest side.
+fn plan_and_decode(
+    app_handle: &tauri::AppHandle,
+    source_path: &str,
+    options: &ExportOptions,
+    cancel: &AtomicBool,
+) -> crate::error::Result<VideoSegment> {
     // Plan the decode: pick a processing scale that fits the adaptive
     // memory budget. This runs BEFORE decode so we don't silently truncate.
-    // `processing_scale = None` means "auto" — the backend picks the
-    // largest resolution that fits. `Some(n)` means the user explicitly
-    // chose n px on the longest side.
     tracing::info!(
         "Planning export decode for source: {} (preferred scale: {:?})",
         source_path,
-        processing_scale
+        options.processing_scale
     );
-    let _ = app_handle.emit(
-        "export-progress",
-        serde_json::json!({"stage": "planning", "progress": 0}),
+    emit_export_progress(
+        app_handle,
+        ExportProgress {
+            stage: "planning",
+            progress: 0,
+            ..Default::default()
+        },
     );
     // A still image is decoded as ONE frame and then multiplied to fill the
     // requested duration, so the memory plan has to be made against the count
     // it will become. See plan_decode_for_frames.
-    let still_target_frames = if crate::ffmpeg::probe_frame_count(&source_path).unwrap_or(0) <= 1 {
-        let n = (trim_end.unwrap_or(10.0).max(0.0) * fps.unwrap_or(30.0)).round();
+    let still_target_frames = if crate::ffmpeg::probe_frame_count(source_path).unwrap_or(0) <= 1 {
+        let n = (options.trim_end.unwrap_or(10.0).max(0.0) * options.fps.unwrap_or(30.0)).round();
         Some((n.max(1.0) as usize).min(MAX_EXPORT_FRAMES))
     } else {
         None
     };
     let (decode_scale, budget_bytes) = match still_target_frames {
-        Some(n) => crate::ffmpeg::plan_decode_for_frames(&source_path, processing_scale, n),
-        None => crate::ffmpeg::plan_decode(&source_path, processing_scale),
-    }
-    .map_err(|e| e.to_string())?;
+        Some(n) => crate::ffmpeg::plan_decode_for_frames(source_path, options.processing_scale, n),
+        None => crate::ffmpeg::plan_decode(source_path, options.processing_scale),
+    }?;
     let budget_mb = budget_bytes as f64 / (1024.0 * 1024.0);
     tracing::info!(
         "Export decode plan: scale={:?}, memory budget={:.0} MB",
@@ -1113,30 +1254,30 @@ fn export_video_blocking(
             s
         );
         tracing::warn!("{}", message);
-        let _ = app_handle.emit(
-            "export-progress",
-            serde_json::json!({
-                "stage": "planning",
-                "progress": 0,
-                "warning": message,
-                "downscaled_to": s
-            }),
+        emit_export_progress(
+            app_handle,
+            ExportProgress {
+                stage: "planning",
+                progress: 0,
+                warning: Some(message),
+                downscaled_to: Some(s),
+                ..Default::default()
+            },
         );
     }
 
     // Decode the full source video
     tracing::info!("Decoding export source: {}", source_path);
-    let _ = app_handle.emit(
-        "export-progress",
-        serde_json::json!({"stage": "decoding", "progress": 0}),
+    emit_export_progress(
+        app_handle,
+        ExportProgress {
+            stage: "decoding",
+            progress: 0,
+            ..Default::default()
+        },
     );
-    let mut segment = crate::ffmpeg::decode_video_cancellable(
-        &source_path,
-        None,
-        decode_scale,
-        Some(cancel.as_ref()),
-    )
-    .map_err(|e| e.to_string())?;
+    let mut segment =
+        crate::ffmpeg::decode_video_cancellable(source_path, None, decode_scale, Some(cancel))?;
     tracing::info!(
         "Decoded {} frames, {}x{}, fps={}",
         segment.frames.len(),
@@ -1171,11 +1312,11 @@ fn export_video_blocking(
     // budget and logged a tracing::warn about it -- which no user ever sees, so
     // a five-minute source silently exported as four and the file just ended.
     if still_target_frames.is_none() {
-        let probed = crate::ffmpeg::probe_frame_count(&source_path).unwrap_or(0);
+        let probed = crate::ffmpeg::probe_frame_count(source_path).unwrap_or(0);
         let decoded = segment.frames.len();
         // 2% slack: the probe is duration x fps, which is an estimate.
         if probed > 0 && decoded > 0 && (decoded as f64) < (probed as f64) * 0.98 {
-            let secs = decoded as f64 / (segment.fps as f64).max(1.0);
+            let secs = decoded as f64 / segment.fps.max(1.0);
             let message = format!(
                 "This clip is too long to process at this resolution: exporting the \
                  first {:.0}s of it. Lower the processing resolution in Export \
@@ -1183,13 +1324,14 @@ fn export_video_blocking(
                 secs
             );
             tracing::warn!("{}", message);
-            let _ = app_handle.emit(
-                "export-progress",
-                serde_json::json!({
-                    "stage": "decoding",
-                    "progress": 0,
-                    "warning": message
-                }),
+            emit_export_progress(
+                app_handle,
+                ExportProgress {
+                    stage: "decoding",
+                    progress: 0,
+                    warning: Some(message),
+                    ..Default::default()
+                },
             );
         }
     }
@@ -1204,8 +1346,8 @@ fn export_video_blocking(
     // `vec![single; 300]` of a 48 MB frame is 14.6 GB, and a failed Rust
     // allocation ABORTS rather than panicking, so nothing reached the log.
     if segment.frames.len() == 1 {
-        let effective_fps = fps.unwrap_or(30.0);
-        let target_duration = trim_end.unwrap_or(10.0);
+        let effective_fps = options.fps.unwrap_or(30.0);
+        let target_duration = options.trim_end.unwrap_or(10.0);
         let requested_frames =
             ((target_duration * effective_fps).round().max(1.0) as usize).min(MAX_EXPORT_FRAMES);
         let frame_bytes = segment.frames[0].data.len().max(1);
@@ -1223,13 +1365,14 @@ fn export_video_blocking(
                 target_duration, secs
             );
             tracing::warn!("{}", message);
-            let _ = app_handle.emit(
-                "export-progress",
-                serde_json::json!({
-                    "stage": "decoding",
-                    "progress": 0,
-                    "warning": message
-                }),
+            emit_export_progress(
+                app_handle,
+                ExportProgress {
+                    stage: "decoding",
+                    progress: 0,
+                    warning: Some(message),
+                    ..Default::default()
+                },
             );
         }
         if target_frames > 1 {
@@ -1239,247 +1382,423 @@ fn export_video_blocking(
         }
     }
 
-    // Trim frames by in/out points (seconds)
-    if trim_start.is_some() || trim_end.is_some() {
-        let fps = segment.fps as f64;
-        let total_frames = segment.frames.len();
-        let start_frame = trim_start
-            .map(|s| (s.max(0.0) * fps).min(total_frames as f64) as usize)
-            .unwrap_or(0);
-        let end_frame = trim_end
-            .map(|e| (e.max(0.0) * fps).min(total_frames as f64) as usize)
-            .unwrap_or(total_frames)
-            .max(start_frame);
-        let frames = std::mem::take(&mut segment.frames);
-        segment.frames = frames
-            .into_iter()
-            .skip(start_frame)
-            .take(end_frame - start_frame)
-            .collect();
-        if segment.frames.is_empty() {
-            return Err("Trim range resulted in no frames".to_string());
-        }
+    Ok(segment)
+}
+
+/// Trim a decoded segment to the in/out points (seconds). Both `None` is a
+/// no-op; a range covering no frames is an error.
+fn apply_trim(
+    segment: &mut VideoSegment,
+    trim_start: Option<f64>,
+    trim_end: Option<f64>,
+) -> crate::error::Result<()> {
+    if trim_start.is_none() && trim_end.is_none() {
+        return Ok(());
     }
+    let fps = segment.fps;
+    let total_frames = segment.frames.len();
+    let start_frame = trim_start
+        .map(|s| (s.max(0.0) * fps).min(total_frames as f64) as usize)
+        .unwrap_or(0);
+    let end_frame = trim_end
+        .map(|e| (e.max(0.0) * fps).min(total_frames as f64) as usize)
+        .unwrap_or(total_frames)
+        .max(start_frame);
+    let frames = std::mem::take(&mut segment.frames);
+    segment.frames = frames
+        .into_iter()
+        .skip(start_frame)
+        .take(end_frame - start_frame)
+        .collect();
+    if segment.frames.is_empty() {
+        return Err("Trim range resulted in no frames".into());
+    }
+    Ok(())
+}
 
-    // Resolution override is now handled by FFmpeg -vf scale in encode_video
+/// Build the parameter map for one frame at transport time `t`: copy the
+/// static params, stamp `time`, then overwrite animated parameters with
+/// their keyframed value at `t` and re-clamp -- a keyframe can name any
+/// value the user dragged to, inside or outside the declared range.
+fn frame_params_at(
+    effect: &dyn Effect,
+    params: &serde_json::Map<String, serde_json::Value>,
+    keyframes: Option<&std::collections::HashMap<String, Vec<KeyframePoint>>>,
+    t: f64,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut frame_params = params.clone();
+    frame_params.insert("time".to_string(), serde_json::Value::from(t));
+    if inject_keyframe_params(keyframes, &mut frame_params, t) {
+        frame_params = crate::effects::clamp_for_effect(effect, &frame_params);
+    }
+    frame_params
+}
 
-    let global_mask = decode_mask_b64(mask_b64.as_deref())?;
+/// Apply one effect call to the whole segment, in place.
+///
+/// Memory. Every branch below writes its result back into `segment` rather
+/// than building a second sequence beside it, and the mask is blended per
+/// frame against that frame's own previous contents. The old shape cloned
+/// the whole clip for the blend, collected a whole new clip per effect, and
+/// then blended the two -- three copies of the clip in flight for one
+/// masked effect, against a budget that only ever counted one. The temporal
+/// branch is the exception: a temporal effect returns an owned segment, so
+/// its input necessarily survives until the swap. That 2x is structural and
+/// PIPELINE_PEAK_COPIES in ffmpeg/mod.rs is what the memory plan divides by
+/// to allow for it.
+///
+/// On an Err the segment may be half-processed in place. Nothing reads it
+/// after that -- the export bails -- so do not add a retry on top.
+fn apply_effect_to_segment(
+    effect: &dyn Effect,
+    call: &EffectCall,
+    segment: &mut VideoSegment,
+    ctx: &EffectPassCtx<'_>,
+    effect_idx: usize,
+    stack_len: usize,
+) -> crate::error::Result<()> {
+    // Clamp parameters to declared min/max before any processing.
+    let params = crate::effects::clamp_for_effect(effect, &call.params);
 
-    // Deserialize audio bake data if provided
-    let audio_data: Option<crate::audio::AudioBakeData> =
-        audio_bake_json.and_then(|json| serde_json::from_str(&json).ok());
+    // Per-effect mask overrides global mask
+    let per_effect_mask = if let Some(ref b64) = call.mask_b64 {
+        decode_mask_b64(Some(b64.as_str()))?
+    } else {
+        None
+    };
+    let active_mask = per_effect_mask.as_ref().or(ctx.global_mask);
 
-    // Apply the effect stack
-    tracing::info!("Applying {} effects for export", stack.len());
-    let _ = app_handle.emit(
-        "export-progress",
-        serde_json::json!({"stage": "effects", "progress": 5, "total": stack.len(), "current": 0}),
-    );
-    let registry = registry
-        .lock()
-        .map_err(|e| format!("registry lock poisoned: {e}"))?;
-    // Every per-frame time below goes through `export_frame_time`: the frames
-    // were trimmed above, so a frame's index in the segment is NOT its time on
-    // the transport. See that function for why it matters.
+    // Check if mask blending is needed (avoids expensive clone)
+    let blend_needed = needs_mask_blend(effect, active_mask);
+    let mode = call.mask_mode.as_deref().unwrap_or("inside");
 
-    for (effect_idx, call) in stack.iter().enumerate() {
-        // Cancel is polled between effects, and per frame inside the two
-        // non-temporal branches below. It used to be read only inside the
-        // encoder's write loop -- the last 15% of an export -- so "Cancel"
-        // during decode or effects changed nothing but the status text.
-        if cancel.load(Ordering::Relaxed) {
-            return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
+    // A temporal effect takes the whole segment through one
+    // `Effect::process_video` call with no cancel hook, so a cancel during
+    // it lands between effects: the pass runs to completion first. That
+    // is seconds to tens of seconds on a long clip, with the progress bar
+    // still. The UI says "Cancelling..." rather than "cancelled" for
+    // exactly this reason.
+    if effect.is_temporal() {
+        // Temporal effects: must use sequential process_video for cross-frame correctness.
+        // Per-frame audio injection is meaningless here -- the effect gets the
+        // whole segment at once -- so hand it the beat timeline instead, which
+        // is what lets a datamosh cut on the beat rather than on a clock.
+        let mut temporal_params = params.clone();
+        // A temporal effect is handed the whole segment at once, so it has
+        // no per-frame parameter hook. Animated parameters take their value
+        // at the START of the segment -- the in-point, not clip time 0 --
+        // rather than being ignored outright.
+        let segment_start = export_frame_time(ctx.trim_start, 0, segment.fps);
+        if inject_keyframe_params(call.keyframes.as_ref(), &mut temporal_params, segment_start) {
+            temporal_params = crate::effects::clamp_for_effect(effect, &temporal_params);
         }
-        let effect = registry
-            .get(&call.effect_id)
-            .ok_or_else(|| format!("Effect '{}' not found", call.effect_id))?;
-        tracing::debug!(
-            "Export effect {}/{}: {} (temporal={})",
-            effect_idx + 1,
-            stack.len(),
-            call.effect_id,
-            effect.is_temporal()
-        );
-
-        // Clamp parameters to declared min/max before any processing.
-        let params = crate::effects::clamp_for_effect(effect, &call.params);
-
-        // Per-effect mask overrides global mask
-        let per_effect_mask = if let Some(ref b64) = call.mask_b64 {
-            decode_mask_b64(Some(b64.as_str()))?
-        } else {
-            None
-        };
-        let active_mask = per_effect_mask.as_ref().or(global_mask.as_ref());
-
-        // Check if mask blending is needed (avoids expensive clone)
-        let needs_mask_blend = !effect.handles_masking() && active_mask.is_some();
-        let mode = call.mask_mode.as_deref().unwrap_or("inside");
-
-        // Memory. Every branch below writes its result back into `segment`
-        // rather than building a second sequence beside it, and the mask is
-        // blended per frame against that frame's own previous contents. The
-        // old shape cloned the whole clip for the blend, collected a whole new
-        // clip per effect, and then blended the two -- three copies of the
-        // clip in flight for one masked effect, against a budget that only
-        // ever counted one. The temporal branch is the exception: a temporal
-        // effect returns an owned segment, so its input necessarily survives
-        // until the swap. That 2x is structural and PIPELINE_PEAK_COPIES in
-        // ffmpeg/mod.rs is what the memory plan divides by to allow for it.
-        //
-        // On an Err the segment may be half-processed in place. Nothing reads
-        // it after that -- the export bails -- so do not add a retry on top.
-
-        // A temporal effect takes the whole segment through one
-        // `Effect::process_video` call with no cancel hook, so a cancel during
-        // it lands between effects: the pass runs to completion first. That
-        // is seconds to tens of seconds on a long clip, with the progress bar
-        // still. The UI says "Cancelling..." rather than "cancelled" for
-        // exactly this reason.
-        if effect.is_temporal() {
-            // Temporal effects: must use sequential process_video for cross-frame correctness.
-            // Per-frame audio injection is meaningless here -- the effect gets the
-            // whole segment at once -- so hand it the beat timeline instead, which
-            // is what lets a datamosh cut on the beat rather than on a clock.
-            let mut temporal_params = params.clone();
-            // A temporal effect is handed the whole segment at once, so it has
-            // no per-frame parameter hook. Animated parameters take their value
-            // at the START of the segment -- the in-point, not clip time 0 --
-            // rather than being ignored outright.
-            let segment_start = export_frame_time(trim_start, 0, segment.fps);
-            if inject_keyframe_params(call.keyframes.as_ref(), &mut temporal_params, segment_start)
-            {
-                temporal_params = crate::effects::clamp_for_effect(effect, &temporal_params);
-            }
-            if let Some(ref audio) = audio_data {
-                audio.inject_timeline_params(&mut temporal_params);
-            }
-            let processed = effect
-                .process_video(&segment, active_mask, &temporal_params)
-                .map_err(|e| e.to_string())?;
-            let previous = std::mem::replace(&mut segment, processed);
-            if needs_mask_blend {
-                if let Some(m) = active_mask {
-                    if previous.frames.len() == segment.frames.len() {
-                        blend_segment_against(
-                            &previous.frames,
-                            &mut segment.frames,
-                            m,
-                            mode,
-                            &cancel,
-                        )?;
-                    } else {
-                        // A frame-repeating datamosh returns more frames than it
-                        // was given, so there is no one-to-one "before" frame to
-                        // blend against. This used to index `prev[i]` past the
-                        // end and PANIC: every masked export with Frame Stutter
-                        // failed. Skipping the blend and saying so is the honest
-                        // result; zipping would blend the wrong frames and leave
-                        // the tail unmasked.
-                        let message = format!(
-                            "{} changes the clip length, so the mask could not be \
-                             applied to it. The effect still ran on the whole frame.",
-                            call.effect_id
-                        );
-                        tracing::warn!("{}", message);
-                        let pct = 5 + ((effect_idx + 1) as f64 / stack.len() as f64 * 80.0) as u32;
-                        let _ = app_handle.emit(
-                            "export-progress",
-                            serde_json::json!({
-                                "stage": "effects",
-                                "progress": pct,
-                                "warning": message
-                            }),
-                        );
-                    }
-                }
-            }
-            // `previous` drops here: the input copy is gone before the next effect.
-        } else if audio_data.is_none() {
-            // Non-temporal, no audio: parallelize frame processing with rayon,
-            // in place.
-            let mask_ref = active_mask;
-            let params_ref = &params;
-            let keyframes_ref = call.keyframes.as_ref();
-            let fps_val = segment.fps;
-            segment.frames.par_iter_mut().enumerate().try_for_each(
-                |(idx, frame)| -> std::result::Result<(), String> {
-                    if cancel.load(Ordering::Relaxed) {
-                        return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
-                    }
-                    let t = export_frame_time(trim_start, idx, fps_val);
-                    let mut frame_params = params_ref.clone();
-                    frame_params.insert("time".to_string(), serde_json::Value::from(t));
-                    // Re-clamp after injection: the clamp above ran on the static
-                    // map, and a keyframe can name any value the user dragged to.
-                    if inject_keyframe_params(keyframes_ref, &mut frame_params, t) {
-                        frame_params = crate::effects::clamp_for_effect(effect, &frame_params);
-                    }
-                    apply_frame_in_place(
-                        effect,
-                        frame,
-                        mask_ref,
-                        &frame_params,
-                        needs_mask_blend,
+        if let Some(audio) = ctx.audio_data {
+            audio.inject_timeline_params(&mut temporal_params);
+        }
+        let processed = effect.process_video(segment, active_mask, &temporal_params)?;
+        let previous = std::mem::replace(segment, processed);
+        if blend_needed {
+            if let Some(m) = active_mask {
+                if previous.frames.len() == segment.frames.len() {
+                    blend_segment_against(
+                        &previous.frames,
+                        &mut segment.frames,
+                        m,
                         mode,
-                    )
-                },
-            )?;
-        } else {
-            // Non-temporal with audio: sequential, because AudioBindingSmoother
-            // carries state from frame to frame. Still in place.
-            let fps_val = segment.fps;
-            let mut smoother = AudioBindingSmoother::default();
-            let dt = 1.0 / (fps_val as f64).max(1.0);
-            for (frame_idx, frame) in segment.frames.iter_mut().enumerate() {
-                if cancel.load(Ordering::Relaxed) {
-                    return Err(crate::ffmpeg::EXPORT_CANCELLED.to_string());
+                        ctx.cancel,
+                    )?;
+                } else {
+                    // A frame-repeating datamosh returns more frames than it
+                    // was given, so there is no one-to-one "before" frame to
+                    // blend against. This used to index `prev[i]` past the
+                    // end and PANIC: every masked export with Frame Stutter
+                    // failed. Skipping the blend and saying so is the honest
+                    // result; zipping would blend the wrong frames and leave
+                    // the tail unmasked.
+                    let message = format!(
+                        "{} changes the clip length, so the mask could not be \
+                         applied to it. The effect still ran on the whole frame.",
+                        call.effect_id
+                    );
+                    tracing::warn!("{}", message);
+                    let pct = 5 + ((effect_idx + 1) as f64 / stack_len as f64 * 80.0) as u32;
+                    emit_export_progress(
+                        ctx.app_handle,
+                        ExportProgress {
+                            stage: "effects",
+                            progress: pct,
+                            warning: Some(message),
+                            ..Default::default()
+                        },
+                    );
                 }
-                let t = export_frame_time(trim_start, frame_idx, fps_val);
-                let mut frame_params = params.clone();
-                frame_params.insert("time".to_string(), serde_json::Value::from(t));
-                if inject_keyframe_params(call.keyframes.as_ref(), &mut frame_params, t) {
+            }
+        }
+        // `previous` drops here: the input copy is gone before the next effect.
+    } else if ctx.audio_data.is_none() {
+        // Non-temporal, no audio: parallelize frame processing with rayon,
+        // in place.
+        let mask_ref = active_mask;
+        let params_ref = &params;
+        let keyframes_ref = call.keyframes.as_ref();
+        let fps_val = segment.fps;
+        segment.frames.par_iter_mut().enumerate().try_for_each(
+            |(idx, frame)| -> crate::error::Result<()> {
+                if ctx.cancel.load(Ordering::Relaxed) {
+                    return Err(crate::ffmpeg::EXPORT_CANCELLED.into());
+                }
+                let t = export_frame_time(ctx.trim_start, idx, fps_val);
+                let frame_params = frame_params_at(effect, params_ref, keyframes_ref, t);
+                apply_frame_in_place(effect, frame, mask_ref, &frame_params, blend_needed, mode)
+            },
+        )?;
+    } else {
+        // Non-temporal with audio: sequential, because AudioBindingSmoother
+        // carries state from frame to frame. Still in place.
+        let fps_val = segment.fps;
+        let mut smoother = AudioBindingSmoother::default();
+        let dt = 1.0 / fps_val.max(1.0);
+        for (frame_idx, frame) in segment.frames.iter_mut().enumerate() {
+            if ctx.cancel.load(Ordering::Relaxed) {
+                return Err(crate::ffmpeg::EXPORT_CANCELLED.into());
+            }
+            let t = export_frame_time(ctx.trim_start, frame_idx, fps_val);
+            let mut frame_params = frame_params_at(effect, &params, call.keyframes.as_ref(), t);
+            if let Some(audio) = ctx.audio_data {
+                audio.inject_params_at_time(&mut frame_params, t);
+                // After the keyframes above: binding a parameter to audio is
+                // the more explicit instruction, so it wins when both name
+                // the same parameter.
+                if smoother.inject(
+                    call.audio_bindings.as_ref(),
+                    &mut frame_params,
+                    audio.frame_at_time(t),
+                    dt,
+                ) {
                     frame_params = crate::effects::clamp_for_effect(effect, &frame_params);
                 }
-                if let Some(ref audio) = audio_data {
-                    audio.inject_params_at_time(&mut frame_params, t);
-                    // After the keyframes above: binding a parameter to audio is
-                    // the more explicit instruction, so it wins when both name
-                    // the same parameter.
-                    if smoother.inject(
-                        call.audio_bindings.as_ref(),
-                        &mut frame_params,
-                        audio.frame_at_time(t),
-                        dt,
-                    ) {
-                        frame_params = crate::effects::clamp_for_effect(effect, &frame_params);
-                    }
-                }
-                apply_frame_in_place(
-                    effect,
-                    frame,
-                    active_mask,
-                    &frame_params,
-                    needs_mask_blend,
-                    mode,
-                )?;
+            }
+            apply_frame_in_place(
+                effect,
+                frame,
+                active_mask,
+                &frame_params,
+                blend_needed,
+                mode,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Apply one codec-pipeline (FFglitch) stack entry to the segment.
+///
+/// Codec effects corrupt the compressed bitstream, so the segment makes a
+/// round trip through an encoded file: encode the in-flight frames to a temp
+/// mp4, run the FFglitch sidecar over THAT file, then decode the moshed file
+/// back into the segment for the next layer. Both temp files are deleted on
+/// every exit path, and `ctx.cancel` is honoured before and after each
+/// subprocess — the sidecar itself polls it via `run_ffglitch_subprocess`.
+///
+/// Params get the same `clamp_for_effect` normalisation as the pixel path,
+/// which is what turns the Select control's index into the option name
+/// `mosh_cli.py` reads. Masks, keyframes and audio bindings deliberately do
+/// not apply — corruption happens on the bitstream, not frames — and the
+/// ParameterPanel hides those controls for codec entries.
+fn apply_codec_to_segment(
+    effect: &dyn Effect,
+    call: &EffectCall,
+    segment: &mut VideoSegment,
+    ctx: &EffectPassCtx<'_>,
+    effect_idx: usize,
+    stack_len: usize,
+) -> crate::error::Result<()> {
+    let mode = call.effect_id.strip_prefix("ffglitch.").ok_or_else(|| {
+        format!(
+            "codec effect '{}' does not use the ffglitch.* id convention",
+            call.effect_id
+        )
+    })?;
+
+    let params =
+        clamp_ffglitch_mode_params(effect, &serde_json::Value::Object(call.params.clone()));
+    validate_ffglitch_extra_paths(mode, &params)?;
+
+    if ctx.cancel.load(Ordering::Relaxed) {
+        return Err(crate::ffmpeg::EXPORT_CANCELLED.into());
+    }
+
+    let pct = 5 + ((effect_idx + 1) as f64 / stack_len as f64 * 80.0) as u32;
+    emit_export_progress(
+        ctx.app_handle,
+        ExportProgress {
+            stage: "codec",
+            progress: pct,
+            total: Some(stack_len),
+            current: Some(effect_idx + 1),
+            ..Default::default()
+        },
+    );
+
+    // Marked like the two-stage export's intermediate so a stray file left by
+    // a crash is still one `remove_export_temp` recognises — and never
+    // mistaken for a user file.
+    let temp_dir = mosh_temp_dir("")?;
+    let nonce = format!(
+        "{}-{}-{}",
+        std::process::id(),
+        rand::random::<u32>(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let pre_path = temp_dir.join(format!("codec-pre-{nonce}{EXPORT_TEMP_MARKER}mp4"));
+    let post_path = temp_dir.join(format!("codec-post-{nonce}{EXPORT_TEMP_MARKER}mp4"));
+
+    let before_count = segment.frames.len();
+    let before_dims = segment.frames.first().map(|f| (f.width, f.height));
+    let fps = segment.fps;
+
+    // Drop guard — a panic inside encode/mosh/decode unwinds past
+    // statement-level cleanup, so deletion lives in Drop the same way
+    // TempConfigGuard does for the sidecar's config file.
+    struct TempFilesGuard(Vec<PathBuf>);
+    impl Drop for TempFilesGuard {
+        fn drop(&mut self) {
+            for p in &self.0 {
+                let _ = std::fs::remove_file(p);
             }
         }
-
-        tracing::debug!("Export effect {}/{} done", effect_idx + 1, stack.len());
-        let pct = 5 + ((effect_idx + 1) as f64 / stack.len() as f64 * 80.0) as u32;
-        let _ = app_handle.emit("export-progress", serde_json::json!({"stage": "effects", "progress": pct, "total": stack.len(), "current": effect_idx + 1}));
     }
-    drop(registry);
+    let _temps = TempFilesGuard(vec![pre_path.clone(), post_path.clone()]);
+
+    let result = (|| -> crate::error::Result<VideoSegment> {
+        // The sidecar reads the bitstream, so the intermediate needs real
+        // inter-frame coding: libx264/yuv420p mp4, no audio (the track is
+        // muxed from the source at final encode).
+        encode_video(
+            segment,
+            &pre_path.to_string_lossy(),
+            "libx264",
+            Some(fps),
+            None,
+            None,
+            Some("good"),
+            Some(false),
+            None,
+            None,
+            None,
+            None,
+            Some(ctx.cancel),
+            Some(Duration::from_secs(1800)),
+            Some("mp4"),
+        )?;
+        if ctx.cancel.load(Ordering::Relaxed) {
+            return Err(crate::ffmpeg::EXPORT_CANCELLED.into());
+        }
+        run_ffglitch_file(&pre_path, &post_path, mode, &params, ctx.cancel)?;
+        if ctx.cancel.load(Ordering::Relaxed) {
+            return Err(crate::ffmpeg::EXPORT_CANCELLED.into());
+        }
+        // Headroom past the input count: frame-multiplying moshes return MORE
+        // frames than they were given, and the 10k decode default would
+        // silently cap a long export. The memory budget still bounds it.
+        crate::ffmpeg::decode_video_cancellable(
+            &post_path.to_string_lossy(),
+            Some(before_count.saturating_add(1024)),
+            None,
+            Some(ctx.cancel),
+        )
+    })();
+
+    let processed = result?;
+    if processed.frames.is_empty() {
+        return Err(format!(
+            "{} produced no decodable frames — the corruption left nothing the \
+             decoder could read. Try a milder mode or a different source.",
+            call.effect_id
+        )
+        .into());
+    }
+    let after_count = processed.frames.len();
+    let after_dims = processed.frames.first().map(|f| (f.width, f.height));
+    // The segment owns a fixed time slot: `before_count` frames at `fps`.
+    // Shuffle/Rise/Water Bloom resample to 30 fps inside the sidecar, so the
+    // decoded count can differ — playing it at `fps` would change the clip's
+    // speed (and desync the muxed audio). Nearest-neighbor index resampling
+    // maps the moshed frames back into the original slot; for a corruption
+    // pass, frame-exact identity matters less than duration.
+    let frames = if after_count == before_count {
+        processed.frames
+    } else {
+        (0..before_count)
+            .map(|i| processed.frames[i * after_count / before_count].clone())
+            .collect()
+    };
+    *segment = VideoSegment {
+        frames,
+        // Keep the export's frame rate, not whatever the mosh file reports:
+        // downstream layers and the final encode are timed on it.
+        fps,
+    };
+    // Several modes are SUPPOSED to change the frame count or resolution
+    // (repeat, bloom, stretch), so these are warnings, not errors — same
+    // stance as the frame-count mismatch warning in apply_effect_to_segment.
+    let codec_warning = |message: String| {
+        tracing::warn!("{}", message);
+        emit_export_progress(
+            ctx.app_handle,
+            ExportProgress {
+                stage: "codec",
+                progress: pct,
+                warning: Some(message),
+                ..Default::default()
+            },
+        );
+    };
+    if after_count != before_count {
+        codec_warning(format!(
+            "{} produced {} frames for a {}-frame slot (fps resample in the \
+             sidecar); the output was resampled to keep the clip's duration.",
+            call.effect_id, after_count, before_count
+        ));
+    }
+    if let (Some((bw, bh)), Some((aw, ah))) = (before_dims, after_dims) {
+        if aw != bw || ah != bh {
+            codec_warning(format!(
+                "{} changed the resolution from {}x{} to {}x{}; downstream \
+                 layers and the final encode run at the new size.",
+                call.effect_id, bw, bh, aw, ah
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Pick the codec, decide whether the source audio track gets muxed in, and
+/// run the final encode, emitting the encode and done progress events.
+fn encode_output(
+    app_handle: &tauri::AppHandle,
+    segment: &VideoSegment,
+    source_path: &str,
+    output_path: &str,
+    options: &ExportOptions,
+    cancel: &AtomicBool,
+) -> crate::error::Result<()> {
     tracing::info!("All effects applied, proceeding to encode");
-    let _ = app_handle.emit(
-        "export-progress",
-        serde_json::json!({"stage": "encoding", "progress": 90}),
+    emit_export_progress(
+        app_handle,
+        ExportProgress {
+            stage: "encoding",
+            progress: 90,
+            ..Default::default()
+        },
     );
 
     // Determine codec: explicit codec > format-derived > default
-    let codec_str = codec.as_deref().unwrap_or({
-        match format.as_deref() {
+    let codec_str = options.codec.as_deref().unwrap_or({
+        match options.format.as_deref() {
             Some("webm") => "vp9",
             // gif / apng / webp / *_seq pick their own encoder in output_spec();
             // the value here is only a fallback for the video containers.
@@ -1494,36 +1813,38 @@ fn export_video_blocking(
     // and no combination of settings could produce reactive visuals *and* audio.
     // The bake drives per-frame effect params; this only decides whether a
     // second input is mapped in at encode time.
-    let effective_include_audio = include_audio.unwrap_or(false);
+    let effective_include_audio = options.include_audio.unwrap_or(false);
 
     // Cap a single encode at 30 minutes. This is generous for high-resolution
     // exports while preventing a hung FFmpeg process from blocking indefinitely.
     const ENCODE_TIMEOUT: Duration = Duration::from_secs(1800);
 
     encode_video(
-        &segment,
-        &output_path,
+        segment,
+        output_path,
         codec_str,
-        fps,
-        watermark.as_ref(),
-        Some(&source_path),
-        quality.as_deref(),
+        options.fps,
+        options.watermark.as_ref(),
+        Some(source_path),
+        options.quality.as_deref(),
         Some(effective_include_audio),
-        trim_start,
-        trim_end,
-        width,
-        height,
-        Some(cancel.as_ref()),
+        options.trim_start,
+        options.trim_end,
+        options.width,
+        options.height,
+        Some(cancel),
         Some(ENCODE_TIMEOUT),
-        format.as_deref(),
-    )
-    .map_err(|e| e.to_string())?;
-    let _ = app_handle.emit(
-        "export-progress",
-        serde_json::json!({"stage": "done", "progress": 100}),
+        options.format.as_deref(),
+    )?;
+    emit_export_progress(
+        app_handle,
+        ExportProgress {
+            stage: "done",
+            progress: 100,
+            ..Default::default()
+        },
     );
-
-    Ok(output_path)
+    Ok(())
 }
 
 /// Request cancellation of an in-progress export. The export polls this flag
@@ -1532,16 +1853,16 @@ fn export_video_blocking(
 /// A temporal effect's single process_video pass is the one stretch it
 /// cannot interrupt.
 #[tauri::command]
-pub fn cancel_export(state: State<'_, AppState>) -> std::result::Result<(), String> {
+pub fn cancel_export(state: State<'_, AppState>) -> crate::error::Result<()> {
     state.export_cancel.store(true, Ordering::Relaxed);
     Ok(())
 }
 
 /// Get metadata for a media file.
 #[tauri::command]
-pub fn get_media_metadata(path: String) -> std::result::Result<serde_json::Value, String> {
+pub fn get_media_metadata(path: String) -> crate::error::Result<serde_json::Value> {
     validate_io_path(&path, true)?;
-    let meta = probe_metadata(&path).map_err(|e| e.to_string())?;
+    let meta = probe_metadata(&path)?;
     Ok(json!(meta))
 }
 
@@ -1559,14 +1880,14 @@ pub fn get_media_metadata(path: String) -> std::result::Result<serde_json::Value
 pub fn extract_audio_from_video(
     video_path: String,
     max_duration_secs: Option<f64>,
-) -> std::result::Result<String, String> {
+) -> crate::error::Result<String> {
     let validated = validate_io_path(&video_path, true)?;
     let video_path = validated.to_string_lossy().into_owned();
 
     // Fast path: if there's no audio stream, fail fast with a clear message
     // so the frontend can show a "no audio" warning instead of a generic error.
-    if !has_audio_stream(&video_path).map_err(|e| e.to_string())? {
-        return Err("Source video has no audio stream".to_string());
+    if !has_audio_stream(&video_path)? {
+        return Err(crate::error::AppError::NoAudioStream);
     }
 
     // Write to a per-video temp file so repeated loads overwrite cleanly.
@@ -1576,26 +1897,17 @@ pub fn extract_audio_from_video(
     let mut hasher = DefaultHasher::new();
     video_path.hash(&mut hasher);
     let hash = format!("{:016x}", hasher.finish());
-    let out_dir = std::env::temp_dir()
-        .join("moshdither-studio")
-        .join("extracted-audio");
-    std::fs::create_dir_all(&out_dir).map_err(|e| format!("Failed to create temp dir: {e}"))?;
+    let out_dir = mosh_temp_dir("extracted-audio")?;
     let out_path = out_dir.join(format!("{hash}.wav"));
 
-    extract_audio_to_wav(&video_path, &out_path.to_string_lossy(), max_duration_secs)
-        .map_err(|e| e.to_string())?;
+    extract_audio_to_wav(&video_path, &out_path.to_string_lossy(), max_duration_secs)?;
     Ok(out_path.to_string_lossy().into_owned())
 }
 
 /// Get the current image dimensions.
 #[tauri::command]
-pub fn get_media_info(
-    state: State<'_, AppState>,
-) -> std::result::Result<serde_json::Value, String> {
-    let frame_lock = state
-        .current_frame
-        .lock()
-        .map_err(|e| format!("frame lock poisoned: {e}"))?;
+pub fn get_media_info(state: State<'_, AppState>) -> crate::error::Result<serde_json::Value> {
+    let frame_lock = lock_state(&state.current_frame, "frame")?;
     match frame_lock.as_ref() {
         Some(frame) => Ok(json!({
             "width": frame.width,
@@ -1604,15 +1916,6 @@ pub fn get_media_info(
         })),
         None => Ok(json!({ "loaded": false })),
     }
-}
-
-fn lock_sam3<'a>(
-    state: &'a State<'_, AppState>,
-) -> std::result::Result<std::sync::MutexGuard<'a, Option<Sam3Engine>>, String> {
-    state
-        .sam3
-        .lock()
-        .map_err(|e| format!("SAM3 lock poisoned: {e}"))
 }
 
 /// Zip parallel (mask_b64, score) pairs into the `{count, masks, scores}`
@@ -1631,18 +1934,22 @@ fn with_sam3<F, R>(
     app: &tauri::AppHandle,
     state: &State<'_, AppState>,
     f: F,
-) -> std::result::Result<R, String>
+) -> crate::error::Result<R>
 where
     F: Fn(&Sam3Engine) -> crate::error::Result<R>,
 {
-    let mut sam3_lock = lock_sam3(state)?;
+    let mut sam3_lock = lock_state(&state.sam3, "SAM3")?;
 
     if sam3_lock.is_none() {
         match Sam3Engine::new(app) {
             Ok(engine) => {
                 *sam3_lock = Some(engine);
             }
-            Err(e) => return Err(format!("Failed to start SAM3 engine: {e}")),
+            Err(e) => {
+                return Err(AppError::Generic(format!(
+                    "Failed to start SAM3 engine: {e}"
+                )));
+            }
         }
     }
 
@@ -1650,14 +1957,11 @@ where
     match f(engine) {
         Ok(res) => Ok(res),
         Err(e) => {
-            let err_str = e.to_string();
-            // If the sidecar IPC pipe broke or died, drop the dead engine lock and attempt auto-restart
-            if err_str.contains("pipe")
-                || err_str.contains("closed")
-                || err_str.contains("os error")
-            {
+            // A dead transport (broken pipe / bridge exited) gets one restart
+            // retry; a model/timeout error is returned as-is.
+            if e.is_sam3_transport_failure() {
                 tracing::warn!(
-                    "SAM3 engine pipe error detected ({err_str}), auto-restarting SAM3 engine..."
+                    "SAM3 engine transport failure ({e}), auto-restarting SAM3 engine..."
                 );
                 *sam3_lock = None;
                 if let Ok(new_engine) = Sam3Engine::new(app) {
@@ -1668,7 +1972,7 @@ where
                     *sam3_lock = Some(new_engine);
                 }
             }
-            Err(err_str)
+            Err(e)
         }
     }
 }
@@ -1678,15 +1982,17 @@ where
 pub fn sam3_init(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
-) -> std::result::Result<String, String> {
-    let mut sam3_lock = lock_sam3(&state)?;
+) -> crate::error::Result<String> {
+    let mut sam3_lock = lock_state(&state.sam3, "SAM3")?;
     if sam3_lock.is_none() {
         match Sam3Engine::new(&app) {
             Ok(engine) => {
                 *sam3_lock = Some(engine);
                 Ok("SAM3 engine initialized".into())
             }
-            Err(e) => Err(format!("Failed to start SAM3 engine: {}", e)),
+            Err(e) => Err(AppError::Generic(format!(
+                "Failed to start SAM3 engine: {e}"
+            ))),
         }
     } else {
         Ok("SAM3 engine already running".into())
@@ -1699,7 +2005,7 @@ pub fn sam3_load_image(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     image_b64: String,
-) -> std::result::Result<serde_json::Value, String> {
+) -> crate::error::Result<serde_json::Value> {
     let (w, h) = with_sam3(&app, &state, |engine| engine.load_image(image_b64.clone()))?;
     Ok(json!({ "width": w, "height": h }))
 }
@@ -1710,7 +2016,7 @@ pub fn sam3_text_prompt(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     prompt: String,
-) -> std::result::Result<serde_json::Value, String> {
+) -> crate::error::Result<serde_json::Value> {
     let masks = with_sam3(&app, &state, |engine| engine.text_prompt(prompt.clone()))?;
     Ok(masks_to_json(masks))
 }
@@ -1722,7 +2028,7 @@ pub fn sam3_point_prompt(
     state: State<'_, AppState>,
     points: Vec<[f64; 2]>,
     labels: Option<Vec<i32>>,
-) -> std::result::Result<serde_json::Value, String> {
+) -> crate::error::Result<serde_json::Value> {
     let f32_points: Vec<[f32; 2]> = points
         .into_iter()
         .map(|[x, y]| [x as f32, y as f32])
@@ -1739,7 +2045,7 @@ pub fn sam3_box_prompt(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     boxes: Vec<[f64; 4]>,
-) -> std::result::Result<serde_json::Value, String> {
+) -> crate::error::Result<serde_json::Value> {
     let f32_boxes: Vec<[f32; 4]> = boxes
         .into_iter()
         .map(|[x1, y1, x2, y2]| [x1 as f32, y1 as f32, x2 as f32, y2 as f32])
@@ -1756,7 +2062,7 @@ pub fn sam3_auto_mask(
     grid_size: u32,
     iou_threshold: f32,
     min_mask_region_area: u32,
-) -> std::result::Result<serde_json::Value, String> {
+) -> crate::error::Result<serde_json::Value> {
     let masks = with_sam3(&app, &state, |engine| {
         engine.auto_mask(grid_size, iou_threshold, min_mask_region_area)
     })?;
@@ -1766,17 +2072,14 @@ pub fn sam3_auto_mask(
 /// Run video predictor on a list of frames.
 #[tauri::command]
 pub fn sam3_video_predictor(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     frames: Vec<String>,
     prompt: Option<String>,
-) -> std::result::Result<serde_json::Value, String> {
-    let sam3_lock = lock_sam3(&state)?;
-    let engine = sam3_lock
-        .as_ref()
-        .ok_or("SAM3 engine not initialized. Call sam3_init first.")?;
-    let (frame_masks, frame_scores) = engine
-        .video_predictor(frames, prompt)
-        .map_err(|e| e.to_string())?;
+) -> crate::error::Result<serde_json::Value> {
+    let (frame_masks, frame_scores) = with_sam3(&app, &state, |engine| {
+        engine.video_predictor(frames.clone(), prompt.clone())
+    })?;
     Ok(json!({
         "status": "ok",
         "frame_masks": frame_masks,
@@ -1794,7 +2097,7 @@ pub fn sam3_refine_mask(
     mask_b64: String,
     points: Vec<[f64; 2]>,
     labels: Option<Vec<i32>>,
-) -> std::result::Result<serde_json::Value, String> {
+) -> crate::error::Result<serde_json::Value> {
     let f32_points: Vec<[f32; 2]> = points
         .into_iter()
         .map(|[x, y]| [x as f32, y as f32])
@@ -1817,7 +2120,7 @@ pub fn sam3_postprocess_mask(
     shrink: i32,
     feather: i32,
     fill_holes: bool,
-) -> std::result::Result<String, String> {
+) -> crate::error::Result<String> {
     with_sam3(&app, &state, |engine| {
         engine.postprocess_mask(mask_b64.clone(), grow, shrink, feather, fill_holes)
     })
@@ -1825,20 +2128,22 @@ pub fn sam3_postprocess_mask(
 
 /// Clear SAM3 state (image + masks).
 #[tauri::command]
-pub fn sam3_clear(state: State<'_, AppState>) -> std::result::Result<String, String> {
-    let sam3_lock = lock_sam3(&state)?;
+pub fn sam3_clear(state: State<'_, AppState>) -> crate::error::Result<String> {
+    let sam3_lock = lock_state(&state.sam3, "SAM3")?;
     if let Some(engine) = sam3_lock.as_ref() {
-        engine.clear().map_err(|e| e.to_string())?;
+        engine.clear()?;
     }
     Ok("SAM3 state cleared".into())
 }
 
 /// Shutdown the SAM3 bridge process.
 #[tauri::command]
-pub fn sam3_shutdown(state: State<'_, AppState>) -> std::result::Result<String, String> {
-    let mut sam3_lock = lock_sam3(&state)?;
+pub fn sam3_shutdown(state: State<'_, AppState>) -> crate::error::Result<String> {
+    let mut sam3_lock = lock_state(&state.sam3, "SAM3")?;
     if let Some(engine) = sam3_lock.take() {
-        let _ = engine.shutdown();
+        engine
+            .shutdown()
+            .map_err(|e| format!("SAM3 shutdown failed: {e}"))?;
     }
     Ok("SAM3 engine shut down".into())
 }
@@ -1924,7 +2229,7 @@ mod integration_tests {
             data: vec![0u8; 4],
         };
         let err = downscale_frame(bad, 0.5).unwrap_err();
-        assert!(err.contains("downscale_frame"));
+        assert!(err.to_string().contains("downscale_frame"));
     }
 
     #[test]
@@ -1948,14 +2253,14 @@ mod integration_tests {
             data: vec![0u8; 4],
         };
         let err = upscale_frame(bad, 20, 20).unwrap_err();
-        assert!(err.contains("upscale_frame"));
+        assert!(err.to_string().contains("upscale_frame"));
     }
 
     // ── Poisoned-lock error handling ────────────────────────────
-    // Command handlers map a poisoned Mutex into a `Result::Err(String)`
+    // Command handlers map a poisoned Mutex into a `Result::Err(AppError)`
     // instead of panicking (which previously could crash the whole app and
     // permanently poison shared state). These tests poison an AppState mutex
-    // and confirm the same `.lock().map_err(..)` pattern yields an error.
+    // and confirm `lock_state` yields the named lock error.
 
     /// Poison the given mutex by panicking while a guard is held on another thread.
     fn poison_mutex<T: Send>(m: &Mutex<T>) {
@@ -1975,13 +2280,10 @@ mod integration_tests {
         let state = AppState::default();
         poison_mutex(&state.current_frame);
 
-        let result: std::result::Result<_, String> = state
-            .current_frame
-            .lock()
-            .map_err(|e| format!("frame lock poisoned: {e}"));
+        let result = lock_state(&state.current_frame, "frame");
         match result {
             Ok(_) => panic!("expected poisoned frame lock error"),
-            Err(e) => assert!(e.contains("frame lock poisoned")),
+            Err(e) => assert!(e.to_string().contains("frame lock poisoned")),
         }
     }
 
@@ -1990,13 +2292,10 @@ mod integration_tests {
         let state = AppState::default();
         poison_mutex(&state.registry);
 
-        let result: std::result::Result<_, String> = state
-            .registry
-            .lock()
-            .map_err(|e| format!("registry lock poisoned: {e}"));
+        let result = lock_state(&state.registry, "registry");
         match result {
             Ok(_) => panic!("expected poisoned registry lock error"),
-            Err(e) => assert!(e.contains("registry lock poisoned")),
+            Err(e) => assert!(e.to_string().contains("registry lock poisoned")),
         }
     }
 
@@ -2005,13 +2304,10 @@ mod integration_tests {
         let state = AppState::default();
         poison_mutex(&state.sam3);
 
-        let result: std::result::Result<_, String> = state
-            .sam3
-            .lock()
-            .map_err(|e| format!("SAM3 lock poisoned: {e}"));
+        let result = lock_state(&state.sam3, "SAM3");
         match result {
             Ok(_) => panic!("expected poisoned SAM3 lock error"),
-            Err(e) => assert!(e.contains("SAM3 lock poisoned")),
+            Err(e) => assert!(e.to_string().contains("SAM3 lock poisoned")),
         }
     }
 
@@ -2592,32 +2888,35 @@ fn validate_project_path(
 /// Save a JSON string to a file path.
 /// Validates path safety and enforces a maximum file size.
 #[tauri::command]
-pub async fn save_file(path: String, contents: String) -> std::result::Result<(), String> {
+pub async fn save_file(path: String, contents: String) -> crate::error::Result<()> {
     if contents.len() > PROJECT_FILE_MAX_SIZE {
         return Err(format!(
             "File contents too large: {} bytes (max {} bytes)",
             contents.len(),
             PROJECT_FILE_MAX_SIZE
-        ));
+        )
+        .into());
     }
     let valid_path = validate_project_path(&path, true)?;
-    std::fs::write(&valid_path, contents).map_err(|e| e.to_string())
+    std::fs::write(&valid_path, contents)?;
+    Ok(())
 }
 
 /// Read a file as a string.
 /// Validates path safety and enforces a maximum file size.
 #[tauri::command]
-pub async fn read_file(path: String) -> std::result::Result<String, String> {
+pub async fn read_file(path: String) -> crate::error::Result<String> {
     let valid_path = validate_project_path(&path, false)?;
-    let meta = std::fs::metadata(&valid_path).map_err(|e| e.to_string())?;
+    let meta = std::fs::metadata(&valid_path)?;
     if meta.len() as usize > PROJECT_FILE_MAX_SIZE {
         return Err(format!(
             "File too large: {} bytes (max {} bytes)",
             meta.len(),
             PROJECT_FILE_MAX_SIZE
-        ));
+        )
+        .into());
     }
-    std::fs::read_to_string(&valid_path).map_err(|e| e.to_string())
+    Ok(std::fs::read_to_string(&valid_path)?)
 }
 
 /// Maximum size for a user-supplied custom LUT (PNG or .cube).
@@ -2632,7 +2931,7 @@ const ALLOWED_LUT_EXTS: &[&str] = &["png", "cube"];
 /// returning the destination path to use for both WebGL preview and the Rust
 /// export pipeline.
 #[tauri::command]
-pub async fn prepare_custom_lut(path: String) -> std::result::Result<String, String> {
+pub async fn prepare_custom_lut(path: String) -> crate::error::Result<String> {
     let validated = validate_io_path(&path, true)?;
 
     let ext = validated
@@ -2641,26 +2940,26 @@ pub async fn prepare_custom_lut(path: String) -> std::result::Result<String, Str
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
     if !ALLOWED_LUT_EXTS.contains(&ext.as_str()) {
-        return Err(format!("Unsupported LUT extension: .{}", ext));
+        return Err(format!("Unsupported LUT extension: .{}", ext).into());
     }
 
-    let meta = std::fs::metadata(&validated).map_err(|e| e.to_string())?;
+    let meta = std::fs::metadata(&validated)?;
     if meta.len() > LUT_MAX_SIZE {
         return Err(format!(
             "LUT file too large: {} bytes (max {} bytes)",
             meta.len(),
             LUT_MAX_SIZE
-        ));
+        )
+        .into());
     }
 
     let file_name = validated
         .file_name()
         .and_then(|n| n.to_str())
-        .ok_or_else(|| "Invalid LUT file name".to_string())?;
-    let dest_dir = std::env::temp_dir().join("moshdither-studio").join("luts");
-    std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
+        .ok_or("Invalid LUT file name")?;
+    let dest_dir = mosh_temp_dir("luts")?;
     let dest = dest_dir.join(file_name);
-    std::fs::copy(&validated, &dest).map_err(|e| e.to_string())?;
+    std::fs::copy(&validated, &dest)?;
 
     Ok(dest.to_string_lossy().into_owned())
 }
@@ -2678,11 +2977,15 @@ pub struct UpdateInfo {
 /// Check whether a newer signed release is available from the configured
 /// updater endpoint.
 #[tauri::command]
-pub async fn check_update(
-    app: tauri::AppHandle,
-) -> std::result::Result<Option<UpdateInfo>, String> {
-    let updater = app.updater().map_err(|e| e.to_string())?;
-    match updater.check().await.map_err(|e| e.to_string())? {
+pub async fn check_update(app: tauri::AppHandle) -> crate::error::Result<Option<UpdateInfo>> {
+    // The updater plugin is intentionally not registered (see lib.rs) until
+    // signed release artifacts exist, so `app.updater()` errors on every
+    // call. Report "no update" rather than surfacing a config error to the
+    // UI; a registered-but-failing check still propagates its real error.
+    let Ok(updater) = app.updater() else {
+        return Ok(None);
+    };
+    match updater.check().await? {
         Some(update) => Ok(Some(UpdateInfo {
             version: update.version,
             date: update.date.map(|d| d.to_string()),
@@ -2696,14 +2999,17 @@ pub async fn check_update(
 
 /// Download, verify, and install the latest signed update, then restart the app.
 #[tauri::command]
-pub async fn install_update(app: tauri::AppHandle) -> std::result::Result<String, String> {
-    let updater = app.updater().map_err(|e| e.to_string())?;
-    match updater.check().await.map_err(|e| e.to_string())? {
+pub async fn install_update(app: tauri::AppHandle) -> crate::error::Result<String> {
+    // See check_update: an unregistered updater plugin means "up to date",
+    // not an error.
+    let Ok(updater) = app.updater() else {
+        return Ok("up to date".to_string());
+    };
+    match updater.check().await? {
         Some(update) => {
             update
                 .download_and_install(|_chunk, _total| {}, || {})
-                .await
-                .map_err(|e| e.to_string())?;
+                .await?;
             app.restart();
         }
         None => Ok("up to date".to_string()),
@@ -2796,7 +3102,26 @@ fn find_python() -> Option<String> {
         }
     }
     for name in ["python.exe", "python3.exe", "python"] {
-        if crate::proc::command(name).arg("--version").output().is_ok() {
+        // Exit-0 alone is not enough: on machines without Python, the
+        // %LOCALAPPDATA%\Microsoft\WindowsApps\python.exe App Execution
+        // Alias stub sits on PATH, exits quickly and prints no version —
+        // we would end up invoking it for real work. A real interpreter
+        // prints "Python X.Y.Z" to stdout (2.x prints it to stderr).
+        let Ok(output) = crate::proc::command(name).arg("--version").output() else {
+            continue;
+        };
+        let text = [
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        ]
+        .concat();
+        let trimmed = text.trim_start();
+        let is_real_python = trimmed.starts_with("Python ")
+            && trimmed
+                .as_bytes()
+                .get(7)
+                .is_some_and(|b| b.is_ascii_digit());
+        if output.status.success() && is_real_python {
             return Some(name.to_string());
         }
     }
@@ -2826,7 +3151,12 @@ fn run_cancellable(
     poll_interval: Duration,
 ) -> std::result::Result<std::process::Output, String> {
     use child_wait_timeout::ChildWT;
-    use std::io::{ErrorKind, Read};
+    use std::io::ErrorKind;
+
+    if cancel.load(Ordering::Relaxed) {
+        // Cheap, and avoids launching the sidecar only to kill it.
+        return Err("Cancelled by user".to_string());
+    }
 
     let mut child = cmd
         .stdout(Stdio::piped())
@@ -2838,82 +3168,44 @@ fn run_cancellable(
     // dies when `_job` drops, i.e. on every return path below. See KillJob.
     let _job = crate::proc::KillJob::new().filter(|j| j.assign(&child));
 
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Failed to open child stdout".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "Failed to open child stderr".to_string())?;
-    let stdout_buf = Arc::new(Mutex::new(Vec::new()));
-    let stderr_buf = Arc::new(Mutex::new(Vec::new()));
-    let stdout_thread = {
-        let buf = Arc::clone(&stdout_buf);
-        std::thread::spawn(move || {
-            let mut reader = std::io::BufReader::new(stdout);
-            let mut data = Vec::new();
-            let _ = reader.read_to_end(&mut data);
-            if let Ok(mut guard) = buf.lock() {
-                *guard = data;
-            }
-        })
-    };
-    let stderr_thread = {
-        let buf = Arc::clone(&stderr_buf);
-        std::thread::spawn(move || {
-            let mut reader = std::io::BufReader::new(stderr);
-            let mut data = Vec::new();
-            let _ = reader.read_to_end(&mut data);
-            if let Ok(mut guard) = buf.lock() {
-                *guard = data;
-            }
-        })
-    };
-    let join_readers = |stdout_thread: std::thread::JoinHandle<()>,
-                        stderr_thread: std::thread::JoinHandle<()>| {
-        let _ = stdout_thread.join();
-        let _ = stderr_thread.join();
+    let (stdout_buf, stderr_buf, stdout_thread, stderr_thread) =
+        crate::proc::spawn_pipe_readers(&mut child).map_err(|e| e.to_string())?;
+
+    // Kill, then give the child a bounded window to die.
+    //
+    // Do NOT join the readers on a kill path: the job is dropped at `return`,
+    // AFTER a join -- and the join cannot finish while a surviving grandchild
+    // holds the inherited pipe handles. Joining first meant the tree died only
+    // when the orphan finished on its own. The JoinHandles detach at `return`
+    // instead. This is the opposite of ffmpeg's `kill_child_and_join`, which
+    // can join because its children spawn no pipe-holding grandchildren.
+    let kill_gracefully = |child: &mut std::process::Child| {
+        let _ = child.kill();
+        let _ = child.wait_timeout(Duration::from_secs(10));
     };
 
     let started = std::time::Instant::now();
     let status = loop {
         if cancel.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            let _ = child.wait_timeout(Duration::from_secs(10));
-            // Do NOT join the readers here. The job is dropped at `return`,
-            // AFTER a join -- and the join cannot finish while a surviving
-            // grandchild holds the inherited pipe handles. Joining first meant
-            // the tree died only when the orphan finished on its own. The
-            // JoinHandles detach at return instead.
+            kill_gracefully(&mut child);
             return Err("Cancelled by user".to_string());
         }
         if started.elapsed() > timeout {
-            let _ = child.kill();
-            let _ = child.wait_timeout(Duration::from_secs(10));
-            // Do NOT join the readers here. The job is dropped at `return`,
-            // AFTER a join -- and the join cannot finish while a surviving
-            // grandchild holds the inherited pipe handles. Joining first meant
-            // the tree died only when the orphan finished on its own. The
-            // JoinHandles detach at return instead.
+            kill_gracefully(&mut child);
             return Err(format!("Process timed out after {:?}", timeout));
         }
         match child.wait_timeout(poll_interval) {
             Ok(status) => break status,
             Err(e) if e.kind() == ErrorKind::TimedOut => continue,
             Err(e) => {
-                let _ = child.kill();
-                // Do NOT join the readers here. The job is dropped at `return`,
-                // AFTER a join -- and the join cannot finish while a surviving
-                // grandchild holds the inherited pipe handles. Joining first meant
-                // the tree died only when the orphan finished on its own. The
-                // JoinHandles detach at return instead.
+                kill_gracefully(&mut child);
                 return Err(format!("Failed to wait for process: {}", e));
             }
         }
     };
 
-    join_readers(stdout_thread, stderr_thread);
+    let _ = stdout_thread.join();
+    let _ = stderr_thread.join();
     let stdout = stdout_buf.lock().map(|g| g.clone()).unwrap_or_default();
     let stderr = stderr_buf.lock().map(|g| g.clone()).unwrap_or_default();
     Ok(std::process::Output {
@@ -2932,6 +3224,148 @@ fn run_cancellable(
 /// same "await that can never resolve" defect class as the mask-texture
 /// freeze already fixed, plus a Cancel button with no actual path to the
 /// subprocess it claimed to cancel.
+/// The file-level half of `apply_ffglitch`, factored so the export's codec
+/// stage (`apply_codec_to_segment`) can mosh a segment it just encoded
+/// without going through the command layer — which would deadlock on the
+/// 1-permit export semaphore that thread already holds.
+///
+/// Does the whole "locate a runner → check ffgac/ffedit → write the config
+/// JSON → run the subprocess → verify the output exists and is non-empty"
+/// chain. The temp config is removed on every exit path, including a panic
+/// in the subprocess runner; a 0-byte output is removed too.
+fn run_ffglitch_file(
+    input: &Path,
+    output: &Path,
+    mode: &str,
+    params: &serde_json::Value,
+    cancel: &AtomicBool,
+) -> crate::error::Result<()> {
+    // Same low-memory refusal as apply_ffglitch's early check, repeated here
+    // for the codec-stage caller that skips that wrapper: the sidecar
+    // imports numpy before it reads a single argument, and when the commit
+    // limit is exhausted the only symptom used to be a cryptic OpenBLAS
+    // error on stderr (see apply_ffglitch).
+    if let Some(notice) = crate::sysmem::low_memory_notice() {
+        return Err(notice.into());
+    }
+
+    // Params reach this funnel from three callers: the codec stack stage
+    // (schema-clamped upstream), and the direct apply_ffglitch/preview_ffglitch
+    // commands (arbitrary webview JSON — tomato.py multiplies some values into
+    // list lengths, so an unclamped `1e9` is a memory DoS in the sidecar).
+    // Clamp + filter against the registered mode's schema. Modes with no
+    // registered effect (motion_transfer, combine — they take file-path params
+    // no schema declares) pass through unchanged; their paths are already
+    // guarded by validate_ffglitch_extra_paths.
+    let clamped_params;
+    let params = if let Some(effect) = EffectRegistry::new().get(&format!("ffglitch.{mode}")) {
+        clamped_params = clamp_ffglitch_mode_params(effect, params);
+        &clamped_params
+    } else {
+        params
+    };
+
+    // Prefer the bundled sidecar: it carries its own interpreter and numpy, so
+    // datamoshing works on a machine with no Python at all. The interpreter
+    // path stays as the dev fallback (and as an escape hatch if someone wants
+    // to run a modified mosh_cli.py).
+    let sidecar = locate_mosh_sidecar();
+    let (program, script) = match &sidecar {
+        Some(exe) => (exe.to_string_lossy().into_owned(), None),
+        None => {
+            let python = find_python().ok_or(
+                "Datamoshing is unavailable: the datamosh component (mosh-cli) is missing and no \
+                 compatible Python interpreter was found. Please reinstall the application.",
+            )?;
+            let cli = locate_mosh_cli().ok_or(
+                "mosh_cli.py not found. Expected at ./packages/python-backend/mosh_cli.py",
+            )?;
+            (python, Some(cli))
+        }
+    };
+
+    let ffgac = ffgac_binary()?;
+    let ffedit = ffedit_binary()?;
+    if !Path::new(&ffgac).exists() || !Path::new(&ffedit).exists() {
+        return Err("FFglitch binaries (ffgac / ffedit) not found. Download them from ffglitch.org and place in src-tauri/bin/".into());
+    }
+
+    let ffmpeg = ffmpeg_binary()?;
+
+    let config = serde_json::json!({
+        "input": input.to_string_lossy(),
+        "output": output.to_string_lossy(),
+        "mode": mode,
+        "params": params,
+    });
+
+    let temp_config = std::env::temp_dir().join(format!(
+        "ffglitch_config_{}_{}_{}.json",
+        std::process::id(),
+        rand::random::<u32>(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::write(&temp_config, config.to_string())?;
+    // Drop guard so even a panic in the subprocess runner cannot leak the
+    // config JSON into the temp dir.
+    struct TempConfigGuard(PathBuf);
+    impl Drop for TempConfigGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let _config_guard = TempConfigGuard(temp_config);
+
+    // Not `output`: that name is the destination &Path parameter.
+    let proc_output = run_ffglitch_subprocess(
+        &program,
+        script.as_deref(),
+        &_config_guard.0.to_string_lossy(),
+        &ffgac,
+        &ffedit,
+        &ffmpeg,
+        cancel,
+    )
+    .map_err(AppError::Generic)?;
+
+    if !proc_output.status.success() {
+        // Clean up 0-byte output file if it was created
+        if let Ok(meta) = std::fs::metadata(output) {
+            if meta.len() == 0 {
+                let _ = std::fs::remove_file(output);
+            }
+        }
+        return Err(format!(
+            "FFglitch failed: {}{}",
+            String::from_utf8_lossy(&proc_output.stderr),
+            crate::sysmem::low_memory_suffix()
+        )
+        .into());
+    }
+
+    // Verify the output file exists and has non-zero size
+    match std::fs::metadata(output) {
+        Ok(meta) if meta.len() > 0 => Ok(()),
+        Ok(_) => {
+            // 0-byte file — remove it and report error with stderr
+            let _ = std::fs::remove_file(output);
+            Err(format!(
+                "FFglitch produced a 0-byte output file. stderr: {}",
+                String::from_utf8_lossy(&proc_output.stderr)
+            )
+            .into())
+        }
+        Err(_) => Err(format!(
+            "FFglitch completed but output file was not created. stderr: {}",
+            String::from_utf8_lossy(&proc_output.stderr)
+        )
+        .into()),
+    }
+}
+
 /// `program` is either the bundled `mosh-cli` sidecar (in which case `script` is
 /// None, because the entry point is compiled in) or a Python interpreter (in
 /// which case `script` is `mosh_cli.py`).
@@ -2978,6 +3412,103 @@ fn ffglitch_params_or_empty(params: serde_json::Value) -> serde_json::Value {
         serde_json::Value::Object(_) => params,
         _ => serde_json::json!({}),
     }
+}
+
+/// The app's shared scratch dir under the OS temp dir. `/tmp` is
+/// world-writable on POSIX, so a hostile local user could pre-plant
+/// `moshdither-studio` and then race or replace the intermediates we
+/// encode→mosh→decode through it. On unix the leaf is uid-scoped
+/// (`moshdither-studio-<euid>`) so another local account cannot plant the
+/// name at all; ownership is then verified fail-closed — a dir we don't own
+/// is never tightened or trusted, we fall back to a per-process name instead
+/// (the cache simply won't be shared across runs). Windows `%TEMP%` is
+/// already per-user, so the leaf stays plain `moshdither-studio`.
+#[cfg(unix)]
+fn mosh_temp_dir(sub: &str) -> crate::error::Result<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    // SAFETY: geteuid takes no arguments and cannot fail.
+    let uid = unsafe { libc::geteuid() };
+    let root = mosh_temp_root(uid);
+    let dir = if sub.is_empty() { root } else { root.join(sub) };
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)
+        .map_err(|e| format!("temp dir {}: {e}", dir.display()))?;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| format!("temp dir {}: chmod 0700: {e}", dir.display()))?;
+    Ok(dir)
+}
+
+#[cfg(unix)]
+fn mosh_temp_root(uid: u32) -> PathBuf {
+    use std::os::unix::fs::MetadataExt;
+    // symlink_metadata, not metadata: a planted symlink pointing at a dir we
+    // own must fail the ownership check, not pass it via its target.
+    fn usable(path: &std::path::Path, uid: u32) -> bool {
+        match std::fs::symlink_metadata(path) {
+            Err(_) => true, // absent — safe to create
+            Ok(md) => md.uid() == uid && md.is_dir(),
+        }
+    }
+    let candidate = std::env::temp_dir().join(format!("moshdither-studio-{uid}"));
+    if usable(&candidate, uid) {
+        return candidate;
+    }
+    // Pre-planted by another uid (shared-mount leftover, root squash) — don't
+    // touch it; a per-process name is still inside the asset scope glob and
+    // cannot be pre-planted by a non-root user.
+    let pid = std::process::id();
+    for n in 0..16u32 {
+        let alt = std::env::temp_dir().join(format!("moshdither-studio-{uid}-p{pid}-{n}"));
+        if usable(&alt, uid) {
+            return alt;
+        }
+    }
+    // Practically unreachable; last resort still carries the uid leaf.
+    std::env::temp_dir().join(format!("moshdither-studio-{uid}-p{pid}-x"))
+}
+
+#[cfg(not(unix))]
+fn mosh_temp_dir(sub: &str) -> crate::error::Result<PathBuf> {
+    let root = std::env::temp_dir().join("moshdither-studio");
+    let dir = if sub.is_empty() { root } else { root.join(sub) };
+    std::fs::create_dir_all(&dir).map_err(|e| format!("temp dir {}: {e}", dir.display()))?;
+    Ok(dir)
+}
+
+/// Clamp a codec mode's params against its registered schema: ranges AND
+/// keys. `mosh_cli.py` multiplies some params into list lengths (tomato.py's
+/// `[x] * repeat`), so a webview-supplied `1e9` must not reach the sidecar
+/// unbounded — and undeclared keys ride through to its `params.get` reads
+/// unchecked, so they are filtered rather than forwarded.
+/// `apply_codec_to_segment` already calls `clamp_for_effect`; calling this
+/// a second time is idempotent.
+fn clamp_ffglitch_mode_params(
+    effect: &dyn Effect,
+    params: &serde_json::Value,
+) -> serde_json::Value {
+    let Some(obj) = params.as_object() else {
+        return params.clone();
+    };
+    let mut clamped = crate::effects::clamp_for_effect(effect, obj);
+    let meta = effect.meta();
+    clamped.retain(|k, _| meta.parameters.iter().any(|p| &p.id == k));
+    // Params declared with step 1 are frame indices / repeat counts on the
+    // Python side (tomato.py's `[x] * repeat`, basic_modes' frame ops) — a
+    // typed-in decimal reaches int() calls or slicing and aborts the render.
+    for (k, v) in clamped.iter_mut() {
+        let integer_typed = meta
+            .parameters
+            .iter()
+            .any(|p| &p.id == k && p.step == Some(1.0));
+        if integer_typed {
+            if let Some(n) = v.as_f64() {
+                *v = serde_json::json!(n.round());
+            }
+        }
+    }
+    serde_json::Value::Object(clamped)
 }
 
 /// Validates the extra file-path parameters that the motion_transfer/combine
@@ -3050,18 +3581,45 @@ pub const EXPORT_TEMP_MARKER: &str = ".moshdither-fx-tmp.";
 /// delete a user's media. Failure to clean up is not fatal to an export, so the
 /// caller is expected to ignore the error rather than fail the job over it.
 #[tauri::command]
-pub fn remove_export_temp(path: String) -> std::result::Result<(), String> {
+pub fn remove_export_temp(path: String) -> crate::error::Result<()> {
     let validated = validate_io_path(&path, true)?;
     let name = validated
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or_default();
     if !name.contains(EXPORT_TEMP_MARKER) {
-        return Err(format!(
-            "Refusing to remove {name}: not a MoshDither export intermediate"
-        ));
+        return Err(
+            format!("Refusing to remove {name}: not a MoshDither export intermediate").into(),
+        );
     }
-    std::fs::remove_file(&validated).map_err(|e| e.to_string())
+    std::fs::remove_file(&validated)?;
+    Ok(())
+}
+
+/// A unique output path inside the mosh-preview cache dir, for the "Render
+/// mosh preview" affordance in PreviewViewport: the frontend writes a real
+/// (short, downscaled) `export_video` here — codec layers included — and
+/// plays the result back through the asset protocol.
+///
+/// Returns a path rather than rendering anything itself: the preview IS the
+/// normal export path on a trimmed range, so it needs no dedicated pipeline.
+/// The name carries `EXPORT_TEMP_MARKER` so `remove_export_temp` can clean it
+/// up, and the directory is inside the asset-protocol scope (same one
+/// `preview_ffglitch` writes to).
+#[tauri::command]
+pub fn codec_preview_path() -> crate::error::Result<String> {
+    let dir = mosh_temp_dir("mosh-preview")?;
+    let name = format!(
+        "codec-preview-{}-{:08x}-{}{}mp4",
+        std::process::id(),
+        rand::random::<u32>(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+        EXPORT_TEMP_MARKER
+    );
+    Ok(dir.join(name).to_string_lossy().into_owned())
 }
 
 /// Apply an FFglitch datamoshing effect by delegating to the Python mosh_cli.py.
@@ -3086,7 +3644,7 @@ pub async fn preview_ffglitch(
     start_secs: Option<f64>,
     duration_secs: Option<f64>,
     params: Option<serde_json::Value>,
-) -> std::result::Result<String, String> {
+) -> crate::error::Result<String> {
     let validated = validate_io_path(&input_path, true)?;
     let source = validated.to_string_lossy().into_owned();
     let params = ffglitch_params_or_empty(params.unwrap_or(serde_json::Value::Null));
@@ -3097,10 +3655,7 @@ pub async fn preview_ffglitch(
     let seconds = duration_secs.unwrap_or(2.0).clamp(0.5, 10.0);
     let start = start_secs.unwrap_or(0.0).max(0.0);
 
-    let dir = std::env::temp_dir()
-        .join("moshdither-studio")
-        .join("mosh-preview");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create preview dir: {e}"))?;
+    let dir = mosh_temp_dir("mosh-preview")?;
 
     // Keyed by everything that changes the result, so a cache hit is always the
     // right clip. The source path is hashed rather than embedded: it can be long,
@@ -3128,7 +3683,7 @@ pub async fn preview_ffglitch(
     // Trim first. Moshing two seconds instead of the whole clip is the entire
     // point; handing the full source to the datamosher would be as slow as a
     // real export.
-    let ffmpeg = ffmpeg_binary().map_err(|e| e.to_string())?;
+    let ffmpeg = ffmpeg_binary()?;
     let trimmed = dir.join(format!("src-{key:016x}.mp4"));
     let trim = crate::proc::command(&ffmpeg)
         .args(["-v", "error", "-y", "-ss"])
@@ -3154,7 +3709,8 @@ pub async fn preview_ffglitch(
                 .last()
                 .unwrap_or("unknown error"),
             crate::sysmem::low_memory_suffix()
-        ));
+        )
+        .into());
     }
 
     let result = apply_ffglitch(
@@ -3176,10 +3732,9 @@ pub async fn apply_ffglitch(
     output_path: String,
     mode: String,
     params: serde_json::Value,
-) -> std::result::Result<String, String> {
+) -> crate::error::Result<String> {
     let validated_input = validate_io_path(&input_path, true)?;
     let validated_output = validate_io_path(&output_path, false)?;
-    let input_path = validated_input.to_string_lossy().into_owned();
     let output_path = validated_output.to_string_lossy().into_owned();
     let params = ffglitch_params_or_empty(params);
 
@@ -3190,55 +3745,11 @@ pub async fn apply_ffglitch(
     // "OpenBLAS error: Memory allocation still failed" on stderr, or ffgac
     // exiting -22 opening a file that is right there. Refuse with the
     // reason instead. (Observed 2026-09-10, commit limit exhausted by
-    // another app -- see sysmem.rs.)
+    // another app -- see sysmem.rs.) run_ffglitch_file repeats this check
+    // inside the worker for the codec-stage caller that skips this wrapper.
     if let Some(notice) = crate::sysmem::low_memory_notice() {
-        return Err(notice);
+        return Err(notice.into());
     }
-
-    // Prefer the bundled sidecar: it carries its own interpreter and numpy, so
-    // datamoshing works on a machine with no Python at all. The interpreter
-    // path stays as the dev fallback (and as an escape hatch if someone wants
-    // to run a modified mosh_cli.py).
-    let sidecar = locate_mosh_sidecar();
-    let (program, script) = match &sidecar {
-        Some(exe) => (exe.to_string_lossy().into_owned(), None),
-        None => {
-            let python = find_python().ok_or(
-                "Datamoshing is unavailable: the datamosh component (mosh-cli) is missing and no \
-                 compatible Python interpreter was found. Please reinstall the application.",
-            )?;
-            let cli = locate_mosh_cli().ok_or(
-                "mosh_cli.py not found. Expected at ./packages/python-backend/mosh_cli.py",
-            )?;
-            (python, Some(cli))
-        }
-    };
-
-    let ffgac = ffgac_binary().map_err(|e| e.to_string())?;
-    let ffedit = ffedit_binary().map_err(|e| e.to_string())?;
-    if !Path::new(&ffgac).exists() || !Path::new(&ffedit).exists() {
-        return Err("FFglitch binaries (ffgac / ffedit) not found. Download them from ffglitch.org and place in src-tauri/bin/".to_string());
-    }
-
-    let ffmpeg = ffmpeg_binary().map_err(|e| e.to_string())?;
-
-    let config = serde_json::json!({
-        "input": input_path,
-        "output": output_path,
-        "mode": mode,
-        "params": params,
-    });
-
-    let temp_config = std::env::temp_dir().join(format!(
-        "ffglitch_config_{}_{}_{}.json",
-        std::process::id(),
-        rand::random::<u32>(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    std::fs::write(&temp_config, config.to_string()).map_err(|e| e.to_string())?;
 
     // Serialize against export_video (this file, ~line 615): the two
     // commands share one export_cancel AtomicBool, so without this permit a
@@ -3247,74 +3758,22 @@ pub async fn apply_ffglitch(
     // resetting the flag so a stale `true` left over from a previously
     // cancelled operation can't immediately abort this new one, and so this
     // reset can't race a still-running or queued export_video call.
-    let permit = state
-        .export_semaphore
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(|e| format!("Export queue error: {}", e))?;
+    let permit = state.export_semaphore.clone().acquire_owned().await?;
     let cancel = state.export_cancel.clone();
     cancel.store(false, Ordering::Relaxed);
 
     // Run the blocking Python process on a spawn_blocking task to avoid
     // blocking the Tauri async runtime (which can cause command timeouts
-    // and leave 0-byte output files).
-    let temp_config_path = temp_config.to_string_lossy().to_string();
-    let output_path_clone = output_path.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    // and leave 0-byte output files). The permit moves in and is held for
+    // the whole sidecar run; run_ffglitch_file does the runner→config→
+    // subprocess→output-check chain and cleans its temp config itself.
+    tauri::async_runtime::spawn_blocking(move || {
         let _permit = permit;
-        run_ffglitch_subprocess(
-            &program,
-            script.as_deref(),
-            &temp_config_path,
-            &ffgac,
-            &ffedit,
-            &ffmpeg,
-            &cancel,
-        )
-        .map(|output| (output, output_path_clone))
+        run_ffglitch_file(&validated_input, &validated_output, &mode, &params, &cancel)
     })
-    .await
-    .map_err(|e| format!("Task failed: {}", e))?;
+    .await??;
 
-    let _ = std::fs::remove_file(&temp_config);
-
-    let (output, output_path) = result?;
-
-    if !output.status.success() {
-        // Clean up 0-byte output file if it was created
-        let op = Path::new(&output_path);
-        if op.exists() {
-            if let Ok(meta) = std::fs::metadata(op) {
-                if meta.len() == 0 {
-                    let _ = std::fs::remove_file(op);
-                }
-            }
-        }
-        return Err(format!(
-            "FFglitch failed: {}{}",
-            String::from_utf8_lossy(&output.stderr),
-            crate::sysmem::low_memory_suffix()
-        ));
-    }
-
-    // Verify the output file exists and has non-zero size
-    let op = Path::new(&output_path);
-    match std::fs::metadata(op) {
-        Ok(meta) if meta.len() > 0 => Ok(output_path),
-        Ok(_) => {
-            // 0-byte file — remove it and report error with stderr
-            let _ = std::fs::remove_file(op);
-            Err(format!(
-                "FFglitch produced a 0-byte output file. stderr: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ))
-        }
-        Err(_) => Err(format!(
-            "FFglitch completed but output file was not created. stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )),
-    }
+    Ok(output_path)
 }
 
 /// Generate a low-resolution proxy video for smooth preview editing.
@@ -3324,14 +3783,10 @@ pub async fn generate_proxy_command(
     source_path: String,
     max_width: u32,
     crf: u32,
-) -> std::result::Result<String, String> {
+) -> crate::error::Result<String> {
     let validated = validate_io_path(&source_path, true)?;
     let path = validated.to_string_lossy().into_owned();
-    tauri::async_runtime::spawn_blocking(move || {
-        generate_proxy(&path, max_width, crf).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| format!("Task failed: {}", e))?
+    tauri::async_runtime::spawn_blocking(move || generate_proxy(&path, max_width, crf)).await?
 }
 
 /// Turn a currently-loaded still image into a real multi-frame video by
@@ -3345,14 +3800,10 @@ pub async fn animate_still_as_video(
     image_path: String,
     duration_secs: f64,
     fps: f64,
-) -> std::result::Result<String, String> {
+) -> crate::error::Result<String> {
     let validated = validate_io_path(&image_path, true)?;
     let path = validated.to_string_lossy().into_owned();
-    tauri::async_runtime::spawn_blocking(move || {
-        image_to_video(&path, duration_secs, fps).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| format!("Task failed: {}", e))?
+    tauri::async_runtime::spawn_blocking(move || image_to_video(&path, duration_secs, fps)).await?
 }
 
 #[cfg(test)]
@@ -4312,6 +4763,118 @@ mod in_place_mask_tests {
         let cancel = AtomicBool::new(true);
         let err = blend_segment_against(&previous, &mut frames, &mask, "inside", &cancel)
             .expect_err("a set cancel flag must abort");
-        assert!(err.contains("cancelled"));
+        assert!(err.to_string().contains("cancelled"));
+    }
+}
+
+#[cfg(test)]
+mod export_pipeline_tests {
+    use super::*;
+
+    fn seg(n: usize, fps: f64) -> VideoSegment {
+        VideoSegment {
+            frames: (0..n)
+                .map(|_| Frame {
+                    width: 2,
+                    height: 2,
+                    data: vec![0u8; 16],
+                })
+                .collect(),
+            fps,
+        }
+    }
+
+    /// The filename suffix is an export option in disguise -- the Save dialog
+    /// can't carry an in/out range, so `name_trim_0.5-2.3.mp4` is how a
+    /// batch job says it. Explicit trim arguments must always win over it.
+    #[test]
+    fn filename_trim_range_parses_the_suffix() {
+        let close = |a: Option<f64>, b: Option<f64>| match (a, b) {
+            (Some(x), Some(y)) => (x - y).abs() < 1e-9,
+            (None, None) => true,
+            _ => false,
+        };
+
+        assert!(close(
+            filename_trim_range("out_trim_0.5-2.3.mp4").0,
+            Some(0.5)
+        ));
+        assert!(close(
+            filename_trim_range("out_trim_0.5-2.3.mp4").1,
+            Some(2.3)
+        ));
+        assert!(close(
+            filename_trim_range("C:/clips/name_trim_1-4.mp4").0,
+            Some(1.0)
+        ));
+        assert!(close(
+            filename_trim_range("C:/clips/name_trim_1-4.mp4").1,
+            Some(4.0)
+        ));
+
+        // No marker, or a malformed one: no range.
+        assert_eq!(filename_trim_range("plain.mp4"), (None, None));
+        assert_eq!(filename_trim_range("out_trim_1.mp4"), (None, None));
+        assert_eq!(filename_trim_range("out_trim_1-2-3.mp4"), (None, None));
+
+        // A side that fails to parse stays None while the other still applies.
+        assert_eq!(filename_trim_range("out_trim_abc-2.mp4"), (None, Some(2.0)));
+        assert_eq!(filename_trim_range("out_trim_1-xyz.mp4"), (Some(1.0), None));
+    }
+
+    /// An explicit in/out point beats the filename encoding, but a filename
+    /// fills in a range the caller left entirely unset.
+    #[test]
+    fn export_options_explicit_trim_wins_over_the_filename() {
+        let mut explicit = ExportOptions {
+            trim_start: Some(1.0),
+            trim_end: Some(3.0),
+            ..Default::default()
+        };
+        explicit.resolve_filename_trim("out_trim_9-9.mp4");
+        assert_eq!(explicit.trim_start, Some(1.0));
+        assert_eq!(explicit.trim_end, Some(3.0));
+
+        // Half-set is still "set": the filename must not fill in the other side.
+        let mut half = ExportOptions {
+            trim_start: Some(1.0),
+            ..Default::default()
+        };
+        half.resolve_filename_trim("out_trim_9-9.mp4");
+        assert_eq!(half.trim_start, Some(1.0));
+        assert_eq!(half.trim_end, None);
+
+        let mut unset = ExportOptions::default();
+        unset.resolve_filename_trim("out_trim_0.5-2.0.mp4");
+        assert_eq!(unset.trim_start, Some(0.5));
+        assert_eq!(unset.trim_end, Some(2.0));
+    }
+
+    /// Trimming drops frames outside the in/out points and, when the range
+    /// covers nothing, says so instead of handing the encoder an empty clip.
+    #[test]
+    fn apply_trim_slices_frames_and_rejects_an_empty_range() {
+        // 10 frames at 10 fps = 1 s; 0.2-0.5 s keeps frames 2..5.
+        let mut s = seg(10, 10.0);
+        apply_trim(&mut s, Some(0.2), Some(0.5)).expect("in-range trim");
+        assert_eq!(s.frames.len(), 3);
+
+        // Either side unset trims only the other edge.
+        let mut s = seg(10, 10.0);
+        apply_trim(&mut s, Some(0.8), None).expect("end-open trim");
+        assert_eq!(s.frames.len(), 2);
+        let mut s = seg(10, 10.0);
+        apply_trim(&mut s, None, Some(0.3)).expect("start-open trim");
+        assert_eq!(s.frames.len(), 3);
+
+        // No range at all is a no-op, not an error.
+        let mut s = seg(10, 10.0);
+        apply_trim(&mut s, None, None).expect("unset trim is a no-op");
+        assert_eq!(s.frames.len(), 10);
+
+        // A range past the end covers no frames -- error, don't encode air.
+        let mut s = seg(10, 10.0);
+        let err = apply_trim(&mut s, Some(5.0), Some(9.0)).expect_err("empty range must error");
+        assert!(err.to_string().contains("no frames"));
     }
 }

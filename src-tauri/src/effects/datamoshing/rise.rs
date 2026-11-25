@@ -52,6 +52,10 @@ impl Effect for RiseDatamosh {
         _m: Option<&Mask>,
         _params: &ParameterValues,
     ) -> Result<Frame> {
+        // Luma-band colour remap, faithful to the classic datamosher "rise":
+        // near-black clamps to black, each mid band gets a neon tint, and
+        // near-white stays white. process_video drops frames on top of this;
+        // the tint is what sells the effect, it is not incidental.
         let len = input.data.len();
         let mut out = input.data.clone();
         for i in (0..len).step_by(4) {
@@ -97,10 +101,8 @@ impl Effect for RiseDatamosh {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let start_drop = params
-            .get("start_drop")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(self.start_drop as u64) as usize;
+        let start_drop =
+            crate::effects::params::usize_param(params, "start_drop", self.start_drop as usize);
         let total = input.frames.len();
         let mut frames = Vec::new();
 

@@ -55,6 +55,11 @@ path = "src/bin/mosh_verify.rs"
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2.0.0"
 
+[target.'cfg(unix)'.dependencies]
+# geteuid for the per-user temp-dir leaf in commands.rs — /tmp is shared on
+# POSIX, so scratch dirs must be uid-namespaced to resist pre-planting.
+libc = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
     "Win32_UI_Shell",

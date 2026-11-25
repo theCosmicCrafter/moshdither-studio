@@ -116,9 +116,9 @@ export class ManifestAudioEngine {
       this.emit({ type: "ended" });
       this.stopRaf();
     });
-
-    // Start RAF loop to emit features from manifest
-    this.startRaf();
+    // The RAF loop starts in play() — before then nothing consumes the
+    // features it emits, and an always-on loop burns a wake-up every frame
+    // for the lifetime of the engine.
   }
 
   /**
@@ -140,7 +140,12 @@ export class ManifestAudioEngine {
 
   play(): void {
     if (this.mediaElement) {
-      this.mediaElement.play();
+      // play() rejects on interrupted loads, autoplay policy, or a dead
+      // element — without the catch it surfaces as an unhandled rejection.
+      void this.mediaElement.play().catch((err) => {
+        this._isPlaying = false;
+        this.emit({ type: "error", data: String(err) });
+      });
       this._isPlaying = true;
       this.emit({ type: "play" });
       this.startRaf();
@@ -152,6 +157,7 @@ export class ManifestAudioEngine {
       this.mediaElement.pause();
       this._isPlaying = false;
       this.emit({ type: "pause" });
+      this.stopRaf();
     }
   }
 

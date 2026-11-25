@@ -1,6 +1,5 @@
 import { useAppStore } from "../store";
-import { generateProxy } from "../lib/tauri";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { generateProxy, convertFileSrc } from "../lib/tauri";
 import LabeledSlider from "./LabeledSlider";
 
 export default function ProxyPanel() {

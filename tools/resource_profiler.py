@@ -11,6 +11,11 @@ import psutil
 TAURI_PROCESS_NAME = "moshdither-studio"
 SAM3_KEYWORD = "sam3"  # Look for this in the command line of python processes
 OUTPUT_FILE = "resource_profile.csv"
+CRASH_LOG_FILE = "crash_log.csv"
+HEAP_CORRUPTION_CODE = 0xC0000374  # STATUS_HEAP_CORRUPTION
+
+# PIDs seen on the previous sample; used to detect terminated processes.
+known_pids: set = set()
 
 def get_vram_usage():
     try:
@@ -142,7 +147,7 @@ def log_resources():
                         p = psutil.Process(pid)
                         tauri_ram += p.memory_info().rss / (1024 * 1024)
                         tauri_vram += vram_map.get(pid, 0)
-                    except:
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                         pass
 
                 sam3_ram = 0
@@ -152,7 +157,7 @@ def log_resources():
                         p = psutil.Process(pid)
                         sam3_ram += p.memory_info().rss / (1024 * 1024)
                         sam3_vram += vram_map.get(pid, 0)
-                    except:
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                         pass
 
                 writer.writerow([

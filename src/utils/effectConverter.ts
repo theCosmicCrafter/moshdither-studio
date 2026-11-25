@@ -1,6 +1,7 @@
 import { shaderRegistry } from "../engine/shaders";
 import { EffectShader, RenderPass } from "../engine/webgl2/types";
-import { EffectMeta, StackEntry, type Keyframe, type AudioBinding } from "../store";
+import { EffectMeta, StackEntry, type Keyframe, type AudioBinding, type LfoSpec } from "../store";
+import { exportFrameTimes, keyframeValueAt, modulatedParamValue } from "./lfo";
 
 /** Maps a Rust effect ID to its WebGL shader preview equivalent. */
 export interface WebGLMapping {
@@ -73,6 +74,10 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
     // match Rust's rx = x - shift / bx = x + shift exactly (anaglyph.rs).
     paramMap: { shift: "amount" },
     transform: (_k, v) => (typeof v === "number" ? v / 30 : 0.2),
+    // The pixel->UV conversion bakes a ~1000px-wide frame assumption into
+    // the constant (shift/30 * 0.03 UV = shift pixels only near 1000px), so
+    // the displacement is off on any other resolution. Approximate.
+    accurate: false,
   },
   "pixel_geo.block_shift": {
     shaderId: "block_shift",
@@ -133,6 +138,10 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
     // match Rust's rx = x - shift / bx = x + shift (chromatic_aberration.rs).
     paramMap: { shift: "amount" },
     transform: (_k, v) => (typeof v === "number" ? v / 10 : 1),
+    // Same fixed-width flaw as anaglyph: `shift` is in pixels but `amount`
+    // becomes a UV offset through a constant that only lands pixel-exact on
+    // a ~1000px-wide frame. Approximate.
+    accurate: false,
   },
   "analog.vhs": {
     shaderId: "vhs_crt",
@@ -505,6 +514,9 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
       if (k === "max_shift") return Math.min(1, n / 100);
       return Math.max(1, n);
     },
+    // Shader uses a GLSL sin() hash and a fixed /1000 UV shift rather than
+    // Rust's seeded SmallRng per-slice pixel displacement. Approximate.
+    accurate: false,
   },
   "glitch.databend": {
     shaderId: "databend",
@@ -567,7 +579,14 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "glitch.crc_mismatch": {
     shaderId: "slice_shift",
     paramMap: { scanline_interval: "sliceHeight", shift_amount: "amount" },
-    transform: (_k, v) => (typeof v === "number" ? v / 100 : 0.2),
+    // Key on the Rust param name: the shader's `amount` is normalized but
+    // `sliceHeight` is a pixel count — a blind /100 made every interval a
+    // sub-pixel slice and the effect invisible.
+    transform: (k, v) => {
+      const n = typeof v === "number" ? v : 0;
+      if (k === "shift_amount") return Math.min(1, n / 100);
+      return Math.max(1, n);
+    },
     // Mapped to slice_shift shader — completely different algorithm. Fake.
     accurate: false,
   },
@@ -657,8 +676,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.classic": {
     shaderId: "temporalDatamoshing",
     paramMap: { chunk_size: "u_blockSize", repeats: "u_intensity" },
-    transform: (_k, v) => {
-      if (_k === "u_blockSize") return typeof v === "number" ? v : 16;
+    transform: (rustParam, v) => {
+      if (rustParam === "chunk_size") return typeof v === "number" ? v : 16;
       return typeof v === "number" ? v / 10 : 0.2;
     },
     accurate: false,
@@ -666,8 +685,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.bloom": {
     shaderId: "temporalDatamoshing",
     paramMap: { bloom_size: "u_blockSize" },
-    transform: (_k, v) => {
-      if (_k === "u_blockSize") return typeof v === "number" ? v : 32;
+    transform: (rustParam, v) => {
+      if (rustParam === "bloom_size") return typeof v === "number" ? v : 32;
       return 0.3;
     },
     accurate: false,
@@ -675,8 +694,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.buffer": {
     shaderId: "temporalDatamoshing",
     paramMap: { buffer_size: "u_blockSize", feedback: "u_intensity" },
-    transform: (_k, v) => {
-      if (_k === "u_blockSize") return typeof v === "number" ? v : 16;
+    transform: (rustParam, v) => {
+      if (rustParam === "buffer_size") return typeof v === "number" ? v : 16;
       return typeof v === "number" ? v / 100 : 0.3;
     },
     accurate: false,
@@ -684,8 +703,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.stop": {
     shaderId: "temporalDatamoshing",
     paramMap: { threshold: "u_intensity", n_frames: "u_blockSize" },
-    transform: (_k, v) => {
-      if (_k === "u_blockSize") return typeof v === "number" ? v * 4 : 16;
+    transform: (rustParam, v) => {
+      if (rustParam === "n_frames") return typeof v === "number" ? v * 4 : 16;
       return typeof v === "number" ? v / 100 : 0.2;
     },
     accurate: false,
@@ -699,8 +718,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.shuffle": {
     shaderId: "temporalDatamoshing",
     paramMap: { chunk_size: "u_blockSize" },
-    transform: (_k, v) => {
-      if (_k === "u_blockSize") return typeof v === "number" ? v : 16;
+    transform: (rustParam, v) => {
+      if (rustParam === "chunk_size") return typeof v === "number" ? v : 16;
       return 0.4;
     },
     accurate: false,
@@ -708,8 +727,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.delay": {
     shaderId: "temporalDatamoshing",
     paramMap: { delay_frames: "u_blockSize" },
-    transform: (_k, v) => {
-      if (_k === "u_blockSize") return typeof v === "number" ? v * 4 : 16;
+    transform: (rustParam, v) => {
+      if (rustParam === "delay_frames") return typeof v === "number" ? v * 4 : 16;
       return 0.3;
     },
     accurate: false,
@@ -750,8 +769,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.iframe_removal_advanced": {
     shaderId: "iframeRemoval",
     paramMap: { threshold: "u_intensity", rate: "u_blockSize" },
-    transform: (_k, v) => {
-      if (_k === "u_blockSize") return typeof v === "number" ? v * 4 : 16;
+    transform: (rustParam, v) => {
+      if (rustParam === "rate") return typeof v === "number" ? v * 4 : 16;
       return typeof v === "number" ? v / 100 : 0.3;
     },
     accurate: false,
@@ -765,8 +784,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.motion_transfer": {
     shaderId: "motionVectorGlitch",
     paramMap: { strength: "u_intensity", block_size: "u_scale" },
-    transform: (_k, v) => {
-      if (_k === "u_scale") return typeof v === "number" ? v / 10 : 1;
+    transform: (rustParam, v) => {
+      if (rustParam === "block_size") return typeof v === "number" ? v / 10 : 1;
       return typeof v === "number" ? v / 100 : 0.3;
     },
     accurate: false,
@@ -774,8 +793,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.optical_flow": {
     shaderId: "motionVectorGlitch",
     paramMap: { warp_strength: "u_intensity", alpha: "u_scale" },
-    transform: (_k, v) => {
-      if (_k === "u_scale") return typeof v === "number" ? v : 1;
+    transform: (rustParam, v) => {
+      if (rustParam === "alpha") return typeof v === "number" ? v : 1;
       return typeof v === "number" ? v / 10 : 0.2;
     },
     accurate: false,
@@ -783,8 +802,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.profile_glitch": {
     shaderId: "temporalDatamoshing",
     paramMap: { intensity: "u_intensity", drop_interval: "u_blockSize" },
-    transform: (_k, v) => {
-      if (_k === "u_blockSize") return typeof v === "number" ? v * 4 : 16;
+    transform: (rustParam, v) => {
+      if (rustParam === "drop_interval") return typeof v === "number" ? v * 4 : 16;
       return typeof v === "number" ? v / 100 : 0.4;
     },
     accurate: false,
@@ -792,8 +811,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.profile_bloom": {
     shaderId: "temporalDatamoshing",
     paramMap: { bloom_size: "u_blockSize", repeat_count: "u_intensity" },
-    transform: (_k, v) => {
-      if (_k === "u_blockSize") return typeof v === "number" ? v : 32;
+    transform: (rustParam, v) => {
+      if (rustParam === "bloom_size") return typeof v === "number" ? v : 32;
       return typeof v === "number" ? v / 10 : 0.3;
     },
     accurate: false,
@@ -801,8 +820,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.profile_smear": {
     shaderId: "temporalDatamoshing",
     paramMap: { strength: "u_intensity", drop_interval: "u_blockSize" },
-    transform: (_k, v) => {
-      if (_k === "u_blockSize") return typeof v === "number" ? v * 4 : 16;
+    transform: (rustParam, v) => {
+      if (rustParam === "drop_interval") return typeof v === "number" ? v * 4 : 16;
       return typeof v === "number" ? v / 100 : 0.5;
     },
     accurate: false,
@@ -816,8 +835,8 @@ export const rustToWebGL: Record<string, WebGLMapping> = {
   "datamoshing.profile_rainbow": {
     shaderId: "temporalDatamoshing",
     paramMap: { hue_shift: "u_intensity", drop_interval: "u_blockSize" },
-    transform: (_k, v) => {
-      if (_k === "u_blockSize") return typeof v === "number" ? v * 4 : 16;
+    transform: (rustParam, v) => {
+      if (rustParam === "drop_interval") return typeof v === "number" ? v * 4 : 16;
       return typeof v === "number" ? v / 360 : 0.3;
     },
     accurate: false,
@@ -1059,11 +1078,6 @@ export function isVideoOnlyEffect(meta: Pick<EffectMeta, "media_type">): boolean
   return meta.media_type === "video";
 }
 
-/** Shared copy for the video-only-effect-on-a-still-image warning, shown as
- *  a tooltip on the stack row (EffectStack/index.tsx) and as an inline
- *  banner in the parameter panel (EffectStack/ParameterPanel.tsx) whenever
- *  `isVideoOnlyEffect` is true and the loaded media is a still image. Kept
- *  in one place so the two surfaces never drift out of sync. */
 /**
  * Effects that render nothing until a file-valued Select parameter is chosen.
  *
@@ -1096,6 +1110,11 @@ export function unsetSelectionWarning(
   return missing ? req.message : null;
 }
 
+/** Shared copy for the video-only-effect-on-a-still-image warning, shown as
+ *  a tooltip on the stack row (EffectStack/index.tsx) and as an inline
+ *  banner in the parameter panel (EffectStack/ParameterPanel.tsx) whenever
+ *  `isVideoOnlyEffect` is true and the loaded media is a still image. Kept
+ *  in one place so the two surfaces never drift out of sync. */
 export const VIDEO_ONLY_ON_IMAGE_WARNING =
   "No visible effect on a still image — this effect requires video.";
 
@@ -1133,7 +1152,26 @@ export function stackToRustPayload(
   /** Parameters driven by an audio feature, keyed by stack-entry id then
    *  parameter id. Pass the store's `audioBindings` when EXPORTING; the
    *  backend needs the baked audio too, which exportVideo already sends. */
-  audioBindings?: Record<string, Record<string, AudioBinding>>
+  audioBindings?: Record<string, Record<string, AudioBinding>>,
+  /** Per-param LFO modulation for export parity. The Rust `EffectCall` knows
+   *  keyframes and audio bindings but no LFO concept, so each modulated param
+   *  is baked into a dense keyframe track -- one key per export frame, on the
+   *  same transport-time grid the backend evaluates at -- carrying exactly
+   *  what `resolveModulatedValue` showed in the preview. A param that also
+   *  has an audio binding keeps its baked track; the backend's audio pass
+   *  overwrites it per frame, the same order the preview uses.
+   *
+   *  `bake` is the frame grid: fps is the DECODE fps (the clip's own rate for
+   *  video, the export fps for an animated still -- `segment.fps` in
+   *  commands.rs), trimStart/trimEnd the export range. Preview-side callers
+   *  that pass `time` leave it out: their params are already resolved for
+   *  that instant by useKeyframePlayback. */
+  modulation?: {
+    lfos?: Record<string, Record<string, LfoSpec>>;
+    /** Effect metadata, for the declared range each `depth` scales over. */
+    effects?: EffectMeta[];
+    bake?: { fps: number; trimStart: number; trimEnd: number };
+  }
 ): Array<{
   effect_id: string;
   params: Record<string, unknown>;
@@ -1142,12 +1180,15 @@ export function stackToRustPayload(
   keyframes?: Record<string, { time: number; value: number; easing: string }[]>;
   audio_bindings?: Record<string, AudioBinding>;
 }> {
+  const bakeTimes = modulation?.bake
+    ? exportFrameTimes(modulation.bake.fps, modulation.bake.trimStart, modulation.bake.trimEnd)
+    : undefined;
   return stack
     .filter((e) => e.enabled)
     .map((e) => {
       const bound = audioBindings?.[e.id];
       const tracks = keyframes?.[e.id];
-      const animated = tracks
+      const animated: Record<string, { time: number; value: number; easing: string }[]> = tracks
         ? Object.fromEntries(
             Object.entries(tracks)
               .filter(([, ks]) => ks.length > 0)
@@ -1158,14 +1199,41 @@ export function stackToRustPayload(
                   .map((k) => ({ time: k.time, value: k.value, easing: k.easing })),
               ])
           )
-        : undefined;
+        : {};
+      const entryLfos = modulation?.lfos?.[e.id];
+      if (entryLfos && bakeTimes) {
+        const meta = modulation?.effects?.find((m) => m.id === e.effectId);
+        for (const [paramId, spec] of Object.entries(entryLfos)) {
+          const def = meta?.parameters?.find((p) => p.id === paramId);
+          const track = tracks?.[paramId];
+          // The baked track REPLACES this param's plain keyframe track: each
+          // baked key already carries the keyframe-interpolated centre plus
+          // the LFO's wave, so emitting both would double-count nothing --
+          // Rust reads one track per param.
+          animated[paramId] = bakeTimes.map((t) => {
+            const resolved = modulatedParamValue({
+              keyframeValue: track ? keyframeValueAt(track, t) : null,
+              lfo: spec,
+              min: def?.min,
+              max: def?.max,
+              time: t,
+            });
+            // modulatedParamValue can't return null here (lfo is set), but a
+            // non-finite spec from a hand-edited file could resolve NaN —
+            // serde would reject the whole export over one key, so clamp.
+            const value =
+              resolved !== null && Number.isFinite(resolved) ? resolved : spec.offset;
+            return { time: t, value, easing: "linear" };
+          });
+        }
+      }
       return {
         effect_id: e.effectId,
         params: { ...e.params, ...(time !== undefined ? { time } : {}) },
         // Use snapshotted maskB64 if available; fall back to live resolution
         mask_b64: e.maskB64 ?? resolveMaskId(e.maskId, activeMask, sam3Masks),
         mask_mode: e.maskMode ?? "inside",
-        ...(animated && Object.keys(animated).length > 0 ? { keyframes: animated } : {}),
+        ...(Object.keys(animated).length > 0 ? { keyframes: animated } : {}),
         ...(bound && Object.keys(bound).length > 0 ? { audio_bindings: bound } : {}),
       };
     });

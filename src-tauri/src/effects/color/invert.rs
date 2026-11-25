@@ -48,10 +48,7 @@ impl Effect for Invert {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let intensity = params
-            .get("intensity")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(self.intensity as f64) as f32;
+        let intensity = crate::effects::params::f32_param(params, "intensity", self.intensity);
         let mut data = input.data.clone();
         for chunk in data.as_chunks_mut::<4>().0.iter_mut() {
             for c in &mut chunk[..3] {
@@ -62,22 +59,6 @@ impl Effect for Invert {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

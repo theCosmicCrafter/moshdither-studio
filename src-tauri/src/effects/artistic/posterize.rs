@@ -48,11 +48,8 @@ impl Effect for Posterize {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let bits = params
-            .get("bits")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(self.bits as u64) as u8;
-        let shift = 8 - bits;
+        let bits = crate::effects::params::u64_param(params, "bits", self.bits as u64) as u8;
+        let shift = 8 - bits.min(8);
         let mut data = input.data.clone();
         for chunk in data.as_chunks_mut::<4>().0.iter_mut() {
             for c in &mut chunk[..3] {
@@ -63,22 +60,6 @@ impl Effect for Posterize {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

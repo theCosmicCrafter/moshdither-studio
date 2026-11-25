@@ -123,19 +123,10 @@ impl Effect for BrightnessContrast {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let brightness = params
-            .get("brightness")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0) as f32;
-        let contrast = params
-            .get("contrast")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0) as f32;
-        let gamma = params.get("gamma").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
-        let saturation = params
-            .get("saturation")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(1.0) as f32;
+        let brightness = crate::effects::params::f32_param(params, "brightness", 0.0);
+        let contrast = crate::effects::params::f32_param(params, "contrast", 0.0);
+        let gamma = crate::effects::params::f32_param(params, "gamma", 1.0);
+        let saturation = crate::effects::params::f32_param(params, "saturation", 1.0);
         let gamma = gamma.clamp(0.01, 10.0);
 
         let contrast_factor = (contrast + 1.0).clamp(0.0, 2.0);
@@ -172,22 +163,6 @@ impl Effect for BrightnessContrast {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

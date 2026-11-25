@@ -114,7 +114,6 @@
   --font-body: "Geist Variable", system-ui, sans-serif;
   --font-display: "Geist Variable", system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", "Fira Code", monospace;
-  --font-hand: "Architects Daughter", cursive;
 
   /* Cyber-Urban shadows */
   --neo-dark: rgba(0, 0, 0, 0.35);
@@ -292,27 +291,20 @@
     text-rendering: optimizeLegibility;
   }
 
-  /* Neumorphic Scrollbars */
+  /* Flat scrollbars — no neumorphic grooves */
   ::-webkit-scrollbar {
     width: 6px;
     height: 6px;
   }
   ::-webkit-scrollbar-track {
-    background: rgba(28, 30, 34, 0.5);
-    box-shadow:
-      inset 2px 2px 5px var(--neo-dark),
-      inset -2px -2px 5px var(--neo-light);
-    border-radius: 4px;
+    background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: rgba(28, 30, 34, 0.8);
-    box-shadow:
-      2px 2px 4px var(--neo-dark),
-      -2px -2px 4px var(--neo-light);
-    border-radius: 4px;
+    background: var(--surface-container-highest);
+    border-radius: 3px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: linear-gradient(45deg, #b8d300, #ffade0);
+    background: var(--outline);
   }
 
   /* Selection */
@@ -336,79 +328,47 @@
 }
 
 @layer components {
-  /* Neumorphic Panels */
+  /* Flat panels — neumorphism removed in the reskin. Class names are kept so
+     existing markup still applies a coherent surface; the visual is now
+     solid fill + 1px border, no shadow geometry. */
   .neo-panel {
-    background: rgba(28, 30, 34, 0.35);
-    -webkit-backdrop-filter: blur(16px);
-    backdrop-filter: blur(16px);
-    box-shadow:
-      6px 6px 12px var(--neo-dark),
-      -6px -6px 12px var(--neo-light);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    transition: box-shadow 0.3s ease;
+    background: var(--surface-container-low);
+    border: 1px solid var(--outline-variant);
+    border-radius: 8px;
   }
   .neo-panel:hover {
-    box-shadow:
-      8px 8px 16px var(--neo-dark-strong),
-      -8px -8px 16px var(--neo-light-strong);
+    border-color: var(--outline);
   }
 
   .neo-flat {
-    background: rgba(28, 30, 34, 0.45);
-    -webkit-backdrop-filter: blur(12px);
-    backdrop-filter: blur(12px);
-    box-shadow:
-      4px 4px 8px var(--neo-dark),
-      -4px -4px 8px var(--neo-light);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    /* Enumerated rather than `transition: all`. `all` includes `outline`, and
-       because `outline-style` animates discretely the focus ring stayed pinned
-       to its pre-focus computed value (0-width/none) instead of resolving to
-       the `:focus-visible` ring below -- keyboard focus was invisible on every
-       .neo-* surface. Keep `outline` out of this list. */
-    transition-property: background-color, border-color, border-width, box-shadow, color, transform, opacity,
-      filter, backdrop-filter, -webkit-backdrop-filter;
-    transition-duration: 0.3s;
-    transition-timing-function: cubic-bezier(0.25, 0.8, 0.25, 1);
+    background: var(--surface-container-low);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
+    transition-property: background-color, border-color, color;
+    transition-duration: 0.15s;
   }
 
   .neo-pressed {
-    background: rgba(28, 30, 34, 0.28);
-    -webkit-backdrop-filter: blur(8px);
-    backdrop-filter: blur(8px);
-    box-shadow:
-      inset 4px 4px 8px var(--neo-dark-strong),
-      inset -4px -4px 8px var(--neo-light);
-    border: 1px solid rgba(255, 255, 255, 0.02);
+    background: var(--surface-container-lowest);
+    border: 1px solid var(--outline-variant);
   }
 
   .neo-btn {
-    background: rgba(28, 30, 34, 0.4);
-    -webkit-backdrop-filter: blur(4px);
-    backdrop-filter: blur(4px);
-    box-shadow:
-      3px 3px 6px var(--neo-dark),
-      -3px -3px 6px var(--neo-light);
-    transition-property: background-color, border-color, border-width, box-shadow, color, transform, opacity,
-      filter, backdrop-filter, -webkit-backdrop-filter;
-    transition-duration: 0.3s;
-    transition-timing-function: cubic-bezier(0.25, 0.8, 0.25, 1);
+    background: var(--surface-container-low);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
+    transition-property: background-color, border-color, color;
+    transition-duration: 0.15s;
   }
   .neo-btn:hover {
-    box-shadow:
-      4px 4px 8px var(--neo-dark-strong),
-      -4px -4px 8px var(--neo-light-strong),
-      0 0 12px rgba(255, 173, 224, 0.3),
-      0 0 20px rgba(184, 211, 0, 0.2);
-    transform: translateY(-1px);
+    background: var(--surface-container);
+    border-color: var(--outline);
   }
   .neo-btn:active,
   .neo-btn.active {
-    box-shadow:
-      inset 3px 3px 6px var(--neo-dark-strong),
-      inset -3px -3px 6px var(--neo-light);
-    color: var(--accent);
-    transform: scale(0.95);
+    background: color-mix(in srgb, var(--accent-pink) 12%, var(--surface-container-low));
+    border-color: var(--accent-pink);
+    color: var(--accent-pink);
   }
 
   .opaque-control {
@@ -417,18 +377,16 @@
     backdrop-filter: none !important;
   }
 
-  /* Solar Glitch Gradients */
+  /* Accent fills — gradients retired in the reskin; pink is the sole hero.
+     The solar-* utilities survive only for the logo mark and flat fills. */
   .solar-text {
-    background: linear-gradient(45deg, #b8d300, #ffade0);
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
+    color: var(--accent-pink);
   }
   .solar-bg {
-    background: linear-gradient(45deg, #b8d300, #ffade0);
+    background: var(--accent-pink);
   }
   .solar-border {
-    border-image: linear-gradient(45deg, #b8d300, #ffade0) 1;
+    border-color: var(--accent-pink);
   }
 
   /* Pixel Grid */
@@ -439,111 +397,15 @@
       linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
   }
 
-  /* Animations */
-  /* These glows are the ones that actually render. An identically-purposed pair
-     of keyframes also lived in tailwind.config.js; for `shimmer` the two names
-     collided and this file won, so re-theming the config copy alone was a no-op.
-     The config copies have been removed and these are now the single definition,
-     driven by the accent tokens so the glow follows the active theme instead of
-     being pinned to the dark palette's literals. */
-  @keyframes pulse-glow {
-    0% {
-      box-shadow: 0 0 5px color-mix(in srgb, var(--accent-pink) 40%, transparent);
-      opacity: 0.8;
-    }
-    50% {
-      box-shadow: 0 0 20px color-mix(in srgb, var(--accent-gold) 80%, transparent);
-      opacity: 1;
-    }
-    100% {
-      box-shadow: 0 0 5px color-mix(in srgb, var(--accent-pink) 40%, transparent);
-      opacity: 0.8;
-    }
-  }
-  .animate-pulse-glow {
-    animation: pulse-glow 2s infinite ease-in-out;
-  }
+  /* Animations: the glow keyframes were retired with the reskin (pulse-glow,
+     pulse-glow-border, shimmer, scanline) — nothing consumes them. Live
+     animation classes belong to their components, not this file. */
 
-  @keyframes pulse-glow-border {
-    0% {
-      border-color: color-mix(in srgb, var(--accent-pink) 40%, transparent);
-      box-shadow: inset 0 0 10px color-mix(in srgb, var(--accent-pink) 20%, transparent);
-    }
-    50% {
-      border-color: color-mix(in srgb, var(--accent-gold) 80%, transparent);
-      box-shadow: inset 0 0 20px color-mix(in srgb, var(--accent-gold) 40%, transparent);
-    }
-    100% {
-      border-color: color-mix(in srgb, var(--accent-pink) 40%, transparent);
-      box-shadow: inset 0 0 10px color-mix(in srgb, var(--accent-pink) 20%, transparent);
-    }
-  }
-  .active-card-pulse {
-    animation: pulse-glow-border 3s infinite ease-in-out;
-    border: 1px solid transparent;
-  }
-
-  @keyframes scanline {
-    0% {
-      top: 0%;
-    }
-    100% {
-      top: 100%;
-    }
-  }
-
-  @keyframes shimmer {
-    0% {
-      opacity: 0.5;
-      filter: drop-shadow(0 0 2px color-mix(in srgb, var(--accent-pink) 50%, transparent));
-    }
-    50% {
-      opacity: 1;
-      filter: drop-shadow(0 0 8px color-mix(in srgb, var(--accent-gold) 80%, transparent));
-    }
-    100% {
-      opacity: 0.5;
-      filter: drop-shadow(0 0 2px color-mix(in srgb, var(--accent-pink) 50%, transparent));
-    }
-  }
-
-  /* Filigree Details */
-  .filigree-corner {
-    position: relative;
-  }
+  /* Filigree decorations retired — corner brackets and header flourishes
+     render as no-ops so markup keeps working until usages are removed. */
   .filigree-corner::before,
   .filigree-corner::after {
-    content: "";
-    position: absolute;
-    width: 20px;
-    height: 20px;
-    border: 1px solid transparent;
-    pointer-events: none;
-    transition-property: background-color, border-color, border-width, box-shadow, color, transform, opacity,
-      filter, backdrop-filter, -webkit-backdrop-filter;
-    transition-duration: 0.3s;
-    transition-timing-function: ease;
-  }
-  .filigree-corner::before {
-    top: 4px;
-    left: 4px;
-    border-top-color: rgba(255, 173, 224, 0.5);
-    border-left-color: rgba(255, 173, 224, 0.5);
-    border-top-left-radius: 8px;
-  }
-  .filigree-corner::after {
-    bottom: 4px;
-    right: 4px;
-    border-bottom-color: rgba(184, 211, 0, 0.5);
-    border-right-color: rgba(184, 211, 0, 0.5);
-    border-bottom-right-radius: 8px;
-  }
-  .group:hover .filigree-corner::before,
-  .filigree-corner:hover::before,
-  .group:hover .filigree-corner::after,
-  .filigree-corner:hover::after {
-    animation: shimmer 1.5s infinite;
-    border-width: 2px;
+    content: none;
   }
 
   .filigree-header {
@@ -551,28 +413,10 @@
     display: inline-block;
   }
   .filigree-header::before {
-    content: "\2727";
-    position: absolute;
-    left: -20px;
-    color: #b8d300;
-    font-size: 12px;
-    top: 50%;
-    transform: translateY(-50%);
-    transition: text-shadow 0.3s;
+    content: none;
   }
   .filigree-header::after {
-    content: "\2727";
-    position: absolute;
-    right: -20px;
-    color: #ffade0;
-    font-size: 12px;
-    top: 50%;
-    transform: translateY(-50%);
-    transition: text-shadow 0.3s;
-  }
-  .neo-panel:hover .filigree-header::before,
-  .neo-panel:hover .filigree-header::after {
-    text-shadow: 0 0 8px currentColor;
+    content: none;
   }
 
   /* Panel chrome (legacy compat) */
@@ -583,15 +427,81 @@
   }
 
   .panel-header {
-    font-family: var(--font-hand);
+    font-family: var(--font-body);
     font-weight: 600;
-    font-size: 13px;
-    letter-spacing: 0.02em;
-    color: var(--text-secondary);
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--border-primary);
-    background: rgba(28, 30, 34, 0.5);
-    border-radius: 8px 8px 0 0;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    padding: 8px 12px 6px;
+  }
+
+  /* Pipeline-provenance chips (reskin honesty layer). `codec` = real
+     bitstream corruption via the FFglitch path; `sim` = pixel-domain
+     approximation of a codec effect. Same visual language, different
+     emphasis — teal reads "technical truth", muted reads "approximate". */
+  .codec-chip {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 8px;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--accent-teal);
+    border: 1px solid color-mix(in srgb, var(--accent-teal) 35%, transparent);
+    border-radius: 3px;
+    padding: 0 4px;
+    background: color-mix(in srgb, var(--accent-teal) 7%, transparent);
+    vertical-align: 1px;
+    flex: none;
+  }
+  .sim-chip {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 8px;
+    letter-spacing: 0.07em;
+    text-transform: lowercase;
+    color: var(--text-muted);
+    border: 1px solid var(--outline-variant);
+    border-radius: 3px;
+    padding: 0 4px;
+    vertical-align: 1px;
+    flex: none;
+  }
+  /* Interactive modulator chips (LFO editor, lane markers) — same shell
+     language as .codec-chip/.sim-chip but these are buttons: honesty chips
+     stay non-interactive so "pipeline truth" and "modulation state" never
+     share a selector. */
+  .lfo-chip, .lfo-chip-off {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    font-family: var(--font-mono);
+    font-size: 8px;
+    letter-spacing: 0.07em;
+    text-transform: none;
+    border-radius: 3px;
+    padding: 0 4px;
+    cursor: pointer;
+    vertical-align: 1px;
+    flex: none;
+    background: none;
+  }
+  .lfo-chip {
+    color: var(--accent-teal);
+    border: 1px solid color-mix(in srgb, var(--accent-teal) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-teal) 7%, transparent);
+  }
+  .lfo-chip:hover {
+    background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
+  }
+  .lfo-chip-off {
+    color: var(--text-muted);
+    border: 1px solid var(--outline-variant);
+    text-transform: lowercase;
+  }
+  .lfo-chip-off:hover {
+    color: var(--accent-teal);
+    border-color: color-mix(in srgb, var(--accent-teal) 35%, transparent);
   }
 
   /* Parameter readout */
@@ -609,59 +519,34 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* Glow on active elements */
-  .glow-active {
-    box-shadow:
-      0 0 0 1px var(--accent),
-      0 0 12px var(--border-glow);
-  }
+  /* .glow-active removed — zero usages survived the reskin. */
 
-  /* Custom slider styling (neumorphic) */
+  /* Custom slider styling — flat track, pink fill handled by markup */
   .slider-track {
     -webkit-appearance: none;
     appearance: none;
     width: 100%;
-    height: 6px;
-    background: rgba(28, 30, 34, 0.8);
-    box-shadow:
-      inset 2px 2px 4px var(--neo-dark-strong),
-      inset -2px -2px 4px var(--neo-light-strong);
-    border-radius: 4px;
-    outline: none;
+    height: 3px;
+    background: var(--surface-container-highest);
+    border-radius: 2px;
   }
   .slider-track::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
-    width: 16px;
-    height: 16px;
-    background: var(--bg-primary);
-    box-shadow:
-      2px 2px 4px var(--neo-dark-strong),
-      -2px -2px 4px var(--neo-light-strong);
-    border-radius: 50%;
-    cursor: pointer;
-    border: 2px solid var(--accent);
-    margin-top: -5px;
-    transition-property: background-color, border-color, border-width, box-shadow, color, transform, opacity,
-      filter, backdrop-filter, -webkit-backdrop-filter;
-    transition-duration: 0.2s;
-    transition-timing-function: cubic-bezier(0.25, 0.8, 0.25, 1);
-  }
-  .slider-track::-webkit-slider-thumb:hover {
-    box-shadow:
-      0 0 10px rgba(255, 173, 224, 0.8),
-      0 0 20px rgba(184, 211, 0, 0.4);
-    transform: scale(1.1);
-  }
-  .slider-track::-webkit-slider-thumb:active {
-    transform: scale(0.9);
-  }
-  .slider-track::-moz-range-thumb {
     width: 12px;
     height: 12px;
+    background: var(--accent-pink);
     border-radius: 50%;
-    background: var(--bg-primary);
-    border: 2px solid var(--accent);
+    cursor: pointer;
+    border: 2px solid var(--surface-main);
+    margin-top: -4.5px;
+  }
+  .slider-track::-moz-range-thumb {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--accent-pink);
+    border: 2px solid var(--surface-main);
     cursor: pointer;
   }
 
@@ -699,49 +584,39 @@
 
   /* Button styles */
   .btn-primary {
-    background: linear-gradient(45deg, #b8d300, #ffade0);
-    color: #1c1e22;
-    font-weight: 700;
+    background: var(--accent-pink);
+    color: var(--surface-main);
+    font-weight: 600;
     font-size: 12px;
     letter-spacing: 0.02em;
     padding: 6px 16px;
     border-radius: 6px;
     border: none;
     cursor: pointer;
-    transition-property: background-color, border-color, border-width, box-shadow, color, transform, opacity,
-      filter, backdrop-filter, -webkit-backdrop-filter;
-    transition-duration: 0.3s;
-    transition-timing-function: cubic-bezier(0.25, 0.8, 0.25, 1);
-    box-shadow: 0 0 10px rgba(184, 211, 0, 0.3);
+    transition: filter 0.15s;
   }
   .btn-primary:hover {
-    box-shadow:
-      0 0 20px rgba(255, 173, 224, 0.5),
-      0 0 30px rgba(184, 211, 0, 0.3);
-    transform: translateY(-1px);
+    filter: brightness(1.1);
   }
   .btn-primary:active {
-    transform: scale(0.95);
+    filter: brightness(0.9);
   }
 
   .btn-secondary {
-    background: rgba(28, 30, 34, 0.8);
+    background: var(--surface-container-low);
     color: var(--text-secondary);
     font-weight: 500;
     font-size: 12px;
     padding: 6px 14px;
     border-radius: 6px;
-    border: 1px solid var(--border-secondary);
+    border: 1px solid var(--outline-variant);
     cursor: pointer;
-    transition-property: background-color, border-color, border-width, box-shadow, color, transform, opacity,
-      filter, backdrop-filter, -webkit-backdrop-filter;
-    transition-duration: 0.15s;
-    transition-timing-function: ease;
+    transition: background-color 0.15s, border-color 0.15s, color 0.15s;
   }
   .btn-secondary:hover {
     color: var(--text-primary);
-    border-color: var(--accent);
-    box-shadow: 0 0 8px var(--border-glow);
+    border-color: var(--outline);
+    background: var(--surface-container);
   }
 
   .btn-icon {
@@ -751,33 +626,19 @@
     width: 28px;
     height: 28px;
     border-radius: 6px;
-    background: rgba(28, 30, 34, 0.8);
-    -webkit-backdrop-filter: blur(4px);
-    backdrop-filter: blur(4px);
-    box-shadow:
-      3px 3px 6px var(--neo-dark),
-      -3px -3px 6px var(--neo-light);
+    background: transparent;
     border: 1px solid transparent;
     color: var(--text-muted);
     cursor: pointer;
-    transition-property: background-color, border-color, border-width, box-shadow, color, transform, opacity,
-      filter, backdrop-filter, -webkit-backdrop-filter;
-    transition-duration: 0.3s;
-    transition-timing-function: cubic-bezier(0.25, 0.8, 0.25, 1);
+    transition: background-color 0.15s, color 0.15s;
   }
   .btn-icon:hover {
     color: var(--text-primary);
-    box-shadow:
-      4px 4px 8px var(--neo-dark-strong),
-      -4px -4px 8px var(--neo-light-strong),
-      0 0 12px rgba(255, 173, 224, 0.3);
-    transform: translateY(-1px);
+    background: var(--surface-container);
   }
   .btn-icon.active {
-    color: var(--accent);
-    box-shadow:
-      inset 3px 3px 6px var(--neo-dark-strong),
-      inset -3px -3px 6px var(--neo-light);
+    color: var(--accent-pink);
+    background: color-mix(in srgb, var(--accent-pink) 12%, transparent);
   }
 
   /* Themed select */
@@ -796,72 +657,46 @@
     color: var(--text-primary) !important;
   }
 
-  /* Stitch slider-thumb */
+  /* Stitch slider-thumb — flat */
   .slider-thumb::-webkit-slider-runnable-track {
-    height: 6px;
-    background: rgba(26, 28, 32, 0.8);
-    box-shadow:
-      inset 2px 2px 4px var(--neo-dark-strong),
-      inset -2px -2px 4px var(--neo-light-strong);
-    border-radius: 4px;
+    height: 3px;
+    background: var(--surface-container-highest);
+    border-radius: 2px;
   }
   .slider-thumb::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
-    width: 16px;
-    height: 16px;
-    background: #1a1c20;
-    box-shadow:
-      2px 2px 4px var(--neo-dark-strong),
-      -2px -2px 4px var(--neo-light-strong);
-    border-radius: 50%;
-    cursor: pointer;
-    border: 2px solid var(--accent);
-    margin-top: -5px;
-    transition-property: background-color, border-color, border-width, box-shadow, color, transform, opacity,
-      filter, backdrop-filter, -webkit-backdrop-filter;
-    transition-duration: 0.2s;
-    transition-timing-function: cubic-bezier(0.25, 0.8, 0.25, 1);
-  }
-  .slider-thumb::-webkit-slider-thumb:hover {
-    box-shadow:
-      0 0 10px rgba(255, 173, 224, 0.8),
-      0 0 20px rgba(184, 211, 0, 0.4);
-    transform: scale(1.1);
-  }
-  .slider-thumb::-webkit-slider-thumb:active {
-    transform: scale(0.9);
-  }
-  .slider-thumb::-moz-range-thumb {
     width: 12px;
     height: 12px;
+    background: var(--accent-pink);
     border-radius: 50%;
-    background: #1a1c20;
-    border: 2px solid var(--accent);
+    cursor: pointer;
+    border: 2px solid var(--surface-main);
+    margin-top: -4.5px;
+  }
+  .slider-thumb::-moz-range-thumb {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--accent-pink);
+    border: 2px solid var(--surface-main);
     cursor: pointer;
   }
 
-  /* Stitch custom-scrollbar */
+  /* Stitch custom-scrollbar — flat */
   .custom-scrollbar::-webkit-scrollbar {
     width: 6px;
     height: 6px;
   }
   .custom-scrollbar::-webkit-scrollbar-track {
-    background: rgba(26, 28, 32, 0.5);
-    box-shadow:
-      inset 2px 2px 5px var(--neo-dark),
-      inset -2px -2px 5px var(--neo-light);
-    border-radius: 4px;
+    background: transparent;
   }
   .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: rgba(26, 28, 32, 0.8);
-    box-shadow:
-      2px 2px 4px var(--neo-dark),
-      -2px -2px 4px var(--neo-light);
-    border-radius: 4px;
+    background: var(--surface-container-highest);
+    border-radius: 3px;
   }
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: linear-gradient(45deg, #b8d300, #ffade0);
+    background: var(--outline);
   }
 }
 
@@ -1015,6 +850,13 @@
 
 .dock-rail-btn {
   border: 1px solid transparent;
+  border-left: 2px solid transparent;
+  border-radius: 6px;
+}
+
+.dock-rail-btn.dock-rail-active {
+  border-left-color: var(--accent-pink);
+  background: color-mix(in srgb, var(--accent-pink) 10%, transparent);
 }
 
 .dock-rail-btn:active {
@@ -1098,12 +940,10 @@
 /* Splitter handle */
 .splitter-handle {
   background: var(--accent);
-  box-shadow: 0 0 6px var(--accent);
   cursor: ew-resize;
 }
 .splitter-knob {
   background: var(--accent);
-  box-shadow: 0 0 8px var(--accent);
 }
 
 /* Drop overlay */
@@ -1164,11 +1004,6 @@
 /* Hidden image */
 .preview-hidden {
   display: none;
-}
-
-/* Toolbar header logo */
-.toolbar-logo {
-  font-family: var(--font-hand);
 }
 
 /* Toolbar menu icon */

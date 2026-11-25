@@ -12,7 +12,9 @@
 use std::env;
 use std::process::ExitCode;
 
-use moshdither_studio_lib::effects::types::{Frame, Mask, MediaType, ParameterDef, VideoSegment};
+use moshdither_studio_lib::effects::types::{
+    Frame, Mask, MediaType, ParameterDef, Pipeline, VideoSegment,
+};
 use moshdither_studio_lib::effects::{
     clamp_params, functional_tests, verification, EffectRegistry,
 };
@@ -139,16 +141,18 @@ fn cmd_verify_all(args: &[String]) -> ExitCode {
             results.push(verification::verify_effect(&meta.id, &registry));
         }
         let passed = results.iter().filter(|r| r.overall_pass).count();
+        let skipped = results.iter().filter(|r| r.skipped).count();
         let total = results.len();
-        let failed = total - passed;
+        let failed = total - passed - skipped;
         verification::VerificationReport {
             total_effects: total,
             passed,
             failed,
+            skipped,
             results,
             summary: format!(
-                "{}/{} effects passed verification ({} failed)",
-                passed, total, failed
+                "{}/{} effects passed verification ({} failed, {} skipped)",
+                passed, total, failed, skipped
             ),
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -170,12 +174,18 @@ fn cmd_verify_all(args: &[String]) -> ExitCode {
             // Text format
             println!("=== MoshDither Studio Verification Report ===");
             println!(
-                "Total: {} | Passed: {} | Failed: {}",
-                report.total_effects, report.passed, report.failed
+                "Total: {} | Passed: {} | Failed: {} | Skipped: {}",
+                report.total_effects, report.passed, report.failed, report.skipped
             );
             println!();
             for r in &report.results {
-                let status = if r.overall_pass { "PASS" } else { "FAIL" };
+                let status = if r.skipped {
+                    "SKIP"
+                } else if r.overall_pass {
+                    "PASS"
+                } else {
+                    "FAIL"
+                };
                 println!(
                     "  {} {} — {} [crash:{} output:{} anim:{} mask_in:{} mask_out:{}] {}ms",
                     status,
@@ -219,7 +229,9 @@ fn cmd_verify_effect(args: &[String]) -> ExitCode {
         serde_json::to_string_pretty(&result).unwrap_or_default()
     );
 
-    if result.overall_pass {
+    // A skipped (codec-pipeline) result is not a failure — the frame-domain
+    // checks don't apply to it, which is exactly what `skipped` says.
+    if result.overall_pass || result.skipped {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
@@ -514,8 +526,12 @@ fn cmd_render_all(args: &[String]) -> ExitCode {
     // Create output directory structure
     let images_dir = format!("{}/images", output_dir);
     let videos_dir = format!("{}/videos", output_dir);
-    let _ = std::fs::create_dir_all(&images_dir);
-    let _ = std::fs::create_dir_all(&videos_dir);
+    for dir in [&images_dir, &videos_dir] {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            eprintln!("Error creating output directory {}: {}", dir, e);
+            return ExitCode::from(2);
+        }
+    }
 
     // Load test image
     eprintln!("Loading image: {}", image_path);
@@ -588,6 +604,20 @@ fn cmd_render_all(args: &[String]) -> ExitCode {
                 continue;
             }
         };
+
+        // Codec-pipeline effects pass frames through unchanged — the real
+        // mosh happens on the encoded file at export — so a rendered frame
+        // here would just be the input, and would look like the effect did
+        // nothing.
+        if effect.pipeline() == Pipeline::Codec {
+            eprintln!(
+                "  SKIP {} — codec-pipeline effect (runs on the encoded file at export)",
+                meta.id
+            );
+            stats.skipped += 1;
+            report_lines.push(format!("SKIP|{}|codec-pipeline", meta.id));
+            continue;
+        }
 
         let safe_name = sanitize_filename(&meta.id);
         let mut base = build_default_params(&meta.id, &meta.parameters);
@@ -731,7 +761,10 @@ fn cmd_render_all(args: &[String]) -> ExitCode {
     // Write summary report
     let report_path = format!("{}/render-report.csv", output_dir);
     let report_content = format!("status|effect_id|output|notes\n{}", report_lines.join("\n"));
-    let _ = std::fs::write(&report_path, report_content);
+    if let Err(e) = std::fs::write(&report_path, report_content) {
+        eprintln!("Error writing report {}: {}", report_path, e);
+        return ExitCode::from(2);
+    }
 
     eprintln!("\n=== Render Summary ===");
     eprintln!("Total effects: {}", stats.total);
@@ -817,7 +850,10 @@ fn cmd_render_presets(args: &[String]) -> ExitCode {
         }
     };
 
-    let _ = std::fs::create_dir_all(&output_dir);
+    if let Err(e) = std::fs::create_dir_all(&output_dir) {
+        eprintln!("Error creating output directory {}: {}", output_dir, e);
+        return ExitCode::from(2);
+    }
 
     eprintln!("Loading image: {}", image_path);
     let _current = match image_io::load_image(image_path) {
@@ -973,7 +1009,10 @@ fn cmd_render_luts(args: &[String]) -> ExitCode {
         }
     };
 
-    let _ = std::fs::create_dir_all(&output_dir);
+    if let Err(e) = std::fs::create_dir_all(&output_dir) {
+        eprintln!("Error creating output directory {}: {}", output_dir, e);
+        return ExitCode::from(2);
+    }
 
     eprintln!("Loading image: {}", image_path);
     let test_image = match image_io::load_image(image_path) {
@@ -1207,7 +1246,10 @@ fn cmd_audio_render(args: &[String]) -> ExitCode {
     }
 
     // Create output directory
-    let _ = std::fs::create_dir_all(&output_dir);
+    if let Err(e) = std::fs::create_dir_all(&output_dir) {
+        eprintln!("Error creating output directory {}: {}", output_dir, e);
+        return ExitCode::from(2);
+    }
 
     // Find audio-reactive effects
     let registry = EffectRegistry::new();
@@ -1314,7 +1356,10 @@ fn cmd_audio_render(args: &[String]) -> ExitCode {
     // Write report
     let report_path = format!("{}/audio-render-report.csv", output_dir);
     let report_content = format!("status|effect_id|output|notes\n{}", report_lines.join("\n"));
-    let _ = std::fs::write(&report_path, report_content);
+    if let Err(e) = std::fs::write(&report_path, report_content) {
+        eprintln!("Error writing report {}: {}", report_path, e);
+        return ExitCode::from(2);
+    }
 
     eprintln!("\n=== Audio Render Summary ===");
     eprintln!("Total effects: {}", audio_effects.len());
@@ -1593,7 +1638,10 @@ fn cmd_animate_all(args: &[String]) -> ExitCode {
         }
     };
 
-    let _ = std::fs::create_dir_all(&output_dir);
+    if let Err(e) = std::fs::create_dir_all(&output_dir) {
+        eprintln!("Error creating output directory {}: {}", output_dir, e);
+        return ExitCode::from(2);
+    }
 
     // Load still image
     eprintln!("Loading image: {}", image_path);
@@ -1645,6 +1693,15 @@ fn cmd_animate_all(args: &[String]) -> ExitCode {
                 continue;
             }
         };
+
+        // Codec-pipeline effects pass frames through unchanged — animating
+        // them here would produce an N-frame copy of the input.
+        if effect.pipeline() == Pipeline::Codec {
+            eprintln!("  SKIP {} — codec-pipeline effect", meta.id);
+            skip_count += 1;
+            report_lines.push(format!("SKIP|{}|codec-pipeline", meta.id));
+            continue;
+        }
 
         let safe_name = sanitize_filename(&meta.id);
         let base_params = build_default_params(&meta.id, &meta.parameters);
@@ -1806,7 +1863,10 @@ fn cmd_animate_all(args: &[String]) -> ExitCode {
     // Write report
     let report_path = format!("{}/animate-report.csv", output_dir);
     let report_content = format!("status|effect_id|output|notes\n{}", report_lines.join("\n"));
-    let _ = std::fs::write(&report_path, report_content);
+    if let Err(e) = std::fs::write(&report_path, report_content) {
+        eprintln!("Error writing report {}: {}", report_path, e);
+        return ExitCode::from(2);
+    }
 
     eprintln!("\n=== Animation Summary ===");
     eprintln!("Total effects: {}", metas.len());

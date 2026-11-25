@@ -1,14 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { tauriMockScript } from "./mocks/tauri-mock";
+import { openApp } from "./helpers";
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(tauriMockScript);
-  await page.goto("/", { waitUntil: "domcontentloaded" });
-  await page.waitForSelector("header, [data-testid='toolbar']", { timeout: 15000 });
-  // Dismiss modals
-  await page.locator("text=Discard").click({ timeout: 2000 }).catch(() => {});
-  await page.locator("text=Skip").click({ timeout: 2000 }).catch(() => {});
-  await page.locator("text=Get Started").click({ timeout: 2000 }).catch(() => {});
+  await openApp(page);
 });
 
 test("effect stack panel renders", async ({ page }) => {
@@ -64,16 +60,15 @@ test("removing effect from stack", async ({ page }) => {
   // then guarded the remove click and asserted the header was visible.
   await page.getByRole("button", { name: /Bayer Dither/ }).click();
 
-  // The Stack shares the left tabset with Effects, so its Inspector is not
-  // mounted until the tab is opened.
-  await page.getByRole("tab", { name: "Stack" }).click();
-  const stack = page.locator(".flexlayout__tab").filter({ hasText: "Inspector" });
+  // The curated layout docks Layers on the right, already active -- layer
+  // actions live in the card's kebab menu now.
+  const layers = page.getByRole("tabpanel", { name: "Layers" });
+  const kebab = layers.getByTitle("Layer actions");
+  await expect(kebab).toHaveCount(1);
 
-  const removeButtons = stack.getByTitle("Remove");
-  await expect(removeButtons).toHaveCount(1);
-
-  await removeButtons.first().click();
-  await expect(removeButtons).toHaveCount(0);
+  await kebab.click();
+  await page.getByRole("menuitem", { name: "Remove" }).click();
+  await expect(layers.getByTitle("Layer actions")).toHaveCount(0);
 });
 
 test("effect toggle (enable/disable) doesn't crash", async ({ page }) => {

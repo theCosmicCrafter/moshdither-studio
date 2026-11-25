@@ -1,22 +1,10 @@
 import { expect, test } from "@playwright/test";
 import { tauriMockScript } from "./mocks/tauri-mock";
+import { openApp } from "./helpers";
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(tauriMockScript);
-  await page.goto("/", { waitUntil: "domcontentloaded" });
-  await page.waitForSelector("[data-testid='app-layout'], .app-layout", { timeout: 15000 });
-  await page
-    .locator("text=Discard")
-    .click({ timeout: 2000 })
-    .catch(() => {});
-  await page
-    .locator("text=Skip")
-    .click({ timeout: 2000 })
-    .catch(() => {});
-  await page
-    .locator("text=Get Started")
-    .click({ timeout: 2000 })
-    .catch(() => {});
+  await openApp(page, "[data-testid='app-layout'], .app-layout");
 });
 
 test("proxy media panel is visible", async ({ page }) => {
@@ -33,7 +21,7 @@ async function openPanelTab(page: import("@playwright/test").Page, tabLabel: str
   // Not every panel is part of the default dock layout (e.g. Proxy Media) --
   // those need adding via the panel rail before their tab exists.
   if (!(await tab.isVisible().catch(() => false))) {
-    await page.getByRole("button", { name: new RegExp(`^Add ${tabLabel} panel`) }).click();
+    await page.getByRole("button", { name: new RegExp(`^Show ${tabLabel} panel`) }).click();
   }
   await tab.click();
   await page.waitForTimeout(300);

@@ -3,6 +3,7 @@ import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
 import { tauriMockWithMediaScript } from "./mocks/tauri-mock-with-media";
+import { openApp } from "./helpers";
 
 // @ts-expect-error - import.meta.dirname may not be defined in all TS configs
 const currentDir = import.meta.dirname || __dirname;
@@ -23,20 +24,7 @@ test.beforeEach(async ({ page }) => {
       return original(command, args);
     };
   });
-  await page.goto("/", { waitUntil: "domcontentloaded" });
-  await page.waitForSelector("header, [data-testid='toolbar']", { timeout: 15000 });
-  await page
-    .locator("text=Discard")
-    .click({ timeout: 2000 })
-    .catch(() => {});
-  await page
-    .locator("text=Skip")
-    .click({ timeout: 2000 })
-    .catch(() => {});
-  await page
-    .locator("text=Get Started")
-    .click({ timeout: 2000 })
-    .catch(() => {});
+  await openApp(page);
 });
 
 // Regression test for a bug introduced by an earlier performance fix: the
@@ -81,10 +69,10 @@ test("changing a static effect's parameter updates the WebGL live preview canvas
   await expect(bayerEffect).toBeVisible({ timeout: 10000 });
   await bayerEffect.click();
 
-  // Effects and Stack share a tabset (see defaultLayout.ts) -- adding an
-  // effect from the browser doesn't switch tabs, so Stack's ParameterPanel
-  // (where the Matrix Size control lives) isn't visible until selected.
-  await page.getByRole("tab", { name: "Stack" }).click();
+  // The curated layout docks Layers on the right and a newly added layer is
+  // auto-selected (expanded, params visible); the click is insurance in case
+  // a saved layout leaves another tab active.
+  await page.getByRole("tab", { name: "Layers" }).click();
 
   const canvas = page.locator("canvas.preview-canvas").first();
   await expect(canvas).toBeVisible({ timeout: 10000 });
@@ -126,7 +114,11 @@ test("changing a static effect's parameter updates the WebGL live preview canvas
     auditorExitCode = 1;
     result = (e.stdout || "") + (e.stderr || "");
   }
-  console.log(result);
+  const rmsdLine = result
+    .split(/\r?\n/)
+    .find((line) => /RMSD/i.test(line))
+    ?.trim();
+  console.log(`[param-update] Canvas updated as expected (${rmsdLine ?? "RMSD > 2.0"})`);
 
   expect(auditorExitCode, "expected a meaningful (non-noise) pixel difference after the parameter change").toBe(1);
   expect(result).toContain("FAIL");

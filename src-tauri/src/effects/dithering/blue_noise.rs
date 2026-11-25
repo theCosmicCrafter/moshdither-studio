@@ -205,10 +205,7 @@ impl Effect for BlueNoiseDither {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let strength = params
-            .get("strength")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(1.0) as f32;
+        let strength = crate::effects::params::f32_param(params, "strength", 1.0);
         let w = input.width as usize;
         let h = input.height as usize;
         let mut data = input.data.clone();
@@ -236,22 +233,6 @@ impl Effect for BlueNoiseDither {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

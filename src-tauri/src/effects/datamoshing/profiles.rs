@@ -1,8 +1,15 @@
+use crate::effects::params::usize_param;
 use crate::effects::types::*;
 use crate::effects::Effect;
 use crate::error::Result;
 use rand::Rng;
 use serde_json::json;
+
+const GLITCH_DROP_INTERVAL: usize = 8;
+const BLOOM_SIZE: usize = 8;
+const BLOOM_REPEAT_COUNT: usize = 3;
+const SMEAR_DROP_INTERVAL: usize = 10;
+const RAINBOW_DROP_INTERVAL: usize = 12;
 
 // ─── Glitch Profile ─────────────────────────────────────────────────────
 // Aggressive I-frame removal + shuffle + pixel corruption.
@@ -38,7 +45,7 @@ impl Effect for GlitchProfile {
                     id: "drop_interval".to_string(),
                     name: "Drop Interval".to_string(),
                     param_type: ParamType::Slider,
-                    default: json!(8),
+                    default: json!(GLITCH_DROP_INTERVAL),
                     min: Some(2.0),
                     max: Some(30.0),
                     step: Some(1.0),
@@ -58,10 +65,7 @@ impl Effect for GlitchProfile {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let intensity = params
-            .get("intensity")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.7) as f32;
+        let intensity = crate::effects::params::f32_param(params, "intensity", 0.7);
 
         // A near-empty or zero-dimension frame's byte buffer has len <= 3,
         // which would make `len.saturating_sub(3)` produce an empty `0..0`
@@ -113,10 +117,7 @@ impl Effect for GlitchProfile {
         mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let drop_interval = params
-            .get("drop_interval")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(8) as usize;
+        let drop_interval = usize_param(params, "drop_interval", GLITCH_DROP_INTERVAL).max(1);
 
         // Phase 1: Drop I-frames
         let mut frames = Vec::new();
@@ -174,7 +175,7 @@ impl Effect for BloomProfile {
                     id: "bloom_size".to_string(),
                     name: "Bloom Size".to_string(),
                     param_type: ParamType::Slider,
-                    default: json!(8),
+                    default: json!(BLOOM_SIZE),
                     min: Some(2.0),
                     max: Some(20.0),
                     step: Some(1.0),
@@ -184,7 +185,7 @@ impl Effect for BloomProfile {
                     id: "repeat_count".to_string(),
                     name: "Repeat Count".to_string(),
                     param_type: ParamType::Slider,
-                    default: json!(3),
+                    default: json!(BLOOM_REPEAT_COUNT),
                     min: Some(1.0),
                     max: Some(8.0),
                     step: Some(1.0),
@@ -204,10 +205,7 @@ impl Effect for BloomProfile {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let bloom_size = params
-            .get("bloom_size")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(8) as usize;
+        let bloom_size = usize_param(params, "bloom_size", BLOOM_SIZE).max(1);
         let mut out = input.data.clone();
 
         // Bloom. Shares its fix with datamoshing.bloom, which carried the same
@@ -251,14 +249,8 @@ impl Effect for BloomProfile {
         mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let bloom_size = params
-            .get("bloom_size")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(8) as usize;
-        let repeat_count = params
-            .get("repeat_count")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(3) as usize;
+        let bloom_size = usize_param(params, "bloom_size", BLOOM_SIZE).max(1);
+        let repeat_count = usize_param(params, "repeat_count", BLOOM_REPEAT_COUNT).max(1);
 
         // Phase 1: Bloom — duplicate keyframes
         let mut frames = Vec::new();
@@ -326,7 +318,7 @@ impl Effect for SmearProfile {
                     id: "drop_interval".to_string(),
                     name: "Drop Interval".to_string(),
                     param_type: ParamType::Slider,
-                    default: json!(10),
+                    default: json!(SMEAR_DROP_INTERVAL),
                     min: Some(2.0),
                     max: Some(60.0),
                     step: Some(1.0),
@@ -346,10 +338,7 @@ impl Effect for SmearProfile {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let strength = params
-            .get("strength")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.8) as f32;
+        let strength = crate::effects::params::f32_param(params, "strength", 0.8);
         let w = input.width as usize;
         let h = input.height as usize;
         let mut out = input.data.clone();
@@ -391,10 +380,7 @@ impl Effect for SmearProfile {
         mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let drop_interval = params
-            .get("drop_interval")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(10) as usize;
+        let drop_interval = usize_param(params, "drop_interval", SMEAR_DROP_INTERVAL);
 
         // Phase 1: Progressive frame drop (more drops toward end)
         let total = input.frames.len();
@@ -462,10 +448,7 @@ impl Effect for ExtremeProfile {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let aggression = params
-            .get("aggression")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.9) as f32;
+        let aggression = crate::effects::params::f32_param(params, "aggression", 0.9);
 
         // Same zero-dimension/near-empty-buffer guard as GlitchProfile above
         // -- `len.saturating_sub(3)` would otherwise hand `gen_range` an
@@ -491,11 +474,11 @@ impl Effect for ExtremeProfile {
         // Row duplication (classic-style)
         let w = input.width as usize;
         let h = input.height as usize;
-        let chunk_size = (3.0 + aggression * 7.0) as usize;
+        let chunk_size = ((3.0 + aggression * 7.0).max(1.0)) as usize;
         for y in 0..h {
             let row_start = y * w * 4;
             for chunk in (0..w).step_by(chunk_size) {
-                let chunk_end = (chunk + chunk_size).min(w);
+                let chunk_end = chunk.saturating_add(chunk_size).min(w);
                 let src_idx = row_start + chunk * 4;
                 let r = out[src_idx];
                 let g = out[src_idx + 1];
@@ -532,10 +515,7 @@ impl Effect for ExtremeProfile {
         mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let aggression = params
-            .get("aggression")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.9) as f32;
+        let aggression = crate::effects::params::f32_param(params, "aggression", 0.9);
 
         // Phase 1: Aggressive I-frame removal
         let drop_interval = (15.0 - aggression * 10.0).max(2.0) as usize;
@@ -547,8 +527,8 @@ impl Effect for ExtremeProfile {
         }
 
         // Phase 2: Classic chunk repeat
-        let chunk_size = (3.0 + aggression * 5.0) as usize;
-        let repeats = (2.0 + aggression * 4.0) as usize;
+        let chunk_size = ((3.0 + aggression * 5.0).max(1.0)) as usize;
+        let repeats = ((2.0 + aggression * 4.0).max(1.0)) as usize;
         let mut repeated = Vec::new();
         for chunk in frames.chunks(chunk_size) {
             for _ in 0..repeats {
@@ -615,7 +595,7 @@ impl Effect for RainbowProfile {
                     id: "drop_interval".to_string(),
                     name: "Drop Interval".to_string(),
                     param_type: ParamType::Slider,
-                    default: json!(12),
+                    default: json!(RAINBOW_DROP_INTERVAL),
                     min: Some(2.0),
                     max: Some(60.0),
                     step: Some(1.0),
@@ -635,10 +615,7 @@ impl Effect for RainbowProfile {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let hue_speed = params
-            .get("hue_shift")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.5) as f32;
+        let hue_speed = crate::effects::params::f32_param(params, "hue_shift", 0.5);
         let w = input.width as usize;
         let h = input.height as usize;
         // Same category of bug as GlitchProfile/ExtremeProfile's corruption
@@ -742,10 +719,7 @@ impl Effect for RainbowProfile {
         mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let drop_interval = params
-            .get("drop_interval")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(12) as usize;
+        let drop_interval = usize_param(params, "drop_interval", RAINBOW_DROP_INTERVAL).max(1);
 
         // Phase 1: Drop I-frames
         let mut frames = Vec::new();
@@ -789,6 +763,19 @@ mod tests {
             })
             .collect();
         VideoSegment { frames, fps: 30.0 }
+    }
+
+    #[test]
+    fn bloom_profile_honours_float_valued_integer_params() {
+        // Keyframes, audio bindings and clamp_params all emit floats.
+        let mut params = serde_json::Map::new();
+        params.insert("bloom_size".to_string(), json!(5.0));
+        params.insert("repeat_count".to_string(), json!(2.0));
+        let r = BloomProfile
+            .process_video(&make_segment(10), None, &params)
+            .unwrap();
+        // 2 chunks of 5 bloomed to 10 frames, in 2 series of 5, repeated twice.
+        assert_eq!(r.frames.len(), 20);
     }
 
     #[test]

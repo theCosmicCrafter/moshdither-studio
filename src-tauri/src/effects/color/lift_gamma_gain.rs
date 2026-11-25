@@ -168,8 +168,7 @@ impl Effect for LiftGammaGain {
         let w = input.width as usize;
         let h = input.height as usize;
 
-        let get_f32 =
-            |key: &str| -> f32 { params.get(key).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32 };
+        let get_f32 = |key: &str| -> f32 { crate::effects::params::f32_param(params, key, 0.0) };
 
         let lift = [get_f32("lift_r"), get_f32("lift_g"), get_f32("lift_b")];
         let gamma = [get_f32("gamma_r"), get_f32("gamma_g"), get_f32("gamma_b")];
@@ -195,21 +194,5 @@ impl Effect for LiftGammaGain {
         }
 
         Ok(output)
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
-        })
     }
 }

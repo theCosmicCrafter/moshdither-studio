@@ -1,3 +1,4 @@
+import { logger } from "../../utils/logger";
 import { LUTLoader } from "../lut/loader";
 import { FullscreenQuad } from "./FullscreenQuad";
 import { EffectShader, RenderPass } from "./types";
@@ -42,6 +43,7 @@ export class EffectChain {
   reset() {
     this.maskTextureCache.clear();
     this.savedPreviousTex = null;
+    this.savedPreviousTexFor = -1;
     this.initialized = false;
     this.quad.reset();
     this.lutLoader.clearCache();
@@ -127,14 +129,18 @@ export class EffectChain {
     }
   }
 
-  private ensurePingPongTextures(w: number, h: number) {
-    if (this.initialized) return;
+  private createPingPongTextures(w: number, h: number) {
     this.ctx.createTexture("fbo_a", w, h);
     this.ctx.createTexture("fbo_b", w, h);
     this.ctx.createTexture("fbo_c", w, h);
     this.ctx.createFramebuffer("fb_a", this.ctx.getTexture("fbo_a")!);
     this.ctx.createFramebuffer("fb_b", this.ctx.getTexture("fbo_b")!);
     this.ctx.createFramebuffer("fb_c", this.ctx.getTexture("fbo_c")!);
+  }
+
+  private ensurePingPongTextures(w: number, h: number) {
+    if (this.initialized) return;
+    this.createPingPongTextures(w, h);
     this.initialized = true;
   }
 
@@ -154,7 +160,7 @@ export class EffectChain {
     shaders: Map<string, EffectShader>
   ) {
     if (this.gl.isContextLost()) {
-      console.warn("[EffectChain] render skipped: WebGL context lost");
+      logger.warn("effectchain", `render skipped: WebGL context lost`);
       return;
     }
 
@@ -218,7 +224,7 @@ export class EffectChain {
       const pass = expandedPasses[i];
       const shader = shaders.get(pass.shaderId);
       if (!shader) {
-        console.warn(`[EffectChain] Pass ${i}: shader "${pass.shaderId}" not found — skipping`);
+        logger.warn("effectchain", `Pass ${i}: shader "${pass.shaderId}" not found — skipping`);
         continue;
       }
 
@@ -229,8 +235,13 @@ export class EffectChain {
 
       if (isMaskBlend) {
         // inputTex is the effect output; we need the pre-effect frame and mask
-        // The pre-effect texture was saved before the effect pass
-        previousTex = this.savedPreviousTex;
+        // The pre-effect texture was saved before the effect pass — but only
+        // trust it if the pass right before this one actually rendered. When
+        // that pass was skipped (missing shader), savedPreviousTex still
+        // holds a texture saved by an earlier pass (or a previous frame),
+        // and blending against it produces a stale-image mask.
+        previousTex =
+          this.savedPreviousTexFor === i - 1 ? this.savedPreviousTex : null;
         const origPass = expandedPasses[i - 1];
         if (origPass?.maskB64) {
           maskTex = await this.getMaskTexture(origPass.maskB64);
@@ -242,6 +253,7 @@ export class EffectChain {
       } else if (pass.maskB64) {
         // Save the pre-effect input texture for the upcoming maskBlend pass
         this.savedPreviousTex = inputTex;
+        this.savedPreviousTexFor = i;
       }
 
       const program = this.ctx.getOrCreateProgram(
@@ -305,11 +317,7 @@ export class EffectChain {
               gl.bindTexture(gl.TEXTURE_2D, tex);
               gl.uniform1i(loc, unit);
             } catch (err) {
-              console.error(
-                `[EffectChain] texture for uniform "${name}" failed to load (${value}); ` +
-                  `rendering this pass without it`,
-                err
-              );
+              logger.error("effectchain", `texture for uniform "${name}" failed to load (${value}); `);
               this.onTextureError?.(name, value, err);
             }
           }
@@ -403,7 +411,7 @@ export class EffectChain {
 
     // If no pass was rendered (all shaders missing), fall back to blit
     if (!renderedAnyPass) {
-      console.warn("[EffectChain] No passes were rendered — falling back to blit");
+      logger.warn("effectchain", `No passes were rendered — falling back to blit`);
       this.blit(sourceTexture);
     }
   }
@@ -449,10 +457,7 @@ export class EffectChain {
     if (this.reportedGlFaults.has(key)) return;
     this.reportedGlFaults.add(key);
     const name = names[err] ?? String(err);
-    console.error(
-      `[EffectChain] GL ${name} (${err}) at ${label} — reported once per chain; ` +
-        "later occurrences of this same label are suppressed."
-    );
+    logger.error("effectchain", `GL ${name} (${err}) at ${label} — reported once per chain; `);
     // Surfaced to the UI as well: a console message cannot be read by someone
     // running the installed build, and this is the only signal that explains a
     // black preview.
@@ -497,27 +502,14 @@ export class EffectChain {
     this.width = width;
     this.height = height;
     if (this.initialized) {
-      // Delete old FBO textures and framebuffers before creating new ones
-      const gl = this.gl;
-      const oldTexA = this.ctx.getTexture("fbo_a");
-      const oldTexB = this.ctx.getTexture("fbo_b");
-      const oldTexC = this.ctx.getTexture("fbo_c");
-      const oldFbA = this.ctx.getFramebuffer("fb_a");
-      const oldFbB = this.ctx.getFramebuffer("fb_b");
-      const oldFbC = this.ctx.getFramebuffer("fb_c");
-      if (oldTexA) gl.deleteTexture(oldTexA);
-      if (oldTexB) gl.deleteTexture(oldTexB);
-      if (oldTexC) gl.deleteTexture(oldTexC);
-      if (oldFbA) gl.deleteFramebuffer(oldFbA);
-      if (oldFbB) gl.deleteFramebuffer(oldFbB);
-      if (oldFbC) gl.deleteFramebuffer(oldFbC);
-      // Recreate FBO textures at new size
-      this.ctx.createTexture("fbo_a", width, height);
-      this.ctx.createTexture("fbo_b", width, height);
-      this.ctx.createTexture("fbo_c", width, height);
-      this.ctx.createFramebuffer("fb_a", this.ctx.getTexture("fbo_a")!);
-      this.ctx.createFramebuffer("fb_b", this.ctx.getTexture("fbo_b")!);
-      this.ctx.createFramebuffer("fb_c", this.ctx.getTexture("fbo_c")!);
+      // createTexture/createFramebuffer already delete the object sitting in
+      // the named slot, so a resize is just the creation path again.
+      this.createPingPongTextures(width, height);
+      // savedPreviousTex can point at a ping-pong texture that was just
+      // deleted and recreated — the saved handle is now dangling, and a
+      // maskBlend that uses it samples from whatever replaced it.
+      this.savedPreviousTex = null;
+      this.savedPreviousTexFor = -1;
     }
   }
 
@@ -531,4 +523,7 @@ export class EffectChain {
   }
 
   private savedPreviousTex: WebGLTexture | null = null;
+  // Index of the expanded pass that produced savedPreviousTex. maskBlend at
+  // pass i trusts it only when savedPreviousTexFor === i - 1.
+  private savedPreviousTexFor = -1;
 }

@@ -46,10 +46,7 @@ impl Effect for Anaglyph {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let shift = params
-            .get("shift")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(self.shift as u64) as usize;
+        let shift = crate::effects::params::usize_param(params, "shift", self.shift as usize);
         let w = input.width as usize;
         let h = input.height as usize;
         let mut data = input.data.clone();
@@ -58,7 +55,7 @@ impl Effect for Anaglyph {
             for x in 0..w {
                 let dst_idx = (y * w + x) * 4;
                 let rx = x.saturating_sub(shift).min(w - 1);
-                let bx = (x + shift).min(w - 1);
+                let bx = x.saturating_add(shift).min(w - 1);
                 data[dst_idx] = input.data[(y * w + rx) * 4];
                 data[dst_idx + 1] = input.data[dst_idx + 1];
                 data[dst_idx + 2] = input.data[(y * w + bx) * 4 + 2];
@@ -68,22 +65,6 @@ impl Effect for Anaglyph {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

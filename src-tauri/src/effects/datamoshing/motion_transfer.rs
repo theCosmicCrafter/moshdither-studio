@@ -64,14 +64,8 @@ impl Effect for MotionTransfer {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let block_size = params
-            .get("block_size")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(16) as usize;
-        let strength = params
-            .get("strength")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.7) as f32;
+        let block_size = crate::effects::params::usize_param(params, "block_size", 16).max(1);
+        let strength = crate::effects::params::f32_param(params, "strength", 0.7);
 
         // Single-frame preview: estimate a self-motion field from the frame
         // to a slightly shifted copy, then warp. This creates a smearing look
@@ -87,14 +81,8 @@ impl Effect for MotionTransfer {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let block_size = params
-            .get("block_size")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(16) as usize;
-        let strength = params
-            .get("strength")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.7) as f32;
+        let block_size = crate::effects::params::usize_param(params, "block_size", 16).max(1);
+        let strength = crate::effects::params::f32_param(params, "strength", 0.7);
 
         if input.frames.len() < 2 {
             return Ok(input.clone());

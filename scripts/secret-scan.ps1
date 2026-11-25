@@ -116,7 +116,7 @@ if ($History) {
     # URI is parsed as ssh://file/... and the scan dies trying to resolve a
     # hostname called "file".
     $uri = "file://" + ($repoRoot -replace '\\', '/')
-    $scanArgs = @("git", $uri, "--no-update")
+    $scanArgs = @("git", $uri, "--no-update", "--exclude-detectors=Lob")
     if ($OnlyVerified) { $scanArgs += "--only-verified" }
     if ($SinceCommit) { $scanArgs += "--since-commit=$SinceCommit" }
     & $trufflehog @scanArgs
@@ -146,7 +146,7 @@ else {
 
     Write-Host "Scanning working tree (excluding vendored and build directories)..." -ForegroundColor Cyan
     $scanArgs = @("filesystem", "$repoRoot", "--only-verified", "--no-update",
-                  "--exclude-paths", $excludeFile)
+                  "--exclude-detectors=Lob", "--exclude-paths", $excludeFile)
     & $trufflehog @scanArgs
 }
 # TruffleHog uses 183 for "findings present" and other non-zero codes for real

@@ -1,8 +1,7 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { logger } from "../utils/logger";
 import { useEffect, useRef } from "react";
 import { AudioFeatureExtractor } from "../engine/audio/AudioFeatureExtractor";
-import { extractAudioFromVideo } from "../lib/tauri";
+import { extractAudioFromVideo, convertFileSrc, NO_AUDIO_STREAM_MESSAGE } from "../lib/tauri";
 import { useAppStore } from "../store";
 
 /**
@@ -125,7 +124,7 @@ export function useAutoAudioExtract() {
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes("no audio stream")) {
+        if (msg === NO_AUDIO_STREAM_MESSAGE) {
           useAppStore.getState().setAudioIsSilent(true);
           setStatusMessage(
             "Video has no audio track — load a separate audio file for audio-reactive effects"

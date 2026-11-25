@@ -1,3 +1,4 @@
+import { logger } from "../utils/logger";
 import { useEffect, useRef, useCallback } from "react";
 import { AudioEngine, setGlobalAudioEngine } from "../engine/audio/AudioEngine";
 import { ManifestAudioEngine } from "../engine/audio/ManifestAudioEngine";
@@ -258,7 +259,7 @@ export function useAudioEngine() {
             // Load into manifest engine for playback
             await manifestEngine.loadFile(file, manifest);
           } catch (e) {
-            console.warn("Manifest analysis failed, falling back to live engine:", e);
+            logger.warn("audio-engine", `Manifest analysis failed, falling back to live engine:`, { error: String(e) });
             setAudioManifestProgress(0, "Analysis failed");
             // Fallback to live engine
             const engine = getEngine();

@@ -2,6 +2,7 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -128,7 +129,7 @@ def ffmpeg_convert(input_path, output_path, extra_args=None):
         # finding on the `cmd` argument -- so the call stays on one line. (It
         # had wrapped, and the marker silently stopped applying.)
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1200, **_NO_WINDOW)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1200, **_NO_WINDOW)
     except subprocess.TimeoutExpired as e:
         raise RuntimeError(f"ffmpeg timed out after {e.timeout}s") from e
     if result.returncode != 0:
@@ -241,124 +242,138 @@ def main():
     # 4. JS effects modes: Zoom, Delay, Buffer, Noise, Shift, Sink, Slice, Stop, Vibrate, Invert-Reverse, Mirror, Shear, Slam Zoom
     js_effects = ["zoom", "delay", "buffer", "noise", "shift", "sink", "slice", "stop", "vibrate", "invert-reverse", "mirror", "shear", "slam zoom"]
 
-    temp_dir = tempfile.gettempdir()
+    temp_dir = tempfile.mkdtemp(prefix="mosh_cli_")
 
-    if mode in tomato_modes:
-        temp_in = os.path.join(temp_dir, f"tomato_in_{os.path.basename(input_path)}.avi")
-        temp_corrupted = os.path.join(temp_dir, f"tomato_corrupted_{os.path.basename(input_path)}.avi")
+    try:
+        if mode in tomato_modes:
+            temp_in = os.path.join(temp_dir, f"tomato_in_{os.path.basename(input_path)}.avi")
+            temp_corrupted = os.path.join(temp_dir, f"tomato_corrupted_{os.path.basename(input_path)}.avi")
 
-        try:
-            # Step 1: Convert to AVI using x264 with specific bitrate limit
-            ffmpeg_convert(input_path, temp_in, ["-c:v", "libx264", "-preset", "medium", "-b:v", "2M", "-minrate", "2M", "-maxrate", "2M", "-bufsize", "2M"])
+            try:
+                # Step 1: Convert to AVI using x264 with specific bitrate limit
+                ffmpeg_convert(input_path, temp_in, ["-c:v", "libx264", "-preset", "medium", "-b:v", "2M", "-minrate", "2M", "-maxrate", "2M", "-bufsize", "2M"])
 
-            # Step 2: Mosh using Tomato
-            count = params.get("count", 20)
-            n_frame = params.get("frame", 1)
-            kill_rate = params.get("kill", 0.7)
-            keep_audio = 1 if params.get("keepAudio", True) else 0
-            keep_frame = 1 if params.get("keepFrame", True) else 0
+                # Step 2: Mosh using Tomato
+                count = params.get("count", 20)
+                n_frame = params.get("frame", 1)
+                kill_rate = params.get("kill", 0.7)
+                keep_audio = 1 if params.get("keepAudio", True) else 0
+                keep_frame = 1 if params.get("keepFrame", True) else 0
 
-            tomato.mosh(
-                infile=temp_in,
-                outfile=temp_corrupted,
-                m=mode,
-                c=count,
-                n=n_frame,
-                a=keep_audio,
-                f=keep_frame,
-                k=kill_rate
-            )
+                tomato.mosh(
+                    infile=temp_in,
+                    outfile=temp_corrupted,
+                    m=mode,
+                    c=count,
+                    n=n_frame,
+                    a=keep_audio,
+                    f=keep_frame,
+                    k=kill_rate
+                )
 
-            # Step 3: Re-encode corrupted AVI back to target container
-            ffmpeg_convert(temp_corrupted, output_path, ["-c:v", "libx264", "-pix_fmt", "yuv420p"])
-        finally:
-            if os.path.exists(temp_in):
-                os.remove(temp_in)
-            if os.path.exists(temp_corrupted):
-                os.remove(temp_corrupted)
+                # Step 3: Re-encode corrupted AVI back to target container
+                ffmpeg_convert(temp_corrupted, output_path, ["-c:v", "libx264", "-pix_fmt", "yuv420p"])
+            finally:
+                for p in (temp_in, temp_corrupted):
+                    if os.path.exists(p):
+                        try:
+                            os.remove(p)
+                        except OSError:
+                            pass
 
-    elif mode in original_modes:
-        temp_in = os.path.join(temp_dir, f"orig_in_{os.path.basename(input_path)}.avi")
-        temp_corrupted = os.path.join(temp_dir, f"orig_corrupted_{os.path.basename(input_path)}.avi")
+        elif mode in original_modes:
+            temp_in = os.path.join(temp_dir, f"orig_in_{os.path.basename(input_path)}.avi")
+            temp_corrupted = os.path.join(temp_dir, f"orig_corrupted_{os.path.basename(input_path)}.avi")
 
-        try:
-            # Step 1: Convert to AVI without B-frames
-            ffmpeg_convert(input_path, temp_in, ["-bf", "0", "-b:v", "10000k"])
+            try:
+                # Step 1: Convert to AVI without B-frames
+                ffmpeg_convert(input_path, temp_in, ["-bf", "0", "-b:v", "10000k"])
 
-            # Step 2: Apply specific mosh mode
-            if mode == "classic":
-                classic.Datamosh(temp_in, temp_corrupted, s=params.get("start", 0), e=params.get("end", 10), p=params.get("p", 1), fps=30)
-            elif mode == "classic2":
-                classic_new.Datamosh(temp_in, temp_corrupted, s=params.get("startFrame", 0), e=params.get("endFrame", 1000), fps=30)
-            elif mode == "repeat":
-                repeat.Datamosh(temp_in, temp_corrupted, s=params.get("startFrame", 0), e=params.get("endFrame", 1000), p=params.get("p", 5), fps=30)
-            elif mode == "glide":
-                pymodes.library.glide(params.get("p", 5), temp_in, temp_corrupted)
-            elif mode == "sort":
-                keep_first = 0 if params.get("keepFirst", True) else 1
-                reverse = params.get("reverse", False)
-                pymodes.library.avi_sort(temp_in, temp_corrupted, mode=keep_first, rev=reverse)
-            elif mode == "echo":
-                pymodes.library.process_streams(temp_in, temp_corrupted, mid=params.get("mid", 0.5))
+                # Step 2: Apply specific mosh mode
+                if mode == "classic":
+                    classic.Datamosh(temp_in, temp_corrupted, s=params.get("start", 0), e=params.get("end", 10), p=params.get("p", 1), fps=30)
+                elif mode == "classic2":
+                    classic_new.Datamosh(temp_in, temp_corrupted, s=params.get("startFrame", 0), e=params.get("endFrame", 1000), fps=30)
+                elif mode == "repeat":
+                    repeat.Datamosh(temp_in, temp_corrupted, s=params.get("startFrame", 0), e=params.get("endFrame", 1000), p=params.get("p", 5), fps=30)
+                elif mode == "glide":
+                    pymodes.library.glide(params.get("p", 5), temp_in, temp_corrupted)
+                elif mode == "sort":
+                    keep_first = 0 if params.get("keepFirst", True) else 1
+                    reverse = params.get("reverse", False)
+                    pymodes.library.avi_sort(temp_in, temp_corrupted, mode=keep_first, rev=reverse)
+                elif mode == "echo":
+                    pymodes.library.process_streams(temp_in, temp_corrupted, mid=params.get("mid", 0.5))
 
-            # Step 3: Re-encode corrupted AVI
-            ffmpeg_convert(temp_corrupted, output_path, ["-c:v", "libx264", "-pix_fmt", "yuv420p"])
-        finally:
-            if os.path.exists(temp_in):
-                os.remove(temp_in)
-            if os.path.exists(temp_corrupted):
-                os.remove(temp_corrupted)
+                # Step 3: Re-encode corrupted AVI
+                ffmpeg_convert(temp_corrupted, output_path, ["-c:v", "libx264", "-pix_fmt", "yuv420p"])
+            finally:
+                for p in (temp_in, temp_corrupted):
+                    if os.path.exists(p):
+                        try:
+                            os.remove(p)
+                        except OSError:
+                            pass
 
-    elif mode in basic_modes_list or mode in js_effects:
-        temp_corrupted = os.path.join(temp_dir, f"ffg_out_{os.path.basename(input_path)}.mpg")
-        temp_js = None
+        elif mode in basic_modes_list or mode in js_effects:
+            temp_corrupted = os.path.join(temp_dir, f"ffg_out_{os.path.basename(input_path)}.mpg")
+            temp_js = None
 
-        try:
-            gop = params.get("gop", 1000)
+            try:
+                gop = params.get("gop", 1000)
 
-            if mode == "fluid":
-                basic_modes.library(input_path, temp_corrupted, mode=3, fluidity=params.get("fluidity", 5), gop=gop)
-            elif mode == "stretch":
-                direction = 1 if params.get("direction", "horizontal") == "horizontal" else 0
-                basic_modes.library(input_path, temp_corrupted, mode=2, vh=direction, gop=gop)
-            elif mode == "motion_transfer":
-                motion_video = params.get("motionUrl")
-                if not motion_video:
-                    raise ValueError("motionUrl parameter is required for motion_transfer mode")
-                basic_modes.library(input_path, temp_corrupted, mode=1, extract_from=motion_video, gop=gop)
-            elif mode == "shuffle_basic":
-                basic_modes.library(input_path, temp_corrupted, mode=4, size=params.get("chunkSize", 1), gop=gop)
-            elif mode == "rise":
-                start_f = params.get("startFrame", 1)
-                end_f = params.get("endFrame", 100)
-                basic_modes.library(input_path, temp_corrupted, mode=5, s=start_f, e=(end_f - start_f), gop=gop)
-            elif mode == "water_bloom":
-                pos_f = params.get("positionFrame", 1)
-                repeat_c = params.get("repeatCount", 20)
-                basic_modes.library(input_path, temp_corrupted, mode=6, f=pos_f, r=repeat_c, gop=gop)
-            elif mode == "combine":
-                combine_videos = params.get("combineVideos", [])
-                if isinstance(combine_videos, str):
-                    combine_videos = [combine_videos]
-                # Normalize and clean paths
-                combine_videos = [v.replace('media://', '') for v in combine_videos if v]
-                if len(combine_videos) < 2:
-                    raise ValueError("At least 2 video paths are required for combine mode")
-                basic_modes.library(combine_videos, temp_corrupted, mode=7, gop=gop)
-            elif mode in js_effects:
-                # Dynamically write custom JS script
-                temp_js = configure_js_script(mode, params)
-                external_script.mosh(input_path, temp_corrupted, mode=1, scriptfile=temp_js, gop=gop)
+                if mode == "fluid":
+                    basic_modes.library(input_path, temp_corrupted, mode=3, fluidity=params.get("fluidity", 5), gop=gop)
+                elif mode == "stretch":
+                    direction = 1 if params.get("direction", "horizontal") == "horizontal" else 0
+                    basic_modes.library(input_path, temp_corrupted, mode=2, vh=direction, gop=gop)
+                elif mode == "motion_transfer":
+                    motion_video = params.get("motionUrl")
+                    if not motion_video:
+                        raise ValueError("motionUrl parameter is required for motion_transfer mode")
+                    basic_modes.library(input_path, temp_corrupted, mode=1, extract_from=motion_video, gop=gop)
+                elif mode == "shuffle_basic":
+                    basic_modes.library(input_path, temp_corrupted, mode=4, size=params.get("chunkSize", 1), gop=gop)
+                elif mode == "rise":
+                    start_f = params.get("startFrame", 1)
+                    end_f = params.get("endFrame", 100)
+                    basic_modes.library(input_path, temp_corrupted, mode=5, s=start_f, e=(end_f - start_f), gop=gop)
+                elif mode == "water_bloom":
+                    pos_f = params.get("positionFrame", 1)
+                    repeat_c = params.get("repeatCount", 20)
+                    basic_modes.library(input_path, temp_corrupted, mode=6, f=pos_f, r=repeat_c, gop=gop)
+                elif mode == "combine":
+                    combine_videos = params.get("combineVideos", [])
+                    if isinstance(combine_videos, str):
+                        combine_videos = [combine_videos]
+                    # Normalize and clean paths
+                    # Rust validates these paths after strip_prefix("media://")
+                    # — prefix-only. replace() strips EVERY occurrence, which on
+                    # POSIX (where ':' is a legal filename char) could validate
+                    # one canonical path and open another. removeprefix mirrors
+                    # the validator's semantics exactly.
+                    combine_videos = [v.removeprefix('media://') for v in combine_videos if v]
+                    if len(combine_videos) < 2:
+                        raise ValueError("At least 2 video paths are required for combine mode")
+                    basic_modes.library(combine_videos, temp_corrupted, mode=7, gop=gop)
+                elif mode in js_effects:
+                    # Dynamically write custom JS script
+                    temp_js = configure_js_script(mode, params)
+                    external_script.mosh(input_path, temp_corrupted, mode=1, scriptfile=temp_js, gop=gop)
 
-            # Convert MPG to MP4
-            ffmpeg_convert(temp_corrupted, output_path, ["-c:v", "libx264", "-pix_fmt", "yuv420p"])
-        finally:
-            if temp_js and os.path.exists(temp_js):
-                os.remove(temp_js)
-            if os.path.exists(temp_corrupted):
-                os.remove(temp_corrupted)
-    else:
-        raise ValueError(f"Unknown datamoshing mode: {mode}")
+                # Convert MPG to MP4
+                ffmpeg_convert(temp_corrupted, output_path, ["-c:v", "libx264", "-pix_fmt", "yuv420p"])
+            finally:
+                for p in (temp_js, temp_corrupted):
+                    if p and os.path.exists(p):
+                        try:
+                            os.remove(p)
+                        except OSError:
+                            pass
+        else:
+            raise ValueError(f"Unknown datamoshing mode: {mode}")
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
     print("Mosh pipeline completed successfully!")
 

@@ -127,14 +127,8 @@ impl Effect for SortingGlitch {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let threshold = params
-            .get("u_threshold")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(self.threshold as f64) as f32;
-        let intensity = params
-            .get("u_intensity")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(self.intensity as f64) as f32;
+        let threshold = crate::effects::params::f32_param(params, "u_threshold", self.threshold);
+        let intensity = crate::effects::params::f32_param(params, "u_intensity", self.intensity);
         let direction_str = params
             .get("u_direction")
             .and_then(|v| v.as_str())
@@ -208,130 +202,72 @@ impl Effect for SortingGlitch {
             threshold
         };
 
-        if direction == 0 {
-            // Horizontal: sort runs within each row
-            for y in 0..h {
-                let row_start = y * w;
-                let mut x = 0;
-                while x < w {
-                    let idx = (row_start + x) * 4;
-                    let brightness = sort_key(data[idx], data[idx + 1], data[idx + 2]);
-                    if brightness > threshold {
-                        // Find end of sortable run (contiguous pixels above threshold)
-                        let mut run_end = x + 1;
-                        while run_end < w {
-                            let ridx = (row_start + run_end) * 4;
-                            let b = sort_key(data[ridx], data[ridx + 1], data[ridx + 2]);
-                            if b <= threshold {
-                                break;
-                            }
-                            run_end += 1;
-                        }
-                        // Sort the run by sort key
-                        let run_len = run_end - x;
-                        if run_len > 1 {
-                            let mut pixels: Vec<(f32, [u8; 4])> = (x..run_end)
-                                .map(|px| {
-                                    let pidx = (row_start + px) * 4;
-                                    let key = sort_key(data[pidx], data[pidx + 1], data[pidx + 2]);
-                                    (
-                                        key,
-                                        [
-                                            data[pidx],
-                                            data[pidx + 1],
-                                            data[pidx + 2],
-                                            data[pidx + 3],
-                                        ],
-                                    )
-                                })
-                                .collect();
-                            // Apply intensity as a partial sort: only the first
-                            // `sort_count` pixels of the run -- by ORIGINAL
-                            // position, not by sorted rank -- are rearranged
-                            // among themselves; the remaining pixels of the run
-                            // keep their original, unsorted values. At
-                            // intensity == 10.0, sort_count == run_len, so the
-                            // whole run is sorted among itself, identical to an
-                            // unconditional full sort -- this keeps the
-                            // established look at the max setting unchanged.
-                            let sort_count = ((run_len as f32 * intensity / 10.0).ceil() as usize)
-                                .clamp(1, run_len);
-                            pixels[..sort_count].sort_by(|a, b| {
-                                a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
-                            });
-                            for (i, (_, px)) in pixels.iter().enumerate().take(sort_count) {
-                                let pidx = (row_start + x + i) * 4;
-                                data[pidx] = px[0];
-                                data[pidx + 1] = px[1];
-                                data[pidx + 2] = px[2];
-                                data[pidx + 3] = px[3];
-                            }
-                            // Positions x+sort_count..run_end keep the original
-                            // values already present in `data` -- untouched.
-                        }
-                        x = run_end;
-                    } else {
-                        x += 1;
-                    }
+        // One pass for both axes: `line` walks rows or columns, `offset` the
+        // pixel index along it, and `idx_of` projects the pair to a flat
+        // buffer index. Direction only changes that projection.
+        let horizontal = direction == 0;
+        let (line_count, line_len) = if horizontal { (h, w) } else { (w, h) };
+        for line in 0..line_count {
+            let idx_of = |offset: usize| {
+                if horizontal {
+                    line * w + offset
+                } else {
+                    offset * w + line
                 }
-            }
-        } else {
-            // Vertical: sort runs within each column
-            for x in 0..w {
-                let mut y = 0;
-                while y < h {
-                    let idx = (y * w + x) * 4;
-                    let brightness = sort_key(data[idx], data[idx + 1], data[idx + 2]);
-                    if brightness > threshold {
-                        let mut run_end = y + 1;
-                        while run_end < h {
-                            let ridx = (run_end * w + x) * 4;
-                            let b = sort_key(data[ridx], data[ridx + 1], data[ridx + 2]);
-                            if b <= threshold {
-                                break;
-                            }
-                            run_end += 1;
+            };
+            let mut offset = 0;
+            while offset < line_len {
+                let idx = idx_of(offset) * 4;
+                let brightness = sort_key(data[idx], data[idx + 1], data[idx + 2]);
+                if brightness > threshold {
+                    // Find end of sortable run (contiguous pixels above threshold)
+                    let mut run_end = offset + 1;
+                    while run_end < line_len {
+                        let ridx = idx_of(run_end) * 4;
+                        if sort_key(data[ridx], data[ridx + 1], data[ridx + 2]) <= threshold {
+                            break;
                         }
-                        let run_len = run_end - y;
-                        if run_len > 1 {
-                            let mut pixels: Vec<(f32, [u8; 4])> = (y..run_end)
-                                .map(|py| {
-                                    let pidx = (py * w + x) * 4;
-                                    let key = sort_key(data[pidx], data[pidx + 1], data[pidx + 2]);
-                                    (
-                                        key,
-                                        [
-                                            data[pidx],
-                                            data[pidx + 1],
-                                            data[pidx + 2],
-                                            data[pidx + 3],
-                                        ],
-                                    )
-                                })
-                                .collect();
-                            // Same partial-sort intensity gating as the
-                            // horizontal branch above -- kept consistent so
-                            // Vertical isn't the only direction where intensity
-                            // is unreachable.
-                            let sort_count = ((run_len as f32 * intensity / 10.0).ceil() as usize)
-                                .clamp(1, run_len);
-                            pixels[..sort_count].sort_by(|a, b| {
-                                a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
-                            });
-                            for (i, (_, px)) in pixels.iter().enumerate().take(sort_count) {
-                                let pidx = ((y + i) * w + x) * 4;
-                                data[pidx] = px[0];
-                                data[pidx + 1] = px[1];
-                                data[pidx + 2] = px[2];
-                                data[pidx + 3] = px[3];
-                            }
-                            // Positions y+sort_count..run_end keep the original
-                            // values already present in `data` -- untouched.
-                        }
-                        y = run_end;
-                    } else {
-                        y += 1;
+                        run_end += 1;
                     }
+                    // Sort the run by sort key
+                    let run_len = run_end - offset;
+                    if run_len > 1 {
+                        let mut pixels: Vec<(f32, [u8; 4])> = (offset..run_end)
+                            .map(|o| {
+                                let pidx = idx_of(o) * 4;
+                                (
+                                    sort_key(data[pidx], data[pidx + 1], data[pidx + 2]),
+                                    [data[pidx], data[pidx + 1], data[pidx + 2], data[pidx + 3]],
+                                )
+                            })
+                            .collect();
+                        // Apply intensity as a partial sort: only the first
+                        // `sort_count` pixels of the run -- by ORIGINAL
+                        // position, not by sorted rank -- are rearranged
+                        // among themselves; the remaining pixels of the run
+                        // keep their original, unsorted values. At
+                        // intensity == 10.0, sort_count == run_len, so the
+                        // whole run is sorted among itself, identical to an
+                        // unconditional full sort -- this keeps the
+                        // established look at the max setting unchanged.
+                        let sort_count =
+                            ((run_len as f32 * intensity / 10.0).ceil() as usize).clamp(1, run_len);
+                        pixels[..sort_count].sort_by(|a, b| {
+                            a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        for (i, (_, px)) in pixels.iter().enumerate().take(sort_count) {
+                            let pidx = idx_of(offset + i) * 4;
+                            data[pidx] = px[0];
+                            data[pidx + 1] = px[1];
+                            data[pidx + 2] = px[2];
+                            data[pidx + 3] = px[3];
+                        }
+                        // Positions offset+sort_count..run_end keep the original
+                        // values already present in `data` -- untouched.
+                    }
+                    offset = run_end;
+                } else {
+                    offset += 1;
                 }
             }
         }
@@ -340,22 +276,6 @@ impl Effect for SortingGlitch {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

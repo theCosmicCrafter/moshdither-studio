@@ -48,10 +48,9 @@ impl Effect for Pixelate {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let bs = params
-            .get("block_size")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(self.block_size as u64) as usize;
+        let bs =
+            crate::effects::params::usize_param(params, "block_size", self.block_size as usize)
+                .max(1);
         let w = input.width as usize;
         let h = input.height as usize;
         let mut data = input.data.clone();
@@ -74,22 +73,6 @@ impl Effect for Pixelate {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

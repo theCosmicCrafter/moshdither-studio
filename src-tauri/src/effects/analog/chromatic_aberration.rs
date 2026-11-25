@@ -46,10 +46,7 @@ impl Effect for ChromaticAberration {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let shift = params
-            .get("shift")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(self.shift as u64) as usize;
+        let shift = crate::effects::params::usize_param(params, "shift", self.shift as usize);
         let w = input.width as usize;
         let h = input.height as usize;
         let mut data = vec![0u8; input.data.len()];
@@ -67,7 +64,7 @@ impl Effect for ChromaticAberration {
                 data[idx] = input.data[ridx];
 
                 // Blue shifted right
-                let bx = (x + shift).min(w - 1);
+                let bx = x.saturating_add(shift).min(w - 1);
                 let bidx = (y * w + bx) * 4;
                 data[idx + 2] = input.data[bidx];
             }
@@ -77,22 +74,6 @@ impl Effect for ChromaticAberration {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

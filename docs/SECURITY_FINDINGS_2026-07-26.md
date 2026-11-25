@@ -5,11 +5,9 @@ but had never executed: the framework was not wired to this repository's hooks,
 and the separate TruffleHog hook silently skipped on every commit because it
 looked for the binary in the wrong directory.
 
-Everything below is a **real finding that is not yet fixed**. Each is suppressed
-by explicit ID or path in the tooling so the gates block *new* problems rather
-than being permanently red — a gate that always fails is one people learn to
-bypass, which is how this situation arose in the first place. Nothing here is
-dismissed.
+> **Status update — 2026-11-02:** Section 1 (`B602` `shell=True` in `basic_modes.py` and `external_script.py`) is **FIXED** — all subprocess invocations in `packages/python-backend` now use list-form `subprocess.run([...])` without `shell=True`, with isolated scratch directories. See `docs/QC_DEVOPS_AUDIT_REPORT_2026-11-02.md` and `docs/SESSION-HANDOFF.md` for the current security and QC audit state.
+
+Everything below is the historical 2026-07-26 baseline from the first run of the security tooling. Each item was either fixed or tracked explicitly so the gates block *new* problems rather than being permanently red.
 
 ---
 

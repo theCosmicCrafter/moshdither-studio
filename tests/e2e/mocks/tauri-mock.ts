@@ -2,9 +2,38 @@
  * Tauri API mock for E2E tests.
  * Injected via Playwright page.addInitScript() to stub out @tauri-apps/api
  * so the frontend runs without the Rust backend.
+ *
+ * `tauriMockScript` is the default no-media build; variants (e.g.
+ * `tauriMockWithMediaScript`) are produced by `buildTauriMockScript` with a
+ * config of response overrides -- one harness, several data sets. This file
+ * used to have a second hand-copied mock for media-flow tests; the copies
+ * drifted (ffglitch_ok, load_media's return value, dialog paths, mask data)
+ * without either side noticing.
  */
 
-export const tauriMockScript = `
+export interface TauriMockConfig {
+  /**
+   * Plain-data entries merged over the base response table (JSON-serialised
+   * into the script). Functions are not supported -- the base table's few
+   * function responses deliberately derive from the merged state, so the
+   * right override is usually the data they read.
+   */
+  responses?: Record<string, unknown>;
+  /** Path the open dialog returns. Default: opt-in via
+   *  `window.__MOSH_E2E_MEDIA_PATH__` (null = cancelled). */
+  dialogOpen?: string | null;
+  /** Path the save dialog returns. Default: null (cancelled). */
+  dialogSave?: string | null;
+  /** Start with media already loaded. */
+  mediaLoaded?: boolean;
+}
+
+export function buildTauriMockScript(config: TauriMockConfig = {}): string {
+  const responsesJson = JSON.stringify(config.responses ?? {});
+  const dialogOpenJson = JSON.stringify(config.dialogOpen ?? null);
+  const dialogSaveJson = JSON.stringify(config.dialogSave ?? null);
+  const mediaLoaded = config.mediaLoaded === true;
+  return `
 (() => {
   // Dismiss onboarding modal and clear auto-save before app renders
   try {
@@ -18,8 +47,9 @@ export const tauriMockScript = `
   const MOCK_MASK_B64 =
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==';
 
-  // Set true once a test drives a successful open (see plugin:dialog|open).
-  let mediaOpened = false;
+  // Set true once a test drives a successful open (see plugin:dialog|open),
+  // or immediately when the mock was built with mediaLoaded.
+  let mediaOpened = ${mediaLoaded};
 
   const mockResponses = {
     // An empty library, as a string: the real command returns file text.
@@ -33,17 +63,16 @@ export const tauriMockScript = `
       { id: "color.brightness", name: "Brightness", category: "color", media_type: "image", parameters: [] },
     ],
     list_effects_by_category: (args) => {
-      const all = [
-        { id: "dithering.bayer", name: "Bayer Dither", category: "dithering", media_type: "image", parameters: [] },
-        { id: "dithering.floyd_steinberg", name: "Floyd-Steinberg", category: "dithering", media_type: "image", parameters: [] },
-      ];
-      return all.filter(e => e.category === args.category);
+      // Derived from the (possibly overridden) list_effects so a config that
+      // swaps the catalogue keeps this command consistent with it.
+      return mockResponses.list_effects.filter(e => e.category === args.category);
     },
     // Reports loaded only after a test has opted in by setting
-    // window.__MOSH_E2E_MEDIA_PATH__ and driving the open flow. Panels gated on
-    // media (Mask, and parts of Export) cannot otherwise be reached, while
-    // tests that assert the empty state -- "Load media before exporting" --
-    // still get a no-media app by default.
+    // window.__MOSH_E2E_MEDIA_PATH__ and driving the open flow (or built the
+    // mock with mediaLoaded). Panels gated on media (Mask, and parts of
+    // Export) cannot otherwise be reached, while tests that assert the empty
+    // state -- "Load media before exporting" -- still get a no-media app by
+    // default.
     get_media_info: () => ({ width: 1920, height: 1080, loaded: mediaOpened }),
     get_environment_status: {
       mode: "portable",
@@ -82,6 +111,10 @@ export const tauriMockScript = `
     apply_effect_stack: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
     generate_proxy_command: "C:/tmp/moshdither-proxy/test_proxy_1280p.mp4",
   };
+  // Config-provided overrides and additions land last. Function values in
+  // the base (get_media_info, list_effects_by_category) read this merged
+  // table at call time, so data overrides stay consistent.
+  Object.assign(mockResponses, ${responsesJson});
 
   // Mock window object for @tauri-apps/api/window
   const mockWindow = {
@@ -101,18 +134,30 @@ export const tauriMockScript = `
   let callbackId = 0;
 
   window.__TAURI_INTERNALS__ = {
+    metadata: {
+      currentWindow: { label: "main" },
+      currentWebview: { windowLabel: "main", label: "main" },
+      windows: [{ label: "main" }],
+      webviews: [{ windowLabel: "main", label: "main" }],
+    },
     invoke(command, args) {
       console.log('[TAURI MOCK] invoke:', command, args);
-      if (command === 'plugin:event|listen') return Promise.resolve(1);
+      if (
+        command === 'plugin:event|listen' ||
+        command === 'plugin:webview|on_drag_drop_event'
+      ) {
+        return Promise.resolve(1);
+      }
       if (command === 'plugin:event|unlisten') return Promise.resolve();
       if (command === 'plugin:dialog|open') {
-        // Default is null (user cancelled). A test opts in to a successful open
-        // by setting window.__MOSH_E2E_MEDIA_PATH__ before navigation.
-        const chosen = window.__MOSH_E2E_MEDIA_PATH__ || null;
+        // A test opts in to a successful open by setting
+        // window.__MOSH_E2E_MEDIA_PATH__ before navigation; a mock built with
+        // dialogOpen always returns that path. Either marks media opened.
+        const chosen = window.__MOSH_E2E_MEDIA_PATH__ || ${dialogOpenJson};
         if (chosen) mediaOpened = true;
         return Promise.resolve(chosen);
       }
-      if (command === 'plugin:dialog|save') return Promise.resolve(null);
+      if (command === 'plugin:dialog|save') return Promise.resolve(${dialogSaveJson});
       const response = mockResponses[command];
       if (typeof response === 'function') return Promise.resolve(response(args));
       if (response !== undefined) return Promise.resolve(response);
@@ -158,8 +203,11 @@ export const tauriMockScript = `
 
   // Mock @tauri-apps/plugin-dialog
   window.__TAURI_DIALOG__ = {
-    open: () => Promise.resolve(null),
-    save: () => Promise.resolve(null),
+    open: () => Promise.resolve(${dialogOpenJson}),
+    save: () => Promise.resolve(${dialogSaveJson}),
   };
 })();
 `;
+}
+
+export const tauriMockScript = buildTauriMockScript();

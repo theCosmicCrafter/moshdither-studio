@@ -375,45 +375,21 @@ async fn install(app: AppHandle) -> Result<AddonStatus> {
     std::fs::create_dir_all(&staging)?;
 
     if need_sidecar {
-        let mut parts = Vec::new();
-        for (i, part) in manifest.sidecar.parts.iter().enumerate() {
-            let dest = staging.join(format!("sidecar.part{i}"));
-            let label = format!(
-                "Segmentation engine — part {} of {}",
-                i + 1,
-                manifest.sidecar.parts.len()
-            );
-            emit(
-                &app,
-                "sidecar",
-                &label,
-                pct(done, grand_total),
-                done,
-                grand_total,
-            );
-            done += download_part(&client, part, &dest, done, grand_total, &|d, t| {
-                emit(&app, "sidecar", &label, pct(d, t), d, t)
-            })
-            .await?;
-            parts.push(dest);
-        }
-
-        emit(
+        done = download_and_assemble(
             &app,
+            &client,
+            &manifest.sidecar.parts,
             "sidecar",
-            "Verifying",
-            pct(done, grand_total),
+            "Segmentation engine",
+            "sidecar",
+            &staging,
+            SIDECAR_FILENAME,
+            &dir.join(SIDECAR_FILENAME),
+            EXPECTED_SIDECAR_SHA256,
             done,
             grand_total,
-        );
-        // Assemble beside the final name, then rename, so an interrupted run
-        // never leaves a half-written executable where the engine will find it.
-        let assembled = staging.join(SIDECAR_FILENAME);
-        join_and_verify(&parts, &assembled, EXPECTED_SIDECAR_SHA256)?;
-        std::fs::rename(&assembled, dir.join(SIDECAR_FILENAME))?;
-        for p in parts {
-            let _ = std::fs::remove_file(p);
-        }
+        )
+        .await?;
     }
 
     if need_ckpt {
@@ -421,43 +397,84 @@ async fn install(app: AppHandle) -> Result<AddonStatus> {
         if let Some(parent) = ckpt_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let mut parts = Vec::new();
-        for (i, part) in ckpt.parts.iter().enumerate() {
-            let dest = staging.join(format!("ckpt.part{i}"));
-            let label = format!("Model weights — part {} of {}", i + 1, ckpt.parts.len());
-            emit(
-                &app,
-                "checkpoint",
-                &label,
-                pct(done, grand_total),
-                done,
-                grand_total,
-            );
-            done += download_part(&client, part, &dest, done, grand_total, &|d, t| {
-                emit(&app, "checkpoint", &label, pct(d, t), d, t)
-            })
-            .await?;
-            parts.push(dest);
-        }
-        emit(
+        let _ = download_and_assemble(
             &app,
+            &client,
+            &ckpt.parts,
             "checkpoint",
-            "Verifying",
-            pct(done, grand_total),
+            "Model weights",
+            "ckpt",
+            &staging,
+            "sam3.pt.partial",
+            &ckpt_path,
+            &ckpt.sha256,
             done,
             grand_total,
-        );
-        let assembled = staging.join("sam3.pt.partial");
-        join_and_verify(&parts, &assembled, &ckpt.sha256)?;
-        std::fs::rename(&assembled, &ckpt_path)?;
-        for p in parts {
-            let _ = std::fs::remove_file(p);
-        }
+        )
+        .await?;
     }
 
     let _ = std::fs::remove_dir_all(&staging);
     emit(&app, "done", "SAM3 is ready", 100, grand_total, grand_total);
     Ok(sam3_addon_status())
+}
+
+/// Download every part of an asset into `staging` under `stem`, emitting
+/// `channel` progress labelled `{label} — part N of M`, then join the parts,
+/// verify the SHA-256, and rename into place. Parts are deleted after a
+/// successful assemble; an interrupted run leaves only staging files, never a
+/// half-written file at `dest`. Returns the updated byte total.
+#[allow(clippy::too_many_arguments)]
+async fn download_and_assemble(
+    app: &AppHandle,
+    client: &reqwest::Client,
+    manifest_parts: &[AssetPart],
+    channel: &str,
+    label: &str,
+    stem: &str,
+    staging: &Path,
+    assembled_name: &str,
+    dest: &Path,
+    expected_sha256: &str,
+    mut done: u64,
+    grand_total: u64,
+) -> Result<u64> {
+    let mut part_files = Vec::new();
+    for (i, part) in manifest_parts.iter().enumerate() {
+        let part_dest = staging.join(format!("{stem}.part{i}"));
+        let part_label = format!("{label} — part {} of {}", i + 1, manifest_parts.len());
+        emit(
+            app,
+            channel,
+            &part_label,
+            pct(done, grand_total),
+            done,
+            grand_total,
+        );
+        done += download_part(client, part, &part_dest, done, grand_total, &|d, t| {
+            emit(app, channel, &part_label, pct(d, t), d, t)
+        })
+        .await?;
+        part_files.push(part_dest);
+    }
+
+    emit(
+        app,
+        channel,
+        "Verifying",
+        pct(done, grand_total),
+        done,
+        grand_total,
+    );
+    // Assemble beside the final name, then rename, so an interrupted run
+    // never leaves a half-written file where the engine will find it.
+    let assembled = staging.join(assembled_name);
+    join_and_verify(&part_files, &assembled, expected_sha256)?;
+    std::fs::rename(&assembled, dest)?;
+    for p in part_files {
+        let _ = std::fs::remove_file(p);
+    }
+    Ok(done)
 }
 
 fn pct(done: u64, total: u64) -> u8 {

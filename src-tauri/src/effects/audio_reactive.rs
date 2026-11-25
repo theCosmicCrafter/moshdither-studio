@@ -6,7 +6,7 @@ use serde_json::json;
 
 /// Helper: read an audio param as f32, defaulting to 0.0 if absent.
 fn audio_f32(params: &ParameterValues, key: &str) -> f32 {
-    params.get(key).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32
+    crate::effects::params::f32_param(params, key, 0.0)
 }
 
 // ─── BassPulse ───────────────────────────────────────────────────────────
@@ -58,14 +58,8 @@ impl Effect for BassPulse {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let sensitivity = params
-            .get("sensitivity")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(1.0) as f32;
-        let block_size = params
-            .get("block_size")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(16) as usize;
+        let sensitivity = crate::effects::params::f32_param(params, "sensitivity", 1.0);
+        let block_size = crate::effects::params::usize_param(params, "block_size", 16).max(1);
 
         let bass = audio_f32(params, "_audio_bass");
         let pulse = bass * sensitivity;
@@ -185,14 +179,8 @@ impl Effect for BeatGlitch {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let corruption = params
-            .get("corruption")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.5) as f32;
-        let threshold = params
-            .get("trigger_threshold")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.5) as f32;
+        let corruption = crate::effects::params::f32_param(params, "corruption", 0.5);
+        let threshold = crate::effects::params::f32_param(params, "trigger_threshold", 0.5);
 
         let beat_bass = audio_f32(params, "_audio_beat_bass");
         let beat_energy = audio_f32(params, "_audio_beat_energy");
@@ -305,10 +293,7 @@ impl Effect for SpectralShift {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let shift_amount = params
-            .get("shift_amount")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.5) as f32;
+        let shift_amount = crate::effects::params::f32_param(params, "shift_amount", 0.5);
 
         let centroid = audio_f32(params, "_audio_centroid");
         let flux = audio_f32(params, "_audio_flux");
@@ -436,17 +421,11 @@ impl Effect for AudioDither {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let base_threshold = params
-            .get("base_threshold")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(128.0) as f32;
-        let modulation = params
-            .get("modulation")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.5) as f32;
+        let base_threshold = crate::effects::params::f32_param(params, "base_threshold", 128.0);
+        let modulation = crate::effects::params::f32_param(params, "modulation", 0.5);
         let levels = params
             .get("levels")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .unwrap_or(4)
             .clamp(2, 16) as usize;
 

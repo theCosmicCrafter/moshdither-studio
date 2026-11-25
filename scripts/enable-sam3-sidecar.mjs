@@ -25,12 +25,11 @@ if (!existsSync(baseConfPath)) {
 // venv that does not exist on a user's machine. That is the "SAM3 unavailable"
 // warning users hit.
 // `--no-sidecar` emits an overlay for a deliberate build without SAM3. It
-// still carries the updater handling below, which is the whole reason it
-// exists: tauri.conf.json sets createUpdaterArtifacts true, so a plain
-// `tauri build` fails at the very end with "A public key has been found,
-// but no private key" on any machine without TAURI_SIGNING_PRIVATE_KEY --
-// after having already produced the installers, which makes it look like a
-// packaging failure when nothing is wrong with the bundle.
+// still carries the updater handling below: tauri.conf.json sets
+// `createUpdaterArtifacts: false` by default because no updater endpoint or
+// public key is configured yet, and this overlay only enables updater
+// artifacts when both TAURI_SIGNING_PRIVATE_KEY and plugins.updater.pubkey are
+// present so `tauri build` never fails at the packaging step over missing keys.
 const noSidecar = process.argv.includes("--no-sidecar");
 const binDir = join(projectRoot, "src-tauri", "bin");
 const sidecars = existsSync(binDir)
@@ -77,9 +76,17 @@ const overlay = {
   },
 };
 
-if (process.argv.includes("--disable-updater") || !process.env.TAURI_SIGNING_PRIVATE_KEY) {
+const hasSigningKey = Boolean(process.env.TAURI_SIGNING_PRIVATE_KEY?.trim());
+const hasUpdaterPubkey = Boolean(baseConf.plugins?.updater?.pubkey?.trim());
+
+if (!process.argv.includes("--disable-updater") && hasSigningKey && hasUpdaterPubkey) {
+  overlay.bundle.createUpdaterArtifacts = true;
+  console.log("Release overlay will enable updater artifacts (signing key and updater pubkey configured)");
+} else {
   overlay.bundle.createUpdaterArtifacts = false;
-  console.log("Release overlay will disable updater artifacts (TAURI_SIGNING_PRIVATE_KEY not set)");
+  console.log(
+    "Release overlay will disable updater artifacts (requires both TAURI_SIGNING_PRIVATE_KEY and plugins.updater.pubkey)"
+  );
 }
 
 writeFileSync(releaseConfPath, JSON.stringify(overlay, null, 2) + "\n", "utf8");

@@ -41,10 +41,15 @@ function resetStore() {
     playbackSpeed: 1,
     audioFilePath: null,
     audioBpm: null,
-    isVideo: false,
+    isVideo: true,
+    mediaLoaded: true,
     mediaFps: 30,
     animateFps: 30,
     keyframes: {},
+    lfos: {},
+    effectStack: [],
+    allEffects: [],
+    selectedStackId: null,
   });
 }
 
@@ -80,6 +85,17 @@ describe("Timeline", () => {
 
   // ── Duration input clamping ────────────────────────────────
   describe("Duration input clamping", () => {
+    beforeEach(() => {
+      // The duration field lives in the collapsed still strip.
+      useAppStore.setState({ isVideo: false, mediaLoaded: true });
+    });
+
+    it("renders the slim still strip with an animate-to-clip CTA", () => {
+      render(<Timeline />);
+      expect(screen.getByText(/Still · 1 frame/)).toBeInTheDocument();
+      expect(screen.getByText("Animate to clip")).toBeInTheDocument();
+    });
+
     it("clamps duration to minimum 0.1 on valid input", () => {
       render(<Timeline />);
       const durationInput = screen.getByTitle("Animation length (seconds)");
@@ -108,11 +124,11 @@ describe("Timeline", () => {
       expect(useAppStore.getState().duration).toBe(0.1);
     });
 
-    it("accepts large duration values", () => {
+    it("caps large duration values at the 120s ceiling", () => {
       render(<Timeline />);
       const durationInput = screen.getByTitle("Animation length (seconds)");
       fireEvent.change(durationInput, { target: { value: "300" } });
-      expect(useAppStore.getState().duration).toBe(300);
+      expect(useAppStore.getState().duration).toBe(120);
     });
   });
 
@@ -401,6 +417,117 @@ describe("Timeline", () => {
     it("does not show BPM when null", () => {
       render(<Timeline />);
       expect(screen.queryByText(/BPM/)).not.toBeInTheDocument();
+    });
+  });
+
+  // ── Per-param lanes ────────────────────────────────────────
+  describe("Param lanes", () => {
+    const stackEntry = {
+      id: "s1",
+      effectId: "test.fx",
+      effectName: "TestFX",
+      params: { amount: 5 },
+      enabled: true as const,
+      maskId: null,
+      maskMode: "inside" as const,
+    };
+    const meta = {
+      id: "test.fx",
+      name: "TestFX",
+      category: "test",
+      media_type: "both" as const,
+      parameters: [
+        { id: "amount", name: "Amount", type: "slider" as const, default: 5, min: 0, max: 100 },
+      ],
+    };
+    const kf = (id: string, time: number) => ({ id, time, value: 1, easing: "linear" as const });
+
+    beforeEach(() => {
+      useAppStore.setState({ effectStack: [stackEntry], allEffects: [meta] });
+    });
+
+    function laneTrack() {
+      const el = screen.getByTestId("lane-track-s1.amount");
+      el.getBoundingClientRect = () =>
+        ({ left: 0, top: 0, width: 100, height: 14, right: 100, bottom: 14, x: 0, y: 0, toJSON() {} }) as DOMRect;
+      return el;
+    }
+
+    it("shows no lanes when nothing is modulated", () => {
+      render(<Timeline />);
+      expect(screen.queryByTestId("param-lanes")).not.toBeInTheDocument();
+    });
+
+    it("a keyframed param earns a lane with a marker per key", () => {
+      useAppStore.setState({ keyframes: { s1: { amount: [kf("a", 2), kf("b", 6)] } } });
+      render(<Timeline />);
+      const lane = screen.getByTestId("lane-s1.amount");
+      expect(lane).toHaveTextContent("TestFX · Amount");
+      expect(screen.getAllByRole("button", { name: /amount keyframe at/ })).toHaveLength(2);
+    });
+
+    it("an LFO-only param earns a lane with an LFO chip", () => {
+      useAppStore.setState({
+        lfos: { s1: { amount: { id: "s1.amount", waveform: "sine" as const, rateHz: 2, depth: 0.5, offset: 5 } } },
+      });
+      render(<Timeline />);
+      expect(screen.getByTestId("lane-lfo-s1.amount")).toHaveTextContent("LFO 2.0Hz");
+    });
+
+    it("clicking a lane marker jumps the playhead", () => {
+      useAppStore.setState({ keyframes: { s1: { amount: [kf("a", 7)] } } });
+      render(<Timeline />);
+      fireEvent.click(screen.getByRole("button", { name: "amount keyframe at 00:07.00" }));
+      expect(useAppStore.getState().currentTime).toBe(7);
+    });
+
+    it("dragging a lane marker retimes the keyframe", () => {
+      useAppStore.setState({ keyframes: { s1: { amount: [kf("a", 2)] } } });
+      render(<Timeline />);
+      laneTrack();
+      const marker = screen.getByRole("button", { name: "amount keyframe at 00:02.00" });
+      fireEvent.pointerDown(marker, { clientX: 20, pointerId: 1 });
+      fireEvent.pointerMove(marker, { clientX: 80, pointerId: 1 });
+      fireEvent.pointerUp(marker, { clientX: 80, pointerId: 1 });
+      expect(useAppStore.getState().keyframes.s1.amount[0].time).toBeCloseTo(8, 5);
+      // The retime was a drag, not a click -- the playhead stayed put.
+      expect(useAppStore.getState().currentTime).toBe(0);
+    });
+
+    it("right-click on a lane marker opens the same keyframe menu and Delete works", () => {
+      useAppStore.setState({ keyframes: { s1: { amount: [kf("a", 2), kf("b", 6)] } } });
+      render(<Timeline />);
+      fireEvent.contextMenu(screen.getByRole("button", { name: "amount keyframe at 00:02.00" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: /Delete keyframe/ }));
+      expect(useAppStore.getState().keyframes.s1.amount.map((k) => k.id)).toEqual(["b"]);
+    });
+
+    it("right-click on an LFO chip offers Remove LFO", () => {
+      useAppStore.setState({
+        lfos: { s1: { amount: { id: "s1.amount", waveform: "sine" as const, rateHz: 2, depth: 0.5, offset: 5 } } },
+      });
+      render(<Timeline />);
+      fireEvent.contextMenu(screen.getByTestId("lane-lfo-s1.amount"));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Remove LFO" }));
+      expect(useAppStore.getState().lfos.s1).toBeUndefined();
+    });
+
+    it("clicking the lane label selects the stack entry", () => {
+      useAppStore.setState({ keyframes: { s1: { amount: [kf("a", 2)] } } });
+      render(<Timeline />);
+      fireEvent.click(screen.getByTitle(/select this effect/));
+      expect(useAppStore.getState().selectedStackId).toBe("s1");
+    });
+
+    it("still mode renders the same lanes under the slim strip", () => {
+      useAppStore.setState({
+        isVideo: false,
+        keyframes: { s1: { amount: [kf("a", 2)] } },
+        lfos: { s1: { amount: { id: "s1.amount", waveform: "sine" as const, rateHz: 2, depth: 0.5, offset: 5 } } },
+      });
+      render(<Timeline />);
+      expect(screen.getByTestId("param-lanes")).toBeInTheDocument();
+      expect(screen.getByTestId("lane-lfo-s1.amount")).toBeInTheDocument();
     });
   });
 

@@ -24,6 +24,25 @@ pub enum MediaType {
     Both,
 }
 
+/// Which engine actually produces an effect's output.
+///
+/// `Pixel` (the default): `process_frame`/`process_video` run over decoded
+/// RGBA frames. `Codec`: the effect corrupts the compressed bitstream via the
+/// FFglitch sidecar — `process_frame`/`process_video` are deliberate
+/// pass-throughs and the real work happens in the export's codec stage
+/// (`apply_codec_to_segment` in commands.rs), which re-encodes the segment to
+/// a temp file, moshes THAT, and decodes the result back.
+///
+/// This is a trait method rather than an `EffectMeta` field for the same
+/// reason `is_temporal` is: adding a field would churn every `EffectMeta { .. }`
+/// literal in the codebase (~60 sites) for a flag almost all of them share.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Pipeline {
+    Pixel,
+    Codec,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParameterDef {
     pub id: String,
@@ -93,6 +112,17 @@ pub trait Effect: Send + Sync {
         false
     }
 
+    /// Which pipeline produces this effect's output — see [`Pipeline`].
+    ///
+    /// Pixel effects are applied frame-by-frame (or per-segment for temporal
+    /// ones) inside `apply_effect_to_segment`. Codec effects are intercepted
+    /// by the export's stack loop and run through the FFglitch file round
+    /// trip instead; their trait methods must stay safe pass-throughs so the
+    /// CPU preview and any stray trait call do not silently spawn the sidecar.
+    fn pipeline(&self) -> Pipeline {
+        Pipeline::Pixel
+    }
+
     /// Process a single frame (images or preview).
     fn process_frame(
         &self,
@@ -102,12 +132,26 @@ pub trait Effect: Send + Sync {
     ) -> crate::error::Result<Frame>;
 
     /// Process a full video segment (export tier).
+    ///
+    /// The default applies `process_frame` to every frame and keeps the fps.
+    /// Temporal effects -- datamoshing, optical flow, anything that needs its
+    /// neighbours -- override this; per-frame effects should not re-implement
+    /// the loop (it was copy-pasted into ~60 files before this default).
     fn process_video(
         &self,
         input: &VideoSegment,
         mask: Option<&Mask>,
         params: &ParameterValues,
-    ) -> crate::error::Result<VideoSegment>;
+    ) -> crate::error::Result<VideoSegment> {
+        let mut frames = Vec::with_capacity(input.frames.len());
+        for frame in &input.frames {
+            frames.push(self.process_frame(frame, mask, params)?);
+        }
+        Ok(VideoSegment {
+            frames,
+            fps: input.fps,
+        })
+    }
 }
 
 pub type ParameterValues = serde_json::Map<String, serde_json::Value>;

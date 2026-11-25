@@ -114,6 +114,17 @@ describe("Store Advanced Edge Cases", () => {
 
   // ── SAM3 mask index clamping ──
   describe("SAM3 mask index clamping", () => {
+    it("replaceActiveSam3Mask swaps the selected mask and bumps maskRevision", () => {
+      useAppStore.getState().setSam3Masks(["m0", "m1"], [0.9, 0.8]);
+      useAppStore.getState().setSam3MaskIndex(1);
+      const before = useAppStore.getState().maskRevision;
+      useAppStore.getState().replaceActiveSam3Mask("processed");
+      const s = useAppStore.getState();
+      expect(s.sam3Masks).toEqual(["m0", "processed"]);
+      expect(s.activeMask).toBe("processed");
+      expect(s.maskRevision).toBe(before + 1);
+    });
+
     it("clamps negative index to 0", () => {
       useAppStore.getState().setSam3Masks(["m0", "m1", "m2"], [0.9, 0.8, 0.7]);
       useAppStore.getState().setSam3MaskIndex(-5);

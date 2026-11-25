@@ -21,7 +21,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::effects::types::{Frame, VideoSegment};
+use crate::effects::types::{Frame, Pipeline, VideoSegment};
 use crate::effects::EffectRegistry;
 
 fn flat_frame(w: u32, h: u32, gray: u8) -> Frame {
@@ -193,6 +193,13 @@ fn single_frame_noops_are_the_expected_set() {
     let mut actual = BTreeSet::new();
     for meta in reg.list() {
         if let Some(effect) = reg.get(&meta.id) {
+            // Codec-pipeline effects are pass-throughs BY DESIGN — the real
+            // work is a bitstream mosh at export — so identity output is the
+            // contract, not a silently-broken effect. They'd otherwise all
+            // land in this list.
+            if effect.pipeline() == Pipeline::Codec {
+                continue;
+            }
             if let Ok(out) = effect.process_frame(&frame, None, &empty) {
                 if out.data == frame.data {
                     actual.insert(meta.id.clone());

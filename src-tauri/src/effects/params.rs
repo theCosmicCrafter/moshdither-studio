@@ -18,6 +18,26 @@ use serde_json::Value;
 use super::registry::EffectRegistry;
 use super::types::{Effect, ParamType, ParameterDef, ParameterValues};
 
+/// Reads a non-negative integer parameter. Clamping, keyframing and audio
+/// binding all emit float-tagged JSON (`20.0`), which `Value::as_u64` rejects,
+/// so integers are read through `as_f64` and rounded.
+pub fn as_uint(v: &Value) -> Option<u64> {
+    v.as_u64().or_else(|| {
+        v.as_f64()
+            .filter(|f| f.is_finite())
+            .map(|f| f.round().max(0.0) as u64)
+    })
+}
+
+/// Signed counterpart of [`as_uint`].
+pub fn as_int(v: &Value) -> Option<i64> {
+    v.as_i64().or_else(|| {
+        v.as_f64()
+            .filter(|f| f.is_finite())
+            .map(|f| f.round() as i64)
+    })
+}
+
 static PARAM_RANGES: OnceLock<HashMap<String, Vec<ParameterDef>>> = OnceLock::new();
 
 fn ranges() -> &'static HashMap<String, Vec<ParameterDef>> {
@@ -108,6 +128,85 @@ pub fn clamp_for_effect(effect: &dyn Effect, params: &ParameterValues) -> Parame
     clamp_params(&effect.meta().id, params)
 }
 
+/// Read an integer-valued parameter (a count, interval or size), tolerating
+/// JSON floats.
+///
+/// `as_u64()` returns `None` for any float, and floats are what this pipeline
+/// produces: [`clamp_params`] rewrites an out-of-range value as an `f64`, and
+/// keyframes, audio bindings and wheel drags emit non-integral values. Reading
+/// with `as_u64()` silently dropped those and fell back to the default, so a
+/// clamped `30.0` came out as the default rather than the limit. This reads as
+/// `f64` and rounds instead, as `line_screen.rs` does.
+///
+/// Missing, non-numeric, non-finite and negative values fall back to `default`.
+pub fn usize_param(params: &ParameterValues, key: &str, default: usize) -> usize {
+    params
+        .get(key)
+        .and_then(Value::as_f64)
+        .filter(|v| v.is_finite() && *v >= 0.0)
+        .map(|v| v.round() as usize)
+        .unwrap_or(default)
+}
+
+/// The default an effect's parameter schema declares for `key`, as `f64`.
+///
+/// Effects whose only default lives in the schema should fall back to this
+/// instead of restating the literal at the read site -- restated literals
+/// drift from the UI's declared default (e.g. `vhs` had eight of them).
+/// Returns `None` when the schema does not declare `key`, which for a known
+/// parameter is a programming error the caller may safely `unwrap_or` over.
+pub fn schema_f64(meta: &super::types::EffectMeta, key: &str) -> Option<f64> {
+    meta.parameters
+        .iter()
+        .find(|p| p.id == key)
+        .and_then(|p| p.default.as_f64())
+}
+
+/// `u64`-typed counterpart of [`usize_param`], for call sites that need the
+/// value back as `u64` rather than `usize`.
+///
+/// Prefer this over `as_u64()` at the map level for the same reason as
+/// [`usize_param`]: float-tagged values from clamping, keyframes and audio
+/// bindings must not silently fall back to the default.
+pub fn u64_param(params: &ParameterValues, key: &str, default: u64) -> u64 {
+    params
+        .get(key)
+        .and_then(Value::as_f64)
+        .filter(|v| v.is_finite() && *v >= 0.0)
+        .map(|v| v.round() as u64)
+        .unwrap_or(default)
+}
+
+/// Signed counterpart of [`usize_param`], for offsets and deltas that may be
+/// negative (e.g. `rgb_shift` channel shifts). Missing, non-numeric and
+/// non-finite values fall back to `default`.
+pub fn i64_param(params: &ParameterValues, key: &str, default: i64) -> i64 {
+    params
+        .get(key)
+        .and_then(Value::as_f64)
+        .filter(|v| v.is_finite())
+        .map(|v| v.round() as i64)
+        .unwrap_or(default)
+}
+
+/// Reads a float-valued parameter.
+///
+/// Missing, non-numeric and non-finite values fall back to `default` — a NaN
+/// or Infinity parameter would otherwise propagate silently through every
+/// downstream pixel operation.
+pub fn f64_param(params: &ParameterValues, key: &str, default: f64) -> f64 {
+    params
+        .get(key)
+        .and_then(Value::as_f64)
+        .filter(|v| v.is_finite())
+        .unwrap_or(default)
+}
+
+/// `f32`-typed counterpart of [`f64_param`].
+pub fn f32_param(params: &ParameterValues, key: &str, default: f32) -> f32 {
+    f64_param(params, key, default as f64) as f32
+}
+
 fn clamp_value(v: &mut Value, min: f64, max: f64) {
     match v {
         Value::Number(n) => {
@@ -137,6 +236,17 @@ fn number_value(f: f64) -> Value {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn integer_readers_accept_float_tagged_values() {
+        assert_eq!(as_uint(&json!(20.0)), Some(20));
+        assert_eq!(as_uint(&json!(19.6)), Some(20));
+        assert_eq!(as_uint(&json!(7)), Some(7));
+        assert_eq!(as_uint(&json!(-3.0)), Some(0));
+        assert_eq!(as_uint(&json!("x")), None);
+        assert_eq!(as_int(&json!(-4.0)), Some(-4));
+        assert_eq!(as_int(&json!(5)), Some(5));
+    }
 
     #[test]
     fn test_clamps_above_max_and_below_min() {
@@ -253,6 +363,81 @@ mod tests {
             Some("atkinson"),
             "a Select index must reach the effect as the option string it reads"
         );
+    }
+
+    #[test]
+    fn usize_param_reads_integers_as_before() {
+        let mut params = ParameterValues::new();
+        params.insert("n".to_string(), json!(12));
+        assert_eq!(usize_param(&params, "n", 8), 12);
+    }
+
+    #[test]
+    fn usize_param_honours_float_values() {
+        let mut params = ParameterValues::new();
+        for (v, want) in [(json!(30.0), 30), (json!(12.4), 12), (json!(12.6), 13)] {
+            params.insert("n".to_string(), v.clone());
+            assert_eq!(usize_param(&params, "n", 8), want, "{v}");
+        }
+    }
+
+    #[test]
+    fn usize_param_falls_back_to_default_for_unusable_values() {
+        let mut params = ParameterValues::new();
+        assert_eq!(usize_param(&params, "n", 8), 8, "missing");
+        for bad in [json!(-3), json!(-0.5), json!("12"), json!(null)] {
+            params.insert("n".to_string(), bad.clone());
+            assert_eq!(usize_param(&params, "n", 8), 8, "{bad}");
+        }
+    }
+
+    #[test]
+    fn u64_param_matches_usize_param_semantics() {
+        let mut params = ParameterValues::new();
+        params.insert("n".to_string(), json!(12.6));
+        assert_eq!(u64_param(&params, "n", 8), 13);
+        params.insert("n".to_string(), json!(-1));
+        assert_eq!(u64_param(&params, "n", 8), 8, "negative falls back");
+        assert_eq!(u64_param(&params, "missing", 8), 8, "missing falls back");
+    }
+
+    #[test]
+    fn i64_param_accepts_signed_values() {
+        let mut params = ParameterValues::new();
+        params.insert("n".to_string(), json!(-4));
+        assert_eq!(i64_param(&params, "n", 8), -4);
+        params.insert("n".to_string(), json!(-3.6));
+        assert_eq!(i64_param(&params, "n", 8), -4, "floats round");
+        params.insert("n".to_string(), json!("x"));
+        assert_eq!(i64_param(&params, "n", 8), 8, "non-numeric falls back");
+    }
+
+    #[test]
+    fn f64_param_falls_back_for_missing_and_non_numeric() {
+        let mut params = ParameterValues::new();
+        params.insert("x".to_string(), json!(0.25));
+        assert_eq!(f64_param(&params, "x", 0.5), 0.25);
+        params.insert("x".to_string(), json!("a"));
+        assert_eq!(f64_param(&params, "x", 0.5), 0.5, "non-numeric");
+        assert_eq!(f64_param(&params, "missing", 0.5), 0.5, "missing");
+    }
+
+    #[test]
+    fn f32_param_casts() {
+        let mut params = ParameterValues::new();
+        params.insert("x".to_string(), json!(0.75));
+        assert_eq!(f32_param(&params, "x", 0.5), 0.75_f32);
+        assert_eq!(f32_param(&params, "missing", 0.5), 0.5_f32);
+    }
+
+    #[test]
+    fn usize_param_survives_clamping_for_a_real_effect() {
+        // clamp_params rewrites an out-of-range value as an f64; the effect must
+        // see the clamped limit, not its default.
+        let mut params = ParameterValues::new();
+        params.insert("drop_interval".to_string(), json!(40));
+        let out = clamp_params("datamoshing.profile_glitch", &params);
+        assert_eq!(usize_param(&out, "drop_interval", 8), 30);
     }
 
     #[test]
@@ -374,9 +559,13 @@ mod slider_range_tests {
         //     sorted", so there is nothing above it to leave headroom for
         //   * spectrum.bar_count = 7 -- there are exactly 7 frequency bands
         //   * pixelate.min_block = 1, slice_shift repeat = 0 -- minimum/off
+        //   * 10x ffglitch.* frame edges = 0 or 1 -- the codec modes mirror
+        //     mosh_cli.py's own params.get() defaults verbatim: "from frame 0"
+        //     IS the minimum for a frame index, and the 1-minimum frame
+        //     params are the script's defaults, not unreviewed ends
         // Raise this only after checking what the new one actually is.
         assert!(
-            at_end.len() <= 26,
+            at_end.len() <= 36,
             "{} sliders now default to an end of their range; review the new ones:\n  {}",
             at_end.len(),
             at_end.join("\n  ")

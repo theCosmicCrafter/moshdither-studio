@@ -17,14 +17,11 @@ use serde_json::json;
 /// A missing value means "no audio", which every effect below treats as a
 /// no-op rather than as silence-shaped input.
 fn audio_f32(params: &ParameterValues, key: &str) -> f32 {
-    params.get(key).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32
+    crate::effects::params::f32_param(params, key, 0.0)
 }
 
 fn f32_param(params: &ParameterValues, key: &str, fallback: f32) -> f32 {
-    params
-        .get(key)
-        .and_then(|v| v.as_f64())
-        .unwrap_or(fallback as f64) as f32
+    crate::effects::params::f32_param(params, key, fallback)
 }
 
 /// Alpha-composite a colour over RGBA data in place.
@@ -369,11 +366,7 @@ impl Effect for AudioChromatic {
         params: &ParameterValues,
     ) -> Result<Frame> {
         let max_shift = f32_param(params, "max_shift", 12.0).clamp(0.0, 60.0);
-        let vertical = params
-            .get("direction")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0)
-            == 1;
+        let vertical = crate::effects::params::u64_param(params, "direction", 0) == 1;
         let flux = audio_f32(params, "_audio_flux").clamp(0.0, 1.0);
         let shift = (flux * max_shift).round() as i64;
 

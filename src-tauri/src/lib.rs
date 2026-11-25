@@ -1,11 +1,9 @@
 pub mod audio;
 pub mod commands;
-pub mod config;
 pub mod crash;
 pub mod error;
 pub mod window_commands;
 
-pub mod dsp;
 pub mod effects;
 pub mod environment;
 pub mod ffmpeg;
@@ -19,13 +17,13 @@ pub mod utils;
 
 use commands::{
     animate_still_as_video, apply_effect_stack, apply_ffglitch, cancel_export, check_update,
-    export_video, extract_audio_from_video, generate_proxy_command, get_frame_data, get_media_info,
-    get_media_metadata, install_update, list_effects, list_effects_by_category, load_media,
-    load_media_from_base64, log_frontend, prepare_custom_lut, preview_ffglitch, read_file,
-    remove_export_temp, sam3_auto_mask, sam3_box_prompt, sam3_clear, sam3_init, sam3_load_image,
-    sam3_point_prompt, sam3_postprocess_mask, sam3_refine_mask, sam3_shutdown, sam3_text_prompt,
-    sam3_video_predictor, save_file, save_media, save_processed_image, test_all_functions,
-    verify_effects, AppState,
+    codec_preview_path, export_video, extract_audio_from_video, generate_proxy_command,
+    get_frame_data, get_media_info, get_media_metadata, install_update, list_effects,
+    list_effects_by_category, load_media, load_media_from_base64, log_frontend, prepare_custom_lut,
+    preview_ffglitch, read_file, remove_export_temp, sam3_auto_mask, sam3_box_prompt, sam3_clear,
+    sam3_init, sam3_load_image, sam3_point_prompt, sam3_postprocess_mask, sam3_refine_mask,
+    sam3_shutdown, sam3_text_prompt, sam3_video_predictor, save_file, save_media,
+    save_processed_image, test_all_functions, verify_effects, AppState,
 };
 use environment::{get_environment_status, install_local_environment};
 // Only used inside the macOS/Windows-gated window-vibrancy setup below; on
@@ -64,6 +62,7 @@ pub fn run() {
                     state: None,
                     radius: Some(16.0),
                     color: None,
+                    ..Default::default()
                 });
 
                 #[cfg(target_os = "windows")]
@@ -95,7 +94,7 @@ pub fn run() {
                 };
             }
         })
-        // Seven of these are registered but never invoked from the frontend.
+        // Eight of these are registered but never invoked from the frontend.
         // They are recorded here so a later audit does not mistake them for
         // broken wiring, and so nobody adopts one expecting it to be the
         // established path:
@@ -115,6 +114,10 @@ pub fn run() {
         //   sam3_refine_mask
         //       A genuine SAM3 capability (refine an existing mask with new
         //       points) that MaskPanel does not expose yet.
+        //   sam3_video_predictor
+        //       Video-sequence mask tracking through the bridge (600s
+        //       timeout); no frontend calls it — an intended capability whose
+        //       UI was never built, same category as sam3_refine_mask.
         //   save_media
         //       Saves the CURRENT frame. The frontend wants the PROCESSED frame
         //       and calls save_processed_image instead. Not a duplicate, just
@@ -138,6 +141,7 @@ pub fn run() {
             apply_effect_stack,
             apply_ffglitch,
             preview_ffglitch,
+            codec_preview_path,
             remove_export_temp,
             log_frontend,
             crash::get_log_path,

@@ -75,7 +75,12 @@ export class WebGLContext {
   createShader(type: number, source: string): WebGLShader {
     this.ensureContext();
     const gl = this.gl;
-    const shader = gl.createShader(type)!;
+    const shader = gl.createShader(type);
+    if (!shader) {
+      throw new Error(
+        `gl.createShader(type=${type}) returned null — the GL context may be invalid`
+      );
+    }
     gl.shaderSource(shader, source);
     gl.compileShader(shader);
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
@@ -92,16 +97,31 @@ export class WebGLContext {
     const gl = this.gl;
     const vs = this.createShader(gl.VERTEX_SHADER, vertSrc);
     const fs = this.createShader(gl.FRAGMENT_SHADER, fragSrc);
-    const program = gl.createProgram()!;
+    const program = gl.createProgram();
+    if (!program) {
+      throw new Error(
+        `gl.createProgram() returned null (program "${name}") — the GL context may be invalid`
+      );
+    }
     gl.attachShader(program, vs);
     gl.attachShader(program, fs);
     // Bind attribute locations BEFORE linking so they match FullscreenQuad's VAO (0=pos, 1=texCoord)
     gl.bindAttribLocation(program, 0, "a_position");
     gl.bindAttribLocation(program, 1, "a_texCoord");
     gl.linkProgram(program);
+    // Once linked, the shader objects are dead weight until the program is
+    // deleted; on link failure everything leaked. Detach + delete either way.
+    gl.detachShader(program, vs);
+    gl.detachShader(program, fs);
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      throw new Error(`Program link error: ${gl.getProgramInfoLog(program)}`);
+      const info = gl.getProgramInfoLog(program);
+      gl.deleteProgram(program);
+      throw new Error(`Program link error: ${info}`);
     }
+    const old = this.programs.get(name);
+    if (old) gl.deleteProgram(old);
     this.programs.set(name, program);
     return program;
   }
@@ -109,7 +129,12 @@ export class WebGLContext {
   createTexture(name: string, width: number, height: number, data?: Uint8Array): WebGLTexture {
     this.ensureContext();
     const gl = this.gl;
-    const tex = gl.createTexture()!;
+    const tex = gl.createTexture();
+    if (!tex) {
+      throw new Error(
+        `gl.createTexture() returned null (texture "${name}") — the GL context may be invalid`
+      );
+    }
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texImage2D(
       gl.TEXTURE_2D,
@@ -127,6 +152,9 @@ export class WebGLContext {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.bindTexture(gl.TEXTURE_2D, null);
+    // A named slot overwrite would otherwise drop the old texture live.
+    const old = this.textures.get(name);
+    if (old) gl.deleteTexture(old);
     this.textures.set(name, tex);
     return tex;
   }
@@ -138,13 +166,20 @@ export class WebGLContext {
   createFramebuffer(name: string, texture: WebGLTexture): WebGLFramebuffer {
     this.ensureContext();
     const gl = this.gl;
-    const fb = gl.createFramebuffer()!;
+    const fb = gl.createFramebuffer();
+    if (!fb) {
+      throw new Error(
+        `gl.createFramebuffer() returned null (framebuffer "${name}") — the GL context may be invalid`
+      );
+    }
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
     if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
       throw new Error("Framebuffer incomplete");
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    const old = this.framebuffers.get(name);
+    if (old) gl.deleteFramebuffer(old);
     this.framebuffers.set(name, fb);
     return fb;
   }

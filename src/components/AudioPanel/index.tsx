@@ -1,3 +1,4 @@
+import { logger } from "../../utils/logger";
 import React, { useRef, useCallback } from "react";
 import { useAppStore } from "../../store";
 import { useAudioEngine } from "../../hooks/useAudioEngine";
@@ -46,7 +47,7 @@ export default function AudioPanel() {
       try {
         await loadAudioFile(file);
       } catch (err) {
-        console.error("Audio file load failed:", err);
+        logger.error("audio-panel", `Audio file load failed:`, { error: String(err) });
         setStatusMessage(
           `Audio load failed: ${err instanceof Error ? err.message : String(err)}`
         );
@@ -66,7 +67,7 @@ export default function AudioPanel() {
       try {
         await loadAudioFile(file);
       } catch (err) {
-        console.error("Audio file load failed:", err);
+        logger.error("audio-panel", `Audio file load failed:`, { error: String(err) });
         setStatusMessage(
           `Audio load failed: ${err instanceof Error ? err.message : String(err)}`
         );
@@ -104,7 +105,7 @@ export default function AudioPanel() {
         setStatusMessage(`Detected ${result.beats.length} beats (${result.bpm} BPM) — select an effect to apply keyframes`);
       }
     } catch (err) {
-      console.error("Beat detection failed:", err);
+      logger.error("audio-panel", `Beat detection failed:`, { error: String(err) });
       const detail = err instanceof Error ? err.message : String(err);
       setStatusMessage(`Beat detection failed: ${detail}`);
     }

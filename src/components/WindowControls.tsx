@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAppStore } from "../store";
 import { dockWindowAppbar, undockWindowAppbar } from "../lib/tauri";
 import { isTauriAvailable } from "../lib/browserFallback";
+import { logger } from "../utils/logger";
 
 /**
  * WindowControls — Native-style minimize / maximize / close buttons for the Tauri window,
@@ -40,16 +41,16 @@ export default function WindowControls() {
 
   const isWindows = navigator.userAgent.includes("Windows");
 
-  const appWindow = (() => {
-    if (typeof globalThis === "undefined") return null;
-    const internals = (globalThis as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
-    if (!internals) return null;
+  // Memoised so the onResized subscription below is taken once per mount,
+  // not re-armed on every render.
+  const appWindow = useMemo(() => {
+    if (!isTauriAvailable()) return null;
     try {
       return getCurrentWindow();
     } catch {
       return null;
     }
-  })();
+  }, []);
 
   const sync = useCallback(async () => {
     if (!appWindow) return;
@@ -58,8 +59,8 @@ export default function WindowControls() {
       const max = await appWindow.isMaximized();
       setIsFullscreen(fs);
       setIsMaximized(max);
-    } catch {
-      // ignore
+    } catch (err) {
+      logger.warn("window-controls", "window state sync failed", { error: String(err) });
     }
   }, [appWindow]);
 
@@ -91,8 +92,8 @@ export default function WindowControls() {
       }
       // sync state so the tooltip/icon reflect the new window state immediately
       await sync();
-    } catch {
-      // ignore
+    } catch (err) {
+      logger.warn("window-controls", "maximize toggle failed", { error: String(err) });
     }
   };
 
@@ -101,8 +102,8 @@ export default function WindowControls() {
     try {
       await appWindow.setFullscreen(!isFullscreen);
       await sync();
-    } catch {
-      // ignore
+    } catch (err) {
+      logger.warn("window-controls", "fullscreen toggle failed", { error: String(err) });
     }
   };
 
@@ -125,8 +126,9 @@ export default function WindowControls() {
         await dockWindowAppbar(edge, 300);
         setAppBarDocked(true, edge, 300);
       }
-    } catch {
+    } catch (err) {
       // AppBar not supported on this platform
+      logger.warn("window-controls", "AppBar dock failed", { error: String(err) });
     }
     setShowDockMenu(false);
   };

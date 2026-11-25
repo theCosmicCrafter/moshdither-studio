@@ -52,10 +52,34 @@ pub mod my_effect;
 
 Register in `src-tauri/src/effects/engine.rs` or a central registry.
 
-## 5. Add frontend parameter UI (if parameters exist)
+## 5. Codec-pipeline effects (`Pipeline::Codec`)
+
+`Effect::pipeline()` defaults to `Pipeline::Pixel`. Override it to
+`Pipeline::Codec` for effects that operate on the encoded bitstream rather
+than on frames — the 25 `ffglitch.*` modes are the model
+(`src-tauri/src/effects/ffglitch.rs`, a single parameterized `FfglitchMode`
+driven by a `ModeSpec` table mirroring `src/lib/ffglitchModes.ts`).
+
+A codec effect:
+
+- keeps `process_frame`/`process_video` as deliberate pass-throughs so the
+  CPU preview and frame cache see unchanged frames;
+- declares `is_temporal() == true` (corruption crosses frame boundaries);
+- is dispatched by `export_video_blocking` to `apply_codec_to_segment`,
+  which encodes the in-flight segment to a temp mp4, runs the FFglitch
+  sidecar on the file, and decodes back — inside the held export semaphore,
+  sharing the export's cancel flag;
+- is reported as `skipped` by `verify_all_effects`/conformance — the
+  frame-domain checks don't apply;
+- suppresses keyframe/LFO/audio-bind/mask controls in the UI (the
+  `effectPipeline()` helper in `src/lib/effectPipeline.ts` reads the
+  `pipeline` field from `list_effects`, falling back to the `ffglitch.`
+  id-prefix heuristic).
+
+## 6. Add frontend parameter UI (if parameters exist)
 
 Add a corresponding parameter panel component in `src/components/ParameterPanel/`.
 
-## 6. Test
+## 7. Test
 
 Run `cargo test` and `npm run tauri:dev` to verify.

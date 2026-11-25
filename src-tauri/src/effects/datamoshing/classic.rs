@@ -85,10 +85,9 @@ impl Effect for ClassicDatamosh {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let chunk_size = params
-            .get("chunk_size")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(self.chunk_size as u64) as usize;
+        let chunk_size =
+            crate::effects::params::usize_param(params, "chunk_size", self.chunk_size as usize)
+                .max(1);
         let w = input.width as usize;
         let h = input.height as usize;
         let mut out = input.data.clone();
@@ -166,21 +165,21 @@ impl Effect for ClassicDatamosh {
         // consistent whichever name a project file uses.
         let chunk_size = params
             .get("chunk_size")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .or_else(|| {
                 params
                     .get("series_size")
-                    .and_then(|v| v.as_u64())
+                    .and_then(crate::effects::params::as_uint)
                     .map(|v| v.min(30))
             })
             .unwrap_or(self.chunk_size as u64) as usize;
         let repeats = params
             .get("repeats")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::effects::params::as_uint)
             .or_else(|| {
                 params
                     .get("repeat_count")
-                    .and_then(|v| v.as_u64())
+                    .and_then(crate::effects::params::as_uint)
                     .map(|v| v.min(10))
             })
             .unwrap_or(self.repeats as u64) as usize;

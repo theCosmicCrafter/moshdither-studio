@@ -53,10 +53,7 @@ impl Effect for ChannelSwap {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let mode = params
-            .get("mode")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(self.mode as u64) as usize;
+        let mode = crate::effects::params::usize_param(params, "mode", self.mode as usize);
         let mut data = input.data.clone();
         let map: [(usize, usize, usize); 6] = [
             (0, 1, 2),
@@ -80,22 +77,6 @@ impl Effect for ChannelSwap {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

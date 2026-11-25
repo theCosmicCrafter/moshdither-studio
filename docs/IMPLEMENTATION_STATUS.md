@@ -39,7 +39,7 @@
 | 2   | Effect stack engine     | **Done** | `src-tauri/src/effects/engine.rs`               | Sequential application, Rayon parallel for non-temporal                                                                           |
 | 3   | 75+ registered effects  | **Done** | `src-tauri/src/effects/registry.rs`             | 11 categories: dithering, analog, color, composite, pixel_geo, glitch, noise, artistic, datamoshing, segmentation, audio-reactive |
 | 4   | Rayon parallelization   | **Done** | `src-tauri/src/effects/engine.rs`               | `process_frames_parallel()` for export, `par_iter` for non-temporal video segments                                                |
-| 5   | Effect browser UI       | **Done** | `src/components/EffectBrowser/EffectList.tsx`   | Category filtering, search, add to stack                                                                                          |
+| 5   | Effect browser UI       | **Done** | `src/components/EffectBrowser/CategoryAccordion.tsx` | Category accordion, search, add to stack                                                                                       |
 | 6   | Effect stack UI         | **Done** | `src/components/EffectStack/`                   | Reorder, toggle, duplicate, remove, parameter editing                                                                             |
 | 7   | Parameter types         | **Done** | `src-tauri/src/effects/types.rs`                | Slider, select, color, toggle, range parameters                                                                                   |
 | 8   | Keyframe animation      | **Done** | `src/store/index.ts`                            | Per-parameter keyframes with interpolation                                                                                        |
@@ -119,6 +119,7 @@
 | 12  | Batch export queue         | **Done** | `src/components/ExportPanel/index.tsx` | Queue management, sequential processing                 |
 | 13  | Export cancel              | **Done** | `src/store/index.ts`                   | `requestExportCancel` flag                              |
 | 14  | Metadata probing           | **Done** | `src-tauri/src/commands.rs`            | `probe_metadata` + `get_media_metadata`                 |
+| 15  | Codec-pipeline layers      | **Done** | `src-tauri/src/effects/ffglitch.rs`, `commands.rs::apply_codec_to_segment` | 25 `ffglitch.*` modes stack inside `export_video` via encode→sidecar→decode |
 
 ---
 

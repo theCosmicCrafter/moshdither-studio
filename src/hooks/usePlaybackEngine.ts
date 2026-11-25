@@ -29,9 +29,17 @@ export function playbackFps(state: { isVideo: boolean; mediaFps: number; animate
 
 export function usePlaybackEngine() {
   const isPlaying = useAppStore((s) => s.isPlaying);
+  const loopMode = useAppStore((s) => s.loopMode);
   const rafRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
   const accumulatedRef = useRef<number>(0);
+  const directionRef = useRef<1 | -1>(1);
+
+  useEffect(() => {
+    if (loopMode !== "pingpong") {
+      directionRef.current = 1;
+    }
+  }, [loopMode]);
 
   useEffect(() => {
     if (!isPlaying) {
@@ -63,7 +71,11 @@ export function usePlaybackEngine() {
         const state = useAppStore.getState();
         const speed = state.playbackSpeed;
         const frameTime = 1 / fpsNow;
-        let nextTime = state.currentTime + frameTime * speed;
+        if (state.loopMode !== "pingpong") {
+          directionRef.current = 1;
+        }
+        const signedSpeed = state.loopMode === "pingpong" ? speed * directionRef.current : speed;
+        let nextTime = state.currentTime + frameTime * signedSpeed;
 
         const start = state.inPoint ?? 0;
         const end = state.outPoint ?? state.duration;
@@ -72,10 +84,12 @@ export function usePlaybackEngine() {
           if (nextTime >= end) {
             // Reverse direction: play backwards from end
             nextTime = end - (nextTime - end);
-            // Clamp to start
+            directionRef.current = -1;
             if (nextTime < start) nextTime = start;
-          } else if (nextTime <= start && speed < 0) {
+          } else if (nextTime <= start) {
             nextTime = start + (start - nextTime);
+            directionRef.current = 1;
+            if (nextTime > end) nextTime = end;
           }
         } else if (state.loopMode === "loop") {
           if (nextTime >= end) {

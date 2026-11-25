@@ -23,8 +23,112 @@ pub enum AppError {
     #[error("SAM3 timeout: {0}")]
     Sam3Timeout(String),
 
+    /// The SAM3 sidecar's IPC transport is dead: a pipe write failed or the
+    /// bridge's stdout channel closed because the process exited. Distinct
+    /// from `Sam3Timeout` — the caller may restart the engine and retry once.
+    #[error("SAM3 pipe error: {0}")]
+    Sam3Pipe(String),
+
+    /// A shared-state mutex was poisoned by a panic on another thread. The
+    /// payload carries the full message including the lock name.
+    #[error("{0}")]
+    LockPoisoned(String),
+
+    /// A spawned blocking task failed to join (it panicked or was cancelled).
+    #[error("Task failed: {0}")]
+    TaskJoin(#[from] tokio::task::JoinError),
+
+    /// The export semaphore was closed while a command waited on it.
+    #[error("Export queue error: {0}")]
+    ExportQueue(#[from] tokio::sync::AcquireError),
+
+    /// A frame or mask arrived whose pixel count does not match its declared
+    /// dimensions, or two buffers that must be the same size are not.
+    #[error("dimension mismatch: {0}")]
+    DimensionMismatch(String),
+
+    /// The source video carries no audio stream — a domain fact the frontend
+    /// must branch on, not a generic failure. Its Display text is the stable
+    /// IPC contract the frontend compares against exactly.
+    #[error("Source video has no audio stream")]
+    NoAudioStream,
+
     #[error("{0}")]
     Generic(String),
+}
+
+impl AppError {
+    /// True when the failure means the SAM3 sidecar's IPC transport is dead
+    /// or desynchronized and the engine should be restarted and retried once.
+    ///
+    /// `Sam3Timeout` qualifies: the timed-out request can still be answered
+    /// later, and that stale response would be returned to the *next* command
+    /// on the same pipe (a `Sam3Response` parses `#[serde(default)]`, so a
+    /// mismatched body can surface as a plausible `"ok"`). Only a fresh
+    /// bridge process re-synchronizes the stream. A bridge-reported error is
+    /// NOT a transport failure.
+    pub fn is_sam3_transport_failure(&self) -> bool {
+        matches!(
+            self,
+            AppError::Io(_) | AppError::Sam3Pipe(_) | AppError::Sam3Timeout(_)
+        )
+    }
+}
+
+/// Tauri commands serialize the error payload back to the frontend; the
+/// contract is a plain string, so serialize as the Display message.
+impl serde::Serialize for AppError {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+/// A spawn_blocking/join failure reaches commands as tauri::Error: the join
+/// variant means the task died, everything else keeps its own message.
+impl From<tauri::Error> for AppError {
+    fn from(e: tauri::Error) -> Self {
+        match e {
+            tauri::Error::JoinError(j) => AppError::TaskJoin(j),
+            other => AppError::Generic(other.to_string()),
+        }
+    }
+}
+
+/// Generic poisoned-lock conversion for sites that do not need the lock's
+/// name in the message; named sites go through `commands::lock_state`.
+impl<T> From<std::sync::PoisonError<T>> for AppError {
+    fn from(e: std::sync::PoisonError<T>) -> Self {
+        AppError::LockPoisoned(format!("lock poisoned: {e}"))
+    }
+}
+
+impl From<tauri_plugin_updater::Error> for AppError {
+    fn from(e: tauri_plugin_updater::Error) -> Self {
+        AppError::Generic(e.to_string())
+    }
+}
+
+impl From<image::ImageError> for AppError {
+    fn from(e: image::ImageError) -> Self {
+        AppError::Image(e.to_string())
+    }
+}
+
+/// Helpers that still surface plain-string errors convert losslessly:
+/// `Generic` displays the message unchanged.
+impl From<String> for AppError {
+    fn from(e: String) -> Self {
+        AppError::Generic(e)
+    }
+}
+
+impl From<&str> for AppError {
+    fn from(e: &str) -> Self {
+        AppError::Generic(e.to_string())
+    }
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;

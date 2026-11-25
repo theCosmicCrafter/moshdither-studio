@@ -111,11 +111,13 @@ def scan_gate(path: str = ".") -> dict:
     results["gitleaks"] = run_gitleaks(path)
     results["bandit"] = run_bandit(path)
     
-    blocked = [k for k, v in results.items() 
-               if v.get("status") not in ("clean", "error")]
+    # A scanner that failed to run proves nothing, so it blocks the gate too.
+    blocked = [k for k, v in results.items() if v.get("status") != "clean"]
+    errored = [k for k, v in results.items() if v.get("status") == "error"]
     return {
         "gate": "BLOCKED" if blocked else "PASS",
         "blocked_by": blocked,
+        "errored": errored,
         "results": results,
     }
 

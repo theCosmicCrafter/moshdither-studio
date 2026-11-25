@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef } from "react";
 import { useAppStore } from "../../store";
 import { formatTimecode } from "../../utils/timecode";
-import { exportVideo, applyFfglitch, previewFfglitch, cancelExport, removeExportTemp } from "../../lib/tauri";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { exportVideo, applyFfglitch, previewFfglitch, cancelExport, removeExportTemp, convertFileSrc } from "../../lib/tauri";
 import { stackToRustPayload } from "../../utils/effectConverter";
 import { useBatchQueue } from "../../hooks/useBatchQueue";
 import type { WatermarkSettings } from "../../utils/watermark";
 import { listen } from "@tauri-apps/api/event";
+import { logger } from "../../utils/logger";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import ChipButton from "./ChipButton";
 import LabeledSlider from "../LabeledSlider";
@@ -151,24 +151,15 @@ export default function ExportPanel() {
     ...(ffglitchParams[ffglitchMode] ?? {}),
   });
 
-  const progressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
   const exportTriggerId = useAppStore((s) => s.exportTriggerId);
   const lastTriggerId = useRef(exportTriggerId);
   const handleExportRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   const activeEffects = effectStack.filter((e) => e.enabled);
-  const resolution = RESOLUTIONS.find((r) => r.id === resolutionId)!;
+  const resolution =
+    RESOLUTIONS.find((r) => r.id === resolutionId) ?? RESOLUTIONS[0];
   const inPoint = useAppStore((s) => s.inPoint);
   const outPoint = useAppStore((s) => s.outPoint);
-
-  useEffect(() => {
-    return () => {
-      if (progressTimerRef.current) {
-        clearInterval(progressTimerRef.current);
-      }
-    };
-  }, []);
 
   const handleBrowseWatermarkImage = async () => {
     try {
@@ -244,10 +235,6 @@ export default function ExportPanel() {
           if (!cancelling) setStatusMessage(warning);
         }
         if (stage === "error") {
-          if (progressTimerRef.current) {
-            clearInterval(progressTimerRef.current);
-            progressTimerRef.current = null;
-          }
           setExportIsRunning(false);
           setExportProgress(0);
           setStatusMessage(`Export failed: ${message ?? "unknown error"}`);
@@ -256,6 +243,7 @@ export default function ExportPanel() {
           if (cancelling) return;
           if (stage === "decoding") setStatusMessage("Decoding video...");
           else if (stage === "effects") setStatusMessage("Applying effects...");
+          else if (stage === "codec") setStatusMessage("Datamoshing (codec layer)...");
           else if (stage === "encoding") setStatusMessage("Encoding video...");
           else if (stage === "done") setStatusMessage("Export complete!");
         }
@@ -263,13 +251,28 @@ export default function ExportPanel() {
     );
 
     const state = useAppStore.getState();
+    // Use outPoint if set, otherwise use the user-set duration as the clip length
+    const trimEnd = typeof outPoint === "number" ? outPoint : state.duration;
     const stack = stackToRustPayload(
       activeEffects,
       state.activeMask,
       state.sam3Masks,
       undefined,
       state.keyframes,
-      state.audioBindings
+      state.audioBindings,
+      {
+        lfos: state.lfos,
+        effects: state.allEffects,
+        // The backend steps LFO-baked keyframes at the DECODE frame rate:
+        // the clip's own fps for video, `options.fps` for an animated still
+        // (see segment.fps in commands.rs). Passing the export fps for a
+        // video would land every baked value on the wrong transport times.
+        bake: {
+          fps: state.isVideo ? state.mediaFps : fps,
+          trimStart: inPoint ?? 0,
+          trimEnd,
+        },
+      }
     );
 
     const { width, height } = exportDimensions(
@@ -282,9 +285,6 @@ export default function ExportPanel() {
     )?.scale;
 
     const audioBakeJson = audioBakeData ? JSON.stringify(audioBakeData) : null;
-
-    // Use outPoint if set, otherwise use the user-set duration as the clip length
-    const trimEnd = typeof outPoint === "number" ? outPoint : state.duration;
 
     try {
       const outputPath = await exportVideo(filePath, stack, {
@@ -317,10 +317,6 @@ export default function ExportPanel() {
 
       const unlisten = await unlistenPromise;
       unlisten();
-      if (progressTimerRef.current) {
-        clearInterval(progressTimerRef.current);
-        progressTimerRef.current = null;
-      }
       setExportProgress(100);
       setStatusMessage(`Exported: ${outputPath}`);
       setTimeout(() => {
@@ -330,10 +326,6 @@ export default function ExportPanel() {
     } catch (err) {
       const unlisten = await unlistenPromise;
       unlisten();
-      if (progressTimerRef.current) {
-        clearInterval(progressTimerRef.current);
-        progressTimerRef.current = null;
-      }
       // Branch on the store flag, not on the message: exportVideo throws its
       // own "Export cancelled" for a dismissed Save dialog with the flag
       // unset, and that must keep reading as it does today.
@@ -367,7 +359,7 @@ export default function ExportPanel() {
     if (!exportIsRunning || exportCancelRequested) return;
     requestExportCancel();
     void cancelExport().catch((err) => {
-      console.error("Failed to cancel export on the backend:", err);
+      logger.error("export", `Failed to cancel export on the backend:`, { error: String(err) });
     });
     setStatusMessage("Cancelling… finishing the current step (a datamosh pass can take a while)");
   };
@@ -405,7 +397,26 @@ export default function ExportPanel() {
     // while a bitstream datamosh needs an ENCODED video to chew on. So the
     // render has to be encoded to an intermediate file before FFglitch sees it.
     const state = useAppStore.getState();
-    const stack = stackToRustPayload(activeEffects, state.activeMask, state.sam3Masks);
+    // Keyframes, audio bindings and baked LFOs ride the effects pre-render
+    // exactly like the main export -- passing them here is what makes an
+    // animated stack mosh the ANIMATED frames rather than the static ones.
+    const stack = stackToRustPayload(
+      activeEffects,
+      state.activeMask,
+      state.sam3Masks,
+      undefined,
+      state.keyframes,
+      state.audioBindings,
+      {
+        lfos: state.lfos,
+        effects: state.allEffects,
+        bake: {
+          fps: state.isVideo ? state.mediaFps : fps,
+          trimStart: inPoint ?? 0,
+          trimEnd: typeof outPoint === "number" ? outPoint : state.duration,
+        },
+      }
+    );
     const willRenderEffects = activeEffects.length > 0;
 
     const finalPath = await save({

@@ -94,18 +94,10 @@ impl Effect for OpticalFlow {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let alpha = params
-            .get("alpha")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(self.alpha as f64) as f32;
-        let iterations = params
-            .get("iterations")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(self.iterations as u64) as usize;
-        let warp_strength = params
-            .get("warp_strength")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(1.0) as f32;
+        let alpha = crate::effects::params::f32_param(params, "alpha", self.alpha);
+        let iterations =
+            crate::effects::params::usize_param(params, "iterations", self.iterations).min(200);
+        let warp_strength = crate::effects::params::f32_param(params, "warp_strength", 1.0);
 
         if input.frames.len() < 2 {
             return Ok(input.clone());

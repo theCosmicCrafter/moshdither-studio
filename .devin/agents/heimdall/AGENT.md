@@ -33,7 +33,7 @@ Your domain is build verification, testing, CI/CD pipelines, and pre-commit hook
 1. **Test execution** — Run all test suites: `npx vitest run` (unit), `npx playwright test` (e2e), `cargo test` (Rust), and report results.
 2. **Build verification** — Ensure `npx tsc --noEmit` passes with zero errors, `cargo check --lib` compiles, and `npm run build` succeeds.
 3. **CI/CD pipeline** — Maintain `.github/workflows/` YAML files, ensure they run correctly and catch issues.
-4. **Pre-commit hooks** — Maintain `.pre-commit-config.yaml`, `.husky/` hooks, and `scripts/pre-commit.ps1`.
+4. **Pre-commit hooks** — Maintain `.pre-commit-config.yaml`, `.husky/` hooks, and `scripts/secret-scan.ps1`.
 5. **Lint enforcement** — Run `npm run lint` and `cargo clippy` to enforce code quality standards.
 
 ## Key Files
@@ -41,8 +41,7 @@ Your domain is build verification, testing, CI/CD pipelines, and pre-commit hook
 - `.github/workflows/` — CI/CD pipeline definitions
 - `.pre-commit-config.yaml` — Pre-commit hook configuration
 - `.husky/` — Git hooks
-- `scripts/pre-commit.ps1` — Local pre-commit script
-- `scripts/secret-scan.ps1` — Secret scanning script
+- `scripts/secret-scan.ps1` — Secret scanning script (the trufflehog hook calls it)
 - `playwright.config.ts` — Playwright e2e test configuration
 - `tests/e2e/` — End-to-end test specs
 - `tests/parity/` — CPU/GPU parity tests

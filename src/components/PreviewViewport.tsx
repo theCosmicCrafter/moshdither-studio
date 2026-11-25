@@ -1,16 +1,20 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { listen } from "@tauri-apps/api/event";
 import {
+  applyEffectStack,
+  cancelExport,
+  codecPreviewPath,
   convertFileSrc,
-  generateProxy,
-  getFrameData,
-  getMediaInfo,
+  exportVideo,
   loadMediaFile,
   loadMediaFromBase64,
+  removeExportTemp,
   sam3BoxPrompt,
   sam3PointPrompt,
-  applyEffectStack,
 } from "../lib/tauri";
+import { effectPipeline } from "../lib/effectPipeline";
+import { refreshMediaState } from "../lib/mediaRefresh";
 import { useAppStore } from "../store";
 import { logger } from "../utils/logger";
 import { WebGLContext, MediaUploader, EffectChain } from "../engine/webgl2";
@@ -79,6 +83,86 @@ async function prepareSourceTexture(
     return await uploader.uploadImage(originalDataUrl);
   }
   return currentTex;
+}
+
+/** The docked mosh-preview clip. Lives outside PreviewViewport so its
+    `currentTime` subscription (per-frame during playback) re-renders only
+    this ~30-line subtree. The badge is honest on two axes: STALE when the
+    stack diverged from the render, OFF-SLICE when a paused playhead sits
+    outside the rendered window — before, scrubbing mid-render was
+    indistinguishable from a stale stack. */
+function MoshPreviewDock({
+  url,
+  stale,
+  range,
+  scopesVisible,
+  onClose,
+}: {
+  url: string;
+  stale: boolean;
+  range: { start: number; end: number } | null;
+  scopesVisible: boolean;
+  onClose: () => void;
+}) {
+  const currentTime = useAppStore((s) => s.currentTime);
+  const isPlaying = useAppStore((s) => s.isPlaying);
+  // Off-slice only matters while paused: during playback the docked clip is
+  // ambient and the playhead is outside the window almost always.
+  const offSlice =
+    !stale && !isPlaying && range !== null &&
+    (currentTime < range.start - 0.05 || currentTime > range.end + 0.05);
+  const rangeLabel = range
+    ? `rendered from ${range.start.toFixed(1)}–${range.end.toFixed(1)}s`
+    : "";
+  return (
+    <div
+      data-testid="mosh-preview-dock"
+      className={`absolute right-3 z-40 w-56 rounded-md overflow-hidden border border-accent-teal/40 bg-black/90 shadow-lg transition-opacity ${scopesVisible ? "bottom-[168px]" : "bottom-3"} ${stale ? "opacity-50" : ""}`}
+    >
+      <video
+        src={url}
+        autoPlay
+        loop
+        muted
+        playsInline
+        aria-label="Rendered mosh preview, looping"
+        className="w-full block"
+      />
+      <div className="flex items-center justify-between px-2 py-1">
+        {stale ? (
+          <span
+            className="sim-chip"
+            title="The stack changed since this render — re-render to preview the current settings"
+          >
+            STALE
+          </span>
+        ) : offSlice ? (
+          <span
+            className="sim-chip"
+            title={`Off-slice — ${rangeLabel}; the playhead is at a different part of the clip`}
+          >
+            OFF-SLICE
+          </span>
+        ) : (
+          <span
+            className="codec-chip"
+            title={`Rendered by the real export path — pixel and codec layers included${range ? ` (${rangeLabel})` : ""}`}
+          >
+            REAL MOSH
+          </span>
+        )}
+        <button
+          type="button"
+          aria-label="Close mosh preview"
+          title="Close mosh preview"
+          onClick={onClose}
+          className="material-symbols-outlined text-sm text-on-surface-variant hover:text-primary transition-colors"
+        >
+          close
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function PreviewViewport({ isDropTarget = false }: Props) {
@@ -151,6 +235,9 @@ function PreviewViewport({ isDropTarget = false }: Props) {
   const { effectStack, maskRevision } = useAppStore(
     useShallow((s) => ({ effectStack: s.effectStack, maskRevision: s.maskRevision }))
   );
+  const allEffects = useAppStore((s) => s.allEffects);
+  const exportIsRunning = useAppStore((s) => s.exportIsRunning);
+  const scopesVisible = useAppStore((s) => s.scopesVisible);
 
   // Heavy signature computation is memoised against the (immutable) effect stack.
   const cpuRenderSignature = useMemo(
@@ -166,13 +253,183 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     [effectStack]
   );
 
+  // ── Codec (FFglitch) layers: "Render mosh preview" ──────────
+  // Codec effects pass frames through in the preview — real bitstream
+  // corruption can only be seen by running the actual export path on a
+  // trimmed slice. This renders ~2s from the playhead through the real
+  // pipeline (pixel stages AND codec stages) into the mosh-preview cache
+  // dir, then loops the result as a small docked video.
+  const stackHasCodecLayer = useMemo(() => {
+    const byId = new Map(allEffects.map((m) => [m.id, m]));
+    return effectStack.some(
+      (e) =>
+        e.enabled &&
+        effectPipeline(
+          byId.get(e.effectId) ?? { id: e.effectId, category: "" }
+        ) === "codec"
+    );
+  }, [effectStack, allEffects]);
+
+  const [moshPreviewUrl, setMoshPreviewUrl] = useState<string | null>(null);
+  const [moshPreviewBusy, setMoshPreviewBusy] = useState(false);
+  const [moshPreviewStage, setMoshPreviewStage] = useState<string | null>(null);
+  // The stack signature the docked clip was rendered from — an edit after the
+  // render makes the REAL MOSH badge a lie, so it dims and says STALE.
+  const [moshPreviewSig, setMoshPreviewSig] = useState<string | null>(null);
+  // The source window the clip was rendered from — the badge can't tell a
+  // stale render from a scrubbed-away playhead without it.
+  const [moshPreviewRange, setMoshPreviewRange] = useState<{ start: number; end: number } | null>(null);
+  // Filesystem path (not the asset URL) so the temp file can be cleaned up.
+  const moshPreviewPathRef = useRef<string | null>(null);
+  const mountedRef = useRef(true);
+
+  const clearMoshPreview = useCallback(() => {
+    setMoshPreviewUrl(null);
+    setMoshPreviewSig(null);
+    setMoshPreviewRange(null);
+    const prev = moshPreviewPathRef.current;
+    moshPreviewPathRef.current = null;
+    if (prev) {
+      // Best-effort: cleanup failure must not surface as an error.
+      removeExportTemp(prev).catch((e) =>
+        logger.warn("preview", "mosh preview cleanup failed", { error: String(e) })
+      );
+    }
+  }, []);
+
+  // A rendered preview belongs to the clip it was made from — a new clip
+  // showing the old mosh would read as corruption in the wrong file.
+  useEffect(() => {
+    clearMoshPreview();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileName]);
+
+  // The docked clip goes stale the moment the stack diverges from what
+  // rendered it — same invalidation rule as an NLE's rendered preview.
+  const moshPreviewStale =
+    moshPreviewUrl !== null && moshPreviewSig !== cpuRenderSignature;
+
+  // The temp file has no owner once the component unmounts — and an in-flight
+  // render that resolves post-unmount would orphan it entirely, so completions
+  // check mountedRef and delete their own output instead of parking it.
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      const prev = moshPreviewPathRef.current;
+      moshPreviewPathRef.current = null;
+      if (prev) removeExportTemp(prev).catch(() => {});
+    };
+  }, []);
+
+  const renderMoshPreview = useCallback(async () => {
+    if (moshPreviewBusy) return;
+    const s = useAppStore.getState();
+    if (!s.isVideo || !s.filePath) {
+      s.setStatusMessage("Mosh preview needs a video clip");
+      return;
+    }
+    // The preview IS an export_video call — it holds the export semaphore —
+    // so it must own exportIsRunning. Without this, a real export started
+    // during the render queues on the permit and the finally-block's
+    // resetExport() then clears the running export's state mid-flight.
+    s.setExportIsRunning(true);
+    setMoshPreviewBusy(true);
+    setMoshPreviewStage("decoding");
+    // ~2s from the playhead is enough to read a mosh — smear needs a handful
+    // of P-frames, not the whole clip — and keeps the render at seconds,
+    // not minutes. This is the same window preview_ffglitch chose.
+    const trimStart = Math.max(
+      0,
+      Math.min(s.currentTime, Math.max(0, s.duration - 0.5))
+    );
+    const trimEnd = Math.min(s.duration, trimStart + 2);
+    const unlistenPromise = listen<{ stage: string }>(
+      "export-progress",
+      (event) => setMoshPreviewStage(event.payload.stage)
+    );
+    try {
+      const outPath = await codecPreviewPath();
+      const stack = stackToRustPayload(
+        s.effectStack,
+        s.activeMask,
+        s.sam3Masks,
+        undefined,
+        s.keyframes,
+        s.audioBindings,
+        {
+          lfos: s.lfos,
+          effects: s.allEffects,
+          // Same decode-fps grid the real export uses (see ExportPanel).
+          bake: { fps: s.mediaFps, trimStart, trimEnd },
+        }
+      );
+      const rendered = await exportVideo(s.filePath, stack, {
+        // Global mask off, per-effect masks ride along in the payload —
+        // same convention as the export panel.
+        maskB64: null,
+        outputPath: outPath,
+        trimStart,
+        trimEnd,
+        format: "mp4",
+        quality: "draft",
+        processingScale: 720,
+        fps: s.mediaFps,
+        // Same audio bake as the export panel — without it an audio-driven
+        // stack renders a mosh the export wouldn't produce.
+        audioBakeJson: s.audioBakeData ? JSON.stringify(s.audioBakeData) : null,
+      });
+      if (!mountedRef.current) {
+        // Unmounted mid-render — the unmount cleanup already ran with no
+        // path to clean, so this completion deletes its own output.
+        removeExportTemp(rendered).catch(() => {});
+        return;
+      }
+      // Replace the previous preview only once the new one rendered, so a
+      // failed re-render doesn't take the working preview down with it.
+      const prev = moshPreviewPathRef.current;
+      moshPreviewPathRef.current = rendered;
+      if (prev && prev !== rendered) {
+        removeExportTemp(prev).catch((e) =>
+          logger.warn("preview", "mosh preview cleanup failed", { error: String(e) })
+        );
+      }
+      setMoshPreviewUrl(convertFileSrc(rendered));
+      setMoshPreviewSig(cpuRenderSignature);
+      setMoshPreviewRange({ start: trimStart, end: trimEnd });
+      s.setStatusMessage("Mosh preview rendered — real export path");
+    } catch (err) {
+      if (useAppStore.getState().exportCancelRequested) {
+        s.setStatusMessage("Mosh preview cancelled");
+      } else {
+        logger.error("preview", "mosh preview render failed", { error: String(err) });
+        s.setStatusMessage(
+          `Mosh preview failed: ${err instanceof Error ? err.message : err}`
+        );
+      }
+    } finally {
+      // A rejected listen() must not skip the busy/state resets below.
+      const unlisten = await unlistenPromise.catch(() => null);
+      unlisten?.();
+      setMoshPreviewBusy(false);
+      setMoshPreviewStage(null);
+      useAppStore.getState().resetExport();
+    }
+  }, [moshPreviewBusy, cpuRenderSignature]);
+
+  const cancelMoshPreview = useCallback(() => {
+    // Same flag + command the Export panel's Cancel uses — the preview IS an
+    // export_video call, so the same AtomicBool reaches it.
+    useAppStore.getState().requestExportCancel();
+    cancelExport().catch((e) =>
+      logger.warn("preview", "mosh preview cancel failed", { error: String(e) })
+    );
+    setMoshPreviewStage("cancelling");
+  }, []);
+
   // Actions are stable references in the Zustand store, but selecting them as a
   // single object with shallow equality reduces subscription hook overhead.
   const {
-    setMediaLoaded,
-    setMediaInfo,
-    setPreviewDataUrl,
-    setOriginalDataUrl,
     setStatusMessage,
     setUseCpuPreview,
     setSam3Masks,
@@ -181,14 +438,8 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     setSam3HoverMask,
     setSam3Clicking,
     setFilePath,
-    setProxyUrl,
-    setIsVideo,
   } = useAppStore(
     useShallow((s) => ({
-      setMediaLoaded: s.setMediaLoaded,
-      setMediaInfo: s.setMediaInfo,
-      setPreviewDataUrl: s.setPreviewDataUrl,
-      setOriginalDataUrl: s.setOriginalDataUrl,
       setStatusMessage: s.setStatusMessage,
       setUseCpuPreview: s.setUseCpuPreview,
       setSam3Masks: s.setSam3Masks,
@@ -197,8 +448,6 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       setSam3HoverMask: s.setSam3HoverMask,
       setSam3Clicking: s.setSam3Clicking,
       setFilePath: s.setFilePath,
-      setProxyUrl: s.setProxyUrl,
-      setIsVideo: s.setIsVideo,
     }))
   );
 
@@ -292,15 +541,19 @@ function PreviewViewport({ isDropTarget = false }: Props) {
   }, [sam3HoverMask, sam3OverlayOpacity, sam3OverlayColor]);
 
   // ── Pan / Zoom / Split ─────────────────────────────────────
-  const handleWheel = useCallback(
-    (e: React.WheelEvent) => {
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
       const delta = e.deltaY > 0 ? -0.1 : 0.1;
-      useAppStore.getState().setZoom(zoom + delta);
-    },
-    [zoom]
-  );
+      const s = useAppStore.getState();
+      s.setZoom(s.zoom + delta);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
@@ -359,38 +612,10 @@ function PreviewViewport({ isDropTarget = false }: Props) {
   }, []);
 
   // ── Backend sync ───────────────────────────────────────────
-  const refreshPreviewFromBackend = useCallback(async () => {
-    const info = await getMediaInfo();
-    if (!info.loaded) return false;
-    const path = useAppStore.getState().filePath;
-    const isVideoFile =
-      path && /\.(mp4|avi|mov|mkv|webm|m4v|flv|wmv|mpeg|mpg)$/i.test(path);
-    setMediaLoaded(true);
-    setMediaInfo({ width: info.width, height: info.height });
-    setIsVideo(!!isVideoFile);
-    const frame = await getFrameData();
-    setPreviewDataUrl(frame);
-    setOriginalDataUrl(frame);
-    if (isVideoFile && path) {
-      try {
-        const proxy = await generateProxy(path, 1280, 28);
-        setProxyUrl(convertFileSrc(proxy));
-      } catch (err) {
-        console.warn("[Preview] Proxy generation failed:", err);
-        setProxyUrl(null);
-      }
-    } else {
-      setProxyUrl(null);
-    }
-    return true;
-  }, [
-    setMediaLoaded,
-    setMediaInfo,
-    setPreviewDataUrl,
-    setOriginalDataUrl,
-    setIsVideo,
-    setProxyUrl,
-  ]);
+  // Shared with AppLayout's File-menu/drag-drop paths (lib/mediaRefresh) —
+  // this one also carries the duration/mediaFps fix the local copy lacked,
+  // so a dropped video no longer keeps the 10 s / 30 fps defaults.
+  const refreshPreviewFromBackend = useCallback(refreshMediaState, []);
 
   const handleDrop = useCallback(
     async (e: React.DragEvent) => {
@@ -409,11 +634,13 @@ function PreviewViewport({ isDropTarget = false }: Props) {
             reader.readAsDataURL(file);
           });
           await loadMediaFromBase64(dataUrl);
-          await refreshPreviewFromBackend();
+          // A failed refresh already explained itself in the status bar —
+          // don't follow it with "Loaded".
+          if (!(await refreshPreviewFromBackend())) return;
           setStatusMessage(`Loaded: ${file.name}`);
         } catch (err) {
           setStatusMessage(`Failed to load ${file.name}: ${err}`);
-          console.error("[html5-drop] error:", err);
+          logger.error("html5-drop", `error:`, { error: String(err) });
         }
       }
     },
@@ -432,7 +659,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
         setStatusMessage("Open cancelled");
       }
     } catch (err) {
-      console.error("[PreviewViewport] handleClickOpen failed:", err);
+      logger.error("previewviewport", `handleClickOpen failed:`, { error: String(err) });
       setStatusMessage(`Open error: ${err}`);
     }
   };
@@ -709,7 +936,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     try {
       const ctx = new WebGLContext(webglCanvasRef.current, {
         onContextLost: () => {
-          console.error("[Preview] WebGL context lost");
+          logger.error("preview", `WebGL context lost`);
           setStatusMessage(
             "WebGL context lost — switched to CPU preview fallback"
           );
@@ -941,11 +1168,11 @@ function PreviewViewport({ isDropTarget = false }: Props) {
           gl.bindFramebuffer(gl.FRAMEBUFFER, null);
           const err = gl.getError();
           if (err !== gl.NO_ERROR) {
-            console.error('[Preview] WebGL error after render:', err);
+            logger.error("preview", "WebGL error after render", { error: String(err) });
           }
         }
       } catch (e) {
-        console.error('WebGL render failed:', e);
+        logger.error("preview", "WebGL render failed", { error: String(e) });
       } finally {
         isRendering = false;
         activeWebglRendersRef.current -= 1;
@@ -1047,12 +1274,12 @@ function PreviewViewport({ isDropTarget = false }: Props) {
       const renderRevision = ++cpuRenderRevisionRef.current;
       try {
         const s = useAppStore.getState();
-        const animTime = s.isPlaying ? s.currentTime : 0;
+        const animTime = s.currentTime;
         const activeStack = stackToRustPayload(s.effectStack, s.activeMask, s.sam3Masks, animTime);
         const result = await applyEffectStack(activeStack, null, scale);
         if (!cancelled && renderRevision === cpuRenderRevisionRef.current) state.setPreviewDataUrl(result);
       } catch (e) {
-        console.error('CPU preview render failed:', e);
+        logger.error("preview", "CPU preview render failed", { error: String(e) });
         if (!cancelled) {
           state.setStatusMessage(`Preview render failed: ${e}`);
         }
@@ -1107,7 +1334,7 @@ function PreviewViewport({ isDropTarget = false }: Props) {
           const result = await applyEffectStack(activeStack, null, 0.5); // Playing uses 0.5 for performance
           if (!cancelled && renderRevision === cpuRenderRevisionRef.current) s.setPreviewDataUrl(result);
         } catch (e) {
-          console.error('CPU preview render failed:', e);
+          logger.error("preview", "CPU preview render failed", { error: String(e) });
           if (!cancelled) {
             useAppStore.getState().setStatusMessage(`Preview render failed: ${e}`);
           }
@@ -1210,23 +1437,27 @@ function PreviewViewport({ isDropTarget = false }: Props) {
     setUseCpuPreview,
   ]);
 
-  let statusDotBg = "solar-bg animate-pulse-glow";
-  let statusText = "LIVE PREVIEW";
+  let statusDotBg = "bg-accent-pink";
+  let statusText = "GPU preview";
   if (useCpuPreview) {
     statusDotBg = "bg-accent-teal";
-    statusText = "EXACT";
+    // Codec layers pass through every frame-domain preview — "matches
+    // export" would claim the mosh is already baked in.
+    statusText = stackHasCodecLayer
+      ? "Exact · codec applies at export"
+      : "Exact · matches export";
   } else if (isApproximatePreview) {
     // With auto-exact on, this state lasts about half a second after you stop
     // moving, so it reports what is happening rather than asking for a click.
     statusDotBg = "bg-amber-400";
     statusText = !previewAutoExact
-      ? "APPROXIMATE (CLICK FOR EXACT)"
+      ? "≈ Approximate · click for exact"
       : isPlaying
-        ? "LIVE PREVIEW"
-        : "REFINING…";
+        ? "GPU preview"
+        : "≈ Refining…";
   } else if (stackCount > 0) {
-    statusDotBg = "bg-accent-pink animate-pulse-glow";
-    statusText = "ANIMATING";
+    statusDotBg = "bg-accent-pink";
+    statusText = "GPU preview";
   }
 
   let canvasCursor = "cursor-default";
@@ -1252,11 +1483,43 @@ function PreviewViewport({ isDropTarget = false }: Props) {
                 s.setUseCpuPreview(!s.useCpuPreview);
               }}
               className="text-label-sm font-label-sm text-on-surface-variant flex items-center gap-2 neo-flat px-3 py-1 rounded-full cursor-pointer hover:border-accent-teal/40 transition-colors"
-              title={useCpuPreview ? "Click to switch to fast WebGL GPU preview" : "Click to switch to 100% exact Rust CPU preview (exact saved output)"}
+              title={
+                useCpuPreview
+                  ? stackHasCodecLayer
+                    ? "Pixel layers are exact — codec layers pass through and apply at export. Click to switch to GPU preview"
+                    : "Click to switch to fast WebGL GPU preview"
+                  : "Click to switch to 100% exact Rust CPU preview (exact saved output)"
+              }
             >
               <span className={`w-2 h-2 rounded-full ${statusDotBg}`} />
               {statusText}
             </button>
+            {stackHasCodecLayer && isVideo && (
+              <button
+                type="button"
+                data-testid="render-mosh-preview"
+                disabled={exportIsRunning && !moshPreviewBusy}
+                onClick={moshPreviewBusy ? cancelMoshPreview : renderMoshPreview}
+                className="text-label-sm font-label-sm text-on-surface-variant flex items-center gap-2 neo-flat px-3 py-1 rounded-full cursor-pointer hover:border-accent-teal/40 transition-colors disabled:opacity-60"
+                title={
+                  moshPreviewBusy
+                    ? "Cancel the mosh preview render"
+                    : exportIsRunning
+                      ? "An export is already running"
+                      : "Codec layers can only be seen through a real export — this renders ~2s from the playhead through the actual FFglitch pipeline and loops it here"
+                }
+              >
+                <span className="material-symbols-outlined text-sm">movie</span>
+                {moshPreviewBusy
+                  ? `Cancel (${moshPreviewStage ?? "rendering"}…)`
+                  : moshPreviewUrl
+                    ? "Re-render mosh preview"
+                    : "Render mosh preview"}
+                {moshPreviewUrl && !moshPreviewBusy && (
+                  <span className="codec-chip" title="Rendered by the real export path — pixel and codec layers included">REAL MOSH</span>
+                )}
+              </button>
+            )}
             {fileName && (
               <span className="text-label-sm font-label-sm text-accent-teal/90 cursor-default hover:text-accent-teal transition-colors bg-surface/60 px-2 rounded">
                 {fileName.split(/[\\/]/).pop()?.toUpperCase() || "CLIP"}
@@ -1322,7 +1585,6 @@ function PreviewViewport({ isDropTarget = false }: Props) {
         ref={containerRef}
         aria-label="Media preview viewport"
         className={`flex-1 relative overflow-hidden ${!mediaLoaded ? "checkerboard" : "bg-black/95"} ${isFullscreen ? "bg-black" : ""} group/main ${canvasCursor}`}
-        onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
@@ -1482,6 +1744,22 @@ function PreviewViewport({ isDropTarget = false }: Props) {
                 </div>
             </div>
           </div>
+
+        {/* Docked mosh-preview clip — the real export output, looped. Sits in
+            the canvas overlay, not the media plane, so it never contaminates
+            what a screenshot or comparison would capture. Hidden during split
+            view like the other overlays, and lifted above the scopes so the
+            two overlays never stack. A child component so its per-frame
+            currentTime subscription doesn't re-render the viewport. */}
+        {moshPreviewUrl && !showBeforeAfter && (
+          <MoshPreviewDock
+            url={moshPreviewUrl}
+            stale={moshPreviewStale}
+            range={moshPreviewRange}
+            scopesVisible={scopesVisible}
+            onClose={clearMoshPreview}
+          />
+        )}
 
         {/* Drop target overlay */}
         {showDropOverlay && (

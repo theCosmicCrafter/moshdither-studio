@@ -1,7 +1,7 @@
 import { useAppStore } from "../../store";
 import { LUT_PRESETS, loadCustomLUT } from "../../engine/lut/loader";
 import { open } from "@tauri-apps/plugin-dialog";
-import { invoke } from "@tauri-apps/api/core";
+import { prepareCustomLut } from "../../lib/tauri";
 import { isTauriAvailable } from "../../lib/browserFallback";
 
 export default function LUTPanel() {
@@ -34,7 +34,7 @@ export default function LUTPanel() {
     try {
       // Copy the user-selected LUT into the app's allowed temporary directory so
       // the webview can preview it through the asset protocol.
-      const preparedPath = (await invoke("prepare_custom_lut", { path: selected })) as string;
+      const preparedPath = await prepareCustomLut(selected);
       const { previewUrl, filePath } = await loadCustomLUT(preparedPath);
       addLUTEffect(previewUrl, filePath);
       setStatusMessage(`Custom LUT loaded: ${preparedPath.split(/[/\\]/).pop()}`);
@@ -49,20 +49,16 @@ export default function LUTPanel() {
     <div className="flex flex-col h-full bg-transparent">
       {/* Header */}
       <div className="flex items-center px-4 py-3 border-b border-outline-variant/30">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded bg-surface/40 flex items-center justify-center neo-flat">
-            <span className="material-symbols-outlined text-accent-pink" style={{ fontSize: 18 }}>
-              palette
-            </span>
-          </div>
-          <div>
-            <h2 className="font-headline-md text-headline-md solar-text filigree-header ml-6 cursor-default">
-              LUT Library
-            </h2>
-            <p className="font-label-sm text-label-sm text-on-surface-variant opacity-60 pl-6">
-              {LUT_PRESETS.length} looks available
-            </p>
-          </div>
+        <div className="flex items-center gap-2.5">
+          <span className="material-symbols-outlined text-accent-pink" style={{ fontSize: 16 }}>
+            palette
+          </span>
+          <h2 className="panel-header cursor-default">
+            LUT Library
+          </h2>
+          <span className="font-label-sm text-label-sm text-on-surface-variant">
+            {LUT_PRESETS.length} looks
+          </span>
         </div>
       </div>
 

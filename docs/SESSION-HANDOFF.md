@@ -4,7 +4,267 @@ Living pass-down note. Update it at the end of every session and commit it.
 It lives in `docs/` on purpose: the previous handoff sat in `outputs/`, which is
 gitignored, so it never travelled with the branch.
 
-**Last updated:** 2026-09-10 02:30 · master `28c86bd` (PR #54 merged; CI, Security Gate and Secret Scan all green on master for the first time)
+**Last updated:** 2026-11-24 · branch `feat/phase1-look-legit` @ `ad1af0d`
+(All 3 phases of the reskin megaplan COMPLETE + deferred items + codebase
+quality sweep — all gates green, three-domain audit remediated, PSA Pass)
+
+## Reskin megaplan progress (feat/phase1-look-legit)
+
+Three phases planned against `outputs/ui-proto/mock.html`. All three are done
+and audited.
+
+**Phase 1 (`292b2db`, `e469d3f`, `7f2a158`):** token reskin in `index.css`
+(killed `--font-hand`, flattened `neo-*`/filigree, pink = single hero accent),
+`utils/effectPipeline.ts` provenance (`pixel|codec|sim`) driving `~sim`/`codec`
+chips, honest preview badge words, curated dock layout (`LAYOUT_VERSION` 5 —
+saved-layout bumps are how tab renames survive), permanent PanelRail toggles,
+layer-card kebab menu + eye toggles, fader params replacing the circular dial,
+stills collapse to a slim strip (duration + ⚡MOSH + Animate CTA).
+
+**Phase 2 (`77cafc9`, `13565e4`, `50baec7`, `b3a26fa`):** `lfos` store map +
+`resolveModulatedValue` (keyframes + LFO + audio at one resolution point →
+preview/export parity), per-param LFO editor in ParameterPanel, ParamLaneRow
+keyframe lanes in the timeline, presets persist per-entry keyframes + lfos
+(ids are regenerated on load — tracks ride on the entry), real CPU-rendered
+preset thumbnails, 5 animated-look default presets, LFO bake into per-frame
+export tracks (`effectConverter.ts`, no Rust changes).
+
+**Phase 3 (`2c3d48c`):** `Pipeline { Pixel, Codec }` as a trait method on
+`Effect` (not an EffectMeta field — avoids churning ~60 meta literals);
+`effects/ffglitch.rs` registers all 25 `ffglitch.*` modes from a `ModeSpec`
+table mirroring `src/lib/ffglitchModes.ts`; `list_effects` returns
+`ListedEffect` (flattened meta + pipeline); `export_video_blocking` dispatches
+codec entries to `apply_codec_to_segment` — encode→temp mp4→`run_ffglitch_file`
+→decode, inside the held semaphore, never re-acquiring it; `codec_preview_path`
++ PreviewViewport "Render mosh preview" runs the real export path on a ~2s
+trim into a marked temp and loops it as a docked `REAL MOSH` clip; codec
+entries suppress keyframe/LFO/audio/mask controls; verification/conformance
+report them `skipped`.
+
+**Deferred items + quality sweep (`5aa220c`, `fafc285`, `ecf037f`):**
+status-bar Export CTA; full WAI-ARIA menubar; `EffectList.tsx` +
+`utils/metadata.ts` + 4 orphaned scripts + dead Rust `config.rs`/`dsp.rs`
+deleted; number keys 1–9 drive accordion expansion (fixed `pixel_geo` vs
+`pixel_geometry` bug); `app:export` wired to `triggerExport`;
+`lib/mediaRefresh.ts` merged the two divergent refresh paths (the dropzone
+path had never set duration/fps — real latent bug).
+
+**Audit remediation (`ad1af0d`):** mosh-preview button is a real cancel path
+and owns `exportIsRunning` (was a dead button + a state-machine race); dock
+goes STALE on stack divergence and lifts above scopes; menubar roving reaches
+every item (roles added) and stops leaking Home/End to the playhead; temp
+dir hardened to 0700 on POSIX; sidecar params schema-clamped+filtered in
+`run_ffglitch_file`; `media://` uses `removeprefix` matching the Rust
+validator; dangling `scripts/pre-commit.ps1` hook repointed to
+`secret-scan.ps1`.
+
+**Traps a future session must not regress:**
+
+- **`!isVideo` ≠ still.** It's also the no-media state. The still-strip gate is
+  `!isVideo && mediaLoaded`; the empty state must keep the full transport
+  strip (timeline.spec's assertions encode this).
+- **Hidden dock tabs stay mounted** with zero-size boxes. `page.$$` finds
+  their elements; click/selectOption then starve on visibility. E2E queries
+  must be `:visible`-scoped or timeout-bounded (see `stress-test.spec.ts`).
+- **Playwright evaluate runs in an isolated world** — store-seeding via
+  `import("/src/store")` hits a second store instance after HMR rewrites
+  module URLs. Seed via DOM (file drop on `.dropzone-btn`) or reload first.
+- **`presetMatchesCurrentStack`** compares saved vs live stacks per render —
+  saved-side signatures are WeakMap-cached; keep it that way (it runs on
+  every resolved-param write during playback).
+- **`mosh-verify` must be rebuilt after touching Rust** — real-backend.spec
+  throws on a stale binary by design.
+- **The mosh preview shares the export semaphore + cancel flag** — it must
+  set `exportIsRunning` before invoking `export_video`, and `resetExport()`
+  in its finally restores exactly that. Never call export_video from a new
+  UI affordance without owning that flag.
+- **Codec spec tables live in two places** — `src/lib/ffglitchModes.ts` (UI)
+  and `src-tauri/src/effects/ffglitch.rs` (registry). Param ids/defaults must
+  match `mosh_cli.py`'s `params.get` reads; the ffglitch.rs header comment
+  and tests pin this.
+- **`run_ffglitch_file` is the sidecar funnel** — params are schema-clamped
+  there; don't bypass it with a second spawn path.
+
+**Phase 1 (`292b2db`, `e469d3f`, `7f2a158`):** token reskin in `index.css`
+(killed `--font-hand`, flattened `neo-*`/filigree, pink = single hero accent),
+`utils/effectPipeline.ts` provenance (`pixel|codec|sim`) driving `~sim`/`codec`
+chips, honest preview badge words, curated dock layout (`LAYOUT_VERSION` 5 —
+saved-layout bumps are how tab renames survive), permanent PanelRail toggles,
+layer-card kebab menu + eye toggles, fader params replacing the circular dial,
+stills collapse to a slim strip (duration + ⚡MOSH + Animate CTA).
+
+**Phase 2 (`77cafc9`, `13565e4`, `50baec7`, `b3a26fa`):** `lfos` store map +
+`resolveModulatedValue` (keyframes + LFO + audio at one resolution point →
+preview/export parity), per-param LFO editor in ParameterPanel, ParamLaneRow
+keyframe lanes in the timeline, presets persist per-entry keyframes + lfos
+(ids are regenerated on load — tracks ride on the entry), real CPU-rendered
+preset thumbnails, 5 animated-look default presets, LFO bake into per-frame
+export tracks (`effectConverter.ts`, no Rust changes).
+
+**Traps a future session must not regress:**
+
+- **`!isVideo` ≠ still.** It's also the no-media state. The still-strip gate is
+  `!isVideo && mediaLoaded`; the empty state must keep the full transport
+  strip (timeline.spec's assertions encode this).
+- **Hidden dock tabs stay mounted** with zero-size boxes. `page.$$` finds
+  their elements; click/selectOption then starve on visibility. E2E queries
+  must be `:visible`-scoped or timeout-bounded (see `stress-test.spec.ts`).
+- **Playwright evaluate runs in an isolated world** — store-seeding via
+  `import("/src/store")` hits a second store instance after HMR rewrites
+  module URLs. Seed via DOM (file drop on `.dropzone-btn`) or reload first.
+- **`presetMatchesCurrentStack`** compares saved vs live stacks per render —
+  saved-side signatures are WeakMap-cached; keep it that way (it runs on
+  every resolved-param write during playback).
+- **`mosh-verify` must be rebuilt after touching Rust** — real-backend.spec
+  throws on a stale binary by design.
+
+**Gates (this branch):** vitest 1435, tsc/eslint clean, build clean (314KB
+main/84KB gz), e2e 73 pass / 1 skip / 0 fail (real-backend + render-presets
+included — binary freshly built), secret-scan clean every commit.
+
+---
+
+
+---
+
+## Quality-plan progress (docs/moshdither-code-quality-plan.html, 74 findings)
+
+Branch protocol now in use: feature branches → `dev` → `master` at release.
+`dev` currently sits 30+ commits ahead of `master`; all gates green.
+
+**ALL 74 FINDINGS DONE.** Phase 0 (PRs #57-#62 + `quality-fixes`) merged earlier;
+phases 1-6 completed across commits `2a79e72`, `da49867`, `16407fa`, `b57dbb9`,
+`e336b2c`, `d813ee8`, `4987632`. Key architecture decisions a future session
+must not regress:
+
+- **Param reads:** `usize_param`/`u64_param`/`i64_param`/`f32_param`/`f64_param`
+  in `effects/params.rs`. `as_uint`/`as_int` survive ONLY for compound Option
+  uses (legacy-alias `or_else` chains, `filter_map`). Defaults that have no
+  struct field come from the schema via `schema_f64` (see vhs.rs pattern).
+- **process_video:** trait default in `types.rs` — do not re-add per-effect
+  copies.
+- **Subprocess cleanup:** `proc::spawn_pipe_readers` drains child pipes for
+  BOTH cancellable paths; `kill_child_and_join` (ffmpeg) joins readers on kill
+  because ffmpeg spawns no pipe-holding grandchildren; `run_cancellable`
+  (commands.rs) deliberately does NOT join on kill (mosh-cli grandchildren
+  hold inherited handles — joining deadlocks). Opposite by design.
+- **IPC:** all invoke() calls route through `src/lib/tauri.ts` adapters.
+  Errors are typed `AppError` variants; recovery checks use
+  `is_sam3_transport_failure()` / `NO_AUDIO_STREAM_ERROR`, never substring
+  matching. Frontend error logging goes through `utils/logger.ts`.
+- **sam3_bridge.py:** the five image-state globals are now `_SessionState`
+  (`session.publish`/`reset` — atomic); inference+OOM handling is `_infer()`.
+  Engine globals (model/processor/model_manager) intentionally separate.
+- **E2E:** `tests/e2e/helpers.ts` owns openApp/openPresetPanel; mock variants
+  are `buildTauriMockScript(config)` configs, not copied scripts.
+- **basic_modes.py:** the ffgac encode→raw-split→concat pipeline is shared
+  (`_ffg_to_raw_frames`/`_concat`); mode fns keep only their frame-order logic.
+
+**Rejected branch (do not merge):** `chore/recycle-legacy-sam3-rpc-backend`
+deletes the live `packages/python-backend/requirements.txt`.
+
+**Sidecar:** `src-tauri/bin/mosh-cli-x86_64-pc-windows-msvc.exe` is a real
+23.5 MB PyInstaller binary. Rebuild with
+`python scripts/build-mosh-sidecar.py` when `mosh_cli.py`/DatamoshLib changes.
+
+**Gates (last full run, dev `4987632`):** cargo test 716/716, vitest
+1323/1323, tsc/eslint clean, cargo check/fmt clean, cargo build clean,
+**full E2E suite 73 passed / 1 skipped / 0 failed** (the skip is the parity
+spec's honest skip when both render targets are unavailable), secret scan
+clean. `mosh-verify` release binary rebuilt fresh — real-backend.spec.ts
+refuses to run against a stale binary, so rebuild it after touching Rust:
+`cargo build --release --bin mosh-verify --manifest-path src-tauri/Cargo.toml`.
+
+**E2E flake note:** `openPresetPanel` waits 30s for the lazy `PresetPanel`
+chunk — a spec that reaches it before Vite's fresh-server transform finishes
+sees only the Suspense "Loading..." fallback. If a different panel helper
+ever fails the same way, give it the same budget rather than retrying.
+
+**Known noise (not bugs):** `[drag-drop] Failed to register listener {"err":{}}`
+appears in every E2E run — the mock's event registration returns `{}`; the
+app logs it and moves on. The launch console-error test passes. The
+live-preview-param-update spec prints a parity RMSD ~23 as diagnostics but
+does not gate on it.
+
+---
+
+## QC/DevOps audit remediation (38 findings, `docs/QC_DEVOPS_AUDIT_REPORT_2026-11-02.md`)
+
+**ALL 38 FINDINGS IMPLEMENTED** on top of checkpoint `18bee51` ("Pre-QC-audit
+remediation batches" — that commit holds the audit doc and the batch-D
+CI/workflow fixes; the code remediation sat uncommitted and is now finished).
+Track layout: Batch A = Rust backend/effects, Batch B = frontend, Batch C =
+Python/DatamoshLib + scripts, Batch D = CI/DevOps.
+
+Gates green on the CI toolchain: `cargo fmt` clean;
+`RUSTUP_TOOLCHAIN=1.98.0 cargo clippy --all-targets -- -D warnings` clean;
+`cargo test` 714 lib + 3 mosh_verify; `npx tsc --noEmit` clean; `eslint`
+0 warnings; `vitest` 1326/1326; `python -m compileall` + `node --check`
+clean on every edited script.
+
+Notes a future session must not regress:
+
+- **`usize_param`-returns-0 class (RUST-M2).** The audit listed a file set;
+  the sweep found the same `step_by`/`%`/`chunks`/`gen_range` panic class in
+  ~15 further sites — `png_chunk`'s `chunk_interval` was an *infinite loop*,
+  `vhs` `slice_size` likewise, `mv_effects` `gen_range(0..randomness)`
+  panics, `color_bleed` `amount*2+1` overflowed. All clamped at the use
+  site (`.max(1)` pattern from `classic.rs`) — including
+  `classic.rs::process_frame` itself, which was unguarded.
+- **Updater contract (RUST-L1/DEVOPS-C2).** `check_update`/`install_update`
+  in commands.rs now return a typed status object instead of throwing;
+  `UpdateInfo` in `src/lib/tauri.ts` is the matching contract. The plugin
+  stays unregistered in `lib.rs` BY DESIGN — it panics without a
+  `plugins.updater` config. Do not "fix" it by registering it.
+- **`blend_mask`** now validates `working`/`previous` `data.len()` against
+  `width*height*4`, not just dims/mask length.
+- **`path_guard`** rejects DOS device names (CON/NUL/AUX/PRN/COM*/LPT*) on
+  every platform — Windows resolves them even mid-path.
+- **Dock AppBar** (`window_commands.rs`): rejects `size <= 0`, clamps to
+  `1..=w.min(h)`, offsets the rect by `monitor.position()` (was always
+  monitor 0), `.max(1) as u32` on dims.
+- **`sam3_video_predictor`** routes through `with_sam3` — was the one caller
+  bypassing auto-init/auto-restart.
+- **`ExportOptions.fps`** validated (>0, finite) at the export entry — the
+  four ffmpeg-arg consumers assumed it.
+- **`EffectChain.savedPreviousTex`** is guarded by pass index
+  (`savedPreviousTexFor === i-1`) so a skipped pre-`maskBlend` pass can no
+  longer blend a stale texture; cleared on `resize()`/`reset()`.
+- **`ManifestAudioEngine`** RAF loop runs only while playing (was a
+  perpetual 60 fps wake from `loadFile`); `play()`'s promise is caught and
+  surfaced as an `error` event.
+- **`logger.ts`** serializes `Error` values via a JSON replacer
+  (name/message/stack) — `{ err }` contexts no longer log `{"err":{}}`.
+  This was the second half of the `[drag-drop] {"err":{}}` noise.
+- **`tomato.py` `bstream_until_marker`** scans a carry-over buffer so
+  markers at chunk offset 0 or straddling the 1024 boundary are found, and
+  returns `None` → callers raise `ValueError` instead of `range(None, ...)`
+  TypeError. Empty `clean` raises before the FX modes.
+- **pymosh `Index`** gained `close()`/`__enter__`/`__exit__`; the three
+  `pymodes.py` call sites use `with` (RiffIndexChunk reads lazily through
+  the handle — closing early corrupts output). `echo` returns `all_frames`
+  when `pframes` is empty (was an infinite loop until timeout).
+- **`build-sam3-sidecar.py`** builds into the temp workdir and `os.replace`s
+  into `src-tauri/bin` — a killed PyInstaller no longer leaves a truncated
+  exe for the next `tauri build` to package.
+- **`publish-sam3-addon.mjs`** refuses `--upload` when the staged sidecar's
+  sha256 ≠ `EXPECTED_SIDECAR_SHA256` parsed from `sam3_addon.rs`.
+- **Clippy debt surfaced by `--all-targets` on Rust 1.98** (prior session
+  added that flag to `ci.yml`): 8 `needless_borrow` call sites,
+  `clone_on_copy`, `needless_update`, `type_complexity` (`PipeReaders`
+  alias) fixed. Two structural lints carry scoped `#[allow]`s
+  (`motion.rs::block_diff`, `sam3_addon.rs::download_and_assemble`, both
+  `too_many_arguments`) — refactor candidates deliberately left out of a
+  remediation pass.
+
+**Full `npm run gate` result (10 gates):** 9/10 pass on first run —
+tsc, eslint, cargo fmt, vitest, cargo test, frontend build, `mosh-verify`
+release build (fresh binary, so `real-backend.spec.ts` is unblocked),
+full Playwright E2E (~390s), and app-smoke. The one failure was
+`cargo-clippy` on the **default 1.99 toolchain**: `needless_borrows_for_
+generic_args` (new lint vs CI's 1.98) on three `map_err(&pipe_err)` sites
+in `sam3_engine.rs` — fixed by dropping the borrows; clippy is now clean
+on BOTH toolchains.
 
 ---
 

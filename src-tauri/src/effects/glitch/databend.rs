@@ -60,11 +60,8 @@ impl Effect for Databend {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let amount = params
-            .get("amount")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(self.amount as f64) as f32;
-        let time = params.get("time").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
+        let amount = crate::effects::params::f32_param(params, "amount", self.amount);
+        let time = crate::effects::params::usize_param(params, "time", 0) as u32;
         let mut data = input.data.clone();
         let len = data.len();
         if len == 0 {
@@ -96,22 +93,6 @@ impl Effect for Databend {
             data,
         })
     }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
-        })
-    }
 }
 
 #[cfg(test)]
@@ -131,13 +112,7 @@ mod tests {
             .process_frame(&frame, None, &serde_json::Map::new())
             .unwrap();
 
-        let mut changed = false;
-        for i in 0..result.data.len() {
-            if result.data[i] != 128 {
-                changed = true;
-                break;
-            }
-        }
+        let changed = result.data.iter().any(|&b| b != 128);
         assert!(changed);
     }
 

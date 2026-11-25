@@ -86,16 +86,15 @@ impl Effect for FractalNoise {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let octaves = params
-            .get("octaves")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(self.octaves as u64) as u32;
-        let persistence = params
-            .get("persistence")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(self.persistence as f64) as f32;
-        let amount = params.get("amount").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
-        let time = params.get("time").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
+        // Beyond ~8 octaves the extra passes are sub-pixel noise; the cap
+        // keeps a hostile param from turning every pixel into a hang.
+        let octaves = (crate::effects::params::u64_param(params, "octaves", self.octaves as u64)
+            as u32)
+            .min(16);
+        let persistence =
+            crate::effects::params::f32_param(params, "persistence", self.persistence);
+        let amount = crate::effects::params::f32_param(params, "amount", 1.0);
+        let time = crate::effects::params::usize_param(params, "time", 0) as u32;
         let w = input.width as usize;
         let h = input.height as usize;
         let mut data = input.data.clone();
@@ -121,22 +120,6 @@ impl Effect for FractalNoise {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

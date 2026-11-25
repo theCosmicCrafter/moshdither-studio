@@ -66,17 +66,17 @@ impl Effect for BlockShift {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let bs = params
-            .get("block_size")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(self.block_size as u64) as usize;
-        let max_shift = params
-            .get("max_shift")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(self.max_shift as u64) as usize;
-        let time = params.get("time").and_then(|v| v.as_f64()).unwrap_or(0.0) as usize;
         let w = input.width as usize;
         let h = input.height as usize;
+        let bs =
+            crate::effects::params::usize_param(params, "block_size", self.block_size as usize)
+                .max(1);
+        // A shift wider than the frame clamps to its edge anyway; the cap
+        // keeps `max_shift * 2 + 1` inside usize.
+        let max_shift =
+            crate::effects::params::usize_param(params, "max_shift", self.max_shift as usize)
+                .min(w.max(h));
+        let time = crate::effects::params::usize_param(params, "time", 0);
         let mut data = vec![0u8; input.data.len()];
 
         for by in (0..h).step_by(bs) {
@@ -103,22 +103,6 @@ impl Effect for BlockShift {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

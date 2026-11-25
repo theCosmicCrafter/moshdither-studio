@@ -23,7 +23,6 @@ vi.mock("../../lib/browserFallback", () => ({
 
 import EffectBrowser from "../EffectBrowser";
 import SearchBar from "../EffectBrowser/SearchBar";
-import EffectList from "../EffectBrowser/EffectList";
 import CategoryAccordion from "../EffectBrowser/CategoryAccordion";
 
 function mockEffectMeta(id: string, name: string, category: string): EffectMeta {
@@ -68,28 +67,17 @@ describe("EffectBrowser — Search Filtering", () => {
     cleanup();
   });
 
-  it("filters effects by name in EffectList", () => {
+  it("filters effects by name", () => {
     useAppStore.getState().setAllEffects([
       mockEffectMeta("dithering.bayer", "Bayer Dither", "dithering"),
       mockEffectMeta("dithering.floyd", "Floyd Steinberg", "dithering"),
       mockEffectMeta("analog.vhs", "VHS Effect", "analog"),
     ]);
     useAppStore.getState().setSearchQuery("bayer");
-    render(<EffectList />);
+    render(<CategoryAccordion />);
     expect(screen.getByText("Bayer Dither")).toBeInTheDocument();
     expect(screen.queryByText("Floyd Steinberg")).not.toBeInTheDocument();
     expect(screen.queryByText("VHS Effect")).not.toBeInTheDocument();
-  });
-
-  it("filters effects by category name in EffectList", () => {
-    useAppStore.getState().setAllEffects([
-      mockEffectMeta("dithering.bayer", "Bayer", "dithering"),
-      mockEffectMeta("analog.vhs", "VHS", "analog"),
-    ]);
-    useAppStore.getState().setSearchQuery("analog");
-    render(<EffectList />);
-    expect(screen.getByText("VHS")).toBeInTheDocument();
-    expect(screen.queryByText("Bayer")).not.toBeInTheDocument();
   });
 
   it("shows no effects found for non-matching query", () => {
@@ -97,7 +85,7 @@ describe("EffectBrowser — Search Filtering", () => {
       mockEffectMeta("dithering.bayer", "Bayer", "dithering"),
     ]);
     useAppStore.getState().setSearchQuery("zzzzz");
-    render(<EffectList />);
+    render(<CategoryAccordion />);
     expect(screen.getByText("No effects found")).toBeInTheDocument();
   });
 
@@ -109,15 +97,14 @@ describe("EffectBrowser — Search Filtering", () => {
     expect(useAppStore.getState().searchQuery).toBe("");
   });
 
-  it("search overrides category filter in EffectList", () => {
+  it("search ignores which category is expanded", () => {
     useAppStore.getState().setAllEffects([
       mockEffectMeta("dithering.bayer", "Bayer", "dithering"),
       mockEffectMeta("analog.vhs", "VHS", "analog"),
     ]);
-    useAppStore.getState().setActiveCategory("dithering");
     useAppStore.getState().setSearchQuery("vhs");
-    render(<EffectList />);
-    // Even though activeCategory is dithering, search should show VHS
+    render(<CategoryAccordion />);
+    // Even though Dither is the expanded category, search shows VHS
     expect(screen.getByText("VHS")).toBeInTheDocument();
     expect(screen.queryByText("Bayer")).not.toBeInTheDocument();
   });
@@ -147,17 +134,37 @@ describe("EffectBrowser — Category Switching", () => {
     cleanup();
   });
 
-  it("shows effects for active category in EffectList", () => {
+  it("expands the category written to activeCategory (number-key shortcut path)", () => {
     useAppStore.getState().setAllEffects([
       mockEffectMeta("dithering.bayer", "Bayer", "dithering"),
       mockEffectMeta("analog.vhs", "VHS", "analog"),
       mockEffectMeta("glitch.pixel_sort", "Pixel Sort", "glitch"),
     ]);
-    useAppStore.getState().setActiveCategory("analog");
-    render(<EffectList />);
+    render(<CategoryAccordion />);
+    expect(screen.queryByText("VHS")).not.toBeInTheDocument();
+    // The keyboard shortcut writes activeCategory; the accordion must follow
+    act(() => {
+      useAppStore.getState().setActiveCategory("analog");
+    });
     expect(screen.getByText("VHS")).toBeInTheDocument();
     expect(screen.queryByText("Bayer")).not.toBeInTheDocument();
     expect(screen.queryByText("Pixel Sort")).not.toBeInTheDocument();
+  });
+
+  it("re-expands on a repeated write of the same category", () => {
+    useAppStore.getState().setAllEffects([
+      mockEffectMeta("dithering.bayer", "Bayer", "dithering"),
+    ]);
+    render(<CategoryAccordion />);
+    // Collapse the active category manually
+    fireEvent.click(screen.getByText("Dither"));
+    expect(screen.queryByText("Bayer")).not.toBeInTheDocument();
+    // A repeated shortcut press ("" then the id) must still re-expand it
+    act(() => {
+      useAppStore.getState().setActiveCategory("");
+      useAppStore.getState().setActiveCategory("dithering");
+    });
+    expect(screen.getByText("Bayer")).toBeInTheDocument();
   });
 
   it("CategoryAccordion expands and collapses categories", () => {
@@ -194,16 +201,6 @@ describe("EffectBrowser — Effect Selection", () => {
     cleanup();
   });
 
-  it("adds effect to stack on click in EffectList", () => {
-    const meta = mockEffectMeta("dithering.bayer", "Bayer", "dithering");
-    useAppStore.getState().setAllEffects([meta]);
-    useAppStore.getState().setActiveCategory("dithering");
-    render(<EffectList />);
-    fireEvent.click(screen.getByText("Bayer"));
-    expect(useAppStore.getState().effectStack.length).toBe(1);
-    expect(useAppStore.getState().effectStack[0].effectId).toBe("dithering.bayer");
-  });
-
   it("adds effect to stack on click in CategoryAccordion", () => {
     const meta = mockEffectMeta("dithering.bayer", "Bayer", "dithering");
     useAppStore.getState().setAllEffects([meta]);
@@ -213,43 +210,23 @@ describe("EffectBrowser — Effect Selection", () => {
     fireEvent.click(screen.getByText("Dither"));
     fireEvent.click(screen.getByText("Bayer"));
     expect(useAppStore.getState().effectStack.length).toBe(1);
-  });
-
-  it("shows in-stack indicator after adding", () => {
-    const meta = mockEffectMeta("dithering.bayer", "Bayer", "dithering");
-    useAppStore.getState().setAllEffects([meta]);
-    useAppStore.getState().setActiveCategory("dithering");
-    useAppStore.getState().addToStack(meta);
-    render(<EffectList />);
-    expect(screen.getByText(/in stack/)).toBeInTheDocument();
-  });
-
-  it("can add multiple different effects", () => {
-    useAppStore.getState().setAllEffects([
-      mockEffectMeta("dithering.bayer", "Bayer", "dithering"),
-      mockEffectMeta("analog.vhs", "VHS", "analog"),
-    ]);
-    useAppStore.getState().setActiveCategory("dithering");
-    render(<EffectList />);
-    fireEvent.click(screen.getByText("Bayer"));
-    // Mutating the store while a component is mounted must be wrapped in act
-    act(() => {
-      useAppStore.getState().setActiveCategory("analog");
-    });
-    // Need to re-render to pick up new state
-    cleanup();
-    render(<EffectList />);
-    fireEvent.click(screen.getByText("VHS"));
-    expect(useAppStore.getState().effectStack.length).toBe(2);
+    expect(useAppStore.getState().effectStack[0].effectId).toBe("dithering.bayer");
   });
 
   it("sets selectedStackId when adding to stack", () => {
     const meta = mockEffectMeta("dithering.bayer", "Bayer", "dithering");
     useAppStore.getState().setAllEffects([meta]);
-    useAppStore.getState().setActiveCategory("dithering");
-    render(<EffectList />);
-    fireEvent.click(screen.getByText("Bayer"));
+    render(<CategoryAccordion />);
+    fireEvent.click(screen.getByText("Bayer")); // Dither expands by default
     expect(useAppStore.getState().selectedStackId).not.toBeNull();
+  });
+
+  it("shows in-stack indicator after adding", () => {
+    const meta = mockEffectMeta("dithering.bayer", "Bayer", "dithering");
+    useAppStore.getState().setAllEffects([meta]);
+    useAppStore.getState().addToStack(meta);
+    render(<CategoryAccordion />); // Dither expands by default
+    expect(screen.getByText(/added/)).toBeInTheDocument();
   });
 
   it("full EffectBrowser renders and allows adding effects", () => {
@@ -276,63 +253,7 @@ describe("EffectBrowser — Media Type Compatibility Indicator", () => {
     cleanup();
   });
 
-  it("marks a video-only effect as incompatible in EffectList when a still image is loaded", () => {
-    useAppStore.getState().setAllEffects([
-      mockVideoOnlyEffectMeta("datamoshing.bloom", "Bloom", "datamoshing"),
-    ]);
-    useAppStore.getState().setActiveCategory("datamoshing");
-    useAppStore.getState().setMediaLoaded(true);
-    useAppStore.getState().setIsVideo(false);
-    render(<EffectList />);
-    expect(screen.getAllByTitle(VIDEO_ONLY_TITLE).length).toBeGreaterThan(0);
-  });
-
-  it("does not mark anything incompatible when no media is loaded", () => {
-    useAppStore.getState().setAllEffects([
-      mockVideoOnlyEffectMeta("datamoshing.bloom", "Bloom", "datamoshing"),
-    ]);
-    useAppStore.getState().setActiveCategory("datamoshing");
-    // mediaLoaded defaults to false via resetStore
-    render(<EffectList />);
-    expect(screen.queryByTitle(VIDEO_ONLY_TITLE)).not.toBeInTheDocument();
-  });
-
-  it("does not mark anything incompatible when a video is loaded", () => {
-    useAppStore.getState().setAllEffects([
-      mockVideoOnlyEffectMeta("datamoshing.bloom", "Bloom", "datamoshing"),
-    ]);
-    useAppStore.getState().setActiveCategory("datamoshing");
-    useAppStore.getState().setMediaLoaded(true);
-    useAppStore.getState().setIsVideo(true);
-    render(<EffectList />);
-    expect(screen.queryByTitle(VIDEO_ONLY_TITLE)).not.toBeInTheDocument();
-  });
-
-  it("does not mark effects that support images as incompatible", () => {
-    useAppStore.getState().setAllEffects([
-      mockEffectMeta("dithering.bayer", "Bayer", "dithering"), // media_type: "both"
-    ]);
-    useAppStore.getState().setActiveCategory("dithering");
-    useAppStore.getState().setMediaLoaded(true);
-    useAppStore.getState().setIsVideo(false);
-    render(<EffectList />);
-    expect(screen.queryByTitle(VIDEO_ONLY_TITLE)).not.toBeInTheDocument();
-  });
-
-  it("still allows adding a video-only effect to the stack while a still image is loaded (visual hint only, not a hard block)", () => {
-    useAppStore.getState().setAllEffects([
-      mockVideoOnlyEffectMeta("datamoshing.bloom", "Bloom", "datamoshing"),
-    ]);
-    useAppStore.getState().setActiveCategory("datamoshing");
-    useAppStore.getState().setMediaLoaded(true);
-    useAppStore.getState().setIsVideo(false);
-    render(<EffectList />);
-    fireEvent.click(screen.getByText("Bloom"));
-    expect(useAppStore.getState().effectStack.length).toBe(1);
-    expect(useAppStore.getState().effectStack[0].effectId).toBe("datamoshing.bloom");
-  });
-
-  it("marks a video-only effect as incompatible in CategoryAccordion when a still image is loaded", () => {
+  it("marks a video-only effect as incompatible when a still image is loaded", () => {
     useAppStore.getState().setAllEffects([
       mockVideoOnlyEffectMeta("datamoshing.bloom", "Bloom", "datamoshing"),
     ]);
@@ -340,7 +261,51 @@ describe("EffectBrowser — Media Type Compatibility Indicator", () => {
     useAppStore.getState().setMediaLoaded(true);
     useAppStore.getState().setIsVideo(false);
     render(<CategoryAccordion />);
-    fireEvent.click(screen.getByText("Mosh"));
+    fireEvent.click(screen.getByText("Datamosh"));
     expect(screen.getAllByTitle(VIDEO_ONLY_TITLE).length).toBeGreaterThan(0);
+  });
+
+  it("does not mark anything incompatible when no media is loaded", () => {
+    useAppStore.getState().setAllEffects([
+      mockVideoOnlyEffectMeta("datamoshing.bloom", "Bloom", "datamoshing"),
+    ]);
+    useAppStore.getState().setActiveCategory("datamoshing"); // mounts expanded
+    // mediaLoaded defaults to false via resetStore
+    render(<CategoryAccordion />);
+    expect(screen.queryByTitle(VIDEO_ONLY_TITLE)).not.toBeInTheDocument();
+  });
+
+  it("does not mark anything incompatible when a video is loaded", () => {
+    useAppStore.getState().setAllEffects([
+      mockVideoOnlyEffectMeta("datamoshing.bloom", "Bloom", "datamoshing"),
+    ]);
+    useAppStore.getState().setActiveCategory("datamoshing"); // mounts expanded
+    useAppStore.getState().setMediaLoaded(true);
+    useAppStore.getState().setIsVideo(true);
+    render(<CategoryAccordion />);
+    expect(screen.queryByTitle(VIDEO_ONLY_TITLE)).not.toBeInTheDocument();
+  });
+
+  it("does not mark effects that support images as incompatible", () => {
+    useAppStore.getState().setAllEffects([
+      mockEffectMeta("dithering.bayer", "Bayer", "dithering"), // media_type: "both"
+    ]);
+    useAppStore.getState().setMediaLoaded(true);
+    useAppStore.getState().setIsVideo(false);
+    render(<CategoryAccordion />); // Dither expands by default
+    expect(screen.queryByTitle(VIDEO_ONLY_TITLE)).not.toBeInTheDocument();
+  });
+
+  it("still allows adding a video-only effect to the stack while a still image is loaded (visual hint only, not a hard block)", () => {
+    useAppStore.getState().setAllEffects([
+      mockVideoOnlyEffectMeta("datamoshing.bloom", "Bloom", "datamoshing"),
+    ]);
+    useAppStore.getState().setActiveCategory("datamoshing"); // mounts expanded
+    useAppStore.getState().setMediaLoaded(true);
+    useAppStore.getState().setIsVideo(false);
+    render(<CategoryAccordion />);
+    fireEvent.click(screen.getByText("Bloom"));
+    expect(useAppStore.getState().effectStack.length).toBe(1);
+    expect(useAppStore.getState().effectStack[0].effectId).toBe("datamoshing.bloom");
   });
 });

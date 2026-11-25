@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { getLogPath } from "../lib/tauri";
 import { logger } from "../utils/logger";
 
 interface Props {
@@ -44,16 +45,9 @@ export class ErrorBoundary extends Component<Props, State> {
     // Surface where the log is. A crash screen that says "try resetting the
     // view" and nothing else leaves the user with no way to report what
     // happened, and the log they would need is in a directory nothing names.
-    const internals = (globalThis as Record<string, unknown>).__TAURI_INTERNALS__ as
-      | { invoke?: (cmd: string, args?: unknown) => Promise<unknown> }
-      | undefined;
-    internals?.invoke?.("get_log_path")
-      .then((p) => {
-        if (typeof p === "string") this.setState({ logPath: p });
-      })
-      .catch(() => {
-        /* no log path available: the crash screen simply omits it */
-      });
+    getLogPath().then((p) => {
+      if (p) this.setState({ logPath: p });
+    });
   }
 
   private reset = (): void => {

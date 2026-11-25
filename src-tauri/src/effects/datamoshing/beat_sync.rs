@@ -25,14 +25,17 @@ fn beat_frames(params: &ParameterValues) -> Vec<usize> {
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|v| v.as_u64().map(|n| n as usize))
+                .filter_map(|v| crate::effects::params::as_uint(v).map(|n| n as usize))
                 .collect()
         })
         .unwrap_or_default()
 }
 
 fn u64_param(params: &ParameterValues, key: &str, fallback: u64) -> u64 {
-    params.get(key).and_then(|v| v.as_u64()).unwrap_or(fallback)
+    params
+        .get(key)
+        .and_then(crate::effects::params::as_uint)
+        .unwrap_or(fallback)
 }
 
 /// Beat-triggered frame hold: freezes the picture for a moment on each beat.

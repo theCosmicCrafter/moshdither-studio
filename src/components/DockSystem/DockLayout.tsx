@@ -25,9 +25,33 @@ import { ErrorBoundary } from "../ErrorBoundary";
  * 3: the Timeline left the dock and became the transport strip under the
  *    workspace. A version-2 layout would restore a bottom tabset asking for
  *    a "timeline" component that no longer exists.
+ * 4: panel labels were renamed for the reskin ("Effects"→"Library",
+ *    "Stack"→"Layers") and tab names are baked into saved layout JSON — a
+ *    version-3 layout would keep showing the old names forever.
  */
 const LAYOUT_STORAGE_KEY = "moshdither.dockLayout";
-const LAYOUT_VERSION = 3;
+const LAYOUT_VERSION = 5;
+
+/** Component ids of every tab node currently docked in `model`. */
+function collectDockedTabIds(model: Model): string[] {
+  const ids: string[] = [];
+  model.visitNodes((n) => {
+    if (n.getType() === "tab") {
+      const component = (n as TabNode).getComponent() as string | undefined;
+      if (component) ids.push(component);
+    }
+  });
+  return ids;
+}
+
+/** Run `fn` on every TabNode in `model` whose component id is `panelId`. */
+function forEachTabWithId(model: Model, panelId: string, fn: (tab: TabNode) => void): void {
+  model.visitNodes((n) => {
+    if (n.getType() === "tab" && (n as TabNode).getComponent() === panelId) {
+      fn(n as TabNode);
+    }
+  });
+}
 
 function loadSavedLayout(): Model | null {
   try {
@@ -77,11 +101,7 @@ export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) 
     setModel(newModel);
     
     // Initial sync
-    const activePanels: string[] = [];
-    newModel.visitNodes((n) => {
-      if (n.getType() === "tab") activePanels.push((n as TabNode).getComponent() as string);
-    });
-    useAppStore.getState().setDockedPanels(activePanels);
+    useAppStore.getState().setDockedPanels(collectDockedTabIds(newModel));
   }, []);
 
 
@@ -149,10 +169,8 @@ export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) 
     if (!model) return;
     
     let exists = false;
-    model.visitNodes((n) => {
-      if (n.getType() === "tab" && (n as TabNode).getComponent() === panelId) {
-        exists = true;
-      }
+    forEachTabWithId(model, panelId, () => {
+      exists = true;
     });
 
     if (exists) return;
@@ -160,12 +178,17 @@ export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) 
     const panelMeta = PANEL_REGISTRY.find((p) => p.id === panelId);
     if (!panelMeta) return;
 
+    // Layouts saved before LAYOUT_VERSION 5 can have a destroyed zone
+    // (empty tabsets were tidied away); center-zone is enableClose:false so
+    // it always survives. Land the panel there rather than no-op.
+    const preferred = panelMeta.defaultZone === "right" ? "right-zone" : "left-zone";
+    const targetZone = model.getNodeById(preferred) ? preferred : "center-zone";
     model.doAction(Actions.addNode({
       type: "tab",
       id: panelId,
       component: panelId,
       name: panelMeta.label
-    }, panelMeta.defaultZone === "right" ? "right-zone" : "left-zone", DockLocation.CENTER, -1));
+    }, targetZone, DockLocation.CENTER, -1));
   };
 
   // PanelRail's icons are `draggable` with directional hints suggesting a
@@ -177,20 +200,15 @@ export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) 
   // the current drag id and the live set of docked panels.
   const onExternalDrag = () => {
     if (!model) return undefined;
-    const dockedComponentIds = new Set<string>();
-    model.visitNodes((n) => {
-      if (n.getType() === "tab") dockedComponentIds.add((n as TabNode).getComponent() as string);
-    });
+    const dockedComponentIds = new Set<string>(collectDockedTabIds(model));
     const target = resolveExternalDrag(getActiveDragPanelId(), dockedComponentIds);
     return target && { ...target, onDrop: () => setActiveDragPanelId(null) };
   };
 
   const removePanel = (panelId: string) => {
     if (!model) return;
-    model.visitNodes((n) => {
-      if (n.getType() === "tab" && (n as TabNode).getComponent() === panelId) {
-        model.doAction(Actions.deleteTab(n.getId()));
-      }
+    forEachTabWithId(model, panelId, (tab) => {
+      model.doAction(Actions.deleteTab(tab.getId()));
     });
   };
 
@@ -202,11 +220,7 @@ export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) 
       clearSavedLayout();
       const newModel = Model.fromJson(DEFAULT_LAYOUT);
       setModel(newModel);
-      const activePanels: string[] = [];
-      newModel.visitNodes((n) => {
-        if (n.getType() === "tab") activePanels.push((n as TabNode).getComponent() as string);
-      });
-      useAppStore.getState().setDockedPanels(activePanels);
+      useAppStore.getState().setDockedPanels(collectDockedTabIds(newModel));
     } else if (layoutTrigger.action === "add" && layoutTrigger.panelId) {
       addPanel(layoutTrigger.panelId);
     } else if (layoutTrigger.action === "remove" && layoutTrigger.panelId) {
@@ -225,7 +239,7 @@ export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) 
   if (!model) return null;
 
   return (
-    <DockContext.Provider value={{ model, addPanel }}>
+    <DockContext.Provider value={{ model, addPanel, removePanel }}>
       <div
         className={`dock-layout flex flex-row h-full w-full min-h-0 overflow-hidden theme-${theme}`}
         style={{ ["--panel-opacity" as string]: panelOpacity }}
@@ -237,15 +251,7 @@ export default function DockLayout({ isDropTarget }: { isDropTarget: boolean }) 
             factory={factory}
             onExternalDrag={onExternalDrag}
             onModelChange={(m) => {
-              const activePanels: string[] = [];
-              m.visitNodes((n) => {
-                if (n.getType() === "tab") {
-                  const tabNode = n as TabNode;
-                  const componentStr = tabNode.getComponent() as string;
-                  if (componentStr) activePanels.push(componentStr);
-                }
-              });
-              useAppStore.getState().setDockedPanels(activePanels);
+              useAppStore.getState().setDockedPanels(collectDockedTabIds(m));
               saveLayout(m);
             }}
           />

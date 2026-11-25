@@ -363,7 +363,7 @@ impl Effect for OrderedDitherVariants {
             .get("matrix")
             .and_then(|v| v.as_str())
             .unwrap_or("clustereddot4x4");
-        let levels = params.get("levels").and_then(|v| v.as_f64()).unwrap_or(2.0) as u32;
+        let levels = crate::effects::params::usize_param(params, "levels", 2) as u32;
         let levels = levels.max(2);
 
         let (matrix, rows, cols) = get_matrix(matrix_name);
@@ -400,22 +400,6 @@ impl Effect for OrderedDitherVariants {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

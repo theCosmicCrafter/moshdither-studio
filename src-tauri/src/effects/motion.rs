@@ -4,8 +4,6 @@
 //! and dense optical flow helpers (Horn-Schunck). All functions work on RGBA
 //! `Frame` buffers and are designed to be called from effect implementations.
 
-#![allow(clippy::too_many_arguments)]
-
 use crate::effects::types::Frame;
 
 /// A 2D motion vector.
@@ -94,6 +92,7 @@ pub fn block_match_motion_field(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn block_diff(
     prev: &Frame,
     curr: &Frame,
@@ -184,7 +183,6 @@ fn to_luma(frame: &Frame) -> Vec<f32> {
 /// # Arguments
 /// * `alpha` - smoothness weight (typical 0.1 - 1.0)
 /// * `iterations` - number of iterations (typical 10 - 100)
-/// * `blur_sigma` - optional pre-blur sigma for noise reduction (0.0 = disabled)
 pub fn horn_schunck(
     prev: &Frame,
     curr: &Frame,

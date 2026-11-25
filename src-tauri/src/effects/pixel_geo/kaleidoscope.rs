@@ -48,10 +48,8 @@ impl Effect for Kaleidoscope {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let segments = params
-            .get("segments")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(self.segments as u64) as u32;
+        let segments = crate::effects::params::u64_param(params, "segments", self.segments as u64)
+            .max(1) as u32;
         let w = input.width as usize;
         let h = input.height as usize;
         let cx = w / 2;
@@ -84,22 +82,6 @@ impl Effect for Kaleidoscope {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

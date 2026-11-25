@@ -3,6 +3,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import type { EffectMeta } from "../store";
 import type { WatermarkSettings } from "../utils/watermark";
 import { getFallbackEffects, isTauriAvailable } from "./browserFallback";
+import { logger } from "../utils/logger";
 
 export { convertFileSrc };
 
@@ -425,23 +426,27 @@ export async function exportVideo(
   const resolvedFormat = options.outputPath
     ? options.format ?? null
     : formatFromPath(path, options.format) ?? null;
+  // The backend takes the required parameters positionally and the optional
+  // ones as one ExportOptions struct (`options` in the invoke).
   return invoke("export_video", {
     sourcePath,
     outputPath: path,
     stack,
-    maskB64: options.maskB64 ?? null,
-    codec: options.codec ?? null,
-    fps: options.fps ?? null,
-    width: options.width ?? null,
-    height: options.height ?? null,
-    audioBakeJson: options.audioBakeJson ?? null,
-    watermark: options.watermark ?? null,
-    trimStart: options.trimStart ?? null,
-    trimEnd: options.trimEnd ?? null,
-    format: resolvedFormat,
-    quality: options.quality ?? null,
-    includeAudio: options.includeAudio ?? null,
-    processingScale: options.processingScale ?? null,
+    options: {
+      maskB64: options.maskB64 ?? null,
+      codec: options.codec ?? null,
+      fps: options.fps ?? null,
+      width: options.width ?? null,
+      height: options.height ?? null,
+      audioBakeJson: options.audioBakeJson ?? null,
+      watermark: options.watermark ?? null,
+      trimStart: options.trimStart ?? null,
+      trimEnd: options.trimEnd ?? null,
+      format: resolvedFormat,
+      quality: options.quality ?? null,
+      includeAudio: options.includeAudio ?? null,
+      processingScale: options.processingScale ?? null,
+    },
   });
 }
 
@@ -567,6 +572,18 @@ export async function applyFfglitch(
 }
 
 /**
+ * A unique output path inside the mosh-preview cache dir for the "Render
+ * mosh preview" affordance. The caller runs a normal (trimmed, downscaled)
+ * exportVideo into it — codec layers and all — and plays the file back via
+ * convertFileSrc. The name carries the `.moshdither-fx-tmp.` marker so
+ * removeExportTemp can clean it up.
+ */
+export async function codecPreviewPath(): Promise<string> {
+  if (!isTauriAvailable()) throw new Error("Mosh preview needs the desktop app.");
+  return invoke("codec_preview_path");
+}
+
+/**
  * Delete an intermediate render left by a two-stage export. The backend refuses
  * anything that is not one of its own `.moshdither-fx-tmp.` files, so this
  * cannot remove a user's media. Cleanup failure is not worth failing an
@@ -601,6 +618,10 @@ export interface EffectVerificationResult {
   category: string;
   checks: VerificationChecks;
   overall_pass: boolean;
+  /** Codec-pipeline effects are reported skipped rather than run through the
+   *  frame-domain checks — their pass-throughs would only fail for the wrong
+   *  reason. */
+  skipped?: boolean;
   error_message: string | null;
   duration_ms: number;
 }
@@ -609,6 +630,7 @@ export interface VerificationReport {
   total_effects: number;
   passed: number;
   failed: number;
+  skipped?: number;
   results: EffectVerificationResult[];
   summary: string;
   timestamp: string;
@@ -699,4 +721,55 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
 export async function installUpdate(): Promise<string> {
   if (!isTauriAvailable()) return "up to date";
   return invoke<string>("install_update");
+}
+
+/**
+ * Display text of `AppError::NoAudioStream` — the stable IPC contract for
+ * "the source video carries no audio stream". Compare with `===`, never
+ * `includes`: a generic ffmpeg stderr could contain the same words.
+ */
+export const NO_AUDIO_STREAM_MESSAGE = "Source video has no audio stream";
+
+// ── File IO ──────────────────────────────────────────────────
+
+/**
+ * Reads a UTF-8 file through the path-guarded backend reader. No Tauri
+ * guard on purpose: a silent no-op read would be indistinguishable from an
+ * empty file, so callers outside the shell should see invoke() reject.
+ */
+export async function readFile(path: string): Promise<string> {
+  return invoke<string>("read_file", { path });
+}
+
+/**
+ * Writes `contents` to `path` through the path-guarded backend writer.
+ * Deliberately unguarded for the same reason as {@link readFile} — a save
+ * that silently did nothing would report success while losing work.
+ */
+export async function writeFile(path: string, contents: string): Promise<void> {
+  await invoke("save_file", { path, contents });
+}
+
+/**
+ * Copies a user-picked LUT into the app's allowed temporary directory so the
+ * webview can preview it through the asset protocol. Returns the prepared
+ * path inside that directory.
+ */
+export async function prepareCustomLut(path: string): Promise<string> {
+  return invoke<string>("prepare_custom_lut", { path });
+}
+
+/**
+ * Absolute path of the shared log file, or `null` outside the Tauri shell.
+ * Null — not a rejection — because callers like the crash screen only show
+ * the path when one exists and have no recovery to run when there is none.
+ */
+export async function getLogPath(): Promise<string | null> {
+  if (!isTauriAvailable()) return null;
+  try {
+    return await invoke<string>("get_log_path");
+  } catch (err) {
+    logger.warn("ipc", "get_log_path failed", { error: String(err) });
+    return null;
+  }
 }

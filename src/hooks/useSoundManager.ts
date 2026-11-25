@@ -3,6 +3,8 @@
  * Matches the Stitch design's SoundManager class.
  */
 
+import { audioContextCtor } from "../engine/audio/AudioEngine";
+
 class SoundManager {
   private ctx: AudioContext | null = null;
   private enabled = true;
@@ -11,7 +13,7 @@ class SoundManager {
     if (!this.enabled) return null;
     if (!this.ctx) {
       try {
-        this.ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+        this.ctx = new (audioContextCtor())();
       } catch {
         this.enabled = false;
         return null;

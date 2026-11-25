@@ -1,22 +1,10 @@
 import { expect, test } from "@playwright/test";
 import { tauriMockScript } from "./mocks/tauri-mock";
+import { openApp } from "./helpers";
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(tauriMockScript);
-  await page.goto("/", { waitUntil: "domcontentloaded" });
-  await page.waitForSelector("header, [data-testid='toolbar']", { timeout: 15000 });
-  await page
-    .locator("text=Discard")
-    .click({ timeout: 2000 })
-    .catch(() => {});
-  await page
-    .locator("text=Skip")
-    .click({ timeout: 2000 })
-    .catch(() => {});
-  await page
-    .locator("text=Get Started")
-    .click({ timeout: 2000 })
-    .catch(() => {});
+  await openApp(page);
 });
 
 // Verify is hidden from the panel rail by default (store: panelVisibility.verify
@@ -30,7 +18,7 @@ async function openVerificationPanel(page: import("@playwright/test").Page) {
     await page.getByRole("button", { name: /View/ }).first().click();
     await page.getByRole("button", { name: /Diagnostics Panel/ }).click();
     await page.keyboard.press("Escape");
-    await page.getByTitle("Add Verify to left").click();
+    await page.getByTitle("Show Verify").click();
   }
   await page.getByRole("tab", { name: "Verify" }).click();
   // Scoped by the run control: the results table only exists after a run
@@ -47,14 +35,14 @@ test("diagnostics panel is hidden from the rail until enabled in the View menu",
 }) => {
   // Pins the deliberate default: this panel should not compete for rail space
   // with the tools an end user needs day to day.
-  await expect(page.getByTitle("Add Verify to left")).toHaveCount(0);
+  await expect(page.getByTitle("Show Verify")).toHaveCount(0);
   await expect(page.getByRole("tab", { name: "Verify" })).toHaveCount(0);
 
   await page.getByRole("button", { name: /View/ }).first().click();
   await page.getByRole("button", { name: /Diagnostics Panel/ }).click();
   await page.keyboard.press("Escape");
 
-  await expect(page.getByTitle("Add Verify to left")).toBeVisible();
+  await expect(page.getByTitle("Show Verify")).toBeVisible();
 });
 
 test("verification panel offers a run control and no results until it is used", async ({

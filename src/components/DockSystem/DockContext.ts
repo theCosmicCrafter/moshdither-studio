@@ -4,11 +4,13 @@ import type { Model } from "flexlayout-react";
 export interface DockContextType {
   model: Model | null;
   addPanel: (panelId: string) => void;
+  removePanel: (panelId: string) => void;
 }
 
 export const DockContext = createContext<DockContextType>({
   model: null,
   addPanel: () => {},
+  removePanel: () => {},
 });
 
 export function useDock() {

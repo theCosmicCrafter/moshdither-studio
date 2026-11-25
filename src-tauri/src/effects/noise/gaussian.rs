@@ -52,11 +52,8 @@ impl Effect for GaussianNoise {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let std_dev = params
-            .get("std_dev")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(self.std_dev as f64) as f32;
-        let time = params.get("time").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
+        let std_dev = crate::effects::params::f32_param(params, "std_dev", self.std_dev);
+        let time = crate::effects::params::usize_param(params, "time", 0) as u32;
         let mut data = input.data.clone();
         let mut i = 0usize;
         while i < data.len() {
@@ -83,22 +80,6 @@ impl Effect for GaussianNoise {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { AudioBinding, EffectMeta, Keyframe } from "./index";
-import { applyEasing, useAppStore } from "./index";
+import { useAppStore } from "./index";
+import { applyEasing } from "../utils/lfo";
 
 function mockEffect(id: string, params: Array<{ id: string; default: number }>): EffectMeta {
   return {
@@ -84,6 +85,25 @@ describe("Store E2E — State Management", () => {
       useAppStore.getState().updateStackParamsSilent(id, { matrix_size: 16 });
       expect(useAppStore.getState().effectStack[0].params.matrix_size).toBe(16);
       expect(useAppStore.getState().pastStacks).toHaveLength(pastLen);
+    });
+
+    it("a fader drag (begin → silent writes → commit) undoes to the pre-drag value", () => {
+      const eff = mockEffect("dithering.bayer", [{ id: "matrix_size", default: 4 }]);
+      useAppStore.getState().addToStack(eff);
+      const id = useAppStore.getState().effectStack[0].id;
+      useAppStore.getState().updateStackParams(id, { matrix_size: 8 });
+      const pastLen = useAppStore.getState().pastStacks.length;
+
+      // Drag: first live tick opens the gesture, subsequent ticks are silent.
+      useAppStore.getState().beginParamGesture();
+      useAppStore.getState().updateStackParamsSilent(id, { matrix_size: 12 });
+      useAppStore.getState().updateStackParamsSilent(id, { matrix_size: 15 });
+      useAppStore.getState().updateStackParams(id, { matrix_size: 16 });
+      // One history entry for the whole gesture, not three.
+      expect(useAppStore.getState().pastStacks).toHaveLength(pastLen + 1);
+
+      useAppStore.getState().undo();
+      expect(useAppStore.getState().effectStack[0].params.matrix_size).toBe(8);
     });
 
     it("toggleStackItem flips enabled state", () => {

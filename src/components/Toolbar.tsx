@@ -7,7 +7,6 @@ import {
   convertFileSrc,
   generateProxy,
   getFrameData,
-  getMediaMetadata,
   loadMediaFile,
   loadMediaFromPath,
   sam3LoadImage,
@@ -77,7 +76,6 @@ export default function Toolbar({ onFileLoaded }: Props) {
   const setPreviewDataUrl = useAppStore((s) => s.setPreviewDataUrl);
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
   const setFilePath = useAppStore((s) => s.setFilePath);
-  const setMediaMetadata = useAppStore((s) => s.setMediaMetadata);
   const clearStack = useAppStore((s) => s.clearStack);
   const undo = useAppStore((s) => s.undo);
   const redo = useAppStore((s) => s.redo);
@@ -91,6 +89,66 @@ export default function Toolbar({ onFileLoaded }: Props) {
   const viewMenuRef = useClickOutside<HTMLDivElement>(viewMenuOpen, () => setViewMenuOpen(false));
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const fileMenuRef = useClickOutside<HTMLDivElement>(fileMenuOpen, () => setFileMenuOpen(false));
+
+  // Menu-bar keyboard pattern: once focus is inside a menu, arrows rove the
+  // enabled items (Home/End jump); Escape closes and returns focus to the
+  // trigger; Tab closes so a menu can't stay painted open with focus gone;
+  // ArrowDown on a trigger opens its menu and lands on the first item.
+  // Standard WAI-ARIA menubar behaviour, same for all three menus.
+  const menuKeyDown = (close: () => void) => (e: React.KeyboardEvent<HTMLElement>) => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      close();
+      // APG: Escape returns focus to the menubar trigger that opened the menu.
+      e.currentTarget
+        .querySelector<HTMLElement>('[aria-haspopup="menu"]')
+        ?.focus();
+      return;
+    }
+    if (e.key === "Tab") {
+      // Focus is leaving the menu — close it so aria-expanded can't lie
+      // about a menu nobody can see.
+      close();
+      return;
+    }
+    // Form controls inside a menu (e.g. the View menu's opacity slider) keep
+    // their native arrow-key behaviour — roving would hijack it.
+    if (e.target instanceof HTMLInputElement) return;
+    const items = Array.from(
+      e.currentTarget.querySelectorAll<HTMLElement>('[role^="menuitem"]:not([disabled])')
+    );
+    if (items.length === 0) return;
+    const idx = items.indexOf(document.activeElement as HTMLElement);
+    const move = (i: number) => {
+      e.preventDefault();
+      // Home/End/arrows also live in the global shortcuts (playhead seek) —
+      // a menu that consumed them must stop them reaching the window listener.
+      e.stopPropagation();
+      items[(i + items.length) % items.length].focus();
+    };
+    if (e.key === "ArrowDown") move(idx + 1);
+    else if (e.key === "ArrowUp") move(idx - 1);
+    else if (e.key === "Home") move(0);
+    else if (e.key === "End") move(items.length - 1);
+  };
+  const openMenuFromTrigger = (open: () => void, ref: React.RefObject<HTMLElement | null>) =>
+    (e: React.KeyboardEvent<HTMLElement>) => {
+      if (e.key !== "ArrowDown") return;
+      e.preventDefault();
+      open();
+      requestAnimationFrame(() => {
+        ref.current
+          ?.querySelector<HTMLElement>('[role^="menuitem"]:not([disabled])')
+          ?.focus();
+      });
+    };
+  // Focus leaving a menu wrapper entirely (Tab, click elsewhere) closes it —
+  // the mousedown-only useClickOutside can't see keyboard navigation.
+  const closeMenuOnBlur =
+    (close: () => void) => (e: React.FocusEvent<HTMLElement>) => {
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) close();
+    };
+
   const dockedPanels = useAppStore((s) => s.dockedPanels) || [];
   const triggerLayoutAction = useAppStore((s) => s.triggerLayoutAction);
   const setTheme = useAppStore((s) => s.setTheme);
@@ -114,7 +172,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
         setPreviewDataUrl(original);
         setStatusMessage("Showing original");
       } catch (err) {
-        console.error("Failed to load original frame:", err);
+        logger.error("toolbar", `Failed to load original frame:`, { error: String(err) });
       }
       return;
     }
@@ -172,31 +230,32 @@ export default function Toolbar({ onFileLoaded }: Props) {
     }
   }, [setIsProcessing, setPreviewDataUrl, setStatusMessage]);
 
+  // Shared tail of every media-load path: refresh the preview (which pulls
+  // duration/fps/proxy itself) and mirror the new image into SAM3 when the
+  // bridge is running. Each step is best-effort -- a missing codec or a
+  // stopped bridge must never turn a successful load into an error.
+  const afterMediaLoaded = async (context: string): Promise<boolean> => {
+    const synced = await onFileLoaded();
+    if (useAppStore.getState().sam3Ready) {
+      try {
+        await sam3LoadImage(await getFrameData());
+      } catch (e) {
+        logger.warn("sam3", `Failed to load ${context} into SAM3`, { err: String(e) });
+      }
+    }
+    return synced;
+  };
+
   const handleOpen = async () => {
     setStatusMessage("Opening file...");
     try {
       const path = await loadMediaFile();
       if (path) {
         setFilePath(path);
-        const synced = await onFileLoaded();
-
-        try {
-          const meta = await getMediaMetadata(path);
-          setMediaMetadata(meta);
-        } catch (e) {
-          console.warn("Failed to load metadata", e);
-        }
-
-        const state = useAppStore.getState();
-        if (state.sam3Ready) {
+        if (useAppStore.getState().sam3Ready) {
           setStatusMessage("Loading new image into SAM3...");
-          try {
-            const b64 = await getFrameData();
-            await sam3LoadImage(b64);
-          } catch (e) {
-            logger.warn("sam3", "Failed to load new image into SAM3", { err: String(e) });
-          }
         }
+        const synced = await afterMediaLoaded("new image");
 
         // A failed preview sync used to read as "Loaded: <path> (preview sync
         // pending)" -- success-shaped text for a backend failure, which neither
@@ -210,7 +269,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
         setStatusMessage("Open cancelled");
       }
     } catch (err) {
-      console.error("[Toolbar] handleOpen failed:", err);
+      logger.error("toolbar", `handleOpen failed:`, { error: String(err) });
       setStatusMessage(`Open error: ${err}`);
     }
   };
@@ -239,19 +298,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
       setIsVideo(false);
       setProxyUrl(null);
       setAnimateSourceStillPath(null);
-      const synced = await onFileLoaded();
-      try {
-        setMediaMetadata(await getMediaMetadata(stillPath));
-      } catch (e) {
-        console.warn("Failed to load metadata for reverted still", e);
-      }
-      if (useAppStore.getState().sam3Ready) {
-        try {
-          await sam3LoadImage(await getFrameData());
-        } catch (e) {
-          console.warn("Failed to load reverted still into SAM3", e);
-        }
-      }
+      const synced = await afterMediaLoaded("reverted still");
       setStatusMessage(
         synced ? `Reverted to still: ${stillPath}` : `Reverted to still: ${stillPath} (preview sync pending)`
       );
@@ -304,22 +351,14 @@ export default function Toolbar({ onFileLoaded }: Props) {
         const proxy = await generateProxy(videoPath, 1280, 28);
         setProxyUrl(convertFileSrc(proxy));
       } catch (e) {
-        console.warn("Proxy generation failed for animated video:", e);
+        logger.warn("toolbar", `Proxy generation failed for animated video:`, { error: String(e) });
         setProxyUrl(null);
       }
 
-      const synced = await onFileLoaded();
-
-      const refreshedState = useAppStore.getState();
-      if (refreshedState.sam3Ready) {
+      if (useAppStore.getState().sam3Ready) {
         setStatusMessage("Loading animated frame into SAM3...");
-        try {
-          const b64 = await getFrameData();
-          await sam3LoadImage(b64);
-        } catch (e) {
-          console.warn("Failed to load animated frame into SAM3", e);
-        }
       }
+      const synced = await afterMediaLoaded("animated frame");
 
       setStatusMessage(
         synced
@@ -327,7 +366,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
           : `Animated as video: ${videoPath} (preview sync pending)`
       );
     } catch (err) {
-      console.error("[Toolbar] handleAnimateAsVideo failed:", err);
+      logger.error("toolbar", `handleAnimateAsVideo failed:`, { error: String(err) });
       setStatusMessage(`Animate as Video failed: ${err}`);
     } finally {
       setIsProcessing(false);
@@ -466,15 +505,22 @@ export default function Toolbar({ onFileLoaded }: Props) {
           />
         ) : null}
         <span
-          className={`font-headline-lg text-headline-lg solar-text filigree-header cursor-default toolbar-logo ${theme === "custom" ? "hidden ml-2" : "ml-6"}`}
+          className={`solar-text filigree-header cursor-default ${theme === "custom" ? "hidden ml-2" : "ml-6"}`}
+          style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.06em" }}
           aria-hidden="true"
         >
           MoshDither Studio
         </span>
         <nav className="hidden md:flex gap-4 ml-6" aria-label="Menu bar">
-          <div ref={fileMenuRef} className="relative">
+          <div
+            ref={fileMenuRef}
+            className="relative"
+            onKeyDown={menuKeyDown(() => setFileMenuOpen(false))}
+            onBlur={closeMenuOnBlur(() => setFileMenuOpen(false))}
+          >
             <button
               onClick={() => setFileMenuOpen((v) => !v)}
+              onKeyDown={openMenuFromTrigger(() => setFileMenuOpen(true), fileMenuRef)}
               className="font-label-md text-label-md text-accent-pink font-medium border-b-2 border-accent-pink pb-1 hover:text-accent-teal transition-colors flex items-center gap-1"
               aria-haspopup="menu"
               aria-expanded={fileMenuOpen}
@@ -526,7 +572,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                     Revert to Still
                   </button>
                 )}
-                <div className="border-t border-outline/10 my-1" />
+                <div className="border-t border-outline/10 my-1" role="separator" />
                 <button
                   onClick={() => { handleExport(); setFileMenuOpen(false); }}
                   disabled={!mediaLoaded}
@@ -559,7 +605,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                     the command palette, not even the shortcuts editor that is
                     supposed to document keystrokes. A save format a user cannot
                     find is a save format they do not have. */}
-                <div className="border-t border-outline/10 my-1" />
+                <div className="border-t border-outline/10 my-1" role="separator" />
                 <button
                   onClick={() => { void saveProject(false); setFileMenuOpen(false); }}
                   className="w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors"
@@ -587,7 +633,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   Open Project
                   <span className="ml-auto opacity-50 font-code-sm text-code-sm">Ctrl+O</span>
                 </button>
-                <div className="border-t border-outline/10 my-1" />
+                <div className="border-t border-outline/10 my-1" role="separator" />
                 <button
                   onClick={() => { handleSaveImage(); setFileMenuOpen(false); }}
                   disabled={!mediaLoaded || stackCount === 0}
@@ -609,9 +655,17 @@ export default function Toolbar({ onFileLoaded }: Props) {
               </div>
             )}
           </div>
-          <div ref={editMenuRef} className="relative">
+          <div
+            ref={editMenuRef}
+            className="relative"
+            onKeyDown={menuKeyDown(() => setEditMenuOpen(false))}
+            onBlur={closeMenuOnBlur(() => setEditMenuOpen(false))}
+          >
             <button
               onClick={() => setEditMenuOpen((v) => !v)}
+              onKeyDown={openMenuFromTrigger(() => setEditMenuOpen(true), editMenuRef)}
+              aria-haspopup="menu"
+              aria-expanded={editMenuOpen}
               className="font-label-md text-label-md text-on-surface-variant font-medium hover:text-accent-teal transition-colors flex items-center gap-1"
             >
               Edit
@@ -622,8 +676,9 @@ export default function Toolbar({ onFileLoaded }: Props) {
               </span>
             </button>
             {editMenuOpen && (
-              <div className="absolute left-0 top-full mt-1 z-[200] min-w-[200px] neo-flat rounded-lg bg-surface/90 backdrop-blur-xl border border-outline/20 py-1 shadow-xl">
+              <div role="menu" aria-label="Edit menu" className="absolute left-0 top-full mt-1 z-[200] min-w-[200px] neo-flat rounded-lg bg-surface/90 backdrop-blur-xl border border-outline/20 py-1 shadow-xl">
                 <button
+                  role="menuitem"
                   onClick={() => { handleUndo(); setEditMenuOpen(false); }}
                   disabled={!canUndo}
                   className={`w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors ${canUndo ? "toolbar-enabled" : "toolbar-disabled"}`}
@@ -632,6 +687,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   Undo
                 </button>
                 <button
+                  role="menuitem"
                   onClick={() => { handleRedo(); setEditMenuOpen(false); }}
                   disabled={!canRedo}
                   className={`w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors ${canRedo ? "toolbar-enabled" : "toolbar-disabled"}`}
@@ -640,6 +696,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   Redo
                 </button>
                 <button
+                  role="menuitem"
                   onClick={() => { handleClearAll(); setEditMenuOpen(false); }}
                   disabled={stackCount === 0}
                   className={`w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors ${stackCount > 0 ? "toolbar-enabled" : "toolbar-disabled"}`}
@@ -647,8 +704,8 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   <span className="material-symbols-outlined menu-item-icon">delete_sweep</span>
                   Clear Stack
                 </button>
-                <div className="border-t border-outline/10 my-1" />
-                <div className="px-3 py-1 font-label-sm text-label-sm text-on-surface-variant uppercase">
+                <div className="border-t border-outline/10 my-1" role="separator" />
+                <div role="presentation" className="px-3 py-1 font-label-sm text-label-sm text-on-surface-variant uppercase">
                   Panels
                 </div>
                 {PANEL_REGISTRY.filter((p) => p.id !== "verify").map((p) => {
@@ -656,6 +713,8 @@ export default function Toolbar({ onFileLoaded }: Props) {
                   return (
                     <button
                       key={p.id}
+                      role="menuitemcheckbox"
+                      aria-checked={isDocked}
                       onClick={() => {
                         if (isDocked) {
                           triggerLayoutAction("remove", p.id);
@@ -670,6 +729,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                         {p.label}
                       </span>
                       <span
+                        aria-hidden="true"
                         className={`material-symbols-outlined ${isDocked ? "panel-checkbox-on" : "panel-checkbox-off"}`}
                       >
                         {isDocked ? "check_box" : "check_box_outline_blank"}
@@ -679,6 +739,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                 })}
                 <div className="border-t border-outline/10 mt-1 pt-1 flex gap-2 px-3">
                   <button
+                    role="menuitem"
                     onClick={() => {
                       PANEL_REGISTRY.filter((p) => p.id !== "verify").forEach((p) => {
                         if (!dockedIds.has(p.id)) {
@@ -691,6 +752,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
                     Show All
                   </button>
                   <button
+                    role="menuitem"
                     onClick={() => {
                       PANEL_REGISTRY.forEach((p) => {
                         useAppStore.getState().triggerLayoutAction("remove", p.id);
@@ -704,9 +766,17 @@ export default function Toolbar({ onFileLoaded }: Props) {
               </div>
             )}
           </div>
-          <div ref={viewMenuRef} className="relative">
+          <div
+            ref={viewMenuRef}
+            className="relative"
+            onKeyDown={menuKeyDown(() => setViewMenuOpen(false))}
+            onBlur={closeMenuOnBlur(() => setViewMenuOpen(false))}
+          >
             <button
               onClick={() => setViewMenuOpen((v) => !v)}
+              onKeyDown={openMenuFromTrigger(() => setViewMenuOpen(true), viewMenuRef)}
+              aria-haspopup="menu"
+              aria-expanded={viewMenuOpen}
               className={`font-label-md text-label-md font-medium hover:text-accent-teal transition-colors flex items-center gap-1 ${showBeforeAfter ? "text-accent-pink" : "text-on-surface-variant"}`}
             >
               View
@@ -717,16 +787,18 @@ export default function Toolbar({ onFileLoaded }: Props) {
               </span>
             </button>
             {viewMenuOpen && (
-              <div className="absolute left-0 top-full mt-1 z-[200] min-w-[220px] neo-flat rounded-lg bg-surface/90 backdrop-blur-xl border border-outline/20 py-2 shadow-xl">
+              <div role="menu" aria-label="View menu" className="absolute left-0 top-full mt-1 z-[200] min-w-[220px] neo-flat rounded-lg bg-surface/90 backdrop-blur-xl border border-outline/20 py-2 shadow-xl">
                 <button
+                  role="menuitemcheckbox"
+                  aria-checked={showBeforeAfter}
                   onClick={() => { setShowBeforeAfter(!showBeforeAfter); setViewMenuOpen(false); }}
                   className="w-full flex items-center gap-2 px-3 py-1.5 font-label-md text-label-md text-on-surface hover:bg-accent-teal/10 transition-colors"
                 >
                   <span className="material-symbols-outlined menu-item-icon">{showBeforeAfter ? "toggle_on" : "toggle_off"}</span>
                   Before/After Split
                 </button>
-                <div className="border-t border-outline/20 my-1" />
-                <div className="px-3 py-1.5">
+                <div className="border-t border-outline/20 my-1" role="separator" />
+                <div className="px-3 py-1.5" role="presentation">
                   <LabeledSlider
                     layout="stacked"
                     icon="opacity"
@@ -742,13 +814,15 @@ export default function Toolbar({ onFileLoaded }: Props) {
                     unit="%"
                   />
                 </div>
-                <div className="border-t border-outline/20 my-1" />
-                <div className="px-3 py-1 font-label-sm text-label-sm uppercase text-on-surface-variant/70">
+                <div className="border-t border-outline/20 my-1" role="separator" />
+                <div role="presentation" className="px-3 py-1 font-label-sm text-label-sm uppercase text-on-surface-variant/70">
                   Theme Presets
                 </div>
                 {(["cosmic", "dark", "high-contrast", "light", "custom"] as const).map((t) => (
                   <button
                     key={t}
+                    role="menuitemradio"
+                    aria-checked={theme === t}
                     onClick={() => {
                       if (t === "custom") {
                         useAppStore.getState().setCustomUiModalOpen(true);
@@ -763,9 +837,10 @@ export default function Toolbar({ onFileLoaded }: Props) {
                     {theme === t && <span className="material-symbols-outlined text-xs">check</span>}
                   </button>
                 ))}
-                <div className="border-t border-outline/20 my-1" />
+                <div className="border-t border-outline/20 my-1" role="separator" />
 
                 <button
+                  role="menuitem"
                   onClick={() => {
                     useAppStore.getState().triggerLayoutAction("reset");
                     setViewMenuOpen(false);
@@ -819,7 +894,7 @@ export default function Toolbar({ onFileLoaded }: Props) {
           onClick={handleClearAll}
           disabled={stackCount === 0}
           className={`material-symbols-outlined text-on-surface-variant hover:text-accent-pink transition-colors active:scale-95 duration-100 neo-btn p-1.5 rounded-full transport-icon ${stackCount > 0 ? "toolbar-enabled" : "toolbar-disabled"}`}
-          title="Clear Stack"
+          title="Clear Layers"
           aria-label="Clear effect stack"
         >
           delete_sweep

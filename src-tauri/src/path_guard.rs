@@ -62,6 +62,22 @@ pub fn validate_io_path(path: &str, must_exist: bool) -> Result<PathBuf, String>
         ));
     }
 
+    #[cfg(target_os = "windows")]
+    {
+        // DOS device basenames are reserved in EVERY directory on Windows,
+        // with or without an extension: a write to `D:\media\NUL.avi` opens
+        // the NUL device and silently discards the export, and `CON.mp4`
+        // reads the console. Check the stem of every component, not just the
+        // file name.
+        for component in normalized.components() {
+            if let Component::Normal(part) = component {
+                if is_reserved_device_name(part) {
+                    return Err(format!("Path contains a reserved device name: {}", path));
+                }
+            }
+        }
+    }
+
     let resolved = if must_exist {
         std::fs::canonicalize(&normalized)
             .map_err(|e| format!("Path does not exist or is inaccessible '{}': {}", path, e))?
@@ -143,6 +159,43 @@ fn allowed_roots() -> Vec<PathBuf> {
     }
 
     roots
+}
+
+/// True when `name`'s file stem is one of the reserved DOS device basenames
+/// (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`). Reserved with
+/// or without an extension, case-insensitive.
+#[cfg(target_os = "windows")]
+fn is_reserved_device_name(name: &std::ffi::OsStr) -> bool {
+    let stem = Path::new(name)
+        .file_stem()
+        .unwrap_or(name)
+        .to_string_lossy()
+        .to_lowercase();
+    matches!(
+        stem.as_str(),
+        "con"
+            | "prn"
+            | "aux"
+            | "nul"
+            | "com1"
+            | "com2"
+            | "com3"
+            | "com4"
+            | "com5"
+            | "com6"
+            | "com7"
+            | "com8"
+            | "com9"
+            | "lpt1"
+            | "lpt2"
+            | "lpt3"
+            | "lpt4"
+            | "lpt5"
+            | "lpt6"
+            | "lpt7"
+            | "lpt8"
+            | "lpt9"
+    )
 }
 
 /// Normalize a path by resolving `.` and `..` without touching the filesystem.
@@ -264,6 +317,27 @@ mod tests {
         assert!(validate_io_path("/etc/passwd", false).is_err());
         assert!(validate_io_path("/usr/bin/env", false).is_err());
         assert!(validate_io_path("/bin/sh", false).is_err());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_rejects_reserved_device_names() {
+        // Device names are reserved in every directory, so use a directory
+        // that canonicalizes: the temp dir is also an allowed root.
+        let dir = std::env::temp_dir().to_string_lossy().into_owned();
+        for stem in ["NUL", "con", "COM1", "lpt3", "aux"] {
+            let p = format!("{dir}\\{stem}.avi");
+            assert!(
+                validate_io_path(&p, false).is_err(),
+                "{p} should be rejected"
+            );
+        }
+        // A basename merely containing a reserved word is not a device.
+        let ok = format!("{dir}\\console_output.avi");
+        assert!(
+            validate_io_path(&ok, false).is_ok(),
+            "{ok} should be accepted"
+        );
     }
 
     #[test]

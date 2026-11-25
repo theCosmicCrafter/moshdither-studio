@@ -1,8 +1,10 @@
-import { useAppStore, type AudioBinding } from "../../store";
+import { useRef, useEffect, useState } from "react";
+import { useAppStore, type AudioBinding, type LfoSpec, type LfoWaveform } from "../../store";
 import { audioChannelName } from "../../engine/audio/channelName";
 import { PALETTE_PRESETS, fillPaletteParams } from "../../engine/palettePresets";
 
 import { isVideoOnlyEffect, VIDEO_ONLY_ON_IMAGE_WARNING, unsetSelectionWarning } from "../../utils/effectConverter";
+import { effectPipeline } from "../../lib/effectPipeline";
 
 /**
  * Parameters that a dedicated panel already picks better than a generic control
@@ -42,112 +44,75 @@ const AUDIO_SOURCES = [
   { id: "beatTreble", label: "Beat (Treble)" },
 ];
 
-function ParameterWheel({
+function FaderControl({
   value,
   min,
   max,
-  onChange,
+  step,
+  label,
+  onLive,
+  onCommit,
 }: {
   value: number;
   min: number;
   max: number;
-  onChange: (v: number) => void;
+  step?: number;
+  label: string;
+  // Live commits (per animation frame) must not push undo history —
+  // a drag would flood ~120 entries. Only onCommit (release/unmount)
+  // writes history.
+  onLive: (v: number) => void;
+  onCommit: (v: number) => void;
 }) {
-  const range = max - min;
-  const angle = range > 0 ? ((value - min) / range) * 270 - 135 : 0;
-
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const step = range > 0 ? range / 50 : 1;
-    const dir = e.deltaY > 0 ? -1 : 1;
-    const next = Math.max(min, Math.min(max, value + step * dir));
-    onChange(next);
-  };
-
-  const handleDrag = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const startY = e.clientY;
-    const startValue = value;
-    // Raw mousemove can fire far faster than the screen repaints (OS/mouse
-    // polling rate, sometimes 100-1000Hz) -- calling onChange synchronously
-    // on every event pushed a full store update (and, downstream, a real
-    // preview re-render/backend IPC call) on every single tick, which is
-    // what made dragging a slider on a CPU-preview dithering effect feel
-    // choppy. Coalesce to at most one commit per animation frame instead;
-    // the eye can't perceive more than that anyway, and the final value is
-    // still always committed on mouseup even if it lands between frames.
-    let rafId: number | null = null;
-    let pendingValue: number | null = null;
-    const flush = () => {
-      rafId = null;
-      if (pendingValue !== null) {
-        onChange(pendingValue);
-        pendingValue = null;
-      }
-    };
-    const handleMove = (ev: MouseEvent) => {
-      const delta = startY - ev.clientY;
-      const step = range > 0 ? range / 200 : 1;
-      const next = Math.max(min, Math.min(max, startValue + delta * step));
-      pendingValue = next;
-      if (rafId === null) {
-        rafId = requestAnimationFrame(flush);
-      }
-    };
-    const handleUp = () => {
-      window.removeEventListener("mousemove", handleMove);
-      window.removeEventListener("mouseup", handleUp);
-      if (rafId !== null) {
-        cancelAnimationFrame(rafId);
-        rafId = null;
-      }
-      flush();
-    };
-    window.addEventListener("mousemove", handleMove);
-    window.addEventListener("mouseup", handleUp);
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    const step = range > 0 ? range / 50 : 1;
-    if (e.key === "ArrowUp" || e.key === "ArrowRight") {
-      e.preventDefault();
-      onChange(Math.max(min, Math.min(max, value + step)));
-    } else if (e.key === "ArrowDown" || e.key === "ArrowLeft") {
-      e.preventDefault();
-      onChange(Math.max(min, Math.min(max, value - step)));
+  // Range inputs can fire `input` far faster than the screen repaints
+  // (OS/pointer polling rate), and every event used to push a full store
+  // update plus downstream preview/IPC work. Coalesce commits to one per
+  // animation frame. React maps onChange to the same `input` event, so a
+  // release commit has to hook pointerup/keyboard instead -- and unmount
+  // mid-drag flushes whatever is still pending.
+  const rafRef = useRef<number | null>(null);
+  const pendingRef = useRef<number | null>(null);
+  const liveRef = useRef(onLive);
+  liveRef.current = onLive;
+  const flush = () => {
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    if (pendingRef.current !== null) {
+      onCommit(pendingRef.current);
+      pendingRef.current = null;
     }
   };
+  const flushLive = () => {
+    rafRef.current = null;
+    if (pendingRef.current !== null) {
+      liveRef.current(pendingRef.current);
+    }
+  };
+  const schedule = (v: number) => {
+    pendingRef.current = v;
+    if (rafRef.current === null) {
+      rafRef.current = requestAnimationFrame(flushLive);
+    }
+  };
+  const flushRef = useRef(flush);
+  flushRef.current = flush;
+  useEffect(() => () => flushRef.current(), []);
 
   return (
-    <div className="flex items-center gap-3 mt-1">
-      <div
-        className="relative w-10 h-10 rounded-full neo-panel flex items-center justify-center cursor-pointer border border-accent-pink/30"
-        onWheel={handleWheel}
-        onMouseDown={handleDrag}
-        onKeyDown={handleKeyDown}
-        title="Scroll or drag to adjust"
-        role="slider"
-        aria-label="Parameter wheel"
-        aria-valuemin={Number(min)}
-        aria-valuemax={Number(max)}
-        aria-valuenow={Number(value)}
-        tabIndex={0}
-      >
-        <div
-          className="w-1 h-3 bg-accent-pink absolute top-1 left-1/2 -translate-x-1/2 rounded-full origin-[50%_18px]"
-          style={{ transform: `rotate(${angle}deg)`, boxShadow: "0 0 8px #ffade0" }}
-        />
-        <div className="w-6 h-6 rounded-full neo-pressed flex items-center justify-center">
-          <span className="font-data-micro text-data-micro text-accent-teal">
-            {/* Precision follows the RANGE. A fixed 0 decimals read "0" for
-                every value below 0.5 on the 67 sliders whose whole range is
-                <= 2, so the face was blank of information exactly where fine
-                adjustment matters most. */}
-            {value.toFixed(max - min <= 2 ? 2 : max - min <= 20 ? 1 : 0)}
-          </span>
-        </div>
-      </div>
-    </div>
+    <input
+      type="range"
+      aria-label={`${label} fader`}
+      className="slider-track w-full cursor-pointer mt-1.5"
+      value={value}
+      min={min}
+      max={max}
+      step={step ?? "any"}
+      onInput={(e) => schedule(parseFloat((e.target as HTMLInputElement).value))}
+      onPointerUp={flush}
+      onKeyUp={flush}
+    />
   );
 }
 
@@ -158,6 +123,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
   const mediaLoaded = useAppStore((s) => s.mediaLoaded);
   const isVideo = useAppStore((s) => s.isVideo);
   const updateStackParams = useAppStore((s) => s.updateStackParams);
+  const updateStackParamsSilent = useAppStore((s) => s.updateStackParamsSilent);
   const audioBindings = useAppStore((s) =>
     entry?.id ? s.audioBindings[entry.id] : undefined
   );
@@ -170,6 +136,11 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
   );
   const addKeyframe = useAppStore((s) => s.addKeyframe);
   const removeKeyframe = useAppStore((s) => s.removeKeyframe);
+  const lfos = useAppStore((s) => (entry?.id ? s.lfos[entry.id] : undefined));
+  const setLfo = useAppStore((s) => s.setLfo);
+  const setLfoSilent = useAppStore((s) => s.setLfoSilent);
+  const beginParamGesture = useAppStore((s) => s.beginParamGesture);
+  const removeLfo = useAppStore((s) => s.removeLfo);
 
   if (!entry) {
     return (
@@ -187,15 +158,57 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
 
   const showVideoOnlyWarning = mediaLoaded && !isVideo && isVideoOnlyEffect(effectMeta);
   const selectionWarning = unsetSelectionWarning(entry.effectId, entry.params);
+  // Codec layers corrupt the encoded bitstream at export — there is no
+  // per-frame moment where a keyframe, LFO, audio binding or mask could
+  // apply, so those affordances are hidden rather than silently ignored.
+  const isCodecEntry = effectPipeline(effectMeta) === "codec";
+  // Temporal effects consume the whole segment at once — the engine never
+  // samples LFOs for them (keyframes apply at the in-point instead), so the
+  // control is hidden rather than silently frozen.
+  const isTemporalEntry = !isCodecEntry && effectMeta.is_temporal === true;
 
   return (
     <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4 custom-scrollbar">
-      <div
-        className="text-dense-lg font-semibold filigree-header"
-        style={{ color: "var(--text-secondary)", fontFamily: "var(--font-hand)" }}
-      >
-        {entry.effectName} Parameters
+      <div className="text-label-sm font-label-sm uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>
+        Parameters
       </div>
+
+      {isCodecEntry && (
+        <div
+          data-testid="codec-layer-note"
+          className="text-dense-sm"
+          style={{
+            padding: "6px 8px",
+            borderRadius: 3,
+            // Same accent-teal codec-truth token the chips use, washed —
+            // hardcoded rgba(120,200,255) read as a foreign blue and vanished
+            // against the light theme's surfaces.
+            background: "color-mix(in srgb, var(--accent-teal) 8%, transparent)",
+            border: "1px solid color-mix(in srgb, var(--accent-teal) 25%, transparent)",
+            color: "var(--text-secondary)",
+          }}
+        >
+          Codec layer — corrupts the encoded file at export. Static params
+          apply; masks, keyframes, LFOs and audio bindings do not.
+        </div>
+      )}
+
+      {isTemporalEntry && (
+        <div
+          data-testid="temporal-layer-note"
+          className="text-dense-sm"
+          style={{
+            padding: "6px 8px",
+            borderRadius: 3,
+            background: "color-mix(in srgb, var(--accent-teal) 8%, transparent)",
+            border: "1px solid color-mix(in srgb, var(--accent-teal) 25%, transparent)",
+            color: "var(--text-secondary)",
+          }}
+        >
+          Temporal effect — processes the whole clip at once. Keyframe values
+          apply at the clip's in-point; LFO modulation does not apply.
+        </div>
+      )}
 
       {showVideoOnlyWarning && (
         <div
@@ -256,7 +269,6 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
             style={{
               background: "var(--bg-input)",
               color: "var(--text-primary)",
-              outline: "none",
             }}
             onChange={(e) => {
               const preset = PALETTE_PRESETS.find((p) => p.name === e.target.value);
@@ -295,6 +307,28 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
 
       {effectMeta.parameters.filter((param) => !isPickedElsewhere(entry.effectId, param.id)).map((param) => {
         const value = entry.params[param.id] ?? param.default;
+        // While an LFO drives this param its `offset` is the base value the
+        // wave oscillates around, so the slider and readout edit THAT --
+        // writing entry.params would move a number nothing renders. When a
+        // keyframe track exists the track is the centre instead and offset
+        // is inert; the controls still edit it so the base is in place if
+        // the track is ever removed (same "driven" lie the readout has
+        // always told while keyframes hold the param).
+        const lfo = lfos?.[param.id];
+        const trackLen = keyframes?.[param.id]?.length ?? 0;
+        const numericValue = lfo ? lfo.offset : Number(value);
+        const writeBase = (v: number, commit: boolean) => {
+          if (!commit) beginParamGesture();
+          if (lfo) {
+            const spec = { ...lfo, offset: v };
+            if (commit) setLfo(entry.id, param.id, spec);
+            else setLfoSilent(entry.id, param.id, spec);
+          } else if (commit) {
+            updateStackParams(entry.id, { [param.id]: v });
+          } else {
+            updateStackParamsSilent(entry.id, { [param.id]: v });
+          }
+        };
         return (
           <div key={param.id} className="space-y-1.5">
             <div className="flex items-center justify-between">
@@ -307,12 +341,12 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                 {param.name}
               </label>
               <div className="flex items-center gap-1">
-                {typeof value === "number" && (
+                {typeof value === "number" && !isCodecEntry && (
                   <KeyframeButton
                     stackId={entry.id}
                     paramId={param.id}
                     currentTime={currentTime}
-                    currentValue={Number(value)}
+                    currentValue={numericValue}
                     keyframes={keyframes}
                     addKeyframe={addKeyframe}
                     removeKeyframe={removeKeyframe}
@@ -321,9 +355,9 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                 {typeof value === "number" ? (
                   <input
                     type="number"
-                    value={Number(value)}
+                    value={numericValue}
                     aria-label={param.name}
-                    title={param.name}
+                    title={lfo ? `${param.name} (LFO centre)` : param.name}
                     placeholder="0"
                     min={param.min ?? undefined}
                     max={param.max ?? undefined}
@@ -338,10 +372,9 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                       if (Number.isNaN(raw)) return;
                       const lo = param.min ?? Number.NEGATIVE_INFINITY;
                       const hi = param.max ?? Number.POSITIVE_INFINITY;
-                      const clamped = Math.min(hi, Math.max(lo, raw));
-                      updateStackParams(entry.id, { [param.id]: clamped });
+                      writeBase(Math.min(hi, Math.max(lo, raw)), true);
                     }}
-                    className="param-readout bg-transparent border-b border-[var(--border-secondary)] px-1 w-12 text-right outline-none focus:border-[var(--accent)]"
+                    className="param-readout bg-transparent border-b border-[var(--border-secondary)] px-1 w-12 text-right focus:border-[var(--accent)]"
                     style={{ color: "var(--text-primary)" }}
                   />
                 ) : (
@@ -353,19 +386,45 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
             {String(param.type).toLowerCase() === "slider" && (() => {
               const min = param.min ?? 0;
               const max = param.max ?? 100;
-              const val = Number(value);
               return (
-                <ParameterWheel
-                  value={val}
-                  min={min}
-                  max={max}
-                  onChange={(v) => updateStackParams(entry.id, { [param.id]: v })}
-                />
+                <>
+                  <FaderControl
+                    value={numericValue}
+                    min={min}
+                    max={max}
+                    step={param.step ?? undefined}
+                    label={param.name}
+                    onLive={(v) => writeBase(v, false)}
+                    onCommit={(v) => writeBase(v, true)}
+                  />
+                  {/* Per-param LFO modulator: + chip, expands to a compact
+                      editor. Rides alongside the audio binding below.
+                      Hidden on codec layers and temporal effects — nothing
+                      evaluates it per-frame in either pipeline. */}
+                  {!isCodecEntry && !isTemporalEntry && (
+                  <LfoControl
+                    stackId={entry.id}
+                    paramId={param.id}
+                    paramMin={min}
+                    paramMax={max}
+                    currentValue={Number(value)}
+                    spec={lfo}
+                    keyframed={trackLen > 0}
+                    onSet={setLfo}
+                    onSetSilent={(sid, pid, spec) => {
+                      beginParamGesture();
+                      setLfoSilent(sid, pid, spec);
+                    }}
+                    onRemove={removeLfo}
+                  />
+                  )}
+                </>
               );
             })()}
 
-            {/* Audio binding for slider parameters */}
-            {audioEnabled && String(param.type).toLowerCase() === "slider" && (
+            {/* Audio binding for slider parameters — not on codec layers,
+                where no per-frame pass exists to consume it. */}
+            {audioEnabled && !isCodecEntry && String(param.type).toLowerCase() === "slider" && (
               <AudioBindingControl
                 stackId={entry.id}
                 paramId={param.id}
@@ -703,6 +762,260 @@ function AudioBindingControl({
               Invert
             </label>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One waveform choice in the LFO editor's segmented row. Material icons over
+ * text glyphs: the mock's `~ ▲ ■` read ASCII-cheap next to the icon language
+ * the rest of the panel already speaks.
+ */
+const LFO_WAVES: { id: LfoWaveform; icon: string; label: string }[] = [
+  { id: "sine", icon: "waves", label: "Sine" },
+  { id: "triangle", icon: "change_history", label: "Triangle" },
+  { id: "square", icon: "check_box_outline_blank", label: "Square" },
+  { id: "random", icon: "casino", label: "Random" },
+];
+
+/**
+ * Per-parameter LFO modulator, modelled on the mock's `.modchip` contract:
+ * a `+ LFO` chip when the param is free; an `LFO ~ N Hz` chip (same teal mono
+ * 8px language as `.codec-chip`) once it oscillates, which expands to the
+ * editor and removes on ×.
+ *
+ * Undo granularity mirrors the param fader it sits under: drags commit live
+ * through `onSetSilent` and write ONE history entry on release via `onSet`,
+ * while discrete edits (waveform, number fields) go straight to `onSet`.
+ *
+ * `offset` is the oscillation centre -- the param's "base value". The main
+ * fader already edits it directly (see the map above); the row here exists
+ * for discoverability and for the hint that a keyframe track, when present,
+ * takes the centre over.
+ */
+function LfoControl({
+  stackId,
+  paramId,
+  paramMin,
+  paramMax,
+  currentValue,
+  spec,
+  keyframed,
+  onSet,
+  onSetSilent,
+  onRemove,
+}: {
+  stackId: string;
+  paramId: string;
+  paramMin: number;
+  paramMax: number;
+  currentValue: number;
+  spec?: LfoSpec;
+  keyframed: boolean;
+  onSet: (stackId: string, paramId: string, spec: LfoSpec) => void;
+  onSetSilent: (stackId: string, paramId: string, spec: LfoSpec) => void;
+  onRemove: (stackId: string, paramId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const active = !!spec;
+  const wave = spec ? LFO_WAVES.find((w) => w.id === spec.waveform) : undefined;
+
+  const patch = (p: Partial<LfoSpec>, commit: boolean) => {
+    if (!spec) return;
+    const next = { ...spec, ...p };
+    if (commit) onSet(stackId, paramId, next);
+    else onSetSilent(stackId, paramId, next);
+  };
+
+  return (
+    <div
+      data-testid={`lfo-${paramId}`}
+      style={{
+        marginTop: 4,
+        padding: active ? "4px 6px" : "2px 0",
+        background: active ? "color-mix(in srgb, var(--accent-teal) 5%, transparent)" : "transparent",
+        borderRadius: 4,
+      }}
+    >
+      <div className="flex items-center justify-between">
+        <button
+          onClick={() => {
+            if (active) {
+              setOpen((o) => !o);
+            } else {
+              onSet(stackId, paramId, {
+                // Deterministic id: the random waveform's seed derives from
+                // it, and "the LFO on this param" is a stable identity.
+                id: `${stackId}.${paramId}`,
+                waveform: "sine",
+                rateHz: 1,
+                depth: 0.25,
+                offset: currentValue,
+              });
+              setOpen(true);
+            }
+          }}
+          title={
+            active
+              ? "Edit LFO modulation"
+              : "Add an LFO: oscillates this parameter over time, synced to the transport"
+          }
+          aria-label={
+            active ? `Edit LFO modulation on ${paramId}` : `Add LFO modulation to ${paramId}`
+          }
+          className={active ? "lfo-chip" : "lfo-chip-off"}
+        >
+          {active && wave ? `LFO ${wave.label.slice(0, 3).toUpperCase()} ${spec!.rateHz.toFixed(1)}Hz` : "+ LFO"}
+        </button>
+        {active && (
+          <button
+            onClick={() => onRemove(stackId, paramId)}
+            title="Remove LFO"
+            aria-label={`Remove LFO from ${paramId}`}
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              padding: 4,
+              color: "var(--text-muted, #888)",
+              display: "flex",
+            }}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 12 }}>close</span>
+          </button>
+        )}
+      </div>
+
+      {active && open && spec && (
+        <div
+          className="mt-1 space-y-1"
+          onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); } }}
+        >
+          {/* Waveform */}
+          <div className="flex gap-1 items-center">
+            {LFO_WAVES.map((w) => {
+              const on = w.id === spec.waveform;
+              return (
+                <button
+                  key={w.id}
+                  onClick={() => patch({ waveform: w.id }, true)}
+                  title={w.label}
+                  aria-label={`LFO waveform ${w.label}`}
+                  aria-pressed={on}
+                  className={on ? "lfo-chip" : "lfo-chip-off"}
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: 9 }}>
+                    {w.icon}
+                  </span>
+                  {w.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Rate */}
+          <div className="flex gap-1 items-center">
+            <span style={{ fontSize: 9, color: "var(--text-muted, #888)", minWidth: 34 }}>Rate</span>
+            <div className="flex-1">
+              <FaderControl
+                value={spec.rateHz}
+                min={0.05}
+                max={20}
+                label="LFO rate"
+                onLive={(v) => patch({ rateHz: v }, false)}
+                onCommit={(v) => patch({ rateHz: v }, true)}
+              />
+            </div>
+            <input
+              aria-label="LFO rate (Hz)"
+              type="number"
+              min={0.05}
+              max={20}
+              step={0.1}
+              value={spec.rateHz}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                if (!Number.isNaN(v)) patch({ rateHz: v }, true);
+              }}
+              className="w-12 font-code-sm text-code-sm px-1 py-0.5 rounded"
+              style={{
+                background: "var(--bg-input)",
+                border: "1px solid var(--border-secondary)",
+                color: "var(--text-primary)",
+              }}
+            />
+            <span style={{ fontSize: 9, color: "var(--text-muted, #666)" }}>Hz</span>
+          </div>
+
+          {/* Depth: 0..1 of the param's declared range */}
+          <div className="flex gap-1 items-center">
+            <span style={{ fontSize: 9, color: "var(--text-muted, #888)", minWidth: 34 }}>Depth</span>
+            <div className="flex-1">
+              <FaderControl
+                value={spec.depth}
+                min={0}
+                max={1}
+                label="LFO depth"
+                onLive={(v) => patch({ depth: v }, false)}
+                onCommit={(v) => patch({ depth: v }, true)}
+              />
+            </div>
+            <span
+              className="font-code-sm text-code-sm"
+              style={{ color: "var(--text-muted, #888)", minWidth: 32, textAlign: "right" }}
+            >
+              {Math.round(spec.depth * 100)}%
+            </span>
+          </div>
+
+          {/* Centre (offset) */}
+          <div className="flex gap-1 items-center">
+            <span
+              style={{ fontSize: 9, color: "var(--text-muted, #888)", minWidth: 34 }}
+              title={
+                keyframed
+                  ? "The keyframe track is the oscillation centre while it exists -- offset applies if it is removed"
+                  : "Oscillation centre -- the parameter's base value"
+              }
+            >
+              Centre
+            </span>
+            <div className="flex-1">
+              <FaderControl
+                value={spec.offset}
+                min={paramMin}
+                max={paramMax}
+                label="LFO centre"
+                onLive={(v) => patch({ offset: v }, false)}
+                onCommit={(v) => patch({ offset: v }, true)}
+              />
+            </div>
+            <input
+              aria-label="LFO centre"
+              type="number"
+              step={0.01}
+              value={spec.offset}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                if (!Number.isNaN(v))
+                  patch({ offset: Math.min(paramMax, Math.max(paramMin, v)) }, true);
+              }}
+              className="w-12 font-code-sm text-code-sm px-1 py-0.5 rounded"
+              style={{
+                background: "var(--bg-input)",
+                border: "1px solid var(--border-secondary)",
+                color: "var(--text-primary)",
+              }}
+            />
+          </div>
+
+          {keyframed && (
+            <div style={{ fontSize: 9, color: "var(--text-muted, #666)" }}>
+              Keyframes set the centre — offset applies if the track is removed
+            </div>
+          )}
         </div>
       )}
     </div>

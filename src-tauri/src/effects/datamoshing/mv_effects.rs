@@ -8,11 +8,17 @@
 use crate::effects::motion::{
     block_match_motion_field, warp_by_motion_field, MotionField, MotionVector,
 };
+use crate::effects::params::usize_param;
 use crate::effects::types::*;
 use crate::effects::Effect;
 use crate::error::Result;
 use rand::Rng;
 use serde_json::json;
+
+const VIBRATE_RANDOMNESS: usize = 10;
+const STOP_N_FRAMES: usize = 10;
+const BUFFER_SIZE: usize = 3;
+const DELAY_FRAMES: usize = 5;
 
 const SHIFT_OPTIONS: &[i32] = &[0, 1, -1, 2, -2, 4, -4, 8, -8];
 
@@ -58,10 +64,7 @@ impl Effect for ZoomGlitch {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let intensity = params
-            .get("intensity")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.5) as f32;
+        let intensity = crate::effects::params::f32_param(params, "intensity", 0.5);
         let w = input.width as usize;
         let h = input.height as usize;
         let cx = w as f32 / 2.0;
@@ -89,22 +92,6 @@ impl Effect for ZoomGlitch {
             vectors,
         };
         Ok(warp_by_motion_field(input, &field))
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
-        })
     }
 }
 
@@ -150,10 +137,7 @@ impl Effect for ShearGlitch {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let intensity = params
-            .get("intensity")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.5) as f32;
+        let intensity = crate::effects::params::f32_param(params, "intensity", 0.5);
         let w = input.width as usize;
         let h = input.height as usize;
         let cx = w as f32 / 2.0;
@@ -183,22 +167,6 @@ impl Effect for ShearGlitch {
         };
         Ok(warp_by_motion_field(input, &field))
     }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
-        })
-    }
 }
 
 // ─── Vibrate ────────────────────────────────────────────────────────────
@@ -223,7 +191,7 @@ impl Effect for VibrateGlitch {
                 id: "randomness".to_string(),
                 name: "Randomness".to_string(),
                 param_type: ParamType::Slider,
-                default: json!(10),
+                default: json!(VIBRATE_RANDOMNESS),
                 min: Some(1.0),
                 max: Some(50.0),
                 step: Some(1.0),
@@ -242,10 +210,10 @@ impl Effect for VibrateGlitch {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let randomness = params
-            .get("randomness")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(10) as i32;
+        // gen_range panics on an empty range, and `as i32` wraps on
+        // usize::MAX — clamp into a positive, representable bound.
+        let randomness = usize_param(params, "randomness", VIBRATE_RANDOMNESS)
+            .clamp(1, i32::MAX as usize) as i32;
         let bias = randomness / 2;
         let mut rng = crate::effects::rng::frame_rng(input, params);
         let w = input.width as usize;
@@ -268,22 +236,6 @@ impl Effect for VibrateGlitch {
         };
         Ok(warp_by_motion_field(input, &field))
     }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
-        })
-    }
 }
 
 // ─── Stop ───────────────────────────────────────────────────────────────
@@ -292,14 +244,14 @@ impl Effect for VibrateGlitch {
 /// creating intermittent freeze-frame effects. Inspired by Stop.js.
 pub struct StopGlitch {
     threshold: f64,
-    n_frames: u32,
+    n_frames: usize,
 }
 
 impl Default for StopGlitch {
     fn default() -> Self {
         Self {
             threshold: 95.0,
-            n_frames: 10,
+            n_frames: STOP_N_FRAMES,
         }
     }
 }
@@ -326,7 +278,7 @@ impl Effect for StopGlitch {
                     id: "n_frames".to_string(),
                     name: "Freeze Frames".to_string(),
                     param_type: ParamType::Slider,
-                    default: json!(10),
+                    default: json!(STOP_N_FRAMES),
                     min: Some(1.0),
                     max: Some(60.0),
                     step: Some(1.0),
@@ -356,14 +308,8 @@ impl Effect for StopGlitch {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let threshold = params
-            .get("threshold")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(self.threshold);
-        let n_frames = params
-            .get("n_frames")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(self.n_frames as u64) as usize;
+        let threshold = crate::effects::params::f64_param(params, "threshold", self.threshold);
+        let n_frames = usize_param(params, "n_frames", self.n_frames);
         // Video-level: seed from the first frame so the whole segment shares one
         // reproducible sequence rather than re-rolling per render.
         let seed = input
@@ -431,7 +377,7 @@ impl Effect for BufferGlitch {
                     id: "buffer_size".to_string(),
                     name: "Buffer Size".to_string(),
                     param_type: ParamType::Slider,
-                    default: json!(3),
+                    default: json!(BUFFER_SIZE),
                     min: Some(1.0),
                     max: Some(20.0),
                     step: Some(1.0),
@@ -483,14 +429,8 @@ impl Effect for BufferGlitch {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let buffer_size = params
-            .get("buffer_size")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(3) as usize;
-        let feedback = params
-            .get("feedback")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.5) as f32;
+        let buffer_size = usize_param(params, "buffer_size", BUFFER_SIZE);
+        let feedback = crate::effects::params::f32_param(params, "feedback", 0.5);
 
         if input.frames.len() < 2 {
             return Ok(input.clone());
@@ -570,7 +510,7 @@ impl Effect for DelayGlitch {
                 id: "delay_frames".to_string(),
                 name: "Delay Frames".to_string(),
                 param_type: ParamType::Slider,
-                default: json!(5),
+                default: json!(DELAY_FRAMES),
                 min: Some(1.0),
                 max: Some(30.0),
                 step: Some(1.0),
@@ -611,10 +551,7 @@ impl Effect for DelayGlitch {
         _mask: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<VideoSegment> {
-        let delay = params
-            .get("delay_frames")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(5) as usize;
+        let delay = usize_param(params, "delay_frames", DELAY_FRAMES).max(1);
 
         if input.frames.len() < 2 {
             return Ok(input.clone());

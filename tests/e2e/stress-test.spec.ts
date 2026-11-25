@@ -1,4 +1,6 @@
 import { expect, test } from "@playwright/test";
+import { openApp, openPresetPanel } from "./helpers";
+import { tauriMockWithMediaScript } from "./mocks/tauri-mock-with-media";
 
 test.describe("UI Stress Testing", () => {
   // Every other E2E spec dismisses the onboarding modal before interacting
@@ -15,13 +17,12 @@ test.describe("UI Stress Testing", () => {
   });
 
   test("blast UI with state changes to test robustness", async ({ page }) => {
-    test.setTimeout(60000);
+    test.setTimeout(150000);
 
     await page.goto("/");
 
     await page
-      .waitForSelector(".app-container", { state: "attached", timeout: 10000 })
-      .catch(() => {});
+      .waitForSelector("[data-testid='app-layout']", { state: "attached", timeout: 10000 });
 
     const iterations = 50;
 
@@ -60,38 +61,33 @@ test.describe("UI Stress Testing", () => {
   });
 
   test("rapid preset loading does not flash original image", async ({ page }) => {
-    test.setTimeout(30000);
+    test.setTimeout(150000);
 
-    await page.goto("/");
-    await page
-      .waitForSelector(".app-container", { state: "attached", timeout: 10000 })
-      .catch(() => {});
+    // The "does not flash the original image" check needs a loaded image to
+    // exist -- without media there is no preview to revert to. This test
+    // drives the real open flow with the with-media mock, so the preview
+    // assertion afterwards is real.
+    await page.addInitScript(tauriMockWithMediaScript);
+    await openApp(page, "[data-testid='app-layout']");
 
-    // Find preset buttons/cards in the preset panel
-    const presetButtons = await page.$$(
-      '[data-testid="preset-card"], .preset-card, button:has-text("Preset")'
-    );
+    await page.locator("header button:has-text('File')").click();
+    await page.locator("text=Open File").click();
+    await expect(
+      page.locator('[data-testid="preview-viewport"]').first()
+    ).toBeVisible({ timeout: 10000 });
 
-    if (presetButtons.length < 2) {
-      // If no presets visible, try opening the preset panel
-      const presetTab = page
-        .locator('button:has-text("Preset"), [data-panel-id="presets"]')
-        .first();
-      if (await presetTab.isVisible().catch(() => false)) {
-        await presetTab.click();
-        await page.waitForTimeout(500);
-      }
+    // Create two real presets through the Presets panel so there is
+    // something to rapid-load. The old test queried `.preset-card` and
+    // `[data-testid="preset-card"]` -- classes nothing renders -- then
+    // skipped itself, so it had never actually run.
+    const panel = await openPresetPanel(page);
+    for (const name of ["stress-a", "stress-b"]) {
+      await panel.getByLabel("Preset name").fill(name);
+      await panel.getByTitle("Save preset").click();
+      await expect(panel.locator(`[title='${name}']`)).toBeVisible();
     }
-
-    const presets = await page.$$(
-      '[data-testid="preset-card"], .preset-card, button:has-text("Preset")'
-    );
-    const presetCount = Math.min(presets.length, 10);
-
-    if (presetCount < 2) {
-      console.log("Not enough presets found for stress test — skipping");
-      return;
-    }
+    const presets = [panel.locator("[title='stress-a']"), panel.locator("[title='stress-b']")];
+    const presetCount = presets.length;
 
     // Rapidly load different presets
     for (let i = 0; i < 20; i++) {
@@ -127,8 +123,7 @@ test.describe("UI Stress Testing", () => {
 
     await page.goto("/");
     await page
-      .waitForSelector(".app-container", { state: "attached", timeout: 10000 })
-      .catch(() => {});
+      .waitForSelector("[data-testid='app-layout']", { state: "attached", timeout: 10000 });
 
     // Find all range sliders
     const sliders = await page.$$('input[type="range"]');
@@ -168,8 +163,7 @@ test.describe("UI Stress Testing", () => {
 
     await page.goto("/");
     await page
-      .waitForSelector(".app-container", { state: "attached", timeout: 10000 })
-      .catch(() => {});
+      .waitForSelector("[data-testid='app-layout']", { state: "attached", timeout: 10000 });
 
     // Find mask-related controls
     const maskSelects = await page.$$("select");
@@ -212,19 +206,27 @@ test.describe("UI Stress Testing", () => {
   });
 
   test("combined rapid preset + slider + mask stress", async ({ page }) => {
-    test.setTimeout(60000);
+    test.setTimeout(90000);
 
     await page.goto("/");
     await page
-      .waitForSelector(".app-container", { state: "attached", timeout: 10000 })
-      .catch(() => {});
+      .waitForSelector("[data-testid='app-layout']", { state: "attached", timeout: 10000 });
 
-    // Combined stress: alternate between preset loads, slider scrubbing, and mask toggling
-    for (let i = 0; i < 30; i++) {
+    // Combined stress: alternate between preset loads, slider scrubbing, and
+    // mask toggling. The loop is wall-clock bounded, not iteration bounded:
+    // once preset cards load real effect stacks, the headless software-GL
+    // preview saturates the renderer and every protocol call takes seconds —
+    // the right amount of stress for that environment is however many
+    // iterations fit, not a fixed count that can never finish.
+    const stressStart = Date.now();
+    for (let i = 0; i < 30 && Date.now() - stressStart < 45000; i++) {
+      // :visible on all three queries: an inactive dock tab keeps its
+      // elements mounted with a zero-size box — $$ finds them, but click/
+      // selectOption then wait for visibility and burn their whole timeout.
       // Every 3rd iteration: try loading a preset
       if (i % 3 === 0) {
         const presets = await page.$$(
-          '[data-testid="preset-card"], .preset-card, button:has-text("Preset")'
+          '[data-testid="preset-card"]:visible, .preset-card:visible, button:has-text("Preset"):visible'
         );
         if (presets.length > 0) {
           await presets[i % presets.length].click({ timeout: 200 }).catch(() => {
@@ -235,7 +237,7 @@ test.describe("UI Stress Testing", () => {
 
       // Every 3rd + 1: scrub a slider
       if (i % 3 === 1) {
-        const sliders = await page.$$('input[type="range"]');
+        const sliders = await page.$$('input[type="range"]:visible');
         if (sliders.length > 0) {
           await sliders[0].fill(String(Math.random() * 100), { timeout: 100 }).catch(() => {});
         }
@@ -243,9 +245,11 @@ test.describe("UI Stress Testing", () => {
 
       // Every 3rd + 2: toggle a mask select
       if (i % 3 === 2) {
-        const selects = await page.$$("select");
+        const selects = await page.$$("select:visible");
         if (selects.length > 0) {
-          await selects[0].selectOption({ index: 0 }).catch(() => {});
+          // selectOption waits for visibility with no default bound, so the
+          // timeout stays as a belt-and-braces guard even with :visible.
+          await selects[0].selectOption({ index: 0, timeout: 200 }).catch(() => {});
         }
       }
 

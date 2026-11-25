@@ -64,14 +64,9 @@ impl Effect for PngChunkGlitch {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let chunk_interval = params
-            .get("chunk_interval")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(4096) as usize;
-        let corruption = params
-            .get("corruption")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.3) as f32;
+        let chunk_interval =
+            crate::effects::params::usize_param(params, "chunk_interval", 4096).max(1);
+        let corruption = crate::effects::params::f32_param(params, "corruption", 0.3);
 
         let mut data = input.data.clone();
         let mut rng = crate::effects::rng::frame_rng(input, params);
@@ -82,7 +77,7 @@ impl Effect for PngChunkGlitch {
         let mut offset = chunk_interval;
         while offset < len {
             let corrupt_len = (chunk_interval as f32 * corruption) as usize;
-            let end = (offset + corrupt_len).min(len);
+            let end = offset.saturating_add(corrupt_len).min(len);
             for (i, byte) in data.iter_mut().enumerate().take(end).skip(offset) {
                 if i % 4 == 3 {
                     continue; // Preserve alpha channel
@@ -103,29 +98,13 @@ impl Effect for PngChunkGlitch {
                     }
                 }
             }
-            offset += chunk_interval;
+            offset = offset.saturating_add(chunk_interval);
         }
 
         Ok(Frame {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }
@@ -182,17 +161,13 @@ impl Effect for CrcMismatchGlitch {
         _m: Option<&Mask>,
         params: &ParameterValues,
     ) -> Result<Frame> {
-        let scanline_interval = params
-            .get("scanline_interval")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(8) as usize;
-        let shift_amount = params
-            .get("shift_amount")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(16) as usize;
-
         let w = input.width as usize;
         let h = input.height as usize;
+        let scanline_interval =
+            crate::effects::params::usize_param(params, "scanline_interval", 8).max(1);
+        // A shift wider than the row wraps identically; the cap keeps
+        // `dir * shift_amount` inside i32.
+        let shift_amount = crate::effects::params::usize_param(params, "shift_amount", 16).min(w);
         let mut data = input.data.clone();
 
         // Every Nth scanline, shift pixels horizontally in alternating directions
@@ -221,22 +196,6 @@ impl Effect for CrcMismatchGlitch {
             width: input.width,
             height: input.height,
             data,
-        })
-    }
-
-    fn process_video(
-        &self,
-        input: &VideoSegment,
-        mask: Option<&Mask>,
-        params: &ParameterValues,
-    ) -> Result<VideoSegment> {
-        let mut frames = Vec::with_capacity(input.frames.len());
-        for frame in &input.frames {
-            frames.push(self.process_frame(frame, mask, params)?);
-        }
-        Ok(VideoSegment {
-            frames,
-            fps: input.fps,
         })
     }
 }
