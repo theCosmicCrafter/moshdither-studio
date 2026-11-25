@@ -182,6 +182,20 @@ function extractIconNames(source) {
         if (c === quote && source[i - 1] !== "\\") quote = null;
         continue;
       }
+      // Inside a `style={{ ... }}` object, `//` and `/* */` are real JS
+      // comments — an apostrophe in one ("theme's") would otherwise open a
+      // quote state that never closes and the `>` walk overruns into the
+      // next element's attributes.
+      if (c === "/" && source[i + 1] === "/") {
+        while (i < source.length && source[i] !== "\n") i++;
+        continue;
+      }
+      if (c === "/" && source[i + 1] === "*") {
+        i += 2;
+        while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) i++;
+        i++;
+        continue;
+      }
       if (c === '"' || c === "'" || c === "`") quote = c;
       else if (c === "{") depth++;
       else if (c === "}") depth--;

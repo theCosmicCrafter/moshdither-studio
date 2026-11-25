@@ -1,10 +1,11 @@
 use super::types::*;
 use super::Effect;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Registry of all available effects, indexed by effect ID.
 pub struct EffectRegistry {
-    effects: HashMap<String, Box<dyn Effect>>,
+    effects: HashMap<String, Arc<dyn Effect>>,
 }
 
 impl EffectRegistry {
@@ -29,7 +30,7 @@ impl EffectRegistry {
             "pipeline/id-namespace mismatch for {}",
             meta.id
         );
-        self.effects.insert(meta.id, Box::new(effect));
+        self.effects.insert(meta.id, Arc::new(effect));
     }
 
     fn register_defaults(&mut self) {
@@ -197,18 +198,33 @@ impl EffectRegistry {
             .map(|b| b.as_ref())
     }
 
+    /// Owned handle to an effect — the caller can drop the registry lock and
+    /// still use it. The export loop resolves every call's effect once under
+    /// the lock, then releases it: a codec stage runs its sidecar for seconds
+    /// and must not hold the mutex that preview renders queue on.
+    pub fn get_shared(&self, id: &str) -> Option<Arc<dyn Effect>> {
+        if let Some(effect) = self.effects.get(id) {
+            return Some(effect.clone());
+        }
+        Self::ALIASES
+            .iter()
+            .find(|(old, _)| *old == id)
+            .and_then(|(_, new)| self.effects.get(*new))
+            .cloned()
+    }
+
     pub fn list(&self) -> Vec<EffectMeta> {
         self.effects.values().map(|e| e.meta()).collect()
     }
 
-    /// `(meta, pipeline)` for every registered effect. `pipeline()` lives on
-    /// the trait object, not `EffectMeta`, so `list()` alone cannot answer
-    /// it — the `list_effects` command joins them here rather than doing a
-    /// second `get()` per id.
-    pub fn list_with_pipelines(&self) -> Vec<(EffectMeta, Pipeline)> {
+    /// `(meta, pipeline, is_temporal)` for every registered effect. Both
+    /// flags live on the trait object, not `EffectMeta`, so `list()` alone
+    /// cannot answer them — the `list_effects` command joins them here
+    /// rather than doing a second `get()` per id.
+    pub fn list_details(&self) -> Vec<(EffectMeta, Pipeline, bool)> {
         self.effects
             .values()
-            .map(|e| (e.meta(), e.pipeline()))
+            .map(|e| (e.meta(), e.pipeline(), e.is_temporal()))
             .collect()
     }
 
@@ -249,7 +265,7 @@ mod tests {
     #[test]
     fn pipeline_matches_id_namespace_for_all_registered_effects() {
         let registry = EffectRegistry::new();
-        for (meta, pipeline) in registry.list_with_pipelines() {
+        for (meta, pipeline, _) in registry.list_details() {
             assert_eq!(
                 meta.id.starts_with("ffglitch."),
                 matches!(pipeline, Pipeline::Codec),
@@ -265,9 +281,9 @@ mod tests {
     fn all_ffglitch_modes_are_registered_as_codec() {
         let registry = EffectRegistry::new();
         let codecs = registry
-            .list_with_pipelines()
+            .list_details()
             .into_iter()
-            .filter(|(_, p)| matches!(p, Pipeline::Codec))
+            .filter(|(_, p, _)| matches!(p, Pipeline::Codec))
             .count();
         assert_eq!(codecs, 25, "expected 25 ffglitch codec modes");
     }

@@ -5,7 +5,8 @@ Thank you for your interest in contributing! This document will help you get sta
 ## Development Setup
 
 1. **Install Rust**: [rustup.rs](https://rustup.rs/)
-2. **Install Node.js 18+**: [nodejs.org](https://nodejs.org/)
+2. **Install Node.js 20+**: [nodejs.org](https://nodejs.org/) — the dependency
+   tree (minimatch 11, Vite 8) requires 20; 18 will fail `npm ci`.
 3. **Clone the repository**:
    ```bash
    git clone https://github.com/theCosmicCrafter/moshdither-studio.git

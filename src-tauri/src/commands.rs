@@ -233,13 +233,16 @@ pub async fn load_media_from_base64(
 /// flattened with its `pipeline`, so the JSON is
 /// `{ id, name, category, media_type, parameters, pipeline }`. The pipeline
 /// lives on the trait rather than on `EffectMeta` (see `Pipeline`'s doc), so
-/// the join happens here — the registry's `list_with_pipelines` avoids a
+/// the join happens here — the registry's `list_details` avoids a
 /// second lookup per id.
 #[derive(serde::Serialize)]
 pub struct ListedEffect {
     #[serde(flatten)]
     meta: EffectMeta,
     pipeline: Pipeline,
+    /// Temporal effects consume the whole segment at once, so per-frame LFO
+    /// modulation is never sampled — the UI suppresses the control on this.
+    is_temporal: bool,
 }
 
 /// Get metadata for all available effects.
@@ -247,9 +250,13 @@ pub struct ListedEffect {
 pub fn list_effects(state: State<'_, AppState>) -> crate::error::Result<Vec<ListedEffect>> {
     let registry = lock_state(&state.registry, "registry")?;
     Ok(registry
-        .list_with_pipelines()
+        .list_details()
         .into_iter()
-        .map(|(meta, pipeline)| ListedEffect { meta, pipeline })
+        .map(|(meta, pipeline, is_temporal)| ListedEffect {
+            meta,
+            pipeline,
+            is_temporal,
+        })
         .collect())
 }
 
@@ -1095,7 +1102,23 @@ fn export_video_blocking(
             ..Default::default()
         },
     );
-    let registry = lock_state(&registry, "registry")?;
+    // Resolve every call's effect handle under ONE short lock, then drop the
+    // guard before the loop runs. A codec stage shells out to the FFglitch
+    // sidecar for seconds-to-minutes; holding the registry mutex across that
+    // blocked every synchronous preview render (and the Cancel control that
+    // lives behind them) for the duration.
+    let effects: Vec<std::sync::Arc<dyn Effect>> = {
+        let registry = lock_state(&registry, "registry")?;
+        let mut resolved = Vec::with_capacity(stack.len());
+        for call in stack.iter() {
+            resolved.push(
+                registry
+                    .get_shared(&call.effect_id)
+                    .ok_or_else(|| format!("Effect '{}' not found", call.effect_id))?,
+            );
+        }
+        resolved
+    };
     // Every per-frame time below goes through `export_frame_time`: the frames
     // were trimmed above, so a frame's index in the segment is NOT its time on
     // the transport. See that function for why it matters.
@@ -1107,7 +1130,7 @@ fn export_video_blocking(
         cancel: &cancel,
     };
 
-    for (effect_idx, call) in stack.iter().enumerate() {
+    for (effect_idx, (call, effect)) in stack.iter().zip(effects.iter()).enumerate() {
         // Cancel is polled between effects, and per frame inside the two
         // non-temporal branches of apply_effect_to_segment. It used to be
         // read only inside the encoder's write loop -- the last 15% of an
@@ -1116,9 +1139,7 @@ fn export_video_blocking(
         if cancel.load(Ordering::Relaxed) {
             return Err(crate::ffmpeg::EXPORT_CANCELLED.into());
         }
-        let effect = registry
-            .get(&call.effect_id)
-            .ok_or_else(|| format!("Effect '{}' not found", call.effect_id))?;
+        let effect: &dyn Effect = effect.as_ref();
         tracing::debug!(
             "Export effect {}/{}: {} (temporal={}, pipeline={:?})",
             effect_idx + 1,
@@ -1155,7 +1176,6 @@ fn export_video_blocking(
             },
         );
     }
-    drop(registry);
 
     encode_output(
         &app_handle,
@@ -1703,8 +1723,21 @@ fn apply_codec_to_segment(
     }
     let after_count = processed.frames.len();
     let after_dims = processed.frames.first().map(|f| (f.width, f.height));
+    // The segment owns a fixed time slot: `before_count` frames at `fps`.
+    // Shuffle/Rise/Water Bloom resample to 30 fps inside the sidecar, so the
+    // decoded count can differ — playing it at `fps` would change the clip's
+    // speed (and desync the muxed audio). Nearest-neighbor index resampling
+    // maps the moshed frames back into the original slot; for a corruption
+    // pass, frame-exact identity matters less than duration.
+    let frames = if after_count == before_count {
+        processed.frames
+    } else {
+        (0..before_count)
+            .map(|i| processed.frames[i * after_count / before_count].clone())
+            .collect()
+    };
     *segment = VideoSegment {
-        frames: processed.frames,
+        frames,
         // Keep the export's frame rate, not whatever the mosh file reports:
         // downstream layers and the final encode are timed on it.
         fps,
@@ -1726,9 +1759,9 @@ fn apply_codec_to_segment(
     };
     if after_count != before_count {
         codec_warning(format!(
-            "{} changed the frame count from {} to {} frames; the rest of the \
-             stack and the audio continue from the new count.",
-            call.effect_id, before_count, after_count
+            "{} produced {} frames for a {}-frame slot (fps resample in the \
+             sidecar); the output was resampled to keep the clip's duration.",
+            call.effect_id, after_count, before_count
         ));
     }
     if let (Some((bw, bh)), Some((aw, ah))) = (before_dims, after_dims) {
@@ -3461,6 +3494,20 @@ fn clamp_ffglitch_mode_params(
     let mut clamped = crate::effects::clamp_for_effect(effect, obj);
     let meta = effect.meta();
     clamped.retain(|k, _| meta.parameters.iter().any(|p| &p.id == k));
+    // Params declared with step 1 are frame indices / repeat counts on the
+    // Python side (tomato.py's `[x] * repeat`, basic_modes' frame ops) — a
+    // typed-in decimal reaches int() calls or slicing and aborts the render.
+    for (k, v) in clamped.iter_mut() {
+        let integer_typed = meta
+            .parameters
+            .iter()
+            .any(|p| &p.id == k && p.step == Some(1.0));
+        if integer_typed {
+            if let Some(n) = v.as_f64() {
+                *v = serde_json::json!(n.round());
+            }
+        }
+    }
     serde_json::Value::Object(clamped)
 }
 

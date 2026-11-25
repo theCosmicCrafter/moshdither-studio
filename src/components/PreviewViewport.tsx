@@ -375,6 +375,9 @@ function PreviewViewport({ isDropTarget = false }: Props) {
         quality: "draft",
         processingScale: 720,
         fps: s.mediaFps,
+        // Same audio bake as the export panel — without it an audio-driven
+        // stack renders a mosh the export wouldn't produce.
+        audioBakeJson: s.audioBakeData ? JSON.stringify(s.audioBakeData) : null,
       });
       if (!mountedRef.current) {
         // Unmounted mid-render — the unmount cleanup already ran with no

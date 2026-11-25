@@ -179,9 +179,13 @@ jobs:
             Write-Host 'No WINDOWS_CERTIFICATE secret configured - building an unsigned Windows installer'
           }
 
-      - uses: tauri-apps/tauri-action@v1
+      # Non-Windows legs build against STUB sidecars (see "stub externalBin"
+      # above) — those installers can't decode or mosh anything and must never
+      # reach the draft release. They still run a plain `tauri build` so the
+      # matrix keeps compile coverage; only the Windows artifact publishes.
+      - name: build (compile coverage only — artifacts are not published)
+        if: matrix.platform != 'windows-latest'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -189,6 +193,14 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npx tauri build ${{ matrix.args }} --config src-tauri/tauri.release.conf.json
+
+      - uses: tauri-apps/tauri-action@v1
+        if: matrix.platform == 'windows-latest'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: v__VERSION__
           releaseName: "MoshDither Studio v__VERSION__"

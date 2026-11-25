@@ -546,10 +546,13 @@ export default function Timeline() {
         aria-valuenow={currentTime}
         aria-valuetext={formatTime(currentTime)}
         onKeyDown={(e) => {
-          if (e.key === "ArrowLeft") { e.preventDefault(); setCurrentTime(Math.max(inPoint ?? 0, currentTime - 1 / fps)); }
-          else if (e.key === "ArrowRight") { e.preventDefault(); setCurrentTime(Math.min(outPoint ?? duration, currentTime + 1 / fps)); }
-          else if (e.key === "Home") { e.preventDefault(); setCurrentTime(inPoint ?? 0); }
-          else if (e.key === "End") { e.preventDefault(); setCurrentTime(outPoint ?? duration); }
+          // stopPropagation: the global transport shortcuts listen on window —
+          // without it each keypress seeks twice (and Home/End overshoot the
+          // trim points entirely).
+          if (e.key === "ArrowLeft") { e.preventDefault(); e.stopPropagation(); setCurrentTime(Math.max(inPoint ?? 0, currentTime - 1 / fps)); }
+          else if (e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); setCurrentTime(Math.min(outPoint ?? duration, currentTime + 1 / fps)); }
+          else if (e.key === "Home") { e.preventDefault(); e.stopPropagation(); setCurrentTime(inPoint ?? 0); }
+          else if (e.key === "End") { e.preventDefault(); e.stopPropagation(); setCurrentTime(outPoint ?? duration); }
         }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}

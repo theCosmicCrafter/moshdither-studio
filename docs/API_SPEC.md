@@ -16,7 +16,7 @@ All communication between the React frontend and Rust backend uses Tauri v2's `i
 |---------|-----------|--------|-------------|
 | `load_media` | `path: string` | `string` | Load image/video from filesystem path. Decodes first frame for preview. |
 | `load_media_from_base64` | `dataUrl: string` | `void` | Load media from a base64 data URL (e.g. drag-drop). |
-| `list_effects` | — | `ListedEffect[]` | List all registered effects (120+ across 11 categories). `ListedEffect` is `EffectMeta` plus `pipeline: "pixel" \| "codec"` — codec effects (the 25 `ffglitch.*` modes) pass frames through and act on the encoded bitstream at export. |
+| `list_effects` | — | `ListedEffect[]` | List all registered effects (120+ across 11 categories). `ListedEffect` is `EffectMeta` plus `pipeline: "pixel" \| "codec"` and `is_temporal: boolean` — codec effects (the 25 `ffglitch.*` modes) pass frames through and act on the encoded bitstream at export; temporal effects never sample LFOs. |
 | `list_effects_by_category` | `category: string` | `EffectMeta[]` | Filter effects by category (dithering, analog, color, glitch, etc.). |
 | `apply_effect_stack` | `stack: StackEntry[], maskB64?: string` | `string` (data URL) | Apply the full effect stack to the current frame — used for single effects too, there's no separate single-effect command. Each entry has `effect_id`, `params`, `mask_b64`, `mask_mode`. |
 | `get_frame_data` | — | `string` (data URL) | Get the current frame as a PNG data URL. |
@@ -134,6 +134,9 @@ interface ListedEffect extends EffectMeta {
   pipeline: "pixel" | "codec";  // "codec" = ffglitch.* modes; frames pass
                                 // through preview, bitstream stage runs
                                 // inside export_video
+  is_temporal: boolean;         // whole-segment effects; LFO modulation is
+                                // never sampled — the UI suppresses it on
+                                // this flag (keyframes apply at the in-point)
 }
 ```
 

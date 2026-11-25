@@ -26,6 +26,10 @@ export interface EffectMeta {
    * when it is absent. "sim" is a frontend-only refinement of "pixel" — see
    * src/lib/effectPipeline.ts. */
   pipeline?: "pixel" | "codec";
+  /** Rust reports this on every effect — temporal effects read the whole
+   * segment at once, so LFO modulation is never sampled for them. Optional
+   * for browser-fallback metas, same as `pipeline`. */
+  is_temporal?: boolean;
   parameters: ParameterDef[];
 }
 
@@ -203,6 +207,11 @@ export interface AppState {
    *  the effect stack, and an LFO lives outside it. */
   pastLfos: Record<string, Record<string, LfoSpec>>[];
   futureLfos: Record<string, Record<string, LfoSpec>>[];
+  /** Same undo coverage for keyframe tracks — presets replace the map
+      alongside the stack, so a snapshot without it restores layers whose
+      animation data silently vanished. */
+  pastKeyframes: Record<string, KeyframeTrack>[];
+  futureKeyframes: Record<string, KeyframeTrack>[];
   selectedStackId: string | null;
 
   // Audio-Reactive
@@ -246,6 +255,12 @@ export interface AppState {
    *  covers the effect stack, not painting; this is the mask's own. */
   maskHistory: { mask: string | null; label: string }[];
   maskRevision: number;
+  /** True between a `beginParamGesture()` call and the gesture's committed
+      write — suppresses a second history push so undo restores the
+      pre-drag value. Opened ONLY by user gestures (fader/LFO drags); silent
+      writers never touch it, since engine ticks share those code paths and
+      have no commit to close it. */
+  paramGestureOpen: boolean;
   maskVisible: boolean;
   maskTab: "sam3" | "manual";
   maskTool: "brush" | "eraser" | "rect" | "ellipse" | "polygon";
@@ -393,6 +408,9 @@ export interface AppState {
   updateStackParams: (id: string, params: Record<string, unknown>) => void;
   /** Update params without pushing to undo history (used by keyframe playback) */
   updateStackParamsSilent: (id: string, params: Record<string, unknown>) => void;
+  /** Open a user drag gesture: snapshots history once so the coming silent
+      writes + commit fold into a single undo entry at the pre-drag value. */
+  beginParamGesture: () => void;
   setStackItemMask: (id: string, maskId: string | null) => void;
   setStackItemMaskMode: (id: string, mode: "inside" | "outside" | "alpha") => void;
   toggleStackItem: (id: string) => void;
@@ -599,9 +617,15 @@ const MAX_HISTORY_ENTRIES = 100;
  * stack and leave the modulation behind -- a dead undo step that still
  * cleared the redo stack.
  */
-function pushHistory(state: Pick<AppState, "pastStacks" | "effectStack" | "pastLfos" | "lfos">) {
+function pushHistory(
+  state: Pick<
+    AppState,
+    "pastStacks" | "effectStack" | "pastLfos" | "lfos" | "pastKeyframes" | "keyframes"
+  >
+) {
   const pastStacks = [...state.pastStacks, state.effectStack];
   const pastLfos = [...state.pastLfos, state.lfos];
+  const pastKeyframes = [...state.pastKeyframes, state.keyframes];
   return {
     pastStacks:
       pastStacks.length > MAX_HISTORY_ENTRIES
@@ -611,8 +635,13 @@ function pushHistory(state: Pick<AppState, "pastStacks" | "effectStack" | "pastL
       pastLfos.length > MAX_HISTORY_ENTRIES
         ? pastLfos.slice(pastLfos.length - MAX_HISTORY_ENTRIES)
         : pastLfos,
+    pastKeyframes:
+      pastKeyframes.length > MAX_HISTORY_ENTRIES
+        ? pastKeyframes.slice(pastKeyframes.length - MAX_HISTORY_ENTRIES)
+        : pastKeyframes,
     futureStacks: [] as StackEntry[][],
     futureLfos: [] as Record<string, Record<string, LfoSpec>>[],
+    futureKeyframes: [] as Record<string, KeyframeTrack>[],
   };
 }
 
@@ -620,6 +649,12 @@ function pushHistory(state: Pick<AppState, "pastStacks" | "effectStack" | "pastL
 const MASK_HISTORY_LIMIT = 30;
 
 const LFO_WAVEFORMS: readonly LfoWaveform[] = ["sine", "square", "triangle", "random"];
+
+/** Keys that write through to Object.prototype when used as plain-object
+    indexes. Whole-map setters take file JSON, so both levels of every
+    keyed map are filtered. */
+const UNSAFE_KEY = (k: string) =>
+  k === "__proto__" || k === "constructor" || k === "prototype";
 
 /**
  * Boundary clamps for an LFO spec arriving from the UI or a restored file.
@@ -695,6 +730,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   futureStacks: [],
   pastLfos: [],
   futureLfos: [],
+  pastKeyframes: [],
+  futureKeyframes: [],
   selectedStackId: null,
   audioEnabled: false,
   audioFilePath: null,
@@ -765,6 +802,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeMask: null,
   maskHistory: [],
   maskRevision: 0,
+  paramGestureOpen: false,
   maskVisible: true,
   viewportGuides: {
     safeArea: false,
@@ -1003,12 +1041,24 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   updateStackParams: (id, params) =>
     set((state) => ({
-      ...pushHistory(state),
+      // Gesture-aware: if a silent-drag already snapshotted the pre-gesture
+      // stack, pushing again would store the dragged value as the undo point.
+      ...(state.paramGestureOpen ? {} : pushHistory(state)),
+      paramGestureOpen: false,
       effectStack: state.effectStack.map((e) =>
         e.id === id ? { ...e, params: { ...e.params, ...sanitizeParams(params) } } : e
       ),
     })),
+  beginParamGesture: () =>
+    set((state) => ({
+      ...(state.paramGestureOpen ? {} : pushHistory(state)),
+      paramGestureOpen: true,
+    })),
   updateStackParamsSilent: (id, params) =>
+    // Pure write — no history, no flag. Engine ticks (audio modulation,
+    // keyframe playback) share this door with fader drags, so it must not
+    // open the gesture flag: a tick has no commit to close it and would
+    // latch paramGestureOpen forever.
     set((state) => ({
       effectStack: state.effectStack.map((e) =>
         e.id === id ? { ...e, params: { ...e.params, ...sanitizeParams(params) } } : e
@@ -1249,15 +1299,20 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (state.pastStacks.length === 0) return state;
       const newPast = [...state.pastStacks];
       const newPastLfos = [...state.pastLfos];
+      const newPastKeyframes = [...state.pastKeyframes];
       const previous = newPast.pop()!;
       const previousLfos = newPastLfos.pop() ?? state.lfos;
+      const previousKeyframes = newPastKeyframes.pop() ?? state.keyframes;
       return {
         pastStacks: newPast,
         pastLfos: newPastLfos,
+        pastKeyframes: newPastKeyframes,
         futureStacks: [state.effectStack, ...state.futureStacks],
         futureLfos: [state.lfos, ...state.futureLfos],
+        futureKeyframes: [state.keyframes, ...state.futureKeyframes],
         effectStack: previous,
         lfos: previousLfos,
+        keyframes: previousKeyframes,
       };
     }),
 
@@ -1266,15 +1321,20 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (state.futureStacks.length === 0) return state;
       const newFuture = [...state.futureStacks];
       const newFutureLfos = [...state.futureLfos];
+      const newFutureKeyframes = [...state.futureKeyframes];
       const next = newFuture.shift()!;
       const nextLfos = newFutureLfos.shift() ?? state.lfos;
+      const nextKeyframes = newFutureKeyframes.shift() ?? state.keyframes;
       return {
         pastStacks: [...state.pastStacks, state.effectStack],
         pastLfos: [...state.pastLfos, state.lfos],
+        pastKeyframes: [...state.pastKeyframes, state.keyframes],
         futureStacks: newFuture,
         futureLfos: newFutureLfos,
+        futureKeyframes: newFutureKeyframes,
         effectStack: next,
         lfos: nextLfos,
+        keyframes: nextKeyframes,
       };
     }),
 
@@ -1301,7 +1361,23 @@ export const useAppStore = create<AppState>((set, get) => ({
         audioBindings: { ...state.audioBindings, [stackId]: entryBindings },
       };
     }),
-  setAudioBindings: (bindings) => set({ audioBindings: bindings }),
+  setAudioBindings: (bindings) =>
+    set(() => {
+      // File-boundary sanitize — same proto-key guard as setLfos.
+      const clean: Record<string, Record<string, AudioBinding>> = {};
+      if (bindings && typeof bindings === "object") {
+        for (const [stackId, entry] of Object.entries(bindings)) {
+          if (UNSAFE_KEY(stackId)) continue;
+          if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+          for (const [paramId, binding] of Object.entries(entry)) {
+            if (UNSAFE_KEY(paramId)) continue;
+            if (!binding || typeof binding !== "object") continue;
+            (clean[stackId] ??= {})[paramId] = binding;
+          }
+        }
+      }
+      return { audioBindings: clean };
+    }),
   setAudioMappedValues: (values) => set({ audioMappedValues: values }),
   setAudioBakeData: (data) => set({ audioBakeData: data }),
   setAudioManifest: (manifest) => set({ audioManifest: manifest }),
@@ -1352,7 +1428,23 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { keyframes: { ...state.keyframes, [stackId]: { ...entry, [paramId]: sorted } } };
     }),
 
-  setKeyframes: (keyframes) => set({ keyframes }),
+  setKeyframes: (keyframes) =>
+    set(() => {
+      // File-boundary sanitize — same proto-key guard as setLfos.
+      const clean: Record<string, KeyframeTrack> = {};
+      if (keyframes && typeof keyframes === "object") {
+        for (const [stackId, entry] of Object.entries(keyframes)) {
+          if (UNSAFE_KEY(stackId)) continue;
+          if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+          for (const [paramId, track] of Object.entries(entry)) {
+            if (UNSAFE_KEY(paramId)) continue;
+            if (!Array.isArray(track)) continue;
+            (clean[stackId] ??= {})[paramId] = track;
+          }
+        }
+      }
+      return { keyframes: clean };
+    }),
 
   clearKeyframes: (stackId, paramId) =>
     set((state) => {
@@ -1374,11 +1466,13 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setLfo: (stackId, paramId, spec) =>
     set((state) => ({
-      ...pushHistory(state),
+      ...(state.paramGestureOpen ? {} : pushHistory(state)),
+      paramGestureOpen: false,
       lfos: setLfoInMap(state.lfos, stackId, paramId, sanitizeLfo(spec)),
     })),
 
   setLfoSilent: (stackId, paramId, spec) =>
+    // Pure write — same door-sharing rule as updateStackParamsSilent.
     set((state) => ({
       lfos: setLfoInMap(state.lfos, stackId, paramId, sanitizeLfo(spec)),
     })),
@@ -1394,13 +1488,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Whole-map restore path (projects, sessions, presets): same
       // treatment as setLfo — file-sourced specs get boundary clamps and
       // a guaranteed string id (the random waveform seeds from it), and
-      // proto-keys can't reparent the maps.
+      // proto-keys can't reparent the maps. BOTH levels are checked: a
+      // crafted "__proto__" outer key would otherwise write into
+      // Object.prototype via the ??= read.
       const clean: Record<string, Record<string, LfoSpec>> = {};
       if (lfos && typeof lfos === "object") {
         for (const [stackId, entry] of Object.entries(lfos)) {
+          if (UNSAFE_KEY(stackId)) continue;
           if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
           for (const [paramId, spec] of Object.entries(entry)) {
-            if (paramId === "__proto__" || paramId === "constructor" || paramId === "prototype") continue;
+            if (UNSAFE_KEY(paramId)) continue;
             if (!spec || typeof spec !== "object") continue;
             (clean[stackId] ??= {})[paramId] = {
               ...sanitizeLfo(spec),

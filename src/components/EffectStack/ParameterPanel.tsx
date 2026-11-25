@@ -139,6 +139,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
   const lfos = useAppStore((s) => (entry?.id ? s.lfos[entry.id] : undefined));
   const setLfo = useAppStore((s) => s.setLfo);
   const setLfoSilent = useAppStore((s) => s.setLfoSilent);
+  const beginParamGesture = useAppStore((s) => s.beginParamGesture);
   const removeLfo = useAppStore((s) => s.removeLfo);
 
   if (!entry) {
@@ -161,6 +162,10 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
   // per-frame moment where a keyframe, LFO, audio binding or mask could
   // apply, so those affordances are hidden rather than silently ignored.
   const isCodecEntry = effectPipeline(effectMeta) === "codec";
+  // Temporal effects consume the whole segment at once — the engine never
+  // samples LFOs for them (keyframes apply at the in-point instead), so the
+  // control is hidden rather than silently frozen.
+  const isTemporalEntry = !isCodecEntry && effectMeta.is_temporal === true;
 
   return (
     <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4 custom-scrollbar">
@@ -185,6 +190,23 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
         >
           Codec layer — corrupts the encoded file at export. Static params
           apply; masks, keyframes, LFOs and audio bindings do not.
+        </div>
+      )}
+
+      {isTemporalEntry && (
+        <div
+          data-testid="temporal-layer-note"
+          className="text-dense-sm"
+          style={{
+            padding: "6px 8px",
+            borderRadius: 3,
+            background: "color-mix(in srgb, var(--accent-teal) 8%, transparent)",
+            border: "1px solid color-mix(in srgb, var(--accent-teal) 25%, transparent)",
+            color: "var(--text-secondary)",
+          }}
+        >
+          Temporal effect — processes the whole clip at once. Keyframe values
+          apply at the clip's in-point; LFO modulation does not apply.
         </div>
       )}
 
@@ -296,6 +318,7 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
         const trackLen = keyframes?.[param.id]?.length ?? 0;
         const numericValue = lfo ? lfo.offset : Number(value);
         const writeBase = (v: number, commit: boolean) => {
+          if (!commit) beginParamGesture();
           if (lfo) {
             const spec = { ...lfo, offset: v };
             if (commit) setLfo(entry.id, param.id, spec);
@@ -376,8 +399,9 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                   />
                   {/* Per-param LFO modulator: + chip, expands to a compact
                       editor. Rides alongside the audio binding below.
-                      Hidden on codec layers — nothing evaluates it. */}
-                  {!isCodecEntry && (
+                      Hidden on codec layers and temporal effects — nothing
+                      evaluates it per-frame in either pipeline. */}
+                  {!isCodecEntry && !isTemporalEntry && (
                   <LfoControl
                     stackId={entry.id}
                     paramId={param.id}
@@ -387,7 +411,10 @@ export default function ParameterPanel({ stackId }: { stackId?: string } = {}) {
                     spec={lfo}
                     keyframed={trackLen > 0}
                     onSet={setLfo}
-                    onSetSilent={setLfoSilent}
+                    onSetSilent={(sid, pid, spec) => {
+                      beginParamGesture();
+                      setLfoSilent(sid, pid, spec);
+                    }}
                     onRemove={removeLfo}
                   />
                   )}
