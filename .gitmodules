@@ -58,6 +58,7 @@
 [submodule "references/eternal-mess"]
 	path = references/eternal-mess
 	url = https://github.com/ninofiliu/eternal-mess.git
+	update = none
 [submodule "references/fftools"]
 	path = references/fftools
 	url = https://github.com/ychalier/fftools.git
@@ -97,9 +98,11 @@
 [submodule "references/supermosh"]
 	path = references/supermosh
 	url = https://github.com/supermosh/supermosh.github.io.git
+	update = none
 [submodule "references/supermosh.github.io"]
 	path = references/supermosh.github.io
 	url = https://github.com/supermosh/supermosh.github.io.git
+	update = none
 [submodule "references/transflow"]
 	path = references/transflow
 	url = https://github.com/ychalier/transflow.git
